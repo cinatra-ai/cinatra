@@ -126,11 +126,58 @@ function parseEnvValue(rawValue) {
 }
 
 /**
- * Read one KEY=value out of a dotenv-style file. Mirrors the launcher's original
- * inline reader: `export ` prefix tolerated, surrounding quotes stripped, blank
- * and `#` lines skipped, first match wins — plus the inline-comment handling in
- * `parseEnvValue`. Returns undefined when the file is absent or the key is
- * unset/empty.
+ * Read one KEY=value out of a dotenv-style file: `export ` prefix tolerated,
+ * surrounding quotes stripped, blank and `#` lines skipped, LAST match wins —
+ * plus the inline-comment handling in `parseEnvValue`. Returns undefined when
+ * the file is absent or the key is unset/empty.
+ *
+ * A DUPLICATED KEY RESOLVES TO ITS LAST OCCURRENCE, AND THAT IS THE APP'S
+ * ANSWER (cinatra#2913, round-6 finding B1). This reader mirrored the
+ * launcher's original inline reader, which returned on the FIRST match. The app
+ * does not: it boots `.env.local` through `@next/env`'s `loadEnvConfig`, which
+ * parses with dotenv and assigns in line order, so the last statement of a key
+ * is the one every runtime consumer gets. Measured out of this checkout's own
+ * `node_modules` (`@next/env` 16.2.10):
+ *
+ *     REDIS_URL=redis://127.0.0.1:6379
+ *     REDIS_URL=redis://127.0.0.1:19999
+ *     → loadEnvConfig(dir, true).combinedEnv.REDIS_URL = redis://127.0.0.1:19999
+ *
+ * First-wins therefore made every local surface speak about an endpoint the app
+ * would not dial: the launcher's PORT, the compose plan's derived host ports,
+ * and — once `scripts/check-services.mjs` was moved onto this one reader — the
+ * Redis row, its required-tier accounting, its exit code and its drift
+ * diagnosis. One file cannot be read two ways, and of the two ways only one is
+ * a fact about the running app; this is that one. The launcher inherits it, and
+ * that is the point rather than the cost: `pnpm dev`, `pnpm check:services` and
+ * the app now agree on which line of a duplicated key wins.
+ *
+ * IT IS ALSO WHAT THE REST OF THIS REPO ALREADY DID. `parseDotenv` in
+ * scripts/gen-nango-env.mjs, scripts/gen-graphiti-env.mjs and
+ * scripts/gen-wayflow-env.mjs assigns each match into an object in line order,
+ * so those three generators have always taken the last statement — and their
+ * own comment says they mirror `scripts/check-services.mjs` "so the parsers
+ * never drift". First-wins put this reader on the other side of every one of
+ * them. (Those parsers know nothing of the `export ` prefix or of inline
+ * comments, which this one does; that divergence is older than this change and
+ * is not touched here.)
+ *
+ * Nothing in a well-formed `.env.local` changes: a key stated ONCE reads
+ * identically, which is every key in every checked-in template here. Only a
+ * file that states the same key twice moves, and it moves onto the value the
+ * app was already using.
+ *
+ * ONE DIVERGENCE FROM THE LOADER REMAINS, AND IT IS NAMED RATHER THAN CHANGED.
+ * dotenv cuts an UNQUOTED value at ANY `#`; the rule below cuts it only at a
+ * `#` that begins the value or follows whitespace. So `REDIS_URL=redis://…/#x`
+ * reads whole here and truncated in the app. That narrowness was chosen against
+ * a review finding of its own — it is what keeps a DSN password (`pa#ssword`)
+ * and a URL fragment from being silently truncated — and it is pinned by cases
+ * of its own further down this suite's file. Swapping it now would be a second
+ * behaviour change riding on the duplicate-key one, and would re-open a
+ * decision an earlier round settled. It is recorded here, and pinned as a KNOWN
+ * divergence in scripts/__tests__/dev-preflight.test.mjs, so it stays a
+ * follow-up somebody chose rather than a surprise somebody finds.
  *
  * The inline-comment handling is DELIBERATELY not scoped to the skip flag. This
  * is the launcher's one `.env.local` reader, so widening it also widens how
@@ -161,14 +208,16 @@ export function readEnvFileValue(filePath, key) {
   } catch {
     return undefined; // unreadable → treat as unset, never throw out of a preflight
   }
+  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`);
+  let value;
   for (const raw of contents.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
-    const m = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`).exec(line);
+    const m = pattern.exec(line);
     if (!m) continue;
-    return parseEnvValue(m[1]);
+    value = parseEnvValue(m[1]); // LAST stated wins — see above
   }
-  return undefined;
+  return value;
 }
 
 /**
@@ -432,6 +481,79 @@ export const PREFLIGHT_HOST_PORTS = [
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
 
+/**
+ * Is this host THIS machine — the only place a published container port lands?
+ *
+ * The one definition, kept HERE because scripts/lib/docker-port-drift.mjs
+ * already imports this module and re-exports it (the reverse direction would be
+ * a cycle). Two copies of this set is how one guard drifts from another: the
+ * drift diagnosis and the connect/publish note ask the same question about the
+ * same address, and must not be able to answer it differently.
+ *
+ * @param {unknown} host
+ * @returns {boolean}
+ */
+export function isLoopbackHost(host) {
+  return LOOPBACK_HOSTS.has(String(host ?? "").trim());
+}
+
+/**
+ * Default port per URL scheme, for a URL that states none.
+ *
+ * Owned HERE and re-exported by scripts/lib/docker-port-drift.mjs, exactly as
+ * `isLoopbackHost` is and for the same reason: that module already imports this
+ * one, and two questions have to get one answer. `parseHostPort` reads this
+ * table to resolve a connect address; `classifyServiceUrl` reads it to decide
+ * whether a portless URL states a port AT ALL. A scheme this table does not
+ * know sends `parseHostPort` to the BUNDLED fallback instead, so the address it
+ * returns is invented rather than stated — and the two callers must not be able
+ * to disagree about which schemes those are.
+ *
+ * IT MUST STAY COMPLETE FOR EVERY SCHEME A SERVICE URL HERE CAN HOLD, AND NO
+ * WIDER. An omission stopped being neutral the moment the classifier began
+ * reading it: a LOOPBACK URL whose scheme is missing from this table reads as
+ * "states no port at all" and is condemned, so a real address-bearing URI would
+ * be reported as unusable. An ADDITION is not free either — a scheme listed
+ * here is one the classifier accepts on EVERY variable — so a scheme no service
+ * in this repo speaks (`ws:`) is deliberately absent: on a `REDIS_URL` it names
+ * no Redis this checkout can find, and saying so is the honest answer. These
+ * are the schemes of THESE services, not of the web.
+ *
+ * IT DOES NOT ANSWER "is this scheme right for this variable?". A
+ * `REDIS_URL=http://127.0.0.1/x` resolves to :80 and is reported at :80: the
+ * address really is the one the URL states, and whether a Redis client can
+ * speak HTTP is a different question from the one this module asks. That
+ * mismatch is pre-existing and untouched by the address work here.
+ *
+ * A URL that omits an explicit port resolves to its scheme default, NOT the
+ * bundled-stack fallback — otherwise a loopback `postgresql://…@localhost/db`
+ * (which means :5432) is mis-read as the bundled 5434 and a perfectly-healthy
+ * non-bundled DB triggers a false drift diagnosis.
+ */
+export const PROTOCOL_DEFAULT_PORTS = {
+  "http:": 80,
+  "https:": 443,
+  "postgres:": 5432,
+  "postgresql:": 5432,
+  "redis:": 6379,
+  "rediss:": 6379,
+  // The whole Neo4j family, not only the two plain schemes. `NEO4J_URI` is a
+  // classified variable on the reporting surface, and a local instance behind
+  // TLS is stated as `neo4j+s://localhost` or `bolt+ssc://127.0.0.1` — all of
+  // them 7687. Listing only `bolt:`/`neo4j:` left the secure spellings with no
+  // known default, which the classifier then reads as "states no port" and
+  // condemns a perfectly good URI. Nothing else moves: neo4j's own fallback IS
+  // 7687 wherever this repo resolves it, so these six entries change no address
+  // already computed — they only stop the classifier condemning four spellings
+  // of an address it can resolve.
+  "bolt:": 7687,
+  "bolt+s:": 7687,
+  "bolt+ssc:": 7687,
+  "neo4j:": 7687,
+  "neo4j+s:": 7687,
+  "neo4j+ssc:": 7687,
+};
+
 const isUsablePort = (port) => Number.isInteger(port) && port > 0 && port < 65536;
 
 /**
@@ -470,6 +592,25 @@ function statedPort(rawUrl) {
  * @param {string | undefined} urlValue
  * @returns {number | undefined}
  */
+/**
+ * Does a PARSED URL point at this machine?
+ *
+ * The one normalization both callers need, in one place: WHATWG returns an IPv6
+ * hostname bracketed (`[::1]`), so it is unwrapped before the lookup —
+ * otherwise the `::1` entry in the loopback set is unreachable and a legitimate
+ * IPv6 loopback lane URL reads as somebody else's service — and
+ * `host.docker.internal` (used so containers reach the host) maps to loopback,
+ * which is what a published port is actually bound to.
+ *
+ * @param {URL} url
+ * @returns {boolean}
+ */
+function isLoopbackUrlHost(url) {
+  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+  if (host === "host.docker.internal") host = "127.0.0.1";
+  return LOOPBACK_HOSTS.has(host);
+}
+
 export function explicitLoopbackPort(urlValue) {
   if (!urlValue) return undefined;
   const raw = String(urlValue).trim();
@@ -479,16 +620,70 @@ export function explicitLoopbackPort(urlValue) {
   } catch {
     return undefined;
   }
-  // WHATWG returns an IPv6 hostname bracketed (`[::1]`), so unwrap before the
-  // lookup — otherwise the `::1` entry above is unreachable and a legitimate
-  // explicit-port IPv6 loopback lane URL reads as somebody else's service.
-  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
-  if (host === "host.docker.internal") host = "127.0.0.1";
-  if (!LOOPBACK_HOSTS.has(host)) return undefined; // external service — not ours
+  if (!isLoopbackUrlHost(url)) return undefined; // external service — not ours
   // `url.port` for anything WHATWG did not normalize away, the raw authority for
   // a stated default port (`:80`, `:443`) that it did.
   const port = url.port ? Number(url.port) : statedPort(raw);
   return isUsablePort(port) ? port : undefined;
+}
+
+/**
+ * Why a STATED service URL names no address at all — or `undefined` when it
+ * names one.
+ *
+ * Separated from `explicitLoopbackPort` because that helper answers ONE
+ * question ("is this a host port we may publish?") and answers `undefined` to
+ * every other shape alike. Three different statements collapse into that one
+ * answer, and only two of them are a service somebody else owns:
+ *
+ *   - `unparseable` — `new URL()` rejects it outright (`REDIS_URL=not a url`,
+ *     a bare socket path). There is no host and no port anywhere in it, so
+ *     nothing here can derive an address from it. What the CLIENT then makes of
+ *     the value is the client's business and is not claimed either way.
+ *   - `no-host` — it parses and states NO host (`redis://`, `redis:///0`,
+ *     `unix:///var/run/redis.sock`). Nothing here can name a TCP address for
+ *     it, whatever the app may do with the value.
+ *   - `unusable-port` — it states a port outside 1-65535, which in practice
+ *     means `:0`, the one such value WHATWG accepts (`:65536` and `:-1` fail
+ *     the parse instead). `bind(0)` asks the OS for an ephemeral port, so
+ *     nothing can ever listen on the address the URL states.
+ *   - `no-known-port` — a LOOPBACK URL that states no port under a scheme
+ *     `PROTOCOL_DEFAULT_PORTS` does not know (`redsi://127.0.0.1/0`, one letter
+ *     off). Nothing in this repo can say which port that is, so `parseHostPort`
+ *     hands back the BUNDLED fallback and every local surface then reports an
+ *     address the operator never stated.
+ *
+ * The port test comes BEFORE the loopback test on purpose: `:0` is not a port
+ * on a remote host either, so the defect is reported for the value the operator
+ * typed rather than only for the half of the host space this checkout publishes
+ * in.
+ *
+ * `no-known-port` IS RESTRICTED TO LOOPBACK, and that is not timidity. The rule
+ * "no explicit port and no scheme default" describes real remote URIs too — a
+ * Neo4j Aura `neo4j+s://….databases.neo4j.io` states neither — and those are
+ * perfectly good configuration this preflight must not condemn. The defect is
+ * not the unknown scheme; it is that a LOCAL address gets invented for it and
+ * then probed, reported and remedied as though it were configured. A remote
+ * host is never probed, never gets a local address printed for it, and stays
+ * `theirs`.
+ *
+ * @param {string} raw — a stated, non-empty, already-trimmed value
+ * @returns {{ reason: "unparseable" | "no-host" | "no-known-port" } | { reason: "unusable-port", port: number } | undefined}
+ */
+function statedUrlDefect(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { reason: "unparseable" };
+  }
+  if (url.hostname === "") return { reason: "no-host" };
+  const port = url.port ? Number(url.port) : statedPort(raw);
+  if (port !== undefined && !isUsablePort(port)) return { reason: "unusable-port", port };
+  if (port === undefined && !(url.protocol in PROTOCOL_DEFAULT_PORTS) && isLoopbackUrlHost(url)) {
+    return { reason: "no-known-port" };
+  }
+  return undefined;
 }
 
 /**
@@ -498,17 +693,55 @@ export function explicitLoopbackPort(urlValue) {
  *     force; this is the main checkout's unchanged behavior.
  *   - `ours` — an explicit-port loopback URL. That port is what this checkout
  *     publishes, and it is the lane's own claim.
- *   - `theirs` — anything else the URL can say: a remote host, or a loopback
- *     host with NO port stated. Either way the service the app talks to is not
- *     one this checkout publishes, so the preflight must neither claim a host
- *     port for it nor start a local copy of it.
+ *   - `theirs` — a URL this module can resolve an address FROM, and one this
+ *     checkout does not publish: a remote host, or a loopback host with no port
+ *     stated (which resolves to the scheme default). For every shape the
+ *     LAUNCHER speaks about, that address is the URL's own rather than a
+ *     fallback, and that is the only claim made about it: whether the service's
+ *     client can speak that scheme is a different question. The one `theirs`
+ *     shape whose port IS a fallback is an unknown scheme on a REMOTE host
+ *     (`redsi://cache.example.com/0`, which `parseHostPort` resolves to the
+ *     bundled port). The launcher never speaks about that row, because it
+ *     probes loopback rows only (the `isLoopbackHost` guard in
+ *     `scripts/dev-server.mjs`). `scripts/check-services.mjs` has NO such guard:
+ *     it probes and prints `host:port` for every row, so it does show that
+ *     fallback port beside a remote host. That is pre-existing behaviour on the
+ *     reporting surface and is untouched here. It is also why `no-known-port`
+ *     condemns only the LOOPBACK half of the shape: there the invented address
+ *     is local, and it gets probed, reported AND remedied as though the
+ *     operator had stated it. Either way the service is not one this checkout
+ *     publishes, so the preflight must neither claim a host port for it nor
+ *     start a local copy of it.
+ *   - `unusable` — stated, and names no address at all (see `statedUrlDefect`).
+ *
+ * `unusable` IS A DISTINCT STATE AND NOT A FLAVOUR OF `theirs` (cinatra#2839,
+ * round-4 finding). Both are stood down, so the PLAN treats them identically —
+ * neither is this checkout's to publish. What they may be SAID about is not
+ * identical: a `theirs` row the launcher speaks about has an address its own
+ * URL states, so "not reachable yet at <address>" is a fact about that
+ * address, while `unusable` has none, and the
+ * address a caller would otherwise print for it is one `parseHostPort` invented
+ * as a fallback. Filing both as `theirs` is what let the launcher tell an
+ * operator that `REDIS_URL=not a url` was "not reachable yet at 127.0.0.1:6379"
+ * — an address the app never uses — and tell a `:0` lane to start a service at
+ * a port nothing can listen on.
+ *
+ * IT LIVES HERE, IN THE CLASSIFIER, rather than in the launcher that formats
+ * the warning. The launcher is not the only surface that speaks about a stated
+ * URL: `scripts/check-services.mjs` reports the same services from the same
+ * plan, and this module's own doctrine is that one question gets one answer
+ * (see `isLoopbackHost`). A shape test written next to the launcher's formatter
+ * would be the second copy, free to drift from the classifier the plan is built
+ * from — the exact failure the shared `isLoopbackHost` exists to prevent.
  *
  * @param {string | undefined} urlValue
- * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string }}
+ * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string } | { state: "unusable", url: string, reason: "unparseable" | "no-host" | "unusable-port" | "no-known-port", port?: number }}
  */
 export function classifyServiceUrl(urlValue) {
   const url = String(urlValue ?? "").trim();
   if (!url) return { state: "unconfigured" };
+  const defect = statedUrlDefect(url);
+  if (defect) return { state: "unusable", url, ...defect };
   const port = explicitLoopbackPort(url);
   return port === undefined ? { state: "theirs", url } : { state: "ours", port, url };
 }
@@ -630,6 +863,7 @@ export function classifyServiceUrl(urlValue) {
  *   refusals: Array<{ service: string, envVar: string, reason: string, message: string }>,
  *   warnings: Array<{ service: string, envVar: string, reason: string, message: string }>,
  *   laneScope: "unscoped" | "checkout" | "lane",
+ *   stated: string[],
  * }}
  */
 export function resolveComposeHostPortPlan({
@@ -687,6 +921,16 @@ export function resolveComposeHostPortPlan({
   const portEnv = {};
   const unmanaged = [];
   const refusals = [];
+  // The host ports this checkout STATED directly, as `CINATRA_*_HOST_PORT`.
+  //
+  // Kept apart from `portEnv` because a claim's SOURCE decides who the
+  // connect/publish note may address. Every other entry in `portEnv` is
+  // something this module worked out — a port read off a service URL, a
+  // companion derived from its container's, the historical default — and the
+  // unscoped checkout's immunity covers exactly those. A variable the operator
+  // typed is a statement, and it is honored whatever the scope, so the note
+  // that measures it has to be too. See `formatConnectPortMismatch`.
+  const statedHostPortVars = [];
   // A stated name compose will not accept can never boot this stack at all, so
   // refuse HERE — at the step that names the variable and the rule — instead of
   // letting the operator meet compose's own error after the entry point has
@@ -734,6 +978,7 @@ export function resolveComposeHostPortPlan({
         if (isUsablePort(explicit)) {
           portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
           origin[spec.envVar] = `stated directly as ${spec.envVar}=${explicit}`;
+          statedHostPortVars.push(spec.envVar);
           continue;
         }
         // Stated, but not a port. Emitting NOTHING here is the leak: the value
@@ -830,7 +1075,12 @@ export function resolveComposeHostPortPlan({
       // Rule A: no lane, no derivation.
       const configured =
         scoped && spec.urlVar ? classifyServiceUrl(read(spec.urlVar)) : { state: "unconfigured" };
-      if (configured.state === "theirs") {
+      // `unusable` rides with `theirs`: the PLAN's question is only "may this
+      // checkout publish a host port for the service?", and the answer is no
+      // either way — a URL that names no address is not a claim on one. The two
+      // states are told apart where they are SPOKEN about, not here (see
+      // `classifyServiceUrl`), so this plan's output shape is unchanged.
+      if (configured.state === "theirs" || configured.state === "unusable") {
         unmanaged.push({
           service: spec.service,
           envVar: spec.envVar,
@@ -841,7 +1091,18 @@ export function resolveComposeHostPortPlan({
       }
       if (configured.state === "ours") {
         portEnv[spec.envVar] = String(configured.port);
-        origin[spec.envVar] = `read from ${spec.urlVar}=${configured.url}`;
+        // Redacted: `origin` is interpolated into the duplicate-host-port
+        // refusal/warning an operator reads, and an `ours` URL is still allowed
+        // userinfo (cinatra#2913, round-5 finding N4).
+        //
+        // NEVER `WITHHELD_URL_VALUE` HERE, and that holds by construction rather
+        // than by luck: `ours` means `explicitLoopbackPort` resolved a loopback
+        // host and an explicit port out of the value, so it parsed AND it has an
+        // authority — the two shapes the redaction withholds are exactly the two
+        // that have none. Pinned as a property in the suite, so a widening of
+        // `ours` cannot quietly put a marker in this sentence.
+        origin[spec.envVar] =
+          `read from ${spec.urlVar}=${redactUrlCredentials(configured.url)}`;
         continue;
       }
 
@@ -938,7 +1199,153 @@ export function resolveComposeHostPortPlan({
     );
   }
 
-  return { portEnv, unmanaged, refusals, warnings, laneScope };
+  return { portEnv, unmanaged, refusals, warnings, laneScope, stated: statedHostPortVars };
+}
+
+/**
+ * The host port THIS checkout publishes for one BUNDLED DB/CACHE service, read
+ * off the resolved plan — never derived a second time.
+ *
+ * Why this exists (cinatra#2839, acceptance item 2): the launcher has two doors
+ * to Docker and only one of them was scoped. `createComposeRunner` honors the
+ * plan; the READ-ONLY drift diagnosis above it measured every service against
+ * the HARDCODED `BUNDLED_DB_SERVICES[].defaultHostPort` — and redis's default
+ * (6379) is precisely the port the port scoping made per-worktree. On a
+ * correctly-configured lane that produced three wrong answers, one of them a
+ * hard boot failure:
+ *
+ *   - a lane that claims redis's host port directly was measured at the global
+ *     6379, found its healthy container published elsewhere, called that drift
+ *     and exited 1;
+ *   - a lane that states REDIS_URL on its own port was skipped as "not our
+ *     stack", so the guard silently stopped existing for lanes;
+ *   - a lane that STANDS REDIS DOWN was diagnosed anyway, against a container
+ *     that is by the plan's own decision not this checkout's to judge.
+ *
+ * The answer is the plan's, in every case:
+ *
+ *   - `{ standDown: true }` — the plan claims NO host port for this service
+ *     (its URL names a remote host, or a loopback with no port). Nothing here
+ *     is ours to diagnose.
+ *   - `{ published }` — the host port the plan publishes. For a service the
+ *     plan does not parameterize (postgres, neo4j: the compose files state a
+ *     fixed host port for them) that IS the historical default, so those
+ *     services and the whole unscoped checkout behave exactly as before.
+ *
+ * A companion entry (`derivedFrom`) is never the answer: it is a second port on
+ * an existing service's container, not a bundled DB service of its own.
+ *
+ * @param {{ composeService: string, defaultHostPort: number, plan?: { portEnv?: Record<string, string>, unmanaged?: Array<{ envVar: string }>, stated?: string[] } }} input
+ * @returns {{ published: number, parameterized: boolean, stated?: boolean, standDown?: false } | { standDown: true }}
+ */
+export function resolvePublishedHostPort({ composeService, defaultHostPort, plan = {} } = {}) {
+  const spec = PREFLIGHT_HOST_PORTS.find(
+    (entry) => entry.service === composeService && !entry.derivedFrom,
+  );
+  // Not a service the plan parameterizes — the compose files pin its host port,
+  // so the historical default is the honest answer and always was. `parameterized`
+  // says which of the two this is, because a caller may only compare a connect
+  // port against a port THIS plan decided; postgres and neo4j are pinned in the
+  // compose files, so a lane pointing at another one of those is the ordinary
+  // external-service case and nothing to remark on.
+  if (!spec) return { published: defaultHostPort, parameterized: false };
+  // `stated` carries the claim's SOURCE forward: was this port typed by the
+  // operator, or worked out by the plan? Only the caller that WARNS about a
+  // claim needs it — see `formatConnectPortMismatch`.
+  const base = {
+    parameterized: true,
+    envVar: spec.envVar,
+    urlVar: spec.urlVar,
+    stated: (plan.stated ?? []).includes(spec.envVar),
+  };
+  if ((plan.unmanaged ?? []).some((entry) => entry.envVar === spec.envVar)) {
+    return { ...base, standDown: true };
+  }
+  const claimed = Number((plan.portEnv ?? {})[spec.envVar]);
+  // A plan that resolved no key for a managed service is the unscoped checkout
+  // (or one whose claim was refused, in which case the caller has already stood
+  // the whole run down); the default is what compose would publish.
+  return { ...base, published: isUsablePort(claimed) ? claimed : defaultHostPort };
+}
+
+/**
+ * The warning a SCOPED checkout owes its operator when it PUBLISHES a service
+ * on one host port and its own app CONNECTS on another.
+ *
+ * This is the leak the drift fix alone does not close (cinatra#2839).
+ * `resolveComposeHostPortPlan` accepts an explicit
+ * `CINATRA_*_HOST_PORT` as a complete claim, so a lane may state
+ * `CINATRA_REDIS_HOST_PORT=16379` and no `REDIS_URL` at all and be refused
+ * nothing. Compose then publishes the lane's redis on 16379 while the app,
+ * having no URL, falls back to the shared 6379 — and the lane silently spends
+ * the whole session talking to the OPERATOR's redis. That is precisely the
+ * cross-lane bleed the scoping exists to prevent, arriving through the one door
+ * the plan leaves open.
+ *
+ * The probe is NOT moved to the published port to paper over it: the probe
+ * answers "can the app reach its service?", so following the plan instead of
+ * the app would report a healthy service the app cannot use. The mismatch is
+ * said out loud instead, naming both ports and both ways to fix it.
+ *
+ * A WARNING, not a refusal, and deliberately so. `REDIS_URL=…:6379` beside
+ * `CINATRA_REDIS_HOST_PORT=16379` is a strange but STATED intent — publish my
+ * own, connect to the shared one — and the plan already accepted it. Refusing
+ * here would overturn that decision from a different module.
+ *
+ * BOTH HALVES OF THE MESSAGE ARE CLAIMS ABOUT THIS HOST, so it is said only
+ * about a LOOPBACK connect address — the same test `shouldDiagnoseDrift` keeps,
+ * for the same reason. A checkout whose `REDIS_URL` names an external or shared
+ * service by design is not talking to another local stack, and "point
+ * `REDIS_URL` at 127.0.0.1" would move it off the service it was configured
+ * for: a false statement with an unsafe remedy attached.
+ *
+ * Returns undefined when there is nothing to say: a non-loopback connect host,
+ * an unscoped checkout that merely OMITTED a host port, a service this plan does
+ * not parameterize, a service stood down, or ports that agree.
+ *
+ * @param {{ service: string, claim?: { published?: number, parameterized?: boolean, standDown?: boolean, stated?: boolean, envVar?: string, urlVar?: string }, connectHost?: string, connectPort?: number, laneScope?: string }} input
+ * @returns {string | undefined}
+ */
+export function formatConnectPortMismatch({
+  service,
+  claim = {},
+  connectHost,
+  connectPort,
+  laneScope,
+} = {}) {
+  // Not this host, not this message. Everything below names ports on the local
+  // Docker host; a remote answer belongs to neither the operator's stack nor
+  // another lane, and re-pointing at loopback would break a working setup.
+  if (!isLoopbackHost(connectHost)) return undefined;
+  // The unscoped checkout states no project name, so it is the operator's single
+  // stack and nothing here remarks on it — the same immunity every rule above
+  // states explicitly rather than leaving to fall out.
+  //
+  // That immunity covers what a checkout OMITS, not what it STATES. An unscoped
+  // checkout that wrote `CINATRA_REDIS_HOST_PORT=16379` made a claim the plan
+  // honors whatever its scope, and published-vs-connect then disagree — which
+  // also switches `shouldDiagnoseDrift` off, so the drift refusal and the "not
+  // reachable yet" warning both stop describing it. This note is the only signal
+  // left before the ECONNREFUSED in app boot, and silence is worse than the
+  // wrong-but-loud answer it replaced.
+  if ((!laneScope || laneScope === "unscoped") && !claim.stated) return undefined;
+  if (!claim.parameterized || claim.standDown) return undefined;
+  // Both sides must be real ports before this can name them. A claim with no
+  // usable published port is one the plan already refused or stood down, and the
+  // caller has stopped on that; saying "published on host port undefined" here
+  // would only bury the message that matters.
+  if (!isUsablePort(Number(claim.published)) || !isUsablePort(Number(connectPort))) {
+    return undefined;
+  }
+  if (Number(connectPort) === Number(claim.published)) return undefined;
+  return (
+    `${service} is published on host port ${claim.published} by this checkout (${claim.envVar}), but the app connects ` +
+    `on ${connectPort}. Those are different services: whatever answers on ${connectPort} is somebody else's — the ` +
+    `operator's stack on the shared default, or another lane — so this checkout starts a ${service} nothing here ` +
+    `uses and does its real work in a container it does not own. Point ${claim.urlVar} at ` +
+    `127.0.0.1:${claim.published}, or set ${claim.envVar} to ${connectPort} so the published port is the one the app ` +
+    `connects on.`
+  );
 }
 
 /**
@@ -983,6 +1390,356 @@ export function formatStandDownRefusal({ unmanaged = [] } = {}) {
 }
 
 /**
+ * What the launcher owes an operator when a service this checkout STOOD DOWN is
+ * also not answering.
+ *
+ * The stand-down settles who may PUBLISH the service; it says nothing about
+ * whether anything is listening where the app dials. Those are two questions,
+ * and the second one still has an answer: the app is about to fail on this
+ * address. The launcher used to skip the probe along with the diagnosis, so the
+ * one shape that reaches this branch and still resolves to loopback — a scoped
+ * lane whose `REDIS_URL` is a loopback URL with no port — got total silence and
+ * then ECONNREFUSED in app boot (cinatra#2839, round-3 finding 1).
+ *
+ * IT MUST NOT BORROW THE ORDINARY REMEDY. "Start them with `pnpm services`" is
+ * the right answer for a service this checkout publishes and a false one here:
+ * a whole-stack `up` cannot honor a stand-down, so the derivation step REFUSES
+ * to run it for exactly this plan (`formatStandDownRefusal`). Sending the
+ * operator to a command that is already rigged to refuse them is worse than the
+ * silence it replaced. So this line names the two fixes that do work, in the
+ * same words the Nango stand-down already uses: start the service where it is
+ * configured, or point its URL at a 127.0.0.1 port this worktree owns.
+ *
+ * THE HOST-PORT VARIABLE IS NAMED AS A CONSTRAINT, NOT AS A SECOND FIX. Setting
+ * `CINATRA_*_HOST_PORT` alone does end the stand-down, and it does NOT make the
+ * service reachable: the app keeps dialing whatever the URL resolves to, so the
+ * only thing that changes is which warning prints (`formatConnectPortMismatch`
+ * instead of this one). The URL is the fix; the variable has to agree with it.
+ *
+ * `hostPortVar` is always known at the one call site: only a service the plan
+ * PARAMETERIZES can be stood down, and such a claim always carries its `envVar`
+ * (`resolvePublishedHostPort`).
+ *
+ * IT NEVER DESCRIBES A DERIVED FALLBACK AS THE CONFIGURED ADDRESS (cinatra#2839,
+ * round-4 finding). `host`/`port` reach this function from `parseHostPort`,
+ * which FALLS BACK to the bundled address whenever the stated URL yields
+ * nothing — so `REDIS_URL=not a url` arrived here as `127.0.0.1:6379` and this
+ * sentence told the operator their app was failing at an address it never
+ * dials, with a remedy ("start Redis where it is configured") aimed at the
+ * wrong place. The stated URL is therefore passed in and classified HERE rather
+ * than tested at the call site: a caller that hands this function an unusable
+ * URL gets the validation line back, not an invented address, and there is no
+ * order of operations at any call site that can produce the false sentence.
+ *
+ * @param {{ service: string, urlVar?: string, hostPortVar?: string, host?: string, port?: number, url?: string, standDown?: boolean }} input
+ * @returns {string}
+ */
+export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host, port, url } = {}) {
+  // Absent `url` keeps the address branch: a stood-down row ALWAYS has a stated
+  // URL (`unmanaged` is populated from one), so the only callers that reach this
+  // without one are asking about a shape that has an address by construction.
+  if (classifyServiceUrl(url).state === "unusable") {
+    return formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, standDown: true });
+  }
+  return (
+    `${service} not reachable yet at ${host}:${port}, and this checkout will not start it: ` +
+    `${urlVar} is not an explicit-port loopback URL, so that service is not ours to publish. ` +
+    `\`pnpm services\` refuses this plan for the same reason. Start ${service} where it is configured, ` +
+    `or point ${urlVar} at a 127.0.0.1 port this worktree owns. This checkout then publishes that port, ` +
+    `and ${hostPortVar} must name the same one if it is set at all.`
+  );
+}
+
+/**
+ * The schemes WHATWG calls SPECIAL. They are the only ones for which a
+ * backslash ends the authority exactly as a slash does; under every other
+ * scheme a `\` is an ordinary character that a password may contain.
+ */
+const SPECIAL_URL_SCHEMES = new Set(["http", "https", "ws", "wss", "ftp", "file"]);
+
+/**
+ * Everything between `scheme://` and the authority's last `@`. A NON-special
+ * scheme reaches an authority only through exactly `//`, so the prefix is
+ * literal.
+ */
+const URL_USERINFO = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)@/;
+
+/**
+ * The same for a SPECIAL scheme, which reaches its authority through ANY run of
+ * `/` and `\` — including none at all. `http:u:pw@host`, `http:\\u:pw@host` and
+ * `http:////u:pw@host` all parse to host `host` with password `pw`, so a rule
+ * that insisted on `://` would print those credentials whole.
+ */
+const URL_USERINFO_SPECIAL = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:[/\\]*)([^/?#\\]*)@/;
+
+/** The scheme of a `scheme:…` value, lowercased, or undefined. */
+const urlScheme = (raw) => /^\s*([A-Za-z][A-Za-z0-9+.-]*):/.exec(raw)?.[1].toLowerCase();
+
+/**
+ * What a surface prints INSTEAD of a URL it cannot prove free of credentials.
+ *
+ * IT EXPLAINS ITSELF ON PURPOSE. `redactUrlCredentials` has callers that write
+ * their own sentence around its return value, and it does not know the variable
+ * name any of them would rather name. So the fail-closed value is readable on
+ * its own: a caller that simply interpolates it still prints something an
+ * operator can act on, and a caller added later cannot turn a forgotten branch
+ * back into a leak. Callers that DO know the variable name say so instead — see
+ * `formatStatedUrlValue`, `scripts/check-services.mjs` and
+ * `scripts/dev-server.mjs`.
+ */
+export const WITHHELD_URL_VALUE =
+  "<withheld: this value has no structure a credential could be redacted out of>";
+
+/**
+ * Strip any userinfo out of a URL-shaped value before it reaches an operator.
+ *
+ * NO SURFACE HERE MAY PRINT A CREDENTIAL (cinatra#2913, round-5 finding N4).
+ * These messages are printed by `pnpm dev` and `pnpm check:services`, which run
+ * in terminals, CI logs and pasted bug reports, and the values they echo are
+ * service URLs — `SUPABASE_DB_URL`, `REDIS_URL`, `NANGO_SERVER_URL` — whose
+ * ordinary shape is `scheme://user:password@host:port/path`. A message that
+ * exists to tell an operator their URL is wrong must not be the thing that
+ * publishes their password.
+ *
+ * The WHOLE userinfo goes, username included. A username is not a secret in the
+ * way a password is, but keeping it means the rule is "print part of the
+ * credential", which is a rule nobody can hold: `redis://opossum@host` states a
+ * password in the username position, and there is no way to tell from the
+ * string which half of a userinfo is which. The host, port, scheme and path
+ * survive, and those are the parts an operator needs to see to fix the value.
+ *
+ * IT FAILS CLOSED, AND THAT IS THE WHOLE RULE (cinatra#2913, round-7 finding
+ * B2). A value is RETURNED only when this helper can PROVE it carries no
+ * userinfo. Two proofs exist and there is no third: the parser read an
+ * AUTHORITY and reported no username and no password, or the value holds no
+ * `@` at all. Failing both proofs, the textual rule redacts what it can
+ * structurally locate — and where it locates nothing, the value is not printed:
+ * `WITHHELD_URL_VALUE` goes out in its place.
+ *
+ * WITHOUT THAT LAST CLAUSE THE RULE HAD TWO HOLES, and both were reachable by a
+ * typo. WHATWG only looks for userinfo INSIDE an authority, so a value with no
+ * authority gets no opinion from it at all: `redis-user:pw@127.0.0.1:6379` — an
+ * operator who forgot the `//` — parses to an OPAQUE PATH of
+ * `pw@127.0.0.1:6379` with an empty username and an empty password, and the
+ * parser's "no credential" answer there is silence, not a clearance. The second
+ * hole was the unparseable value at a DIRECT call site: `formatStatedUrlValue`
+ * withheld it, but `scripts/check-services.mjs` and `scripts/dev-server.mjs`
+ * call this helper straight, and a value the textual rule could not match came
+ * back with only its whitespace scrubbed. One clause closes both.
+ *
+ * IT CUTS AT THE AUTHORITY'S LAST `@`, NOT ITS FIRST. WHATWG splits there, so
+ * `redis://user:p@ss@host` is user `user`, password `p@ss`, host `host` — a `@`
+ * inside a password is legal and ordinary. Stopping at the first `@` redacted
+ * `user:p` and printed `ss` as though it were the host, which leaks half the
+ * password in the line that exists to withhold it.
+ *
+ * THE SCHEME DECIDES WHETHER `\` ENDS THE AUTHORITY, and getting that backwards
+ * costs a credential. For a WHATWG SPECIAL scheme a backslash ends the
+ * authority exactly as a slash does, so in `http://host\path@x` the host is
+ * `host` and `@x` is path — treating that `@` as userinfo would hide a hostname
+ * for no reason. Under every OTHER scheme `\` is an ordinary character:
+ * `redis://u:p\q@127.0.0.1:6379/0` really does have the password `p\q`, and a
+ * rule that stopped at the `\` would match no `@` at all and print the password
+ * whole. One class cannot be right for both, so the scheme picks the class. The
+ * service URLs this preflight speaks about sit on both sides of that line —
+ * `redis:`/`rediss:`/`postgresql:`/`bolt:` on one, `http:`/`https:` on the
+ * other — so neither side is hypothetical.
+ *
+ * A SPECIAL SCHEME ALSO REACHES ITS AUTHORITY WITHOUT `//`. WHATWG accepts any
+ * run of `/` and `\` after `scheme:` for those schemes, zero included, so
+ * `http:u:pw@host` parses to host `host` with password `pw`. A rule keyed on a
+ * literal `://` never saw those and printed them whole, which is why the prefix
+ * is `:[/\\]*` on the special side.
+ *
+ * A value with no `scheme:` and no `@` is returned unchanged: there is no
+ * authority in it, and no `@` means there is no userinfo to hide either. Such a
+ * value never reaches an operator through `formatStatedUrlValue`, which
+ * withholds it outright.
+ *
+ * @param {unknown} value
+ * @returns {string} the value, its userinfo redacted, or `WITHHELD_URL_VALUE`
+ */
+export function redactUrlCredentials(value) {
+  const raw = String(value ?? "");
+  // THE PARSER ANSWERS FIRST, AND ONLY WHERE IT READ AN AUTHORITY. A value that
+  // parses WITH A HOST and carries no username or password has no credential in
+  // it, whatever its `@` looks like — `http://127.0.0.1:3003/nango/@me` puts one
+  // in the path and `https://tunnel.example/@me` puts one in a handle, and both
+  // are printed exactly as the operator wrote them.
+  //
+  // `url.host &&` IS THE HALF THAT MAKES THAT A PROOF. WHATWG looks for userinfo
+  // inside an authority and nowhere else, so a host-less value never had its
+  // `@` examined: `redis-user:pw@127.0.0.1:6379` is one opaque path, username
+  // and password both empty, and taking that as a clearance printed the
+  // password whole. A host-less value therefore falls through to the textual
+  // rule, which either locates the userinfo or withholds the value.
+  try {
+    const url = new URL(raw);
+    if (url.host && !url.username && !url.password) return raw;
+  } catch {
+    // Unparseable: there is no structure to consult, so the textual rule below
+    // decides — and it FAILS CLOSED. It would rather hide a hostname than print
+    // a password, which is the right way round for a value whose most likely
+    // defect is an unquoted password with a space in it.
+  }
+  // THE TEXTUAL RULE READS WHAT THE PARSER READS, NOT WHAT THE FILE SPELLS, and
+  // it does so by running WHATWG's OWN PREPROCESSING first rather than by
+  // patching one character class at a time.
+  //
+  // The basic URL parser begins by stripping leading and trailing C0 controls
+  // and spaces, then deleting every ASCII tab, LF and CR anywhere in the value.
+  // So `http:<TAB>//u:pw@host` and `<NUL>http://u:pw@host` are
+  // both perfectly ordinary credentialled URLs to the app, while a rule applied
+  // to the raw text matches neither and prints the password whole. Two edges of
+  // that shape were found one after the other; doing the whole preprocessing
+  // closes the class instead of the two examples.
+  //
+  // It is never visible in an ordinary echo: a value that parses with no
+  // userinfo has already returned above, so what is left is either a value
+  // becoming `***@…` or one this module withholds outright.
+  const scrubbed = raw
+    .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+    .replace(/[\t\n\r]/g, "");
+  const scheme = urlScheme(scrubbed);
+  const redacted =
+    scheme === undefined
+      ? scrubbed
+      : scrubbed.replace(
+          SPECIAL_URL_SCHEMES.has(scheme) ? URL_USERINFO_SPECIAL : URL_USERINFO,
+          "$1***@",
+        );
+  // A REDACTION THAT FIRED IS ITS OWN PROOF. Both patterns end at the LAST `@`
+  // before the first authority delimiter, so whatever `@` survives in the tail
+  // is one the delimiter already put in a path, a query or a fragment.
+  if (redacted !== scrubbed) return redacted;
+  // NOTHING WAS PROVED AND NOTHING WAS REDACTED, so nothing is printed. What
+  // reaches here is a value whose `@` no parser and no pattern could account
+  // for — an opaque path under a non-special scheme (`redis-user:pw@host`), or
+  // a value that parses as nothing and hides its userinfo behind a `?`: under a
+  // special scheme the `?` starts the query, so the credential lands in the
+  // PORT position, the parse fails, and both patterns stop before the `@`.
+  // There is no way to say which side of that `@` is the secret, so the value
+  // does not go out. An `@`-free value has nothing to hide and still does.
+  return scrubbed.includes("@") ? WITHHELD_URL_VALUE : scrubbed;
+}
+
+/**
+ * Render a STATED service URL for operator output: `VAR=<value>` with any
+ * userinfo redacted, or — when the value does not parse as a URL at all — the
+ * variable's name alone.
+ *
+ * AN UNPARSEABLE VALUE IS NOT ECHOED (cinatra#2913, round-5 finding N4). The
+ * redaction above is structural: it finds the userinfo because the value has
+ * the structure of a URL. A value that parses as nothing has no structure to
+ * find, so nothing can be said about where a secret is in it — and the way a
+ * URL most often becomes unparseable is an unquoted password containing a
+ * space, which puts the credential in exactly the branch that has no way to
+ * locate it. So that branch names the variable and the defect, and shows no
+ * part of the value. The operator has the file open; the variable name is what
+ * they need to find the line.
+ *
+ * A VALUE THE REDACTION WITHHELD IS TREATED THE SAME WAY, for the same reason
+ * (cinatra#2913, round-7 finding B2). `redis-user:pw@127.0.0.1:6379` parses, so
+ * the branch above lets it through — and `redactUrlCredentials` cannot locate
+ * the userinfo in it, because WHATWG filed the whole thing as an opaque path.
+ * Two withholding rules would be two rules to keep in step; this is one. The
+ * operator gets the variable's name either way, which is what they need to find
+ * the line.
+ *
+ * @param {{ urlVar?: string, url?: unknown }} input
+ * @returns {string}
+ */
+export function formatStatedUrlValue({ urlVar, url } = {}) {
+  const value = String(url ?? "");
+  try {
+    new URL(value);
+  } catch {
+    return String(urlVar);
+  }
+  const shown = redactUrlCredentials(value);
+  return shown === WITHHELD_URL_VALUE ? String(urlVar) : `${urlVar}=${shown}`;
+}
+
+/**
+ * What a surface owes an operator when a service URL is STATED and names no
+ * address at all (cinatra#2839, round-4 finding).
+ *
+ * A VALIDATION LINE, NOT A REACHABILITY LINE, and that is the whole point. The
+ * reachability sentence answers "is anything listening where the app dials?" —
+ * a question that presupposes an address. For `REDIS_URL=not a url` there is
+ * none: `getRedisUrl` hands the value to BullMQ verbatim
+ * (`src/lib/background-jobs.ts`), so whatever the app dials it is not
+ * `127.0.0.1:6379` — which is exactly what `parseHostPort` gives every local
+ * surface as its fallback. Reporting THAT address named a service the app never
+ * talks to; for `redis://127.0.0.1:0/0`
+ * the address was real and the remedy impossible, since nothing can listen on
+ * port 0. So this line speaks about the URL, names no host and no port, and
+ * says outright — per defect, because the two halves are not true of the same
+ * shapes — either that a shown address is invented or that the ordinary remedy
+ * cannot be carried out.
+ *
+ * THE HEAD IS "does not state a usable address", not "is not a usable URL".
+ * Only the first stays true for every shape: a `unix:///var/run/redis.sock` may
+ * be a perfectly good value for the app's client and is still no host and port
+ * this preflight can probe. It is also the sentence the plan already speaks
+ * about a host port (`… is not a usable host port (1-65535)`).
+ *
+ * IT IS NOT A REFUSAL EXIT. Both surfaces keep the exit semantics they had: the
+ * launcher warns and lets the app boot (only a positively-diagnosed drift exits
+ * 1, and a service with no address can never be diagnosed), and the checker
+ * reports it beside its rows. Promoting this to a plan REFUSAL would fail
+ * `make dev` outright through `scripts/dev-compose-env.mjs`, and — worse — would
+ * make `scripts/dev-server.mjs` return on `planRefused` BEFORE the preflight
+ * that prints this very line. The louder exit would buy silence about the thing
+ * it exits for.
+ *
+ * `standDown` adds the publishing half, and only where it is true: postgres is
+ * not a service the plan parameterizes, so a defective `SUPABASE_DB_URL` gets
+ * the validation line WITHOUT a stand-down clause this checkout would be
+ * contradicting the moment it published 5434.
+ *
+ * @param {{ service: string, urlVar?: string, url?: string, hostPortVar?: string, standDown?: boolean }} input
+ * @returns {string}
+ */
+export function formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, standDown = false } = {}) {
+  const stated = classifyServiceUrl(url);
+  // Redacted, and for an unparseable value withheld entirely — see
+  // `formatStatedUrlValue`. `shown` is therefore `REDIS_URL=redis://***@host/0`
+  // or bare `REDIS_URL`, never the operator's password.
+  const shown = formatStatedUrlValue({ urlVar, url: stated.url ?? url });
+  // The FALLBACK sentence is the finding's first half and the IMPOSSIBLE-REMEDY
+  // sentence its second, so each reason carries the one that is true of it. A
+  // `:0` URL really does resolve to the address it states — 127.0.0.1:0 is no
+  // fallback — and calling it one would be a new false statement in the line
+  // that exists to remove one.
+  const invented =
+    `The address a check would otherwise show for ${service} is this checkout's own fallback, not one ` +
+    `${urlVar} states`;
+  const why =
+    stated.reason === "no-host"
+      ? `${shown} states no host, so it names no address for ${service} at all. ${invented}`
+      : stated.reason === "unusable-port"
+        ? `${shown} states port ${stated.port}, and a host port is 1-65535. Nothing can ever listen there, so ` +
+          `"start ${service} where it is configured" is a remedy no operator can carry out`
+        : stated.reason === "no-known-port"
+          ? `${shown} states no port, and this checkout knows no default port for the ` +
+            `\`${new URL(stated.url).protocol}\` scheme. ${invented}`
+          : `${shown} does not parse as a URL at all (its value is not echoed here: an unparseable value has no ` +
+            `structure a credential could be redacted out of), so no address here can come from it. ${invented}`;
+  return (
+    `${urlVar} does not state a usable address for ${service}: ${why}. ` +
+    `Point ${urlVar} at the host and port ${service} really answers on: a 127.0.0.1 port this worktree owns if it ` +
+    `runs here.` +
+    (standDown
+      ? ` This checkout will not start ${service} either: a URL that is not an explicit-port loopback URL is not ` +
+        `ours to publish, and \`pnpm services\` refuses this plan for the same reason. ${hostPortVar} alone ends ` +
+        `that stand-down and fixes nothing, because the app keeps dialing ${urlVar}; the URL is the fix, and ` +
+        `${hostPortVar} must name the same port if it is set at all.`
+      : "")
+  );
+}
+
+/**
  * The distinct compose services a plan says this checkout may not publish.
  *
  * @param {Array<{ service: string }>} unmanaged
@@ -997,11 +1754,16 @@ export function unmanagedComposeServices(unmanaged = []) {
  * the line names the configured URL that made the preflight stand down. A
  * derived port repeats its source's URL, so entries are de-duplicated.
  *
+ * Through `formatStatedUrlValue`, so this line is under the same no-credential
+ * rule as every other place a stated URL is echoed (cinatra#2913, round-5
+ * finding N4). `unmanaged` carries `unusable` URLs as well as `theirs` ones, so
+ * an unparseable value reaches here too and is named without being shown.
+ *
  * @param {Array<{ urlVar: string, url: string }>} unmanaged
  * @returns {string}
  */
 export function formatUnmanagedServices(unmanaged = []) {
-  return [...new Set(unmanaged.map(({ urlVar, url }) => `${urlVar}=${url}`))].join(", ");
+  return [...new Set(unmanaged.map((entry) => formatStatedUrlValue(entry)))].join(", ");
 }
 
 /**
