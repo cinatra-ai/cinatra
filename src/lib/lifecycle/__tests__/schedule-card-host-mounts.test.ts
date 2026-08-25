@@ -134,9 +134,9 @@ describe("the four mounts exist and are host-declared", () => {
     expect(source).toMatch(/host:\s*"run_card"\s*\|\s*"page_gate_region"/);
   });
 
-  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the review
-  // page's gate region holds the review card alone.
-  it("both pages place the rail STEP and neither mounts the card — the gate region is the review card's alone", () => {
+  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the
+  // review page's gate region draws no schedule card at all.
+  it("both pages place the rail STEP and neither mounts the card — the gate region draws no schedule card", () => {
     for (const [host, rel] of Object.entries(RAIL_PLACEMENTS)) {
       const source = read(rel);
       for (const tag of RAIL_STEP_TAGS[host as keyof typeof RAIL_STEP_TAGS]) {
@@ -161,10 +161,11 @@ describe("the four mounts exist and are host-declared", () => {
         /<\s*ScheduleProposalCard\b/,
       );
     }
-    // THE GATE REGION. The review page's `page_gate_region` provider now wraps
-    // the review card and nothing else — the composition the plan requires. The
-    // schedule step opens IN that region, in place of the card, which is what
-    // makes "the two can never appear together" structural.
+    // THE GATE REGION. The review page's `page_gate_region` provider wraps the
+    // recommendation hold card above the review gate card (S9f, cinatra#2790)
+    // and no schedule drawing of any kind — the composition the plan requires.
+    // The schedule step opens IN that region, in place of a schedule card, which
+    // is what makes "the two can never appear together" structural.
     const reviewPage = read(REVIEW_PAGE);
     expect(reviewPage).not.toMatch(/<\s*ScheduleProposalCard\b/);
     expect(reviewPage).toMatch(/<LifecycleCardSurfaceProvider host="page_gate_region">/);

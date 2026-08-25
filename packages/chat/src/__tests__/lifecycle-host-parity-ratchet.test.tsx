@@ -404,26 +404,37 @@ describe("an edited array or a bare provider changes nothing", () => {
   });
 
   // The claimed cell must be one the product really does NOT produce, or the
-  // discriminator proves nothing — and the subject has moved twice for exactly
-  // that reason. `verification_summary` stopped being the example when S9e
-  // (cinatra#2789) landed its run-card mount; `trigger_schedule_proposal`
-  // stopped being it when S9d (cinatra#2788) landed its two composition mounts.
-  // `recommendation_hold` on `page_gate_region` is what is left: the kind is a
-  // typed interrupt with no gate-region mount, and that cell is neither
-  // recorded nor owed, so a claim on it is a claim on nothing.
+  // discriminator proves nothing — and the subject has moved three times for
+  // exactly that reason. `verification_summary` stopped being the example when
+  // S9e (cinatra#2789) landed its run-card mount; `trigger_schedule_proposal`
+  // stopped being it when S9d (cinatra#2788) landed its two composition mounts;
+  // `recommendation_hold` stopped being it when S9f (cinatra#2790) landed the
+  // gate-region mount, which this slice both records and renders.
+  // `agent_hitl_screen` on `page_gate_region` is what is left, and it is the
+  // only cell in the whole grid that still qualifies: cinatra#2928 registered
+  // the kind with no mount at all, the three hosts the ruling gives it are OWED,
+  // and `page_gate_region` is neither recorded nor owed — so a claim on that
+  // cell is a claim on nothing.
   it("claiming a host in the ratchet that nothing renders FAILS — the array is not the evidence", () => {
     const edited = {
       ...LIFECYCLE_HOST_PARITY_RATCHET,
-      recommendation_hold: {
+      agent_hitl_screen: {
         hosts: {
-          ...LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts,
+          ...LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.hosts,
           page_gate_region: "composition" as HostObservationMethod,
         },
-        owed: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed,
+        owed: LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.owed,
       },
     };
     const violations = evaluateHostParity({ observed: OBSERVED, ratchet: edited });
     expect(violations.map((v) => v.code)).toContain("host-lost");
+    // …and it is the CLAIMED cell that is lost, not a neighbour's.
+    expect(
+      violations.some(
+        (v) =>
+          v.code === "host-lost" && v.kind === "agent_hitl_screen" && v.host === "page_gate_region",
+      ),
+    ).toBe(true);
   });
 
   it("the DECLARED per-host list is now MATCHED cell-for-cell by what renders", () => {
@@ -440,9 +451,11 @@ describe("an edited array or a bare provider changes nothing", () => {
     // what makes the twelve true is the four render-observed rows above, not
     // this list — and a cell that renders without being declared is equally a
     // drift. The "declaration cannot stand in for an observation" discriminator
-    // itself has NOT gone away; it moved to the two arms below, which drive
-    // `host-lost` and `host-unratcheted` on `recommendation_hold`, the one kind
-    // whose host set is genuinely incomplete.
+    // itself has NOT gone away; it moved to the claimed-cell arm above and the
+    // growth arm below, which drive `host-lost` and `host-unratcheted` on
+    // `agent_hitl_screen@page_gate_region` — the one cell in the whole grid the
+    // ratchet neither records nor owes, since S9f (cinatra#2790) recorded
+    // `recommendation_hold`'s last host.
     const declared = LIFECYCLE_CARD_HOSTS.flatMap((host) =>
       lifecycleViewTypesForHost(host).map((kind) => `${kind}@${host}`),
     );
@@ -482,22 +495,32 @@ describe("the ratchet goes red in every direction it claims to", () => {
   });
 
   // Same reason as the claimed-cell discriminator above: the grown cell must be
-  // one the ratchet does not already record. `verification_summary` records all
-  // four hosts since S9e (cinatra#2789) and `trigger_schedule_proposal` does
-  // since S9d (cinatra#2788), so the subject is `recommendation_hold` on
-  // `page_gate_region` — neither recorded nor owed, so observing it is growth
-  // nobody wrote down rather than an owed row coming due.
+  // one the ratchet neither records NOR owes — an owed cell that starts drawing
+  // is `owed-cell-observed`, a different direction with its own arm below. All
+  // four DRAWN kinds record all four hosts since S9e (cinatra#2789), S9d
+  // (cinatra#2788) and S9f (cinatra#2790), so the subject is `agent_hitl_screen`
+  // on `page_gate_region`: cinatra#2928 registered the kind owing `chat_thread`,
+  // `site_widget` and `run_card` and leaving the gate region unclaimed, so
+  // observing it is growth nobody wrote down rather than an owed row coming due.
   it("a NEW host that nobody recorded fails — growth is not silent either", () => {
     const grown: ObservedHostParity = {
       ...OBSERVED,
-      recommendation_hold: {
-        ...(OBSERVED.recommendation_hold ?? {}),
+      agent_hitl_screen: {
+        ...(OBSERVED.agent_hitl_screen ?? {}),
         page_gate_region: "composition",
       },
     };
-    expect(evaluateHostParity({ observed: grown }).some((v) => v.code === "host-unratcheted")).toBe(
-      true,
-    );
+    const violations = evaluateHostParity({ observed: grown });
+    expect(violations.some((v) => v.code === "host-unratcheted")).toBe(true);
+    // …and it is the GROWN cell that is unratcheted, not a neighbour's.
+    expect(
+      violations.some(
+        (v) =>
+          v.code === "host-unratcheted" &&
+          v.kind === "agent_hitl_screen" &&
+          v.host === "page_gate_region",
+      ),
+    ).toBe(true);
   });
 
   it("an OWED cell that starts drawing fails, so the row must be struck", () => {

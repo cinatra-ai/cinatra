@@ -690,7 +690,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // the same `ScheduleProposalCard` the transcript registry dispatches. The
       // pages pass it a ref and a host and draw nothing of the schedule
       // themselves — so "one renderer per kind" survives the move, and the
-      // review page's gate region now holds the review card alone.
+      // review page's gate region draws no schedule card at all.
       run_card: [
         {
           module: "packages/agents/src/schedule-rail-step.tsx",
@@ -706,7 +706,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "step_rail",
           surface: "production",
-          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it now holds the review card alone, which is the composition the plan requires",
+          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card, holding the recommendation hold card above the review gate card, which is the composition the plan requires",
         },
       ],
     },
