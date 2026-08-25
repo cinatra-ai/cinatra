@@ -373,13 +373,6 @@ try {
 
   await setTheme("cinatra");
   await shoot(
-    "R1__recommendation-card__page_gate_region__decided",
-    "decided",
-    "The recommendation row on the run review page in its DECIDED form, framed on the card root. One settled chip per kept skill, each printing the owning extension's manifest displayName and its own outcome — Confirmed / Adjusted — and NOTHING to press. This is the record of what was chosen before the run started; the decision itself was taken on the run page through the card's own per-chip controls (see logs/real-sequence.log), never here.",
-    "card-root",
-  );
-
-  await shoot(
     "R2__recommendation-card__page_gate_region__decided__above-gate",
     "decided",
     "The SAME decided row IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it still AWAITING its decision (Comment / Reject / Approve). This is the ordering plan section 6.4 asks for, in the only composition a real flow produces: the run-start decision settled above the after-the-fact one that is still open. The measured order is carried in this record's `order`, the gate's own reading in `gate`.",
@@ -387,13 +380,6 @@ try {
   );
 
   await setTheme("dark");
-  await shoot(
-    "R3__recommendation-card__page_gate_region__decided__dark",
-    "decided",
-    "The SAME decided row, same run, same clip rectangle, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
-    "card-root",
-  );
-
   await shoot(
     "R4__recommendation-card__page_gate_region__decided__above-gate__dark",
     "decided",
