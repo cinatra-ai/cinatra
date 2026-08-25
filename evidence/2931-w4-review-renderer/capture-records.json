@@ -1,0 +1,837 @@
+{
+  "$comment": [
+    "Capture records for cinatra#2931 W4 \u2014 the review card includes the artifact's renderer.",
+    "",
+    "Every record here is a MEASUREMENT taken on a live app during one lane session, not a submission.",
+    "The site_widget records (W3, W4, W11) were produced by the SHIPPED island driver",
+    "evidence/2754-island-wire/drivers/03-capture-island.mjs, unmodified, against a host page served",
+    "from a different SITE; their assertions are that recorder's own counts. The other records were",
+    "taken by this round's driver, which likewise takes no counts from its caller: it opens a URL,",
+    "waits for the card to paint, and writes down what it found.",
+    "",
+    "THE DATABASE ROWS THESE PICTURES ARE OF are in RUN-READBACK.md, with their timestamps.",
+    "",
+    "W5 IS BLOCK EVIDENCE. It records that the run DETAIL page carried no review card, because the",
+    "run had already terminated when the sweep minted its gate. It is filed as a refusal, not a pass."
+  ],
+  "schemaVersion": 1,
+  "recorder": "lane-2931 + cinatra#2754 shipped island driver",
+  "records": [
+    {
+      "cell": "W1__review-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W1__review-card__chat_thread__pending.png",
+      "sha256": "be44dc18df2bd5025ca3e3099e07cfb85ef627e11ca0840d76aac41e2195ab50",
+      "px": {
+        "w": 2456,
+        "h": 2600
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "The card the conversation's assistant put in the thread when asked whether a review was waiting. The markdown target is RENDERED through the host's own text renderer; there is NO provenance strip above it, NO 'no renderer resolved' sentence, NO field table and NO Preview / Download links.",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c9619a81-d629-4b5f-8770-d25b8387c1ac",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1300,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "Why Small Teams Should Automate Weekly Status Reports | Blog Post Artifact | @cinatra-ai/blog-post-artifact:post \u00b7 revision 465f4db3-c75\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T09:36:22.112Z | RENDERED | {\"title\":\"Why Small Teams Should Automate Weekly Status Reports\",\"excerpt\":\"Automated weekly status reports help small teams stay aligned, save time, and build",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:07:03.665Z"
+    },
+    {
+      "cell": "W2__review-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "dark",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W2__review-card__chat_thread__pending__dark.png",
+      "sha256": "66387270696cafe157581bc2b273cbef1f75c0b15b6ca4f352a872b22881e398",
+      "px": {
+        "w": 2456,
+        "h": 2600
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "The same card on the dark ground, set through the app's OWN theme control (not a faked media query) and verified on the pixels.",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c9619a81-d629-4b5f-8770-d25b8387c1ac",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1300,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "Why Small Teams Should Automate Weekly Status Reports | Blog Post Artifact | @cinatra-ai/blog-post-artifact:post \u00b7 revision 465f4db3-c75\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T09:36:22.112Z | RENDERED | {\"title\":\"Why Small Teams Should Automate Weekly Status Reports\",\"excerpt\":\"Automated weekly status reports help small teams stay aligned, save time, and build",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:07:36.934Z"
+    },
+    {
+      "cell": "W3__review-card__site_widget__pending",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W3__review-card__site_widget__pending.png",
+      "sha256": "ca91d76efde2e8116863443cb0ce981f115efa317e4b0fc37f6852517078ac40",
+      "px": {
+        "w": 1056,
+        "h": 1208
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "The same card inside the embed on a genuinely third-party page. NO login prompt anywhere in the frame; the island document went out with no cookie.",
+      "finalUrl": "/",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:02:31.615Z",
+      "islandObserved": {
+        "body": 1,
+        "empty": 0,
+        "targets": "1",
+        "text": "Why Small Teams Should Automate Weekly Status Reports\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 465f4db3-c75\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T09:36:22.112Z\nRENDERED\n{\"title\":\"Why Small Teams Should Automate Weekly Status Reports\",\"excerpt\":\"Automated weekly status reports help small teams stay aligned, save time, and build a dependable record of what changed without adding another meeting.\",\"content\":\"## Save time without losing visibility\\n\\nSmall teams run on focus. Every hour spent chasing updates, rewriting notes, or prepa"
+      },
+      "islandAddress": {
+        "present": true,
+        "attribute": "iframe[src] on the element inside [data-conformance-id=\"review-target-island\"]",
+        "path": "/lifecycle/review-island",
+        "absolute": "no (root-relative, this origin)",
+        "paramNames": [
+          "ref",
+          "ic",
+          "assistant",
+          "instanceId"
+        ],
+        "params": {
+          "ref": {
+            "length": 214,
+            "sha256_8": "14145369",
+            "shape": "url-safe base64ish"
+          },
+          "ic": {
+            "length": 560,
+            "sha256_8": "34ee0a3b",
+            "shape": "url-safe base64ish"
+          },
+          "assistant": "wordpress",
+          "instanceId": "lane2931-local-site"
+        },
+        "totalLength": 858
+      }
+    },
+    {
+      "cell": "W4__review-card__site_widget__pending__expanded",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W4__review-card__site_widget__pending__expanded.png",
+      "sha256": "c5618f407275949212e3bb7f2dc293d44ed1c125e01636dcec8b7951584647b8",
+      "px": {
+        "w": 1056,
+        "h": 1968
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "The same third-party card with the island's own Expand pressed.",
+      "finalUrl": "/",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:02:34.414Z",
+      "islandObserved": {
+        "body": 1,
+        "empty": 0,
+        "targets": "1",
+        "text": "Why Small Teams Should Automate Weekly Status Reports\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 465f4db3-c75\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T09:36:22.112Z\nRENDERED\n{\"title\":\"Why Small Teams Should Automate Weekly Status Reports\",\"excerpt\":\"Automated weekly status reports help small teams stay aligned, save time, and build a dependable record of what changed without adding another meeting.\",\"content\":\"## Save time without losing visibility\\n\\nSmall teams run on focus. Every hour spent chasing updates, rewriting notes, or prepa"
+      },
+      "islandAddress": {
+        "present": true,
+        "attribute": "iframe[src] on the element inside [data-conformance-id=\"review-target-island\"]",
+        "path": "/lifecycle/review-island",
+        "absolute": "no (root-relative, this origin)",
+        "paramNames": [
+          "ref",
+          "ic",
+          "assistant",
+          "instanceId"
+        ],
+        "params": {
+          "ref": {
+            "length": 214,
+            "sha256_8": "14145369",
+            "shape": "url-safe base64ish"
+          },
+          "ic": {
+            "length": 560,
+            "sha256_8": "34ee0a3b",
+            "shape": "url-safe base64ish"
+          },
+          "assistant": "wordpress",
+          "instanceId": "lane2931-local-site"
+        },
+        "totalLength": 858
+      }
+    },
+    {
+      "cell": "W5__review-card__run_card__not-parked",
+      "declaredHost": "run_card",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "not-parked",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W5__review-card__run_card__not-parked.png",
+      "sha256": "2fcee1b333b81121145c10bc0b0466330639fe40b612ab1dc06b70b1ca48b695",
+      "px": {
+        "w": 2456,
+        "h": 2600
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "BLOCK EVIDENCE, not a pass. The run DETAIL page carries no review card on this instance: the run had already terminated when the sweep minted its gate, so the run never parked at a review moment. Counted on this screen: zero card roots.",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1300,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:12:05.333Z"
+    },
+    {
+      "cell": "W7__review-card__page_gate_region__pending",
+      "declaredHost": "page_gate_region",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W7__review-card__page_gate_region__pending.png",
+      "sha256": "fb1cb03ef7601089b60d8abdf30d6c3fabaaf1a8a519e91d66ec4b0a858b4bb6",
+      "px": {
+        "w": 2456,
+        "h": 2800
+      },
+      "runId": "cb746224-7c97-4686-9149-bec683a0d3f4",
+      "gateId": "148825cd-b3df-4ca2-a892-6d29e2726c99",
+      "artifactId": "34a5a1e1-24f9-4619-a622-b56c68018091",
+      "representationRevisionId": "d93bad0e-077d-4aaf-9e61-b038af0a23c4",
+      "note": "The review page's gate region: the draft rendered as prose, the decision floor beneath it, the prompt window at the foot.",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cb746224-7c97-4686-9149-bec683a0d3f4/review/lifecycle-review%3A4293f3f727cab5c4880be9749473138f5f25f240bb807c9bae329736852ddc55",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1400,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "Why Small Teams Should Automate Weekly Status Reports | Blog Post Artifact | @cinatra-ai/blog-post-artifact:post \u00b7 revision d93bad0e-077\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T10:12:55.804Z | RENDERED | Weekly status reporting is a coordination problem | Small teams move quickly because there are fewer layers between a decision and the work. That speed is an a",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T10:25:46.093Z"
+    },
+    {
+      "cell": "W8__review-card__page_gate_region__pending__dark",
+      "declaredHost": "page_gate_region",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "dark",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W8__review-card__page_gate_region__pending__dark.png",
+      "sha256": "4c52a5ea3ea9b60ef43087d123d7d2ab54c3b4068d5341e476b8c6d6c51fe0ec",
+      "px": {
+        "w": 2456,
+        "h": 2800
+      },
+      "runId": "cb746224-7c97-4686-9149-bec683a0d3f4",
+      "gateId": "148825cd-b3df-4ca2-a892-6d29e2726c99",
+      "artifactId": "34a5a1e1-24f9-4619-a622-b56c68018091",
+      "representationRevisionId": "d93bad0e-077d-4aaf-9e61-b038af0a23c4",
+      "note": "The same gate region on the dark ground, set through the app's own theme control.",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cb746224-7c97-4686-9149-bec683a0d3f4/review/lifecycle-review%3A4293f3f727cab5c4880be9749473138f5f25f240bb807c9bae329736852ddc55",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1400,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "Why Small Teams Should Automate Weekly Status Reports | Blog Post Artifact | @cinatra-ai/blog-post-artifact:post \u00b7 revision d93bad0e-077\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-25T10:12:55.804Z | RENDERED | Weekly status reporting is a coordination problem | Small teams move quickly because there are fewer layers between a decision and the work. That speed is an a",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T10:28:21.853Z"
+    },
+    {
+      "cell": "W9__artifact-page__detail__markdown",
+      "declaredHost": "artifact_page",
+      "declaredKind": "artifact_detail",
+      "declaredState": "detail",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W9__artifact-page__detail__markdown.png",
+      "sha256": "e973eb17dca47adcb327580a10fbd5ca154f5d6d86d2afbd7016e9347e7550aa",
+      "px": {
+        "w": 2456,
+        "h": 2800
+      },
+      "runId": "cb746224-7c97-4686-9149-bec683a0d3f4",
+      "gateId": "148825cd-b3df-4ca2-a892-6d29e2726c99",
+      "artifactId": "34a5a1e1-24f9-4619-a622-b56c68018091",
+      "representationRevisionId": "d93bad0e-077d-4aaf-9e61-b038af0a23c4",
+      "note": "The PAGE control: the artifact's own page for the SAME artifact at the SAME pinned revision. Card and page now show the same thing, which is the whole claim.",
+      "finalUrl": "/artifacts/34a5a1e1-24f9-4619-a622-b56c68018091",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-host]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-representation-slot]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-native\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-provenance-marketplace\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-floor\"]",
+          "scope": "document+frames",
+          "count": 0
+        },
+        {
+          "selector": "[data-review-target-floor]",
+          "scope": "document+frames",
+          "count": 0
+        }
+      ],
+      "viewport": {
+        "width": 1228,
+        "height": 1400,
+        "deviceScaleFactor": 2
+      },
+      "targetRegionReads": "",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T10:34:01.145Z"
+    },
+    {
+      "cell": "W10__review-card__page_gate_region__decided",
+      "declaredHost": "page_gate_region",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W10__review-card__page_gate_region__decided.png",
+      "sha256": "fee047dab386bee73f343d81357ea88d76ef51256ac9b87c6287f059c8c68ff0",
+      "px": {
+        "w": 1440,
+        "h": 980
+      },
+      "runId": "cb746224-7c97-4686-9149-bec683a0d3f4",
+      "gateId": "148825cd-b3df-4ca2-a892-6d29e2726c99",
+      "artifactId": "34a5a1e1-24f9-4619-a622-b56c68018091",
+      "representationRevisionId": "d93bad0e-077d-4aaf-9e61-b038af0a23c4",
+      "note": "The same gate after a real press of Approve in the browser: 'Approved by Lane Reviewer', decision controls gone. Its audit row reads renderer_kind=first-party.",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cb746224-7c97-4686-9149-bec683a0d3f4/review/lifecycle-review%3A4293f3f727cab5c4880be9749473138f5f25f240bb807c9bae329736852ddc55",
+      "recordedBy": "lane-2931 capture driver",
+      "recordedAt": "2026-08-25T10:42:00Z"
+    },
+    {
+      "cell": "W11__review-card__site_widget__refused",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W11__review-card__site_widget__refused.png",
+      "sha256": "a411deee6c2ce1c6b5ddc21a20be7b0bca156cc69772b941483608782ed4dc76",
+      "px": {
+        "w": 1056,
+        "h": 1208
+      },
+      "runId": "6d1642ff-b60f-43ed-a7b4-e5962addc00d",
+      "gateId": "dbe6f11c-c115-4608-b2fe-93cd45825c67",
+      "artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c",
+      "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd",
+      "note": "The NEGATIVE control from the shipped island driver: one character of the island credential flipped. The island draws its single empty answer; the card is unmoved and no sign-in form appears in third-party chrome.",
+      "finalUrl": "/",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-25T11:02:42.609Z",
+      "islandObserved": {
+        "body": 0,
+        "empty": 1,
+        "targets": null,
+        "text": "Command Palette\nSearch for a command to run..."
+      },
+      "islandAddress": {
+        "present": true,
+        "attribute": "iframe[src] on the element inside [data-conformance-id=\"review-target-island\"]",
+        "path": "/lifecycle/review-island",
+        "absolute": "no (root-relative, this origin)",
+        "paramNames": [
+          "ref",
+          "ic",
+          "assistant",
+          "instanceId"
+        ],
+        "params": {
+          "ref": {
+            "length": 214,
+            "sha256_8": "14145369",
+            "shape": "url-safe base64ish"
+          },
+          "ic": {
+            "length": 560,
+            "sha256_8": "37ea76d2",
+            "shape": "url-safe base64ish"
+          },
+          "assistant": "wordpress",
+          "instanceId": "lane2931-local-site"
+        },
+        "totalLength": 858
+      }
+    }
+  ]
+}
