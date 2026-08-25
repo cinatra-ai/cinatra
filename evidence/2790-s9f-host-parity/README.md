@@ -461,18 +461,19 @@ by a run failing on it rather than by guesswork.
 > SAME reading of the SAME run is recorded at page framing by `R2` and `R4`. The
 > two rows below are kept as the record of what was retired and why; their
 > pictures are gone, because a picture kept beside a retired record is the next
-> round's false evidence. **Their RECORDS are gone as of this commit too** —
-> removed from `capture-records.json` and `capture-results.json`, which until now
-> still carried the hashes of two files this tree does not hold. The two rows
-> below, and every grading row further down that cites `R1`/`R3`, are kept as the
-> retired reading and are not offered as live evidence.
+> round's false evidence. **Their RECORDS went one commit later, in `e520eee58`**
+> — removed there from `capture-records.json` and `capture-results.json`, which
+> between `c6fbe5a9` and `e520eee58` still carried the hashes of two files the
+> tree no longer held. The two rows below, and every grading row further down
+> that cites `R1`/`R3`, are kept as the retired reading and are not offered as
+> live evidence.
 
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
-| `R1__recommendation-card__page_gate_region__decided` | 2096×52 | The settled row on its own root: **`Blog Post Matcher Skill ✓ CONFIRMED`**, **`Blog Writing Skill ⇄ ADJUSTED`**, **`Web Research Skill ✓ CONFIRMED`** — one chip per kept skill, each naming the owning extension's manifest `displayName` and its own outcome. **Nothing to press.** |
+| ~~`R1__recommendation-card__page_gate_region__decided`~~ **RETIRED** | 2096×52 — *picture and record deleted; not in this tree* | The settled row on its own root: **`Blog Post Matcher Skill ✓ CONFIRMED`**, **`Blog Writing Skill ⇄ ADJUSTED`**, **`Web Research Skill ✓ CONFIRMED`** — one chip per kept skill, each naming the owning extension's manifest `displayName` and its own outcome. **Nothing to press.** |
 | `R2__recommendation-card__page_gate_region__decided__above-gate` | 2880×3540 | The same row **in its page**, uncropped: `AGENT RUN / Review`, the run's step rail, the settled row at the top of the gate region, and **beneath it the review gate card still open** — *“Review requested / Awaiting your decision”*, the pinned target, and the decision floor `Comment` · `Reject` · `Approve`. **The target panel names what THIS RUN produced**: *Connector Rollout Note*, `Blog Post Artifact`, `@cinatra-ai/blog-post-artifact:post · revision 65128429-95e… · text/markdown · updated 2026-08-22T17:04:21.865Z` — the same revision id `cinatra.representation.created_by_run_id` binds to this run. |
-| `R3__recommendation-card__page_gate_region__decided__dark` | 2096×52 | The same row, same run, same clip rectangle, in `dark`. |
+| ~~`R3__recommendation-card__page_gate_region__decided__dark`~~ **RETIRED** | 2096×52 — *picture and record deleted; not in this tree* | The same row, same run, same clip rectangle, in `dark`. |
 | `R4__recommendation-card__page_gate_region__decided__above-gate__dark` | 2880×3540 | The same page framing as `R2`, same run, in `dark`. |
 
 `R1` and `R3` shared one clip rectangle — `{x:376, y:191, w:1048, h:26}` CSS px —
@@ -643,14 +644,15 @@ merge-forward that brought `main`'s corrected `review_page` URL class onto this
 branch, the review-page cells too, together with the chat, rework and `R6` cells
 the later rounds added. `R1` and `R3` are not among them: they were retired with
 their pictures by the S9d merge-forward `c6fbe5a9`, and their records left
-`capture-records.json` and `capture-results.json` with this commit.
+`capture-records.json` and `capture-results.json` one commit later, in
+`e520eee58`.
 `capture-records.json` now holds **nine** records; the four
 `capture-records*.json` files in this directory hold **23 entries covering 21
 distinct cells** — `R6` light and dark are recorded identically in both
 `capture-records-r6.json` and `capture-records-rework.json`. Every one of those
 21 cells resolves to a record in the index, and every lane record in the index
 resolves back to a cell in these files. `validateCaptureIndex` over the whole
-file: **75 records, 0 violations.**
+file: **79 records, 0 violations.**
 
 That URL class is the reason the four `R` cells were held out of the index on the
 first evidence commit in this lane, and it is worth keeping the history straight
@@ -682,11 +684,11 @@ is caused by it.
 | Gate | Exit | Findings |
 |---|---|---|
 | `scripts/ci/chat-hitl-evidence-gate.mjs` | **0** | **none** — `no findings.` |
-| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **0** | **none** — *“manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 75 record(s). Anchor contract ratified at the manifest's design pin.”* |
+| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **0** | **none** — *“manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 79 record(s). Anchor contract ratified at the manifest's design pin.”* |
 
 **The isolation was measured, not asserted.** Each gate was re-run with this
 lane's `evidence/` directory moved aside **and** this lane's twenty-one indexed
-records removed from `scripts/ci/chat-hitl-capture-index.json` (75 → 54), so the
+records removed from `scripts/ci/chat-hitl-capture-index.json` (79 → 58), so the
 run saw a repo with this lane's evidence and index records removed. Both control runs also exit **0**
 with **no findings**; the only difference in the output is the record count the
 acceptance gate prints. Both runs are appended verbatim to the same log files:
@@ -710,7 +712,7 @@ than inheriting the old text.
   and naming the one column that is deliberately NOT trusted.
 - `capture-records.json` — every record in the shape
   `scripts/ci/lib/capture-record-contract.mjs` validates; all nine are in the
-  canonical index, which validates clean (75 records, 0 violations).
+  canonical index, which validates clean (79 records, 0 violations).
 - `capture-results.json` — the machine record beside the pixels: counts, the
   root's own `data-*` attributes, the per-chip DOM read-out, the card text, the
   wire, the decide outcome, `settleFacts`, the cookie jar, and the whole
