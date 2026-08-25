@@ -123,7 +123,7 @@ export const LEGAL_TRANSITIONS = new Set<`${AgentRunStatus}->${AgentRunStatus}`>
   // edges give it one, and give the immediate choice a legal dispatch edge, so
   // no caller has to fake a transition out of a terminal status.
   "queued->pending_trigger",          // execution.ts: setup finished, no trigger chosen yet
-  "pending_trigger->queued",          // trigger-service.ts: the user chose "Run now"
+  "pending_trigger->queued",          // trigger-service.ts: the user chose "Run right after setup"
   // TriggerWaitNode pause/resume in-flight WayFlow run.
   // Distinct lifecycle from `armed` (clone-on-tick); `waiting_trigger` resumes
   // the same a2aContextId.

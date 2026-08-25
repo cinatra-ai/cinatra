@@ -7,6 +7,7 @@ import { readRunTriggerPmState } from "@/lib/pm-integration-providers";
 import {
   readRunTriggerByRunId,
   createOrUpdateRunTrigger,
+  markTriggerFiredInDb,
   deleteRunTriggerByRunId,
   type TriggerRecord,
 } from "./trigger-store";
@@ -185,6 +186,49 @@ export async function runAgentRunTriggerReleaseJob(
   // `queued` if it has yet to start, or terminal). Recurring ticks DO NOT
   // re-release the schedule-defining run — gates are monotonic per-run.
   if (trigger.triggerType === "recurring") {
+    // RE-READ THE STOP, IMMEDIATELY BEFORE THE CLONE (cinatra#2972).
+    //
+    // The `!trigger.enabled` skip at the top of this job ran before the PM
+    // check, the archived-org read and the configuration-needs gate — all of
+    // them awaits. **Cancel schedule** can land inside that window: it cancels
+    // the scheduler (so no FUTURE tick fires) and stamps the row, but the tick
+    // already in flight has its answer from before. Without this second read it
+    // would go on to start a run after the person was told the schedule had
+    // stopped.
+    //
+    // It does NOT close the window completely, and the honest statement is that
+    // it cannot from here: a stop landing between this read and the launch
+    // below is still a tick that fires. Closing that needs a row lock or a
+    // conditional write, which reshapes the trigger service rather than adding
+    // a read to it. What this removes is the ordinary case — a stop pressed
+    // while a tick is working through its pre-flight checks.
+    const stillLive = await readRunTriggerByRunId(data.runId);
+    if (!stillLive || stillLive.stoppedAt || !stillLive.enabled) {
+      console.log(
+        `[trigger-release] recurring schedule for run ${data.runId} was stopped while this tick was preparing — not firing`,
+      );
+      // AND THE ORPHAN REMOVES ITSELF. Two ways a scheduler outlives its stop:
+      // its cancel failed inside `stopRecurringTriggerForActor` (which stamps
+      // the row first and treats the cancel as best-effort), or a Save changes
+      // interleaved with the stop and installed a fresh one while the stamp
+      // stood. Either way THIS tick is the first thing to notice, so it tears
+      // the scheduler down rather than leaving it to tick forever into a skip.
+      // Best-effort and never fatal: the refusal above is the safety property,
+      // and this is only tidying.
+      if (stillLive?.stoppedAt && stillLive.jobSchedulerId) {
+        try {
+          const runtime = await ensureBackgroundJobRuntime();
+          await runtime.queue.removeJobScheduler(stillLive.jobSchedulerId);
+        } catch (err) {
+          console.warn(
+            "[trigger-release] could not unschedule the orphan of a stopped schedule for run",
+            data.runId,
+            err,
+          );
+        }
+      }
+      return;
+    }
     const sourceRun = runForFire;
     if (!sourceRun) {
       console.warn(
@@ -284,6 +328,37 @@ export async function runAgentRunTriggerReleaseJob(
       },
       authority: releaseAuthority,
     });
+    // THE SCHEDULE HAS NOW FIRED (cinatra#2972). Stamped AFTER the copy is
+    // launched, so the stamp means what it says: this schedule has produced at
+    // least one run. Plan (A) §7.2 as amended 2026-08-25 keys two readings to
+    // it — the scheduler stays editable for a recurring schedule that has fired
+    // once, and **Cancel schedule** is shown "only for a recurring schedule
+    // that has fired once".
+    //
+    // NOT `markTriggerReleased`. That stamp opens the schedule-defining run's
+    // OWN side-effect gate, and this branch's whole contract is that it does not
+    // ("Recurring ticks DO NOT re-release the schedule-defining run — gates are
+    // monotonic per-run", above). A separate column is what lets the card read
+    // "has fired" without the gate moving.
+    //
+    // Best-effort: the copy is already running, so a failed stamp must not
+    // poison the cron queue or double-fire the tick on a BullMQ retry. The cost
+    // of a missed stamp is a Cancel schedule control that appears one tick late.
+    try {
+      await markTriggerFiredInDb(data.runId);
+    } catch (err) {
+      // LOUD. A lost stamp leaves a schedule that HAS fired reading as one
+      // that has not, which withholds **Cancel schedule** until the next tick —
+      // a long time on a monthly or yearly schedule. Nothing downstream repairs
+      // it, so it is an error rather than a note. It is still swallowed: the
+      // copy is already running, and rethrowing would have BullMQ retry the
+      // whole tick and fire a second run.
+      console.error(
+        "[trigger-release] recurring fire stamp FAILED — the schedule fired but will read as unfired until the next tick, for run",
+        data.runId,
+        err,
+      );
+    }
     console.log(
       `[trigger-release] recurring tick — created new run ${newRun.id} from ${data.runId}`,
     );

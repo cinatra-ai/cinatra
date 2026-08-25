@@ -808,6 +808,13 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
     // out of the comparison, which is the whole point of a whole-object check:
     // the winning member's rows are the ones it was adjusted TO (08:00), and it
     // cannot be saved yet because the install is still arming.
+    //
+    // TWO MORE JOINED IT IN cinatra#2972, and they are the readings plan (A)
+    // §7.2 as amended 2026-08-25 added: `firedOnce` — has this schedule
+    // produced a run yet, which is what **Cancel schedule** is "shown only for
+    // a recurring schedule that has fired once" means — and `stopped`, the
+    // state that control leaves behind. Neither is true here: this schedule is
+    // still installing, so it has fired nothing and been stopped by nobody.
     expect(resolved).toEqual({
       phase: "settled",
       runId: "run_1",
@@ -822,6 +829,8 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
       timezone: "Europe/Berlin",
       released: false,
       arming: true,
+      firedOnce: false,
+      stopped: false,
       canSave: false,
       superseded: false,
     });

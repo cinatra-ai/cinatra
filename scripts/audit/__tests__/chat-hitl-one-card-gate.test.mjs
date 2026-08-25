@@ -1000,12 +1000,16 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
     // anchor set has to be able to say so. The other five are the placeholder's
     // verbatim; no `adjust` anchor was ever in the set, which is the one place
     // the placeholder was already right about the target.
+    //
+    // ONE MEMBER LEFT when the plan withdrew the control it named
+    // (cinatra#2972): §7.2 as amended 2026-08-25 — "there is no Run now" — so
+    // `[data-action="release-trigger-now"]` is gone from the ratified set. An
+    // anchor no host may draw cannot be a requirement.
     trigger_schedule_proposal: [
       "schedule-option-rows",
       "schedule-proposal-floor",
       '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
-      '[data-action="release-trigger-now"]',
     ],
     // CORRECTED when the card landed (cinatra#2789, reconciled by
     // cinatra#2861), and the contract row says at length what may be corrected
@@ -1123,11 +1127,13 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
     expect(hits.map((h) => h.detail).join(" ")).toMatch(/strike the record here/);
   });
 
-  it("the settled schedule controls are NAMED now, so nothing is left open there", () => {
+  it("the settled schedule control is NAMED now, so nothing is left open there", () => {
     const c = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal;
     expect(c.openAnchors ?? []).toEqual([]);
     expect(c.anchors).toContain('[data-action="cancel-trigger-schedule"]');
-    expect(c.anchors).toContain('[data-action="release-trigger-now"]');
+    // cinatra#2972 — the second control is withdrawn, not merely unnamed:
+    // plan (A) §7.2 as amended 2026-08-25 says "there is no Run now".
+    expect(c.anchors).not.toContain('[data-action="release-trigger-now"]');
   });
 });
 
