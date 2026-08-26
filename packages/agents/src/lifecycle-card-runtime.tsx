@@ -72,6 +72,17 @@ export const LIFECYCLE_RECOMMENDATION_HOLD_PATH = "/api/lifecycle-views/recommen
 export const LIFECYCLE_RECOMMENDATION_DECIDE_PATH =
   "/api/lifecycle-views/recommendation-hold/decide";
 
+/**
+ * The BROKER read of the HITL screen (cinatra#2930, lifecycle-b W3).
+ *
+ * The second kind carried as a typed INTERRUPT, and so the second one with no
+ * view ref to post at the resolve route above: the question an agent paused to
+ * ask is addressed by the run the transcript already names. Same rule as the
+ * hold's path — a cookie host never uses it, a credential-declaring host uses it
+ * and nothing else.
+ */
+export const LIFECYCLE_HITL_SCREEN_PATH = "/api/lifecycle-views/hitl-screen";
+
 // ---------------------------------------------------------------------------
 // Host declaration — absent means "no host", which means no card.
 // ---------------------------------------------------------------------------

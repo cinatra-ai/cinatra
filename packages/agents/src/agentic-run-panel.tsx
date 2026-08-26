@@ -17,6 +17,11 @@ import { Separator } from "@/components/ui/separator";
 import { StartNewRunButton, RunCompletionCard } from "./run-completion-affordances";
 import { resetAgentRun } from "./run-actions";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+// THE ONE renderer of `agent_hitl_screen` (cinatra#2930, lifecycle-b W3).
+// This panel's pause screen is the drawing; the card is its identity root,
+// so the same screen the run page has always shown is now a lifecycle card
+// with a kind, a host and a state a capture can read.
+import { AgentHitlScreenCard } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -544,6 +549,15 @@ export function AgenticRunPanel({
   // mount below uses, read once so the skill-picker rule can ask whether an
   // answer is even coming.
   const panelMountsRecommendationCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
+  // ONE HITL SCREEN CARD PER RUN PER TURN (cinatra#2930, lifecycle-b W3).
+  //
+  // The same rule the recommendation card is held to, for the same reason:
+  // inside a conversation this panel is a SIBLING of the conversation's own
+  // mount of the SAME card for the SAME run, so an unconditional mount here
+  // would show the person two screens for one question. The conversation's
+  // card owns it inside `chat_thread` and `site_widget`; the run page keeps
+  // its own because no conversation host is in scope there.
+  const panelMountsHitlScreenCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
   // Was this run's skill set settled on the recommendation card? If it was,
   // nothing inside this card offers a skill to press. While the panel's own read
   // is still in flight the picker also stays away — it is a run's OWN skills
@@ -1370,6 +1384,12 @@ export function AgenticRunPanel({
         size="sm"
         disabled={isApproving}
         className="gap-1.5"
+        // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
+        // panel draws INSIDE the screen card, and deliberately not on the
+        // bare-gate row: that row is the tool-call approval banner, which is a
+        // different gate with a Reject beside it, and a capture that found this
+        // anchor there would be reading a control the screen does not offer.
+        {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
@@ -1684,7 +1704,21 @@ export function AgenticRunPanel({
         // page are unaffected by it.
         null
       ) : isPendingApproval && effectiveHitlContext?.xRenderer ? (
-        // Inline HITL bubble.
+        // THE HITL SCREEN CARD (cinatra#2930, lifecycle-b W3). The inline HITL
+        // bubble below is UNCHANGED — the fields the gate's renderer draws and
+        // the Continue that submits them, exactly as this panel has always
+        // drawn them. What is new is the root around it: the kind, the host and
+        // the state, so the screen the run page already shows is the lifecycle
+        // card the parity ratchet owes a cell for, rather than a shape every
+        // surface had to recognize.
+        !panelMountsHitlScreenCard ? null : (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <AgentHitlScreenCard
+            runId={runId}
+            // The gate's own identity as the CHANGE SIGNAL: a new gate is a new
+            // review-task id, which is exactly when the card must re-read.
+            wireRef={effectiveHitlContext.reviewTaskId}
+            screen={
         <>
           <Separator />
           {/* Skill chip row — xRenderer HITL surface. WITHHELD for a run whose
@@ -1693,7 +1727,10 @@ export function AgenticRunPanel({
               the card are the reading. */}
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
           {hitlRendererEntry?.entry || hitlPresentationHint ? (
-            <div className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4">
+            <div
+              className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4"
+              data-conformance-id="hitl-screen-fields"
+            >
               {(() => {
                 // Presentation-first branch. When the gate embedded a
                 // PresentationHint in currentValues.presentation, short-circuit
@@ -1857,13 +1894,20 @@ export function AgenticRunPanel({
             </div>
           ) : (
             // Fallback: renderer not found in registry.
-            <div className="soft-panel rounded-panel p-4 bg-surface-muted">
+            <div
+              className="soft-panel rounded-panel p-4 bg-surface-muted"
+              data-conformance-id="hitl-screen-fields"
+            >
               <p className="text-sm text-muted-foreground">
                 Waiting for input — no renderer configured for this step.
               </p>
             </div>
           )}
         </>
+            }
+          />
+        </LifecycleCardSurfaceProvider>
+        )
       ) : isPendingApproval ? (
         // Standard HITL approval banner (tool-call gate without x-renderer).
         // cinatra#2444 — the decision for an actively-watched run is taken

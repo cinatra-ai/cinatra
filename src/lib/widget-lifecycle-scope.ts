@@ -136,6 +136,26 @@ export const WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH =
 export const WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH =
   "/api/lifecycle-views/recommendation-hold/decide";
 
+/**
+ * The audience a widget HITL-SCREEN read is served at (cinatra#2930,
+ * lifecycle-b W3).
+ *
+ * A THIRD audience under the same `lifecycle.read` grant, for the same reason
+ * the hold has a second one: `agent_hitl_screen` is the other kind whose
+ * carriage is a typed INTERRUPT, so it mints no `{viewType, ref}` envelope to
+ * post at the resolve route and needs a surface of its own. It is the SAME
+ * capability the grant already names — "show you work items that are waiting on
+ * you" — and a run paused asking you a question is exactly such an item, so it
+ * joins the grant rather than minting a parallel scope nobody re-checks.
+ *
+ * A token minted before this slice carries the scope WITHOUT this audience and
+ * is refused here, which is the fail-closed property the audience is for: an
+ * already-minted token never acquires a grant, and the person sees the card
+ * after their next sign-in.
+ */
+export const WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH =
+  "/api/lifecycle-views/hitl-screen";
+
 // ---------------------------------------------------------------------------
 // The CONVERSATION grants (cinatra#2683, epic #2564 S8f).
 // ---------------------------------------------------------------------------
@@ -609,6 +629,10 @@ export const WIDGET_EXTENSION_SCOPES = {
       // grant may not gain an audience without its copy changing in the same
       // edit.
       WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH,
+      // cinatra#2930 (lifecycle-b W3) — the HITL screen's own read surface,
+      // added under the same rule: the audience joins the grant WITH the
+      // sentence below that admits to it, in the same edit.
+      WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It states
@@ -621,7 +645,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
-      "Show you work items that are waiting on you — reviews and their outcomes, and the skills an agent wants to use before a run you started begins — using the same permissions you have in Cinatra.",
+      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, and a question an agent has paused to ask you — using the same permissions you have in Cinatra.",
   },
   [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
     audiences: [

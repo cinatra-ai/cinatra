@@ -92,6 +92,7 @@ import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
   WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
+  WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
   WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -180,6 +181,13 @@ export const WIDGET_RECOMMENDATION_READ_GRANT = {
  * person may shape THIS run is still the run's own execute-tier gate, taken
  * against this same actor, in the same order, as inside the app.
  */
+export const WIDGET_HITL_SCREEN_READ_GRANT = {
+  routePath: WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+  auditAuthorized: "widget_lifecycle_read_authorized",
+  auditRejected: "widget_lifecycle_read_rejected",
+} as const;
+
 export const WIDGET_RECOMMENDATION_DECIDE_GRANT = {
   routePath: WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
   requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],

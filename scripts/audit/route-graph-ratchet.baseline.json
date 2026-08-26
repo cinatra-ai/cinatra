@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 223,
     "/api/mcp": 1719,
-    "/chat": 1815,
+    "/chat": 1819,
     "/api/a2a": 1724,
     "/api/llm-bridge": 1734
   },
@@ -27,10 +27,10 @@
       "pr": 2991
     },
     "/chat": {
-      "from": 1812,
-      "to": 1815,
-      "reason": "PR #2991 carries this record — cinatra#2930 (epic #2926 W3, the run outbox) now sits directly on main, so `from` (1812) is MAIN own committed ceiling at 5c3ca74086ba8f0976c71841f7efe3095283503f and nothing main already absorbed is re-absorbed here: the lifecycle-b W5a raise main took under PR #2988 (cinatra#2932) and the recommendation-hold cores it took under PR #2890 (cinatra#2790 S9f host parity) are already INSIDE 1812. What this branch adds ON TOP of main is unchanged. The raise is THREE first-party modules, and they are the three the slice is: (1) packages/agents/src/lifecycle-part-outbox.ts — the leaf PORT the coordinator hands a moment to when it opens, zero runtime dependencies on purpose so a boot file can import it directly instead of through the agents barrel, which would close an init-time cycle; it enters this graph through packages/agents/src/lifecycle-coordinator.ts, already here. (2) src/lib/lifecycle/lifecycle-run-outbox.ts — the WRITER half, in the app because the run own turn lives in the app assistant-turn store, which the agents package deliberately cannot reach. (3) src/lib/register-lifecycle-part-outbox.ts — the boot wiring that injects (2) into (1) seam, imported from src/lib/register-run-wait-notifier.ts, which this route graph already contained. One edge each, no barrel import, and the split across the two packages is the seam itself rather than a layering accident: two of the three live under the app own src and one under @cinatra-ai/agents. MEASURED THE WAY CI MEASURES, not computed: with the companion extension fleet cloned PINNED (112/112 at their lock SHAs, missingCount 0 on every tracked route) and an identical scripts/route-graph.mjs, BOTH trees were analysed in one environment — main at 5c3ca74086ba8f0976c71841f7efe3095283503f reproduces this route committed main ceiling EXACTLY (1812), and this branch measures 1815, main ceiling +3 and nothing else. /sign-in measures 223 unchanged on both trees — it reaches neither the notifier boot file nor the coordinator — so it keeps its carried-forward record. The PR #2988 record for this route is RETIRED BY THIS RAISE, which is the one lifecycle the gate allows for an annotation whose ceiling moves.",
-      "pr": 2991
+      "from": 1815,
+      "to": 1819,
+      "reason": "cinatra#2930 (epic #2926 W3, the HITL screen's card) carries this record. `from` (1815) is MAIN's own committed ceiling for this route, so nothing main already absorbed is re-absorbed here: PR #2991's own +3 for the run outbox is already INSIDE 1815, and the record it left for this route is RETIRED BY THIS RAISE — the one lifecycle the gate allows for an annotation whose ceiling moves. The raise is FOUR first-party modules and they are the four this slice is, each entering the graph by ONE edge with no barrel import: (1) packages/agents/src/agent-hitl-screen-card.tsx — the ONE renderer of `agent_hitl_screen`, reached from packages/chat/src/chat-messages-view.tsx by its own SUBPATH for the same reason the §V card is, so the transcript takes the leaf rather than the agents client barrel. (2) packages/agents/src/agent-hitl-screen.ts — the card's SHAPE (the state, the gate and the parse), pure on purpose: it is what lets the browser leaf above name the state without importing the reader that produces it. (3) packages/agents/src/agent-hitl-screen-actions.ts — the cookie host's `\"use server\"` entry, the one door the card calls on a first-party surface. (4) packages/agents/src/agent-hitl-screen-core.ts — the ONE authorized read behind both doors, reached only from (3) here; its own dependencies (the run store and the shared HITL-context derivation) were already on this route's graph, which is why the raise is four and not more. MEASURED THE WAY CI MEASURES, not computed: with the companion extension fleet cloned PINNED (missingCount 0 on every tracked route) and an identical scripts/route-graph.mjs, this branch measures /sign-in 223, /api/mcp 1719, /api/a2a 1724 and /api/llm-bridge 1734 — every one of them EXACTLY main's committed ceiling, unchanged, because none of those entries reaches the conversation column that mounts this card. So the environment reproduces main's numbers on four of the five tracked routes, and the fifth's +4 is this branch's own and nothing else.",
+      "pr": 3014
     },
     "/sign-in": {
       "from": 222,

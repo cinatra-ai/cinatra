@@ -565,16 +565,19 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     triggerToolName: "agent_run",
     owner: "AgentHitlScreenCard",
     // A conformance id of the card's OWN, deliberately NOT the ruled root
-    // declaration: while the root declaration is owed (below), an owner anchor
-    // that IS the ruled anchor would let the obligation be satisfied by the
-    // very thing it is owed.
+    // declaration. It was chosen that way while the declaration was owed — an
+    // owner anchor that IS the ruled anchor would have let the obligation be
+    // satisfied by the very thing it was owed — and it STAYS that way now that
+    // W3 (cinatra#2930) emits both: the two anchors answer different questions,
+    // and collapsing them would make the root check unable to fail on its own.
     ownerAnchors: Object.freeze([`[data-conformance-id="agent-hitl-screen-card"]`]),
     ruledRootAnchors: rootAnchorsFor("agent_hitl_screen"),
     // The HITL screen is fields with a Continue button — that is what the
-    // screen already is on the run page today. NAMED BEFORE THEY EXIST as a
-    // chat mount, on the `trigger_schedule_proposal` precedent above: an
-    // obligation with no named target is a row that can be struck against
-    // nothing.
+    // screen already is on the run page. The name was chosen BEFORE the mount
+    // existed, on the `trigger_schedule_proposal` precedent above, and W3
+    // (cinatra#2930) landed it unchanged: the card's Continue carries exactly
+    // this anchor, on the run panel's own row and on the row the card composes
+    // in a conversation, and both submit the same gate answer.
     decisionControls: Object.freeze([
       '[data-action="submit-hitl-screen"]',
     ]),
@@ -607,15 +610,13 @@ export const RULED_KINDS: readonly LifecycleCardKind[] = LIFECYCLE_CARD_KINDS;
  * turns CI red immediately.
  */
 export const HELD_TURN_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  // cinatra#2928 (lifecycle-b W2a) registers `agent_hitl_screen` as the fifth
-  // kind and draws NOTHING — W2a changes no screen. So the kind genuinely has
-  // no production chat_thread mount, and this row says exactly that. It is NOT
-  // the waiver the note below warns against: that warning is about RE-ADDING a
-  // kind whose mount already landed. A net-new kind with no card has one honest
-  // reading here and one dishonest alternative — claiming a mount nothing
-  // renders. W3 (cinatra#2930) lands the mount and strikes this row, and the
-  // suite turns red the moment the mount exists with the row still standing.
-  "agent_hitl_screen",
+  // `agent_hitl_screen` was the one row here, added by cinatra#2928 (W2a),
+  // which registered the fifth kind and drew nothing. W3 (cinatra#2930) landed
+  // its production chat_thread mount — `chat-messages-view.tsx` draws
+  // `AgentHitlScreenCard` in the `agent_run` part's own slot container, outside
+  // the run card's subtree, exactly as it draws the §V card beside it — so the
+  // row is STRUCK, in the change that made its own observation flip. The list
+  // is empty again and the positive arm is on for every ruled kind.
   // `recommendation_hold` was the one row here. S9b (cinatra#2786) landed its
   // production chat_thread mount — `chat-messages-view.tsx` draws
   // `RecommendationHoldCard` in the `agent_run` part's own slot container,
@@ -672,11 +673,14 @@ export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
  * not, and the "ONE root" this list measures stays one.
  */
 export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  // cinatra#2928 — same reading as the mount obligation above: the kind is
-  // registered, and the component that would carry the ruled root declaration
-  // is W3's (cinatra#2930). The list is no longer empty because a fifth kind
-  // arrived, not because a paid ratchet was relaxed.
-  "agent_hitl_screen",
+  // EMPTY AGAIN, and struck for the same reason the mount obligation above is:
+  // `AgentHitlScreenCard` (cinatra#2930) emits the ruled root declaration —
+  // the kind, the host read from the provider it was mounted under, and the
+  // state — on its ONE root, on every host that mounts it. The row was struck
+  // in the change that landed the declaration, which is the only moment it may
+  // be struck, and the measurement stays live in both directions: the
+  // declaration disappearing puts the kind back into the OBSERVED set and turns
+  // that arm red against this empty list.
 ]);
 
 // ---------------------------------------------------------------------------
