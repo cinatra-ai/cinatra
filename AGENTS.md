@@ -118,12 +118,16 @@ Everything between the markers below is generated from
 Regenerate it with `MEMORY_SEED_WRITE=1 pnpm --filter @cinatra-ai/memory test`.
 
 <!-- memory-conventions:begin -->
-> You have persistent memory at `.memory/`. Read `.memory/index.md` first, and
-> recall from the bundle before you act. Write one concept file per durable
-> insight, and read the memory conventions before your first write.
+> When your host has given you a Memory bundle, you have persistent memory:
+> read its `index.md` first, and recall from the bundle before you act. A
+> repository bundle sits at `.memory/`, and `--dir <bundle-dir>` reaches one
+> that lives elsewhere. Write one concept file per durable insight, and read
+> the memory conventions before your first write. Where no bundle is present
+> yet, `memory init` creates one, and these conventions govern it from its
+> first concept.
 
-The conventions behind that pointer have exactly one authority, and this block
-never restates them. In a Cinatra checkout, read
+The conventions behind that pointer have exactly one authority. This block
+carries the pointer and routes for the rest. In a Cinatra checkout, read
 `docs/internals/workflows/memory-conventions.md`. It covers what qualifies as a
 concept, one concept per insight, the frontmatter `type` choice, the duplicate
 check against `index.md`, the credential prohibition, and recall before acting.
