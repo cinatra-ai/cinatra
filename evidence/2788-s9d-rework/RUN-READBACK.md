@@ -1,5 +1,99 @@
 # RUN-READBACK — the rows behind the pictures
 
+**Round 8 (2026-08-26) is the current round**, and its rows are committed rather
+than only quoted: `readback/2975-r8-readback.json` holds every run, trigger, park,
+outbox row, gate and usage aggregate as `readback/2975-r8-read-back.mjs` printed
+them, unedited, and `readback/2975-r8-runtime-evidence.txt` holds the server log
+lines this file narrates, with the grep that produced each block and the instance's
+public origin, host address and funnel name all redacted. Where a number here and a
+row there disagree, the row is right.
+
+## Round 8 — what the database says
+
+**Eight runs exist on this lane; six carry a cell.** Every one was created by the
+app's own dispatch after a person asked for it in the app's own chat. Nothing was
+inserted, updated or seeded.
+
+| fact | value |
+|---|---|
+| runs that carry a cell | `5e22c046…` (C7, C10b) · `ee1e9e32…` (C9) · `1677f60d…` (C10) · `6c0399ff…` (C10c) · `814d19ea…` (C11, C11b light) · `7da4a7a5…` (C11b dark) |
+| `human_present` / `source_type` on every one | `t` / `agent_builder` |
+| the live hold | `1677f60d…`, one `lifecycle_continuation_park`, checkpoint `recommendation`, **`parked`** at capture time |
+| the decided hold | `6c0399ff…`, the same park **`released`** — `parked` `20:11:54.583` → `released` `20:15:22.834`, when **Confirm** was pressed on the card |
+| the armed one-off | `ee1e9e32…`, one `agent_run_triggers` row, `scheduled`, `2026-08-27 07:30:00+00`, `Europe/Berlin`, `enabled`, `released_at` NULL — armed AHEAD and still ahead when both C9 frames were shot |
+| the immediate runs | one `agent_run_triggers` row each, `immediate`, released at once |
+| review gates | 2, each opened by the sweeper from that run's own `artifact_produced_outbox` row, both `pending` at capture time |
+| the outbox→gate windows | `20:53:45.163` → `20:54:14.008` — **28.8 s** (C11b light, C11) · `21:04:23.617` → `21:04:50.927` — **27.2 s** (C11b dark) |
+| the skill that makes a hold possible | `skill_matches`: `@cinatra-ai/author-agent` ↔ `@cinatra-ai/chat:blog-content`, `source` **manual**, `matched` **t**, written by the app's own Matches tab |
+| the installs the lane had to make | `@cinatra-ai/blog-draft-writer-agent` **0.1.4** and its dependency `@cinatra-ai/context-selection-agent` **0.1.1**, both `owner_level: organization`, both through the **Upload Extension** screen |
+| provider | `openai`, models `gpt-5.5` (17 calls) and `gpt-5.5-2026-04-23` (23 calls) — **40** calls, 514,819 input / 10,051 output tokens |
+| the agent runtime's own calls | **3** `[llm-bridge-run-select] served-by=run_token` lines — the runtime resolving this instance's sealed connection by the run's own token |
+| the provider's callbacks | **62** `POST /api/mcp 200` over the public ingress |
+| scripted-runtime lines | **0** |
+| what cannot be established | this host prints no environment for the listening process, so the process-table read establishes nothing — recorded as `serverEnvAvailable: false` rather than letting a null read as "absent" |
+
+### The two runs that carry NO cell, and why they failed
+
+Both are in the table above and neither is hidden. `03c764ce…` and `21d070b5…`
+each ran on the real provider and each **failed at artifact materialization**,
+with the app's own words: *"the run declared artifact output(s) it did not produce
+(1 of 1 failed): (binding-resolution): failed to load the run package's artifact
+bindings: Instance namespace is not configured. Run /setup/name to provision a
+registry identity."* The namespace was then provisioned through that step — the
+app's own screen — and every run after it completed. They are left on the lane as
+the record of that, not trimmed away.
+
+### The direct-SQL writes this lane made, disclosed
+
+Two, both provisioning and neither a record: the lane account was given the `admin`
+role in Better Auth's own table, and a membership row was written so the account
+belongs to the organization the instance's boot import stamped every agent template
+with (`evidence/2970-setup-rail/drivers/01-lane-setup.mjs`, `02-join-template-org.mjs`,
+which carry the same disclosure). Everything else — every run, trigger, park,
+outbox row, gate, install row and skill match — was written by the app itself
+through its own screens.
+
+
+**Round 7 (2026-08-26) was the previous round**, and its rows are committed rather
+than only quoted: `readback/2975-r7-readback.json` holds every run, trigger, park,
+outbox row, gate and usage aggregate as `readback/2975-r7-read-back.mjs` printed
+them, unedited, and `readback/2975-r7-runtime-evidence.txt` holds the server log
+lines this file narrates, with the grep that produced each block and the
+instance's public origin redacted. Where a number here and a row there disagree,
+the row is right.
+
+## Round 7 — what the database says
+
+**Twelve runs exist on this lane; six carry a cell.** Every one was created by the
+app's own dispatch after a person asked for it in the app's own chat. Nothing was
+inserted, updated or seeded.
+
+| fact | value |
+|---|---|
+| runs that carry a cell | `37087a03…` (C7, C10b, C9) · `197063c3…` (C10, C10c) · `e227ce72…` (C11) · `cd3151cc…` (C11b light) · `7e7d2bdd…` (C11b dark) |
+| `human_present` / `source_type` on every one | `t` / `agent_builder` |
+| the hold | one `lifecycle_continuation_park`, checkpoint `recommendation`, `parked` → `released` when **Confirm** was pressed on the card |
+| the armed one-off | one `agent_run_triggers` row, `scheduled`, `2026-08-26 19:30:00+00`, `Europe/Berlin`, `enabled`, `released_at` NULL |
+| the immediate runs | one `agent_run_triggers` row each, `immediate`, released at once — which is why their pages stay the SETUP surface (`shouldShowPersistentTab` is false for `immediate`) |
+| review gates | 4 on the lane, each opened by the sweeper from that run's own `artifact_produced_outbox` row |
+| the outbox→gate window | `12:58:07.233` → `12:58:32.076` — **25 s** on the C11 run; about 5 s on the C11b runs |
+| provider | `openai`, models `gpt-5.5` and `gpt-5.5-2026-04-23`, **84** calls in `usage_events` |
+| the agent runtime's own calls | **9** `[llm-bridge-run-select] served-by=run_token` lines — the runtime resolving this instance's sealed connection by the run's own token |
+| the provider's callbacks | **94** `POST /api/mcp 200` over the public ingress |
+| scripted-runtime lines | **0** |
+| what cannot be established | this host prints no environment for the listening process, so the process-table read establishes nothing — recorded as `serverEnvAvailable: false` rather than letting a null read as "absent" |
+
+### The direct-SQL writes this lane made, disclosed
+
+Two, both provisioning and neither a record: the lane account was given the `admin`
+role in Better Auth's own table, and a membership row was written so the account
+belongs to the organization the instance's boot import stamped every agent template
+with (`evidence/2970-setup-rail/drivers/01-lane-setup.mjs`, `02-join-template-org.mjs`,
+which carry the same disclosure). Everything else — every run, trigger, park,
+outbox row, gate, install row and skill match — was written by the app itself
+through its own screens.
+
+
 Round 5's runs come first, because they are the runs ALL FOURTEEN pictures are
 taken on. Rounds 4 and 3 follow, unchanged, as the record of what was withdrawn:
 **no committed picture stands on them any more.**
@@ -356,3 +450,86 @@ above.
 Both are real assistant threads written by the shipped chat route. No transcript
 was seeded, no turn was written by a driver and no proposal token was minted by
 hand.
+
+
+## 5. The 2026-08-26 re-shoot (cinatra#2970, PR #2975) — the run behind C7, C9, C10 and C11
+
+Every value below is a DATABASE column or a grep over the app server's own log,
+and both are committed unedited beside this file:
+`readback/2975-reshoot-readback.json` (rows + runtime screens, written by
+`readback/2975-reshoot-read-back.mjs`) and `readback/2975-runtime-evidence.txt`
+(the log lines, with the grep that produced each block). Nothing in this round
+inserts a run, a trigger, a gate or a record.
+
+### The run
+
+- **run id** `2b9859f8-3efc-448e-8659-e8246713b5e2`
+- **status at every shutter** `pending_approval` (read back per record in `dbAt`)
+- **`agent_runs.created_at`** `2026-08-26 05:41:31.728575+00`
+- **`agent_runs.started_at`** NULL — the run has never executed
+- **`agent_runs.human_present`** `t`; **`source_type`** `agent_builder`
+- **`agent_run_triggers`** none until Continue was pressed; then exactly one:
+  `scheduled`, `scheduled_at 2026-08-26 19:30:00+00`, `timezone Europe/Berlin`,
+  `enabled t`, `released_at` NULL, `job_scheduler_id trigger-release-2b9859f8-…`,
+  row created `2026-08-26 05:49:58.71+00`
+- **`artifact_review_gates`** 0 on the whole lane — which is why the review row
+  reads "not reached"
+- **run page** `/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-…/trigger`
+
+### The provider, and the limits of what these readings establish
+
+```
+ provider |  model  | source | operation | calls | input_tokens | output_tokens |           first_at            |            last_at
+----------+---------+--------+-----------+-------+--------------+---------------+-------------------------------+-------------------------------
+ openai   | gpt-5.5 | llm    | stream    |     2 |        43324 |           303 | 2026-08-26 05:41:13.726925+00 | 2026-08-26 05:41:39.278666+00
+(1 row)
+```
+
+The provider was configured through the app's own `/setup/model` form, so the app
+sealed the connection itself; the credential is in no file, no argument, no log and
+no record here.
+
+**The runtime screens** (a hit is proof of a problem; a zero is the absence of that
+particular line and nothing more):
+
+| screen | reading |
+|---|---|
+| `scriptedRuntimeLines` | 0 |
+| `preRouterAttempts` / `preRouterShortCircuits` | 0 / 0 |
+| `noProviderRefusals` | 0 |
+| `mcpToolListRecoveries` (the cold 424 earlier rounds saw) | 0 |
+| `mcpPublicUnreachableRefusals` | **2** — the two turns refused before the ingress was warmed; see below |
+| `publicMcpCallbacks` (positive, unattributed) | **8** |
+| `bridgeRunSelects` (positive) | 0 — no run executed this round |
+
+**What CANNOT be established here, said plainly.** This host prints **no
+environment at all** for the listening process — `ps -Ewww` returns zero `KEY=`
+tokens under macOS System Integrity Protection — so
+`serverScriptedProviderEnv: null` establishes NOTHING, and the readback records
+`serverEnvAvailable: false` beside it rather than letting the null read as
+"absent". What IS positively established is elsewhere: the usage rows above, the
+eight callbacks from the provider's own servers into this instance's `/api/mcp`
+over the public origin, the zero scripted-runtime lines, and the fact that the
+server was launched with the switch explicitly removed from its environment.
+
+### The one fallback in this round, named
+
+The runtime HEADs the public MCP URL with a 2.5-second budget before every turn and
+refuses the turn outright if it does not answer (`#1699`). The FIRST TLS handshake
+through this lane's ingress takes about five seconds; warmed it takes about 0.3 s.
+Two chat turns were refused for that reason before the ingress was warmed with one
+HEAD request. Both refusals are quoted in `readback/2975-runtime-evidence.txt`,
+left in rather than trimmed out. Nothing was stood in for, and the measured turn
+ran on the real provider through the real public toolbox.
+
+### The direct-SQL lane writes, disclosed — there is one driver that writes
+
+`evidence/2970-setup-rail/drivers/11-lane-identity.mjs` makes the throwaway lane
+account an administrator (`UPDATE public."user" SET role='admin'`) and writes ONE
+Better Auth membership row (`INSERT INTO public.member`) so the account is a member
+of the organization the instance's own boot import stamped every agent template
+with. Both are account provisioning on a database that is dropped when the lane
+ends; neither touches a run, a trigger, a gate, a record or any row a photographed
+screen reads. This round creates NO second organization — round 5's driver pair did,
+and a second organization is a lane artefact a picture of the product should never
+carry.

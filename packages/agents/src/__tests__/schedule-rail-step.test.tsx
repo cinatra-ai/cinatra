@@ -195,3 +195,85 @@ describe("the schedule step's surface opens in the RUN DETAIL, not under its rai
     expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
   });
 });
+
+describe("the row keeps every anchor its readers address it by", () => {
+  // The row is drawn from the SHARED run-surface rail row since cinatra#2970.
+  // A shared row is only safe while nothing it carried is lost, so every anchor
+  // the capture walk, the review page and this suite address is asserted off
+  // the RENDERED element rather than off the source that emits it.
+  it("carries the six attributes and the indicator id, on one button element", async () => {
+    mockResolve();
+    const { container } = renderSurface("schedule");
+
+    await waitFor(() => expect(card(container)).not.toBeNull());
+
+    const entry = railColumn(container)!.querySelector<HTMLElement>(
+      '[data-conformance-id="schedule-rail-step"]',
+    )!;
+    expect(entry).not.toBeNull();
+    expect(entry.tagName).toBe("BUTTON");
+    expect(entry.getAttribute("type")).toBe("button");
+    expect(entry.hasAttribute("data-schedule-rail-step")).toBe(true);
+    expect(entry.getAttribute("data-schedule-rail-host")).toBe("run_card");
+    expect(entry.getAttribute("data-schedule-step-selected")).toBe("true");
+    expect(entry.getAttribute("data-action")).toBe("open-schedule-step");
+    expect(entry.getAttribute("aria-current")).toBe("step");
+    const indicator = entry.querySelector<HTMLElement>(
+      '[data-conformance-id="schedule-rail-indicator"]',
+    )!;
+    expect(indicator).not.toBeNull();
+    expect(entry.textContent).toBe("1Schedule");
+    // This row states nothing about "reached" — it is the step the surface is
+    // on. An `available` handed down from here would print the mark and change
+    // the tokens, so its ABSENCE is what is pinned, not just the rest.
+    expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    // NOR did the shared row close it. Since cinatra#2970 a row whose step has
+    // no surface cannot be opened; this step always has its form, so the row
+    // keeps its handler and says nothing about being disabled.
+    expect(entry.hasAttribute("aria-disabled")).toBe(false);
+    expect(entry.className).toContain("hover:opacity-90");
+    expect(indicator.className).toContain("bg-primary");
+    expect(indicator.className).not.toContain("bg-muted-foreground/40");
+    expect(entry.querySelector("span:last-of-type")!.className).toContain("text-foreground");
+    // The two columns keep the ids the capture recorder counts.
+    expect(
+      container.querySelectorAll('[data-conformance-id="run-step-rail-column"]').length,
+    ).toBe(1);
+    expect(
+      container.querySelectorAll('[data-conformance-id="run-detail-column"]').length,
+    ).toBe(1);
+  });
+
+  it("says the host it was mounted on — the review page's row is not the run page's", () => {
+    mockResolve();
+    const { container } = render(
+      <div className="flex items-start gap-6" data-run-detail-contract="">
+        <ScheduleRailStep
+          host="page_gate_region"
+          cardRef="schedule-ref-2"
+          displayStep={1}
+          rail={<DetailRow />}
+          detail={<RunProgress />}
+          initialSelection="detail"
+        />
+      </div>,
+    );
+
+    const entry = container.querySelector<HTMLElement>(
+      '[data-conformance-id="schedule-rail-step"]',
+    )!;
+    expect(entry.getAttribute("data-schedule-rail-host")).toBe("page_gate_region");
+    expect(entry.getAttribute("data-schedule-step-selected")).toBe("false");
+    expect(entry.hasAttribute("aria-current")).toBe(false);
+    expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    expect(entry.hasAttribute("aria-disabled")).toBe(false);
+    // The UNSELECTED tokens, unchanged by the shared row.
+    const indicator = entry.querySelector<HTMLElement>(
+      '[data-conformance-id="schedule-rail-indicator"]',
+    )!;
+    expect(indicator.className).toContain("bg-muted-foreground/40");
+    expect(entry.querySelector("span:last-of-type")!.className).toContain(
+      "text-muted-foreground",
+    );
+  });
+});

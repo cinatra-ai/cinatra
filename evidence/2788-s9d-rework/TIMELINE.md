@@ -1,6 +1,171 @@
 # TIMELINE — the real runs behind every capture
 
-**Round 5 re-shot all fourteen pictures**, and its rows are the first table
+**Round 8 (2026-08-26) re-shot ALL SEVEN cells — C7, C9, C10, C10b, C10c, C11 and
+C11b — because every one of them was taken before the settled row on the setup rail
+and before the merge of `main` 803fe94045fe (cinatra#3006).** Its rows are the first
+table below. Round 7's, round 6's and round 5's rows follow unchanged, and the other
+sixteen pictures are still the committed ones.
+
+## Round 8 — the six runs behind C7, C9, C10, C10b, C10c, C11 and C11b
+
+Every row is read out of the lane database (`readback/2975-r8-readback.json`, as the
+readback driver printed it) or is the `capturedAt` of the record the picture is filed
+with, so a reader can line every picture up against the row it belongs to. Every run
+was asked for in the app's own chat with a real model provider and created by the
+app's own dispatch; no row in `agent_runs`, `agent_run_triggers`,
+`lifecycle_continuation_park`, `artifact_produced_outbox` or `artifact_review_gates`
+was inserted, updated or seeded by this lane.
+
+| run | package | what it carries | status at the shutter | trigger | park | gates |
+|---|---|---|---|---|---|---|
+| `5e22c046-0466-456c-ab9d-72f605bf7ee5` | `blog-draft-writer-agent` | **C7** and **C10b** | `pending_approval` — never executed, `started_at` NULL | none, and none was ever armed on it | none | 0 |
+| `ee1e9e32-058b-4c97-b63f-e8f1e2a87d06` | `blog-draft-writer-agent` | **C9** | `pending_approval` | one `scheduled` @ `2026-08-27 07:30:00+00` `Europe/Berlin`, `enabled`, `released_at` NULL — armed AHEAD and still ahead at both shutters | none | 0 |
+| `1677f60d-a858-4cb9-9c61-f3a9ef49b29d` | `author-agent` | **C10** (live hold) | `pending_input` | none | `recommendation` — **`parked`** | 0 |
+| `6c0399ff-c218-447f-9c80-c939b2262f01` | `author-agent` | **C10c** (decided hold) | `pending_approval` | none | `recommendation` — **`released`** `20:15:22.834` | 0 |
+| `814d19ea-c247-4e8d-97e2-e408910487ec` | `blog-draft-writer-agent` | **C11b light**, then **C11** | `completed`; inside the window at C11b, gate on file at C11 | one `immediate`, released `20:36:06.545+00` | none | 0 at C11b, **1** at C11 |
+| `7da4a7a5-3806-48b0-b262-b2e810c1b52c` | `blog-draft-writer-agent` | **C11b dark** | `completed`, inside the outbox→gate window | one `immediate`, released `21:02:40.626+00` | none | 0 at the shutter, 1 after |
+
+### The order it happened in
+
+| time (UTC) | what |
+|---|---|
+| `20:03:49.630` | the app's own dispatch created the session's first run from the chat |
+| `20:10:03.243` | the **C9** run created from the chat |
+| `20:11:53.776` | the **C10c** run created — and parked at its skills question the second after (`lifecycle_continuation_park` `recommendation` / `parked` `20:11:54.583`) |
+| `20:15:22.834` | **Confirm** pressed on the recommendation card, in the run detail column — the app released the park itself |
+| `20:19:34.628` | the **C10** run created and parked at its own skills question — a SECOND held run, because a hold is either live or decided and never both |
+| `20:35:18.400` | the **C11 / C11b-light** run created from the chat |
+| `20:36:06.545` | its `immediate` trigger released — the app started it |
+| `20:53:45.163` | its artifact's `artifact_produced_outbox` row appears, `pending` — the working window opens |
+| `20:53:50.767` | **C11b light**, caught inside that window (`review-gate-placeholder` 1, `review-gate-card` 0) |
+| `20:54:14.008` | the sweeper opens the gate — **28.8 s** after the outbox row |
+| `20:56:58.607` | the **C7 / C10b** run created from the chat, and never pressed |
+| `20:58:37` – `20:58:46` | **C7** light + dark, on the first-shown scheduling form |
+| `20:58:56` – `20:59:06` | **C9** light + dark, on the run armed a one-off ahead — the form still in the schedule step |
+| `20:59:19` – `20:59:33` | **C10** light + dark, on the live hold |
+| `20:59:45` – `20:59:58` | **C10b** light + dark, the FORCED press on the closed row |
+| `21:00:13` – `21:00:27` | **C10c** light + dark, on the decided hold — the settled row |
+| `21:00:39` – `21:00:51` | **C11** light + dark, with the gate on file |
+| `21:01:50.701` | the **C11b-dark** run created from the chat |
+| `21:04:23.617` | its outbox row appears — the second working window opens |
+| `21:04:28.876` | **C11b dark**, caught inside it |
+| `21:04:50.927` | the sweeper opens its gate — **27.2 s** after the outbox row |
+
+Three things are stated rather than smoothed over:
+
+1. **C9's press happened before its cell was shot, not during it.** The Continue
+   press on `ee1e9e32…` was delivered on the button the page draws inside the run
+   detail column, with *Schedule for later* chosen and `2026-08-27 09:30` typed into
+   the step's own field; the app armed the trigger and **navigated nowhere** — the
+   URL after the press is the same run page it was pressed on, which is
+   cinatra#3006's whole point. The C9 frames were then taken on that page.
+2. **C7 and C10b needed a run that had never been pressed**, so they are not on the
+   C9 run. Arming a one-off no longer takes the page to a second screen, but it does
+   move the schedule step out of the first-shown state C7 is drawn for.
+3. **Two runs of this lane failed and carry no cell.** Both failed at artifact
+   materialization before the instance namespace was provisioned; both are in
+   `RUN-READBACK.md` with the app's own error text, and neither was removed.
+
+
+**Round 7 (2026-08-26) re-shot every cell round 6 had taken — C7, C9, C10, C11 —
+because all four were shot BEFORE the fix under review, and added C10b, C10c and
+C11b.** Its rows are the first table below. Round 6's and round 5's rows follow
+unchanged, and the other twelve pictures are still the committed ones.
+
+## Round 7 — the six runs behind C7, C9, C10, C10b, C10c, C11 and C11b
+
+Every row is read out of the lane database (`readback/2975-r7-readback.json`, as
+the readback driver printed it) or is the `capturedAt` of the record the picture is
+filed with, so a reader can line every picture up against the row it belongs to.
+Every run was asked for in the app's own chat with a real model provider and
+created by the app's own dispatch; no row in `agent_runs`, `agent_run_triggers`,
+`lifecycle_continuation_park`, `artifact_produced_outbox` or
+`artifact_review_gates` was inserted, updated or seeded by this lane.
+
+| run | package | what it carries | status at the shutter | trigger | park | gates |
+|---|---|---|---|---|---|---|
+| `37087a03-ded7-4d6e-beab-e1a4b0b97ab8` | `blog-draft-writer-agent` | **C7**, **C10b**, then **C9** after the press | `pending_approval` — never executed, `started_at` NULL | none until Continue; then one `scheduled` @ `2026-08-26 19:30:00+00` `Europe/Berlin`, `released_at` NULL | none | 0 |
+| `197063c3-2cc9-4a43-941e-111728e978e4` | `author-agent` | **C10** (live hold), then **C10c** after Confirm | `pending_input` at C10, `pending_trigger` at C10c | none | `recommendation` — `parked` at C10, `released` at C10c | 0 |
+| `e227ce72-2329-411b-b1a7-1939f364862c` | `blog-draft-writer-agent` | **C11** | `completed`, artifact materialised | one `immediate`, released `12:45:00.82+00` | none | **1** — gate `12:58:32.08+00` |
+| `cd3151cc-4b26-4954-8f9b-4775fe5cfc74` | `blog-draft-writer-agent` | **C11b light** | `completed`, inside the outbox→gate window | one `immediate`, released `13:44:41.57+00` | none | 0 at the shutter, 1 after |
+| `7e7d2bdd-012b-41cb-ad0d-2697439a0c6b` | `blog-draft-writer-agent` | **C11b dark** | `completed`, inside the outbox→gate window | one `immediate`, released `13:41:41.68+00` | none | 0 at the shutter, 1 after |
+| `09604054-e24e-48e5-8d86-347895da7ada` | `blog-draft-writer-agent` | no cell — the run whose window measured **25 s** and set the catcher's design | `completed` | one `immediate` | none | 1 |
+
+### The order it happened in
+
+| time (UTC) | what |
+|---|---|
+| `11:22:32.836` | the app's own dispatch created the first run of the session from the chat |
+| `11:44:32.287` | the run that holds: created, and parked at its skills question — `lifecycle_continuation_park` `recommendation` / `parked` |
+| `11:46:46` – `11:47:03` | **C10** light + dark, on the live hold |
+| `11:54:42` – `11:55:00` | **C10c** light + dark, after **Confirm** was pressed on the card (the app released the park itself) |
+| `12:42:08.193` | the C11 run created from the chat |
+| `12:45:00.820` | its `immediate` trigger released — the app started it |
+| `12:58:07.233` | its artifact's `artifact_produced_outbox` row appears, `pending` |
+| `12:58:32.076` | the sweeper opens the gate — **25 s** after the outbox row |
+| `13:18:02` – `13:18:19` | **C11** light + dark, with the gate on file |
+| `13:42:48` – `13:42:53` | **C11b dark**, caught inside its own run's window |
+| `13:45:51` – `13:45:56` | **C11b light**, caught inside its own run's window |
+| `13:47:32.643` | the C7 run created from the chat |
+| `13:48:02` – `13:48:37` | **C7** and **C10b**, light + dark, before any press |
+| `13:51:0x` | **Continue** pressed on the scheduler step with *Schedule for later* and `2026-08-26 21:30` typed into the step's own field; the app armed the trigger |
+| `13:51:19` – `13:51:29` | **C9** light + dark, the same run one press later |
+
+Two consequences are stated rather than smoothed over, both unchanged from round 6
+and neither touched by this work:
+
+1. The run was at `pending_approval` and `pending_approval → armed` is not a legal
+   transition, so the trigger row was created while the STATUS stayed
+   `pending_approval`.
+2. Once a one-off is armed the run owns a persistent trigger row and its page draws
+   the **Trigger** tab instead of the setup rail — measured, `run-step-rail-column`
+   **0** / `run-detail-column` **0** — so the setup surface this issue is about is
+   the one a run is on *before* its schedule is armed.
+
+
+**Round 6 (2026-08-26) re-shot ONE picture — C7 — and added three cells (C9, C10,
+C11).** Its rows are the first table below. Round 5's rows follow unchanged, and
+the other twelve of its pictures are still the committed ones.
+
+## Round 6 — the run behind C7, C9, C10 and C11
+
+Every row is read out of the lane database or is the `capturedAt` of the record
+the picture is filed with, so a reader can line every picture up against the row
+it belongs to. ONE run carries all four cells: it was asked for in the app's own
+chat with a real model provider and created by the app's own dispatch, and it has
+never executed (`started_at` NULL at every shutter).
+
+Run `2b9859f8-3efc-448e-8659-e8246713b5e2`, thread
+`780b4eed-efed-4e00-b7a4-81c36c958e37`.
+
+| UTC (2026-08-26) | what | where it is recorded |
+|---|---|---|
+| 05:41:17.251 | a warm-up turn sent in the app's own chat and answered (the ingress had to be warm before the runtime's 2.5 s public-MCP probe would pass — README.md, "the two limits this round hit") | `cinatra.assistant_turns` |
+| 05:41:17.903 | the person asks, in their own words: *"Please run the Blog Draft Writer Agent for me now."* | `cinatra.assistant_turns` (user turn) |
+| 05:41:13.727 / 05:41:39.279 | the two model calls of the session: `openai` / `gpt-5.5`, 43324 in / 303 out | `cinatra.usage_events` |
+| 05:41:31.729 | **the app's own dispatch created the run**, `pending_input`, human-present, `source_type agent_builder` | `cinatra.agent_runs.created_at` |
+| ~05:41:3x | the run parks at its setup interruption, `pending_approval`; no trigger row | `cinatra.agent_runs.status` |
+| 05:48:01.493 / 05:48:09.229 | **C7** shot, light and dark: the two-column setup surface — rail 1 / detail 1, the three steps NAMED, `1 Schedule` open with the scheduling form on the right, no run progress | the two C7 records |
+| 05:48:25.110 / 05:48:41.140 | **C10** shot, light and dark, after the **2 Recommendation** row was pressed: the step takes the selection and the run detail draws NOTHING (`detailColumnTextLength` 0) | the two C10 records |
+| 05:48:55.337 / 05:49:09.838 | **C11** shot, light and dark, after the **3 Review** row was pressed (forced — the row carries `aria-disabled`): nothing happened, the scheduler is still open | the two C11 records |
+| 05:49:57.946 | **Continue pressed** on the scheduler step, inside the run detail column, with *Schedule for later* and `2026-08-26 21:30` typed into the step's own field | `readback/2975-chain.json` |
+| 05:49:58.710 | **the trigger armed by the app itself**: `scheduled`, `2026-08-26 19:30:00+00`, `Europe/Berlin`, enabled, delayed job `trigger-release-2b9859f8-…`, `released_at` NULL | `cinatra.agent_run_triggers` |
+| 05:52:39.654 / 05:52:48.549 | **C9** shot, light and dark: the same run's page now drawing `Trigger configuration` — type `scheduled`, `Aug 26, 2026, 9:30:00 PM`, `Europe/Berlin` — with `Cancel trigger` | the two C9 records |
+
+**The run never ran.** `started_at` is NULL in every record's own `dbAt` block, no
+`artifact_review_gates` row exists for it (0 on the whole lane), and the server log
+carries zero `[llm-bridge-run-select]` lines — which is what a round of
+pre-execution screens should read.
+
+**A consequence worth recording rather than smoothing over:** the run was at
+`pending_approval` when Continue was pressed, and `pending_approval -> armed` is not
+a legal transition, so the trigger row was created while the run's STATUS stayed
+`pending_approval`. The arming is the trigger row and the scheduled job, and both
+are there; the status flip belongs to the `pending_input` path. Nothing in
+cinatra#2970 touches that, and it is the same on this head as before it.
+
+
+**Round 5 re-shot all fourteen pictures**, and its rows are the second table
 below. Rounds 4 and 3 follow unchanged, as the record of what they walked; no
 committed picture stands on them any more.
 
