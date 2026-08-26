@@ -1899,7 +1899,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             // state still decides whether there is a form to edit at all: the
             // composer is withdrawn once the schedule is over (cinatra#3004),
             // which this component measures off the card and is unchanged.
-            runId={run.id}
+            //
+            // Read optionally rather than asserted: `scheduleTabRef` is minted
+            // only for a run, so this branch always has one, but that is a fact
+            // about the ref's derivation that the compiler cannot see -- and
+            // the window's own rule for a host with no run is already "no run,
+            // nothing to hold a conversation about".
+            runId={run?.id ?? null}
             canRespondInWindow={canRespondInWindow}
           />
           </AgentPanelBody>
