@@ -276,31 +276,48 @@ const SURFACES: Surface[] = [
     },
   },
   {
-    name: "the armed-trigger tab",
+    // The Trigger tab that used to draw this window is retired (cinatra#3004);
+    // `SchedulePromptWindow` is the one component both of the armed schedule's
+    // hosts now mount, so this render is the window both of them draw.
+    name: "the armed schedule's window",
     surface: "armed-trigger",
     mount: async (canRespond) => {
-      const { TriggerTabClient } = await import("../trigger-tab-client");
+      const { SchedulePromptWindow } = await import("../schedule-prompt-window");
       return (
-        <TriggerTabClient
-          agentId="cinatra-ai/email-recipient-selection-agent"
-          runId="run-2933"
+        <SchedulePromptWindow
           templateId="tmpl-2933"
+          runId="run-2933"
           canRespondInWindow={canRespond}
-          trigger={{
-            triggerType: "scheduled",
-            scheduledAt: "2026-09-01T09:00:00.000Z",
-            cronExpression: null,
-            timezone: "UTC",
-            enabled: true,
-            releasedAt: null,
-            cronPreview: null,
-          }}
-          gatedSteps={[]}
+          readOnly={false}
         />
       );
     },
   },
 ];
+
+/**
+ * The armed schedule's window has a SECOND reason to be absent that belongs to
+ * the schedule rather than to the reader: once the schedule is over there are no
+ * fields to ask about, so the composer is withdrawn (cinatra#3004). The two
+ * reasons are independent and both still hold, which is what this asserts —
+ * carrying that behaviour through the change that made this window the run's
+ * conversation.
+ */
+describe("the armed schedule's window is withdrawn once the schedule is over", () => {
+  it("draws no box for a reader WITH access when the schedule can no longer change", async () => {
+    const { SchedulePromptWindow } = await import("../schedule-prompt-window");
+    render(
+      <SchedulePromptWindow
+        templateId="tmpl-2933"
+        runId="run-2933"
+        canRespondInWindow={true}
+        readOnly={true}
+      />,
+    );
+    await settle();
+    expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).toBeNull();
+  });
+});
 
 describe("AC1 — each window outside the chat is DRAWN, with the ratified placeholder", () => {
   for (const s of SURFACES) {

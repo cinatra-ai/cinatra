@@ -144,6 +144,37 @@ export type TriggerScreenClientProps = {
   readOnly?: boolean;
 };
 
+/**
+ * WHERE A CONTINUE LANDS (cinatra#3004).
+ *
+ * The plan, on the moment after the press: "After Confirm the card stays where
+ * it is and stays editable … the same option rows show the schedule as it
+ * stands." A press that ARMS A SCHEDULE therefore navigates nowhere — it
+ * re-renders the surface it was pressed on, which comes back drawing the armed
+ * schedule through the one schedule renderer: the run page's schedule step, the
+ * run's own schedule surface, and the setup rail's schedule step all mount THIS
+ * component and all read the same row afterwards. Sending the reader to another
+ * screen is what put a second drawing of the schedule in front of them.
+ *
+ * **RUN RIGHT AFTER SETUP** IS NOT A SCHEDULE and keeps the landing it has
+ * always had. That press starts the run, and the run page is where a run is
+ * watched; staying here would leave the person on a form for a run that is
+ * already going.
+ *
+ * WRITTEN AS AN ALLOW-LIST of the two scheduled kinds, so a kind added later
+ * keeps the old landing rather than silently staying on a surface that draws
+ * nothing for it — the same reading the card resolver takes.
+ *
+ * Exported so the unit test can read the rule without a router.
+ */
+export type ContinueLanding = "in-place" | "run-page";
+
+export function scheduleContinueLanding(triggerType: string): ContinueLanding {
+  return triggerType === "scheduled" || triggerType === "recurring"
+    ? "in-place"
+    : "run-page";
+}
+
 export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const readOnly = props.readOnly === true;
   const router = useRouter();
@@ -370,6 +401,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       const result = await setRunTrigger(args);
       if (!result.ok) {
         setServerError(result.error);
+        return;
+      }
+      // THE SCHEDULE STAYS WHERE IT WAS ARMED (cinatra#3004) — see
+      // `scheduleContinueLanding`. The refresh re-renders the server tree for
+      // the surface this form is mounted on, so the step it stood in comes back
+      // as the armed form; nothing about the reader's place on the page moves.
+      if (scheduleContinueLanding(values.triggerType) === "in-place") {
+        router.refresh();
         return;
       }
       router.push(`/agents/${props.agentId}/${encodeURIComponent(props.instanceId)}`);

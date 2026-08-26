@@ -717,6 +717,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the run page's schedule STEP: the first row of the run detail's left rail, which declares host=\"run_card\" and opens onto the card — the run screen renumbers its own rail around it and mounts no schedule drawing of its own",
         },
+        {
+          module: "packages/agents/src/run-schedule-tab.tsx",
+          adapter: "mount",
+          region: "page_region",
+          surface: "production",
+          why: "the SAME run's schedule tab (cinatra#3004): the agent page's schedule surface, which declares host=\"run_card\" and draws the form on its own — no rail to be a row of. It replaces a second drawing of the same facts (a Trigger-configuration summary, a held-steps tree and a Cancel that deleted the row), so this adapter REMOVES a parallel renderer rather than adding one",
+        },
       ],
       page_gate_region: [
         {
@@ -727,6 +734,22 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card, holding the recommendation hold card above the review gate card, which is the composition the plan requires",
         },
       ],
+    },
+    // TWO ADAPTERS ON THE RUN'S OWN HOST, AND THEY ARE ROUTES (cinatra#3004).
+    // The run detail opens the schedule as a step in its rail; the run's
+    // schedule tab is the same form on its own page region. One run is never
+    // both screens at once, and the picker below is where that is decided in
+    // code rather than inferred from two mounts.
+    exclusions: {
+      run_card: {
+        selector: "runScheduleAdapterFor",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/schedule-run-card-adapters-3004.test.ts",
+          testName:
+            "answers exactly one adapter for every screen and trigger shape — the two run_card schedule adapters are never both chosen",
+        },
+      },
     },
     // All four hosts carry a mount, so there is no `hostGap` to write. §IX's
     // "every card appears on every host" is met for this kind.

@@ -33,11 +33,7 @@ import {
   DEFAULT_CONNECTOR_INVENTORY_DEPS,
 } from "@/lib/connector-inventory.server";
 import { connectionSubjectUserId } from "@/lib/connection-use-gate";
-import {
-  delegatedChatAllowedToolNames,
-  resolveDelegatedChatClass,
-  isDelegatedChatMcpToolAllowed,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
 import {
   detectExplicitDispatchDirective,
@@ -675,21 +671,52 @@ async function resolveChatMcpCatalogState(input: {
     // the filter silently gates nothing.
     const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
 
-    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
-    // still comes from the legacy allowlist, and since the owner's ruling a
-    // primitive with no class in force is unexposed, each seeded name carries
-    // the class `resolveDelegatedChatClass` puts in force for it — the interim
-    // one here, because nothing in the tree declares yet. Seeding no class
-    // would empty the catalog, which is exactly the failure the shim prevents.
-    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
-      name,
-      declaredClass: resolveDelegatedChatClass(name, undefined),
-      capabilityKey: capabilityKeyFor(name),
+    // cinatra#2817 slice 1 — THE SEEDING SITE, now the request-scoped
+    // registration PLAN rather than a static name list. The pass that decides
+    // what registers is the pass that produces this, so the catalog cannot
+    // advertise a primitive the perimeter refuses (or hide one it serves): the
+    // servable subset IS the set `registerTool` accepted, each entry carrying
+    // the class its registration put in force and the capability key resolved
+    // from the live connector catalog.
+    // LAZY, deliberately: `@/lib/mcp-server` carries the whole connector /
+    // module / database graph, and a static import here would put it on every
+    // route this runtime is on (and force every test of an unrelated turn seam
+    // to stub it). The catalog hint is best-effort and already inside a
+    // try/catch, so the import cost is paid only when the hint is built.
+    //
+    // REBUILT EVERY TURN, ON PURPOSE, WITH NO MEMO.
+    // The plan is only valid for the (activationGeneration, admissionGeneration)
+    // pair it was built under: an install/activation or a recorded/withdrawn
+    // review changes what the same primitive name resolves to. Caching it would
+    // mean holding a decision made against a policy that may no longer be in
+    // force, and the failure would be SILENT because this whole block is
+    // fail-open (a stale hint looks exactly like a fresh one). Rebuilding is the
+    // conservative direction: the cost is one registration pass plus one store
+    // read per turn, and the hint is best-effort anyway.
+    //
+    // `admissionSnapshotCacheKey` (packages/mcp-server/src/delegated-chat-admission.ts)
+    // states the key any future cache here MUST use. It has no production
+    // consumer for exactly this reason: there is no cache to consume it yet.
+    const { buildDelegatedChatCapabilityPlan } = await import("@/lib/mcp-server");
+    const plan = await buildDelegatedChatCapabilityPlan({
+      resolveCapabilityKey: capabilityKeyFor,
+    });
+    const servable: ServableChatPrimitive[] = plan.servable.map((entry) => ({
+      name: entry.name,
+      declaredClass: entry.declaredClass,
+      capabilityKey: entry.capabilityKey,
     }));
 
+    // HOST ADMISSION IS THE PLAN (cinatra#2817 slice 3). The plan's servable
+    // subset is exactly what the shared evaluator admitted under this request's
+    // admission snapshot, so membership in it IS host approval. Re-deriving the
+    // answer here from a name would be the second answer this issue removes —
+    // and a name-keyed predicate could not express the decision anyway, which
+    // is about an owner at a version with a reviewed declaration.
+    const admitted = new Set(servable.map((primitive) => primitive.name));
     return {
       servable,
-      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isHostApproved: (name) => admitted.has(name),
       isCapabilityAvailable: (key) => authorizedKeys.has(key),
     };
   } catch {

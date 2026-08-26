@@ -50,7 +50,12 @@ const WINDOWS: Array<{ name: string; file: string; surface: string }> = [
   { name: "the run page", file: "packages/agents/src/agentic-run-panel.tsx", surface: "run-page" },
   { name: "the step-by-step screen", file: "packages/agents/src/orchestrator-stepper-panel.tsx", surface: "step-by-step" },
   { name: "the schedule screen", file: "packages/agents/src/trigger-screen-client.tsx", surface: "schedule" },
-  { name: "the armed-trigger tab", file: "packages/agents/src/trigger-tab-client.tsx", surface: "armed-trigger" },
+  // THE ARMED SCHEDULE'S WINDOW MOVED, AND STAYED ONE WINDOW (cinatra#3004).
+  // The Trigger tab that used to draw it is retired; `SchedulePromptWindow` is
+  // the one component both of its hosts — the run detail's schedule step and
+  // the run's schedule tab — now mount, so the same armed schedule is asked
+  // about through the same exchange however the reader reached it.
+  { name: "the armed schedule's window", file: "packages/agents/src/schedule-prompt-window.tsx", surface: "armed-trigger" },
   {
     name: "the review page",
     file: "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-prompt-window.tsx",
@@ -106,6 +111,16 @@ describe("the window is drawn only for a person the run would answer", () => {
   // mounts each window twice and requires the two answers to DIFFER — a window
   // that draws no box at all can no longer pass the refusal reading.
 
+  it("the retired Trigger tab took no second window with it", () => {
+    // The tab's own file is gone (cinatra#3004). What must NOT have gone with
+    // it is the armed schedule's window: it is one of the five, and it is now
+    // drawn by `SchedulePromptWindow` for both of that schedule's hosts.
+    expect(() => read("packages/agents/src/trigger-tab-client.tsx")).toThrow();
+    const win = read("packages/agents/src/schedule-prompt-window.tsx");
+    expect(win).toContain('surface: "armed-trigger"');
+    expect(win).toContain("canRespondInWindow !== false");
+  });
+
   it("the schedule screen no longer hides its box behind the platform tier", () => {
     const src = read("packages/agents/src/trigger-screen-client.tsx");
     // It used to read `props.isAdmin !== false` on the window's own visibility.
@@ -132,10 +147,19 @@ describe("the window is drawn only for a person the run would answer", () => {
     // thing AC3 forbids, and a window with access but no template cannot be
     // drawn at all.
     const screens = read("packages/agents/src/instance-screens.tsx");
+    // SIX passes for FIVE windows: the armed schedule's window has two hosts on
+    // this screen — the run detail's schedule step and the run's schedule tab —
+    // and both mount the SAME component for the SAME run, which is why they
+    // read as one exchange (cinatra#3004). Every other window has one host.
     const accessPasses = screens.match(/canRespondInWindow=\{canRespondInWindow\}/g) ?? [];
+    expect(accessPasses).toHaveLength(6);
+    // The template travels under two prop names because the schedule's hosts
+    // name it for the window they compose rather than for themselves.
     const templatePasses = screens.match(/templateId=\{template\.id\}/g) ?? [];
-    expect(accessPasses).toHaveLength(5);
-    expect(templatePasses).toHaveLength(5);
+    const scheduleWindowPasses =
+      screens.match(/promptWindowTemplateId=\{template\.id\}/g) ?? [];
+    expect(templatePasses).toHaveLength(4);
+    expect(scheduleWindowPasses).toHaveLength(2);
   });
 
   it("the run page's panel can be given a template at all", () => {

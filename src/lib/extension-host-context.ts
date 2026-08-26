@@ -385,7 +385,12 @@ function makeMcp(
   identity?: ExtensionRecordIdentityInput,
 ): ExtensionHostContext["mcp"] {
   return {
-    registerTool: (tool) => registerExtensionMcpTool(packageName, tool),
+    // cinatra#2817 slice 1 — the record's EXACT version rides the registration
+    // so the per-request plan can bind it to the version actually serving. A
+    // legacy/dev ctx carries none; that registration is then unversioned, and
+    // version-bound admission refuses it rather than guessing.
+    registerTool: (tool) =>
+      registerExtensionMcpTool(packageName, tool, { resolvedVersion: identity?.version ?? null }),
     callPrimitive: makeCallPrimitive(packageName, identity),
     listExternalServers: async () => {
       const { listEnabledGlobalExternalMcpServers } = await import("@/lib/external-mcp-registry");

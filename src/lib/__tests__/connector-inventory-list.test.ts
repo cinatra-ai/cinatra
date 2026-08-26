@@ -30,12 +30,15 @@ import {
   connectorInventoryListSchema,
   CONNECTOR_INVENTORY_TOOL_DESCRIPTION,
 } from "@/lib/connector-inventory-mcp";
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import {
+  coreDelegatedChatAdmittedNames,
+  isCoreDelegatedChatAdmitted,
+} from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
-const POLICY_PATH = resolve(
+const DECLARATIONS_PATH = resolve(
   REPO_ROOT,
-  "packages/mcp-server/src/delegated-chat-tool-policy.ts",
+  "packages/mcp-server/src/capability-plan.ts",
 );
 
 // The RAW material a leak would expose. None of it may appear in the result.
@@ -116,20 +119,15 @@ describe("connector_inventory_list — schema", () => {
 
 describe("connector_inventory_list — delegated-chat allowlist", () => {
   it("is chat-callable", () => {
-    expect(isDelegatedChatMcpToolAllowed(CONNECTOR_INVENTORY_TOOL_NAME)).toBe(true);
+    expect(isCoreDelegatedChatAdmitted(CONNECTOR_INVENTORY_TOOL_NAME)).toBe(true);
   });
 
-  it("is the ONLY `connector_`-namespaced name on the chat allowlist", () => {
-    const body = readFileSync(POLICY_PATH, "utf8");
-    const block = body.match(/ALLOWED_EXACT\s*=\s*new\s+Set<string>\(\[([\s\S]*?)\n\]\)/);
-    expect(block, "ALLOWED_EXACT block not found").toBeTruthy();
-    // Entry lines only — a name mentioned inside a `//` rationale comment is
-    // prose, not an allowlist entry.
-    const entries = block![1]
-      .split("\n")
-      .filter((line) => !/^\s*\/\//.test(line))
-      .flatMap((line) => [...line.matchAll(/"([a-z_][a-z0-9_]*)"/g)].map((m) => m[1]));
-    expect(entries.filter((n) => n.startsWith("connector_"))).toEqual([
+  it("is the ONLY `connector_`-namespaced name the core surface admits", () => {
+    // Asked of the DECISION now, not of a source regex: the projection runs
+    // every host declaration back through the real evaluator, so a name the
+    // evaluator would refuse can never appear here however the declarations are
+    // edited (cinatra#2817 slice 3).
+    expect(coreDelegatedChatAdmittedNames().filter((n) => n.startsWith("connector_"))).toEqual([
       CONNECTOR_INVENTORY_TOOL_NAME,
     ]);
   });
@@ -144,13 +142,13 @@ describe("connector_inventory_list — delegated-chat allowlist", () => {
       "connector_instance_tool_call",
       "nango_connections_list",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(denied), denied).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(denied), denied).toBe(false);
     }
   });
 
-  it("carries its field-allowlist rationale in the policy comment", () => {
-    const body = readFileSync(POLICY_PATH, "utf8");
-    const at = body.indexOf(`"${CONNECTOR_INVENTORY_TOOL_NAME}"`);
+  it("carries its field-allowlist rationale beside its host declaration", () => {
+    const body = readFileSync(DECLARATIONS_PATH, "utf8");
+    const at = body.indexOf(`${CONNECTOR_INVENTORY_TOOL_NAME}: "`);
     expect(at).toBeGreaterThan(-1);
     const rationale = body.slice(Math.max(0, at - 2200), at);
     expect(rationale).toMatch(/FIELD ALLOWLIST/);
