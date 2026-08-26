@@ -64,9 +64,9 @@
       "migrationMechanism": "logical-dump-restore",
       "appManagedSchema": true,
       "upstreamDictated": true,
-      "baselinePin": { "image": "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193", "major": "17", "digest": "sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193" },
+      "baselinePin": { "image": "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73", "major": "17", "digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" },
       "coupledAppImages": [
-        { "image": "nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1", "major": "hosted", "digest": "sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1" }
+        { "image": "nangohq/nango-server:hosted@sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2", "major": "hosted", "digest": "sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2" }
       ],
       "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. nango-server is therefore a coupled app image: it owns no volume but migrates THIS data dir at boot, so its pin is drift-checked alongside the engine. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
       "transitions": [
@@ -242,7 +242,7 @@
       "migrationMechanism": "discard-recreate",
       "appManagedSchema": false,
       "upstreamDictated": false,
-      "baselinePin": { "image": "redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005", "major": "8", "digest": "sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005" },
+      "baselinePin": { "image": "redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576", "major": "8", "digest": "sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576" },
       "notes": "BullMQ cache/queue backend. The volume holds regenerable cache/queue state, so the fail-safe upgrade path is discard-recreate. Forward RDB is readable (7 -> 8 upgrade in place is fine); DOWNGRADE is unsafe — Redis 8 writes RDB v14 which Redis 7 refuses (crash-loop), so a downgrade requires CLEARING the dump first (documented downgrade path).",
       "transitions": [
         { "from": "7", "to": "8", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": false, "notes": "Applied major. Forward RDB is compatible; the works-after redis arm proves a real bullmq enqueue->run->complete round-trip on 8. Data-preserving guarded superset of discard-recreate for a still-populated 7-era volume: scripts/upgrade/redis-upgrade-major.sh (AOF explicit); upgrade-from fixture: scripts/ci/works-after/upgrade-redis.sh (cinatra#1421/#1422)." },
