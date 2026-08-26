@@ -2163,9 +2163,19 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
 });
 
 describe("the ruled carriage table is the one this contract drives", () => {
-  it("covers every chat_thread carriage, with no kind added or dropped", () => {
+  it("covers every MOUNTED chat_thread carriage, with no kind added or dropped", () => {
+    // A kind can only be DRIVEN here once it has a production chat_thread mount:
+    // this tier persists a real turn and reads the card back off the real
+    // transcript, so a kind that renders nothing has nothing to read. The
+    // contract already keeps that list — `HELD_TURN_MOUNT_OBLIGATIONS`, a
+    // ratchet rather than a waiver — so the exclusion is READ from it instead
+    // of being a second hand-maintained list here. The day the mount lands and
+    // the obligation row is struck, this assertion goes red until the carriage
+    // is driven, which is exactly the pressure the row exists to apply.
     expect(CARRIAGES.map((c) => c.kind).sort()).toEqual(
-      CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind).sort(),
+      CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind)
+        .filter((kind) => !HELD_TURN_MOUNT_OBLIGATIONS.includes(kind))
+        .sort(),
     );
   });
 });
@@ -2294,3 +2304,213 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// THE PLATFORM'S OWN INJECTION, AGAINST THE REAL DATABASE
+// (cinatra#2930, epic #2926 W3)
+// ---------------------------------------------------------------------------
+//
+// Every carriage above is driven by a MODEL calling a tool. This wave adds the
+// producer that does not: "In a conversation the platform itself writes the card
+// into the run's own turn, from an outbox the coordinator feeds when a moment
+// opens — a durable part with its provenance and its place in the turn, so it is
+// there after a reload and whether or not the assistant's model says anything."
+//
+// So the same stream → store → reload contract is driven with NO tool call at
+// all: the turn dispatched a run and said nothing, the run reached its moment,
+// and the outbox wrote the card. What is asserted is what a person would see
+// after a refresh — the card, in its producing step, from Postgres alone.
+describe("a card the PLATFORM injected survives store → reload", () => {
+  // Driven by the SCHEDULE moment. The REVIEW moment is driven by its own two
+  // cases below, because cinatra#2997 gave the review gate a second mount — the
+  // run card's own slot — and the rule that follows from it is what those cases
+  // are for.
+  it("comes back at its producing step, with no tool call in the turn", async () => {
+    const { lifecycleRunOutbox } = await import("@/lib/lifecycle/lifecycle-run-outbox");
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const dispatchCall = `call-${randomUUID()}`;
+    const cardRef = `sched-${randomUUID()}`;
+
+    // The turn as the stream route persists it: the run's own dispatch, and
+    // nothing the model asked for.
+    persistThroughTheRealStore({
+      threadId,
+      userText: "run the blog agent",
+      runId,
+      durable: {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "tool_call", id: dispatchCall, name: "agent_run" }],
+        dataParts: [{ kind: "agent_run", toolCallId: dispatchCall, runId }],
+        dataPartSlots: [dispatchCall],
+      },
+    });
+
+    // The moment opens. This is the REAL writer, against the REAL store — the
+    // same call the coordinator makes through the seam.
+    await lifecycleRunOutbox.onMomentOpened({
+      runId,
+      orgId: ORG_ID,
+      moment: "schedule",
+      cardKind: "trigger_schedule_proposal",
+      cardRef,
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    const assistant = reloadedAssistantTurn(reloaded);
+    expect(
+      assistant,
+      "the reload brought back no assistant turn at all, so the injected card has nothing to be redrawn from",
+    ).not.toBeNull();
+    const parts = (assistant!.parts ?? []) as Array<Record<string, unknown>>;
+    const producing = parts.find((p) => p.id === dispatchCall);
+    expect(producing, "the run's own dispatch part did not come back").toBeDefined();
+    expect(producing!.views).toEqual([
+      { viewType: "trigger_schedule_proposal", schemaVersion: 1, ref: cardRef },
+    ]);
+    // NO ASSISTANT TOOL CALL: the only call in the turn is the run's dispatch.
+    expect(parts.filter((p) => p.kind === "tool_call").map((p) => p.name)).toEqual([
+      "agent_run",
+    ]);
+  });
+
+  it("does not give the person a second card when the moment is stated again", async () => {
+    const { lifecycleRunOutbox } = await import("@/lib/lifecycle/lifecycle-run-outbox");
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const dispatchCall = `call-${randomUUID()}`;
+    const cardRef = `sched-${randomUUID()}`;
+    persistThroughTheRealStore({
+      threadId,
+      userText: "run it again",
+      runId,
+      durable: {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "tool_call", id: dispatchCall, name: "agent_run" }],
+        dataParts: [{ kind: "agent_run", toolCallId: dispatchCall, runId }],
+        dataPartSlots: [dispatchCall],
+      },
+    });
+    const entry = {
+      runId,
+      orgId: ORG_ID,
+      moment: "schedule" as const,
+      cardKind: "trigger_schedule_proposal" as const,
+      cardRef,
+    };
+    await lifecycleRunOutbox.onMomentOpened(entry);
+    await lifecycleRunOutbox.onMomentOpened(entry);
+    const assistant = reloadedAssistantTurn(reloadWithNoRedisAndNoClientMemory(threadId));
+    const parts = (assistant!.parts ?? []) as Array<Record<string, unknown>>;
+    const producing = parts.find((p) => p.id === dispatchCall);
+    expect(producing!.views).toHaveLength(1);
+  });
+
+  // ONE REVIEW CARD PER GATE PER TURN (cinatra#2997 x cinatra#2930), against the
+  // REAL store. The pure decision is pinned in
+  // `src/lib/lifecycle/__tests__/one-review-card-per-run-per-turn.test.ts`; these
+  // two cases are the same rule read back off Postgres, because what the rule
+  // protects is what a person sees after a refresh.
+  it("does NOT inject the review gate into a turn that already draws the run card", async () => {
+    const { lifecycleRunOutbox } = await import("@/lib/lifecycle/lifecycle-run-outbox");
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const dispatchCall = `call-${randomUUID()}`;
+    // The turn that dispatched the run: the reload pins the run onto this call,
+    // and the chat mounts the run card off it. Since cinatra#2997 that card IS
+    // the review screen — the spinner over the empty review frame while the run
+    // works, the gate in place when the output opens one.
+    persistThroughTheRealStore({
+      threadId,
+      userText: "write the post",
+      runId,
+      durable: {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "tool_call", id: dispatchCall, name: "agent_run" }],
+        dataParts: [{ kind: "agent_run", toolCallId: dispatchCall, runId }],
+        dataPartSlots: [dispatchCall],
+      },
+    });
+
+    await lifecycleRunOutbox.onMomentOpened({
+      runId,
+      orgId: ORG_ID,
+      moment: "review",
+      cardKind: "artifact_review_gate",
+      cardRef: `gate-${randomUUID()}`,
+    });
+
+    const assistant = reloadedAssistantTurn(reloadWithNoRedisAndNoClientMemory(threadId));
+    expect(assistant, "the reload brought back no assistant turn at all").not.toBeNull();
+    const views = viewsCarriedBy(assistant!);
+    const gates = [...views.turnLevel, ...views.atSlot(dispatchCall)].filter(
+      (v) => (v as Record<string, unknown>).viewType === "artifact_review_gate",
+    );
+    // Not one anywhere in the turn: the run card is already showing it.
+    expect(gates).toEqual([]);
+  });
+
+  it("DOES inject the review gate into a turn that draws no run card for the run", async () => {
+    const { lifecycleRunOutbox } = await import("@/lib/lifecycle/lifecycle-run-outbox");
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const cardRef = `gate-${randomUUID()}`;
+    // A run started ELSEWHERE, read in this turn. The pointer is here — it is
+    // how the outbox finds the turn — but the call that dispatched the run is
+    // not in this trace, so the reload pins the run onto nothing and the chat
+    // mounts no run card. The injected part is the only thing that puts the
+    // question in front of the reader, and it is still written.
+    persistThroughTheRealStore({
+      threadId,
+      userText: "how did that run go?",
+      runId,
+      durable: {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: "",
+        parts: [],
+        dataParts: [
+          { kind: "agent_run", toolCallId: `call-in-an-earlier-turn-${randomUUID()}`, runId },
+        ],
+        dataPartSlots: [null],
+      },
+    });
+
+    await lifecycleRunOutbox.onMomentOpened({
+      runId,
+      orgId: ORG_ID,
+      moment: "review",
+      cardKind: "artifact_review_gate",
+      cardRef,
+    });
+
+    const assistant = reloadedAssistantTurn(reloadWithNoRedisAndNoClientMemory(threadId));
+    expect(assistant, "the reload brought back no assistant turn at all").not.toBeNull();
+    // At TURN LEVEL, because its slot names a call this trace does not have —
+    // the same resolution the projection makes for any unplaceable stamp.
+    expect(viewsCarriedBy(assistant!).turnLevel).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: cardRef },
+    ]);
+  });
+
+  it("writes nothing for a run that is not playing out in a conversation", async () => {
+    const { lifecycleRunOutbox } = await import("@/lib/lifecycle/lifecycle-run-outbox");
+    // No turn names this run — a schedule firing, another agent, an outside
+    // system. The ordinary case, and it must not throw or write.
+    await expect(
+      lifecycleRunOutbox.onMomentOpened({
+        runId: randomUUID(),
+        orgId: ORG_ID,
+        moment: "review",
+        cardKind: "artifact_review_gate",
+        cardRef: `gate-${randomUUID()}`,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});

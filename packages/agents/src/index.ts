@@ -116,6 +116,7 @@ export type {
 // notification builder uses to stay off this index's import graph.
 export {
   classifyRunWaitInterrupt,
+  waitNotificationLandsInConversation,
   isSetupInterruptTaskId,
   runStatusBadgeLabel,
   AWAITING_INPUT_BADGE_LABEL,
