@@ -6,6 +6,8 @@ import {
   hasRunRecommendationSkip,
   readRunRejectedRecommendations,
   readRunSelectedSkillRevisions,
+  readRunRecommendationOfferedSet,
+  writeRunRecommendationOfferedSet,
   writeRunRecommendationSkip,
   type RunRecommendationDecidedSkill,
   type RunRejectedRecommendation,
@@ -22,6 +24,10 @@ import {
   recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
+  RECOMMENDATION_OFFER_STALE_CODE,
+  RECOMMENDATION_OFFER_STALE_REFUSAL,
+  RECOMMENDATION_OFFER_UNREADABLE_CODE,
+  RECOMMENDATION_OFFER_UNREADABLE_REFUSAL,
   RECOMMENDATION_SKIP_NOT_RECORDED,
   RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
   type RecommendationHoldActor,
@@ -127,7 +133,27 @@ export type RecommendationSelectionWrite = (input: {
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
   adjustedSkillIds?: string[];
-}) => Promise<{ ok: boolean }>;
+  /**
+   * The hold the decision was BOUND to by the hold-instance CAS (cinatra#2906),
+   * whose claimed offer this confirm must honour. Threaded from the binding
+   * rather than re-read at the write: a run can be released and parked again
+   * between the two, and a re-read would then resolve the decision against a
+   * different hold's offer.
+   */
+  holdId?: string | null;
+}) => Promise<{
+  ok: boolean;
+  /**
+   * The reader-facing sentence a REFUSED write wants drawn in place of the
+   * generic denial (cinatra#2906). The stale-offer refusal describes the
+   * CALLER'S OWN next step rather than denying them, so flattening it into the
+   * enumeration-proof generic line would cost the reader the one thing they can
+   * act on. Absent for every other refusal, which keeps the generic line.
+   */
+  refusal?: string;
+  /** The typed outcome that rides alongside `refusal`. */
+  refusalCode?: string;
+}>;
 
 /** The canonical dispatcher, handed in by the entry (see the header). */
 export type RecommendationDispatch = (input: {
@@ -273,21 +299,94 @@ export async function resolveRecommendationHoldStateForActor(input: {
     intent: { promptText },
     restrictToSkillIds: assignedSkillIds,
   }).catch(() => []);
+
+  // THE OFFER IS CLAIMED AS IT IS DRAWN, AND THE CARD IS DRAWN FROM IT
+  // (cinatra#2906).
+  //
+  // What the confirm may pin is decided HERE, by what a reader is shown — not
+  // later, by asking for the list again and recording against a different
+  // answer. The FIRST draw claims the offer; every later draw reads that claim
+  // back and renders it, so two readers of one hold see one card and neither
+  // can have the other's offer moved under them.
+  //
+  // The claim carries only the four fields that decide an outcome (skill, pinned
+  // revision, recommended-ness, rank). The LABEL, SCORE and FEATURE BREAKDOWN
+  // stay presentation and are joined from THIS reader's own live scoring below —
+  // which is also what keeps the viewer intersection intact: a chip is drawn only
+  // where the claimed offer and this reader's own entitled candidate set agree,
+  // so a narrower reader still never learns a wider one's scoped skill names.
+  //
+  // BEST-EFFORT, and one-directional: a claim that could not be written or read
+  // costs the FIX and never the card. This is the ONE remaining fall-through and
+  // it is named rather than implied - a hold whose claim write failed is
+  // indistinguishable from a hold parked before this shipped, so its confirm
+  // takes the pre-#2906 path. Fail-closing the DRAW instead would make the card
+  // vanish from a run that is genuinely waiting on it, which is worse than the
+  // defect. The run id is a discrete argument, never in the format-string
+  // position.
+  let offered: Awaited<ReturnType<typeof readRunRecommendationOfferedSet>> = [];
+  try {
+    await writeRunRecommendationOfferedSet({
+      runId,
+      holdId: park.id,
+      offered: recs.map((r) => ({
+        skillId: r.skillId,
+        skillRevisionId: r.skillRevisionId,
+        recommended: r.recommended,
+        rank: r.rank,
+      })),
+    });
+    offered = await readRunRecommendationOfferedSet(park.id);
+  } catch (err) {
+    console.warn(
+      "[resolveRecommendationHoldStateForActor] offered-set claim failed for run",
+      runId,
+      "— the card still draws:",
+      err instanceof Error ? err.message : String(err),
+    );
+    offered = [];
+  }
+
+  // The chips: the CLAIMED offer's decisive fields, this reader's presentation,
+  // in the order the offer was drawn. An offered id this reader cannot see is
+  // not drawn for them; a live candidate this hold never offered is not drawn at
+  // all, because the hold's offer is settled. With no claim to read, the live
+  // scoring is the row, exactly as before #2906.
+  const presentation = new Map(recs.map((r) => [r.skillId, r] as const));
+  const chips =
+    offered.length > 0
+      ? offered.flatMap((o) => {
+          const live = presentation.get(o.skillId);
+          if (!live) return [];
+          return [
+            {
+              skillId: o.skillId,
+              skillRevisionId: o.skillRevisionId,
+              name: live.displayName,
+              score: live.score,
+              rank: o.rank,
+              recommended: o.recommended,
+              scoredFeatures: live.scoredFeatures,
+            },
+          ];
+        })
+      : recs.map((r) => ({
+          skillId: r.skillId,
+          skillRevisionId: r.skillRevisionId,
+          name: r.displayName,
+          score: r.score,
+          rank: r.rank,
+          recommended: r.recommended,
+          scoredFeatures: r.scoredFeatures,
+        }));
+
   return {
     state: "held",
     agentPackageName: packageName,
     promptText,
     canDecide: await readerMayDecide(run, who),
     holdRef: encodeRecommendationHoldRef({ runId, holdId: park.id }) ?? "",
-    recommendations: recs.map((r) => ({
-      skillId: r.skillId,
-      skillRevisionId: r.skillRevisionId,
-      name: r.displayName,
-      score: r.score,
-      rank: r.rank,
-      recommended: r.recommended,
-      scoredFeatures: r.scoredFeatures,
-    })),
+    recommendations: chips,
   };
 }
 
@@ -440,13 +539,26 @@ export async function confirmRecommendationForActor(input: {
     runId: input.runId,
     agentPackageName: input.agentPackageName,
     confirmedSkillIds: input.confirmedSkillIds,
+    // The hold the CAS just bound this decision to — see `holdId` on the type.
+    holdId: bound.holdId,
     ...(input.promptText !== undefined ? { promptText: input.promptText } : {}),
     ...(input.declaredProducedTypes ? { declaredProducedTypes: input.declaredProducedTypes } : {}),
     ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
     ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
     ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
   });
-  if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  if (!written.ok) {
+    // A REFUSED WRITE KEEPS THE HOLD. Nothing is released and nothing is
+    // dispatched, so the card stays decidable with its controls operable — which
+    // is what makes a stale-offer refusal something the reader can act on rather
+    // than a dead end. The write's own sentence is preferred where it has one
+    // (cinatra#2906); everything else keeps the enumeration-proof generic line.
+    return {
+      ok: false,
+      error: written.refusal ?? RECOMMENDATION_DECISION_REFUSAL,
+      ...(written.refusalCode ? { code: written.refusalCode } : {}),
+    };
+  }
 
   return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined, input.dispatch);
 }
@@ -657,6 +769,14 @@ export type RunSkillSelectionWriteResult = {
   ok: boolean;
   written: number;
   efficacy: RecommendationEfficacy;
+  /**
+   * The reader-facing sentence for a refusal that describes the CALLER'S OWN
+   * next step (cinatra#2906: the offer the card made can no longer be honoured).
+   * Absent for an authorization denial, which keeps the generic refusal.
+   */
+  refusal?: string;
+  /** The typed outcome that rides alongside `refusal`. */
+  refusalCode?: string;
 };
 
 /**
@@ -709,6 +829,8 @@ export async function writeRunSkillSelectionForActor(input: {
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
   adjustedSkillIds?: string[];
+  /** The hold the decision was bound to — see `RecommendationSelectionWrite`. */
+  holdId?: string | null;
 }): Promise<RunSkillSelectionWriteResult> {
   const empty: RunSkillSelectionWriteResult = {
     ok: false,
@@ -763,10 +885,34 @@ export async function writeRunSkillSelectionForActor(input: {
         targetArtifactKind: input.targetArtifactKind,
       },
       confirmedSkillIds: input.confirmedSkillIds,
+      // THE HOLD WHOSE OFFER THIS CONFIRM MUST HONOUR (cinatra#2906) — the one
+      // the caller's hold-instance CAS already validated, never a fresh read of
+      // the run's current park. A run can be released and parked AGAIN between
+      // the binding and this write, and a re-read would then resolve the
+      // decision against a different hold's offer. A caller that binds no hold
+      // passes none, which is the no-offer case the confirm already handles.
+      holdId: input.holdId ?? null,
       forcedRevisions,
       adjustedSkillIds,
       restrictToSkillIds: assignedIds,
     });
+    if (!result.ok) {
+      // NOTHING WAS WRITTEN — the confirm refused before its first statement.
+      // The refusal travels with its own sentence so the row can draw a reason
+      // the reader can act on instead of the generic denial, and the two reasons
+      // stay distinguishable: an offer that no longer holds asks the reader to
+      // change their selection, one that could not be READ asks them to retry.
+      const unreadable = result.refusal.reason === "offered_set_unreadable";
+      return {
+        ...empty,
+        refusal: unreadable
+          ? RECOMMENDATION_OFFER_UNREADABLE_REFUSAL
+          : RECOMMENDATION_OFFER_STALE_REFUSAL,
+        refusalCode: unreadable
+          ? RECOMMENDATION_OFFER_UNREADABLE_CODE
+          : RECOMMENDATION_OFFER_STALE_CODE,
+      };
+    }
     return { ok: true, written: result.written, efficacy: result.efficacy };
   } catch {
     return empty;

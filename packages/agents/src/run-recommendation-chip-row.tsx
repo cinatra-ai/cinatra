@@ -469,6 +469,13 @@ export function RunRecommendationChipRow({
   const [loaded, setLoaded] = useState(initialRecommendations != null);
   /** Per-chip marks — the decision model §V draws, held until the row releases. */
   const [chips, setChips] = useState<Record<string, ChipDecision>>({});
+  /**
+   * The SAME marks, carried across a batch of presses (cinatra#2905). `chips` is
+   * what the row DRAWS; this is what the next press accumulates onto, so a run
+   * of presses with no render between them still ends with every mark. The two
+   * are written together in `decideChip`, the only place either is set.
+   */
+  const chipsRef = useRef<Record<string, ChipDecision>>({});
   const [detail, setDetail] = useState<RecommendedSkillForChip | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -571,10 +578,23 @@ export function RunRecommendationChipRow({
     const kept = recs.filter((r) => next[r.skillId]?.keep === true);
     if (kept.length === 0) {
       startTransition(async () => {
-        const res = await submit.skip({
-          runId,
-          ...(holdRef ? { holdRef } : {}),
-        });
+        // A REJECTED action is a refusal, not silence (cinatra#2905 AC-1). The
+        // guard is around the ACTION ONLY: an action that rejects — a transport
+        // failure, or a server-side throw the framework surfaces as a rejection
+        // — left this branch with nothing drawn, the hold still parked and every
+        // control still present, which is #2905's observation verbatim. What
+        // follows a SUCCESSFUL decision is deliberately outside the guard, so a
+        // recorded decision can never be reported as a refusal.
+        let res: RunRecommendationDecisionResult;
+        try {
+          res = await submit.skip({
+            runId,
+            ...(holdRef ? { holdRef } : {}),
+          });
+        } catch {
+          setError(RECOMMENDATION_ROW_REFUSAL);
+          return;
+        }
         if (!res.ok) {
           setError(res.error || "Could not skip.");
           return;
@@ -600,15 +620,22 @@ export function RunRecommendationChipRow({
       .filter((r) => next[r.skillId]?.mark === "adjusted")
       .map((r) => r.skillId);
     startTransition(async () => {
-      const res = await submit.confirm({
-        runId,
-        agentPackageName,
-        confirmedSkillIds: kept.map((r) => r.skillId),
-        promptText,
-        forcedRevisions: Object.keys(forcedRevisions).length ? forcedRevisions : undefined,
-        adjustedSkillIds: adjustedSkillIds.length ? adjustedSkillIds : undefined,
-        ...(holdRef ? { holdRef } : {}),
-      });
+      // The same guard as the skip branch above, for the same reason.
+      let res: RunRecommendationDecisionResult;
+      try {
+        res = await submit.confirm({
+          runId,
+          agentPackageName,
+          confirmedSkillIds: kept.map((r) => r.skillId),
+          promptText,
+          forcedRevisions: Object.keys(forcedRevisions).length ? forcedRevisions : undefined,
+          adjustedSkillIds: adjustedSkillIds.length ? adjustedSkillIds : undefined,
+          ...(holdRef ? { holdRef } : {}),
+        });
+      } catch {
+        setError(RECOMMENDATION_ROW_REFUSAL);
+        return;
+      }
       if (!res.ok) {
         setError(res.error || "Could not confirm the skill selection.");
         return;
@@ -618,9 +645,24 @@ export function RunRecommendationChipRow({
     });
   };
 
-  /** Record one chip's own decision; release once every chip has one. */
+  /**
+   * Record one chip's own decision; release once every chip has one.
+   *
+   * THE MARKS ACCUMULATE IN A REF, NOT IN THE RENDER'S OWN COPY (cinatra#2905
+   * AC-2). This spread the `chips` value captured in the CURRENT render, so
+   * presses that landed with no re-render between them each started from the
+   * same base map: only the last mark survived, the all-decided predicate below
+   * never became true, and the row never released at all — no write, the hold
+   * still parked, nothing drawn. `chipsRef` carries the marks forward across a
+   * whole batch, so the predicate is asked of the NEXT state every time.
+   *
+   * A ref rather than a functional `setChips` updater because the predicate
+   * fires `release`: React may invoke a state updater more than once for the
+   * same press, and a decision must be released exactly once.
+   */
   const decideChip = (skillId: string, mark: RunRecommendationChipMark, keep: boolean) => {
-    const next = { ...chips, [skillId]: { mark, keep } };
+    const next = { ...chipsRef.current, [skillId]: { mark, keep } };
+    chipsRef.current = next;
     setChips(next);
     if (recs.length > 0 && recs.every((r) => next[r.skillId] !== undefined)) release(next);
   };

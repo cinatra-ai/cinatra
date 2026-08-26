@@ -58,8 +58,10 @@ function holdInteraction(over: Record<string, unknown> = {}) {
 
 describe("the interrupt-carried kind set is derived, not hand-listed", () => {
   it("is exactly the kinds S1's carriage table marks `interrupt`", () => {
+    // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two axes
+    // now, and `represent` is the wire one this derivation has always read.
     const expected = LIFECYCLE_CARD_KINDS.filter(
-      (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "interrupt",
+      (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "interrupt",
     );
     expect([...LIFECYCLE_INTERRUPT_KINDS]).toEqual(expected);
     // Two kinds today, for the one reason: the run WAITS on the answer, which

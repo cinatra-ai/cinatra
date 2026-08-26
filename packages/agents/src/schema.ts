@@ -1029,6 +1029,30 @@ export const runRecommendationSkips = cinatraSchema.table("run_recommendation_sk
   skippedAtIdx: index("run_recommendation_skips_skipped_at_idx").on(t.skippedAt),
 }));
 
+/** DECIDED SCHEMA (cinatra#2906): WHAT A RECOMMENDATION CARD ACTUALLY OFFERED.
+ * One row per (hold, skill), written when the card is drawn and read back by the
+ * confirm through the hold the row already hands back — so a confirmed skill is
+ * pinned to the revision the reader SAW rather than to whatever a fresh scoring
+ * pass would resolve at press time, and the efficacy split describes the set the
+ * reader was really asked about. Carries only the four fields that decide an
+ * outcome; the label/score/feature fields that decide how a chip LOOKED are
+ * deliberately absent, because presentation may never change what a run
+ * executes. FK-less, matching the three siblings above. */
+export const runRecommendationOfferedSet = cinatraSchema.table("run_recommendation_offered_set", {
+  id:              text("id").primaryKey(),
+  runId:           text("run_id").notNull(),
+  holdId:          text("hold_id").notNull(),
+  skillId:         text("skill_id").notNull(),
+  skillRevisionId: text("skill_revision_id").notNull(),
+  recommended:     boolean("recommended").notNull(),
+  offeredRank:     integer("offered_rank").notNull(),
+  offeredAt:       timestamp("offered_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  holdSkillUniq: uniqueIndex("run_recommendation_offered_set_uniq").on(t.holdId, t.skillId),
+  holdIdx:       index("run_recommendation_offered_set_hold_idx").on(t.holdId),
+  runIdx:        index("run_recommendation_offered_set_run_idx").on(t.runId),
+}));
+
 // ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------

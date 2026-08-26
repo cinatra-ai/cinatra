@@ -297,6 +297,13 @@ export async function confirmRunSkillSelectionAction(input: {
    */
   adjustedSkillIds?: string[];
   restrictToSkillIds?: string[];
+  /**
+   * The hold this decision was bound to by the caller's hold-instance CAS
+   * (cinatra#2906). The write honours THAT hold's recorded offer — the set the
+   * reader was actually shown — instead of re-scoring live state. Optional: a
+   * caller that binds no hold keeps the pre-#2906 behaviour.
+   */
+  holdId?: string | null;
 }): Promise<ConfirmRunSkillSelectionActionResult> {
   // THE SESSION ENTRY TO THE ONE SELECTION WRITE (cinatra#2790, epic #2784 S9f).
   //
@@ -345,5 +352,6 @@ export async function confirmRunSkillSelectionAction(input: {
     ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
     ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
     ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+    ...(input.holdId ? { holdId: input.holdId } : {}),
   });
 }

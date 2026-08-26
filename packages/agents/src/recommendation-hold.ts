@@ -153,6 +153,43 @@ export const RECOMMENDATION_SKIP_NOT_RECORDED =
  */
 export const RECOMMENDATION_SKIP_NOT_RECORDED_CODE = "recommendation_skip_not_recorded";
 
+/**
+ * THE STALE-OFFER REFUSAL (cinatra#2906).
+ *
+ * A confirm resolves against the set the card offered. When one of the kept
+ * skills can no longer be honoured — its assignment was withdrawn, or it was
+ * uninstalled, while the card sat waiting — the confirm writes NOTHING and
+ * answers with this. The row draws it exactly where it draws every other
+ * refusal, as its one red line, and keeps its controls operable: nothing has
+ * changed, and the reader can leave the named-as-gone skill out, or skip, and
+ * press again.
+ *
+ * Unlike `RECOMMENDATION_DECISION_REFUSAL` this is NOT a generic denial and
+ * enumerates nothing about anyone else's rows — it describes the CALLER'S OWN
+ * next step, which is the same line the retryable refusals above already draw.
+ */
+export const RECOMMENDATION_OFFER_STALE_REFUSAL =
+  "Some of the skills this card offered are no longer available for this run. Leave them out or skip, then decide again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_OFFER_STALE_CODE = "recommendation_offer_stale";
+
+/**
+ * THE UNREADABLE-OFFER REFUSAL (cinatra#2906).
+ *
+ * A hold that OWNS no offer is decided the pre-#2906 way, so this is NOT that
+ * case: it is a hold whose offer exists and could not be READ. Flattening the
+ * two would let a database that did not answer be treated as a card that
+ * offered nothing, and the confirm would silently re-score live state — the very
+ * seam #2906 closes. So the read failure refuses, writes nothing, keeps the
+ * hold, and says the one thing that is actually true: try again.
+ */
+export const RECOMMENDATION_OFFER_UNREADABLE_REFUSAL =
+  "This run's skill offer could not be read just now. Nothing was recorded — please try again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_OFFER_UNREADABLE_CODE = "recommendation_offer_unreadable";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;
