@@ -142,6 +142,21 @@ export const CARVE_OUTS: readonly CarveOut[] = [
     reviewedAt: "2026-05-24",
     reviewerId: "platform-authz-reviewer",
   },
+  // cinatra#2932 (lifecycle-b W5a) — THE LENT ACTION. The one lifecycle
+  // DECISION primitive reachable from a delegated perimeter, and the typed twin
+  // of the disclosed override entries in both delegated tool policies.
+  {
+    primitiveName: "lifecycle_bound_card_decide",
+    resourceType: "agent_run",
+    action: "update",
+    boundary: "delegated_chat_token",
+    reason:
+      "The card lends the assistant ONE of its own controls, once, for ONE message (PLAN: Agents Lifecycle (B) section 4). The token-policy gate (perimeter 5) is what this entry opens; NOTHING about the decision is relaxed. The handler (src/lib/lifecycle/lent-action-mcp.ts) refuses unless the request frame carries a server-minted, signed, single-use grant naming the person, the message, the bound card ref and the ONE allowed control, matched against the frame's own identity, spent by one atomic DELETE before any effect. It then resolves the person's OWN live standing (never the delegated token's weaker hints), re-resolves the bound card under it, refuses a control the card does not offer, and runs the card's own path — submitReviewDecisionAction for the review card's Comment/Approve/Reject, approveReviewTaskInternal for a waiting screen's Continue — which enforce run access, the gate CAS and the audit row exactly as a button press does. A prompt-injected model holds no grant and the primitive does nothing for it. agent_run_resume and approvals_decide stay unreachable: this is one named primitive, not a lifted backstop.",
+    risk: "high",
+    owningTeam: "platform-authz",
+    reviewedAt: "2026-08-25",
+    reviewerId: "platform-authz-reviewer",
+  },
   {
     primitiveName: "agent_creation_request_get",
     resourceType: "agent",

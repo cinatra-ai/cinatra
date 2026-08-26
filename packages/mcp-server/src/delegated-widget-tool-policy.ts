@@ -81,6 +81,25 @@ const WIDGET_CONTENT_EDITOR_TOOLS: Readonly<Record<WidgetDelegationKind, string>
  * policy's, so both the silent-withdrawal and the silent-divergence directions
  * are caught.
  */
+/**
+ * The ONE lifecycle DECISION primitive a widget delegation may reach
+ * (cinatra#2932, lifecycle-b W5a) — the lent action.
+ *
+ * PARITY IS THE REASON IT IS HERE. The epic's rule is that the person sees and
+ * does the same things inside a third-party application as in the app, and the
+ * structural test pins the widget's lifecycle set EQUAL to chat's in both
+ * directions. Withholding this one primitive from the widget would not be a
+ * safety property; it would be the widget quietly refusing a button the person
+ * can press on the card in front of them.
+ *
+ * IT IS NOT A WIDER SURFACE. The grant the handler demands is minted for a
+ * message the person typed, names one card and one control, and is spent once;
+ * inside a third-party application the deciding authority is built fresh from
+ * the widget's own credential at the call, never from the conversation's weaker
+ * runtime. Nothing is offered here that the widget's own credential cannot do.
+ */
+export const DELEGATED_WIDGET_BOUND_CARD_ACTION = "lifecycle_bound_card_decide";
+
 export const DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS: readonly string[] = [
   "artifact_review_gates_list",
   "artifact_review_gate_render",
@@ -106,10 +125,12 @@ const DELEGATED_WIDGET_ALLOWLIST: Readonly<
   wordpress: new Set<string>([
     WIDGET_CONTENT_EDITOR_TOOLS.wordpress,
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+    DELEGATED_WIDGET_BOUND_CARD_ACTION,
   ]),
   drupal: new Set<string>([
     WIDGET_CONTENT_EDITOR_TOOLS.drupal,
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+    DELEGATED_WIDGET_BOUND_CARD_ACTION,
   ]),
 };
 
@@ -212,6 +233,14 @@ export function isDelegatedWidgetMcpToolAllowed(
 ): boolean {
   const allowed = DELEGATED_WIDGET_ALLOWLIST[kind];
   if (!allowed) return false;
+  // THE ONE DISCLOSED EXCEPTION (cinatra#2932, lifecycle-b W5a). The lent
+  // action's name carries `decide`, so the backstop below would deny it; it is
+  // admitted here, by exact name, ABOVE the backstop — the same shape the chat
+  // policy's override has, and for the same reason: an exception that has to be
+  // written down is an exception somebody can find. Exact match, never
+  // case-folded: a differently-cased name is a DIFFERENT primitive and falls
+  // through to the backstop, which denies it.
+  if (name === DELEGATED_WIDGET_BOUND_CARD_ACTION && allowed.has(name)) return true;
   if (carriesDelegatedWidgetDeniedVerb(name.toLowerCase())) return false;
   return allowed.has(name);
 }

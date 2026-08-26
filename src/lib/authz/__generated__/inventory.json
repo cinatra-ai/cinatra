@@ -823,6 +823,11 @@
       "line": 16
     },
     {
+      "primitiveName": "lifecycle_bound_card_decide",
+      "file": "src/lib/lifecycle/lent-action-mcp.ts",
+      "line": 339
+    },
+    {
       "primitiveName": "linkedin_accounts_list",
       "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
       "line": 20

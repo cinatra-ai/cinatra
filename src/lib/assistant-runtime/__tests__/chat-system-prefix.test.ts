@@ -27,6 +27,10 @@ const BASE: ChatSystemPromptFragments = {
   userContext: "\n\nUser context:\nUC",
   instanceFreezeState: "\n\nFROZEN",
   pendingConfirmationContext: "\n\nPENDING",
+  // cinatra#2932 (lifecycle-b W5a) — the bound card. Non-empty here like every
+  // other fragment: the ordering case locates fragments by their own text, so an
+  // empty fixture value would index at 0 and make the assertion vacuous.
+  boundCardContext: "\n\nBOUND",
   explicitDispatchDirective: "\nDISPATCH\n",
   conversationOnlyNotice: "\n\nNOTICE",
 };
@@ -87,11 +91,12 @@ describe("byte-stability", () => {
       userContext: "",
       instanceFreezeState: "",
       pendingConfirmationContext: "",
-      explicitDispatchDirective: "",
+      boundCardContext: "",
+  explicitDispatchDirective: "",
       conversationOnlyNotice: "",
     };
     // The policy trailer is the ONE thing that is never absent — that is the
-    // guarantee it carries (codex round-2, finding 1).
+    // guarantee it carries (convergence round 2, finding 1).
     expect(composeChatSystemPrompt(empty)).toBe(
       `PERSONA${CHAT_SYSTEM_POLICY_TRAILER}`,
     );
@@ -121,7 +126,7 @@ describe("ordering", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PRECEDENCE (codex round-2, finding 1)
+// PRECEDENCE (convergence round 2, finding 1)
 //
 // The re-order moved user-controlled text after the system policy. These pin
 // the resolution: a CONSTANT trailer closes the prompt, so instruction-shaped
@@ -207,7 +212,7 @@ function commonPrefixLength(a: string, b: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// THE MUTABLE FREEZE STATE (codex round-2, finding 2)
+// THE MUTABLE FREEZE STATE (convergence round 2, finding 2)
 // ---------------------------------------------------------------------------
 describe("the instance freeze state is classified volatile, not stable", () => {
   it("is in the volatile tail and NOT in the stable head", () => {

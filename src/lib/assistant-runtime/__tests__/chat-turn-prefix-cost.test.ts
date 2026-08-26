@@ -45,7 +45,7 @@ let capturedStreamInput: Record<string, unknown> | null = null;
 const capturedBuildOptions: Array<Record<string, unknown> | undefined> = [];
 /**
  * EVERY argument of every `buildLlmMcpServerToolForChat` call, captured as a
- * rest array (codex round-2, finding 3). A typed 4-parameter stub silently
+ * rest array (convergence round 2, finding 3). A typed 4-parameter stub silently
  * DISCARDS a 5th argument, so a new channel could be added to the production
  * call site and this file would stay green. The rest array cannot miss one.
  */
@@ -64,7 +64,7 @@ vi.mock("@/app/api/chat/explicit-dispatch", () => ({
 vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
   serverSideExplicitDispatch: vi.fn(),
 }));
-// USER-CONTROLLED, and driven from a mutable fake (codex round-2, finding 1).
+// USER-CONTROLLED, and driven from a mutable fake (convergence round 2, finding 1).
 // Connector-owned sections are rendered into the user context VERBATIM, so this
 // is the channel a prompt injection actually arrives on — a connector display
 // name, a staged wizard value, an object title someone typed.
@@ -97,7 +97,7 @@ vi.mock("@/lib/chat-mcp-actor-token", () => ({
 vi.mock("@/lib/widget-mcp-actor-token", () => ({
   issueWidgetMcpActorToken: vi.fn(() => "stable-widget-token"),
 }));
-// The instance identity is MUTABLE here, not stubbed to null (codex round-2,
+// The instance identity is MUTABLE here, not stubbed to null (convergence round 2,
 // finding 2). `firstPublishedAt` is what the freeze note is derived from, and
 // the chat's own `agent_source_publish` tool is what sets it — so it really can
 // flip between two turns of one conversation. Stubbing identity to null, as
@@ -114,7 +114,7 @@ vi.mock("@/lib/artifacts/attachment-resolver-ports", () => ({
 vi.mock("@/lib/agent-run-skills-used", () => ({
   recordTurnSkillDelivery: vi.fn(async () => 0),
 }));
-// A GENUINELY MUTATING volatile source (codex round-1, finding 4). The
+// A GENUINELY MUTATING volatile source (convergence round 1, finding 4). The
 // pending-confirmation section is a one-hour sliding window over live rows, so
 // it really does change between two turns of one conversation. Driving it from
 // a mutable fake is what turns "the composer declares this fragment volatile"
@@ -201,7 +201,7 @@ import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config"
 const ALL_ALLOWED = delegatedChatAllowedToolNames();
 
 // ---------------------------------------------------------------------------
-// The resolver's DECLARED INPUT, named (codex round-2, finding 3).
+// The resolver's DECLARED INPUT, named (convergence round 2, finding 3).
 //
 // These lists are tied to the exported types by `satisfies` plus an
 // exhaustiveness check, so they are not a remembered copy: adding a field to
@@ -305,13 +305,30 @@ describe("owner ruling A: the tool list derives from state, never from the quest
     await runTurn(["build me a dashboard of spend by agent"]);
     const args = capturedBuildArgs.at(-1)!;
     const options = capturedBuildOptions.at(-1)!;
-    // ARITY FIRST (codex round-2, finding 3): a 5th argument is a channel too,
+    // ARITY FIRST (convergence round 2, finding 3): a 5th argument is a channel too,
     // and a typed 4-parameter stub would have dropped it silently.
     expect(args).toHaveLength(4);
     // `Reflect.ownKeys`, NOT `Object.keys`: own keys INCLUDING symbols and
     // non-enumerable properties. `Object.keys` is own-enumerable-string-only,
     // so a channel riding a symbol or a non-enumerable prop read as clean.
-    expect(Reflect.ownKeys(options)).toEqual(["catalogState"]);
+    //
+    // AMENDED for cinatra#2932 (lifecycle-b W5a): the second key is the turn's
+    // LENT-ACTION GRANT, and the ruling this case pins is untouched by it.
+    //
+    //   · It is not a channel for the QUESTION. It is derived from the reader's
+    //     own access to the card the composer was bound to — a server-side
+    //     resolve of refs the page could see — and never from what they typed;
+    //     the assertion below pins that it carries none of the message's words.
+    //   · It does not narrow or widen the tool list. It becomes a REQUEST HEADER
+    //     on the self-MCP reference; which primitives are callable is still the
+    //     transport policy's answer, and this turn has no bound card, so the
+    //     value is `null`.
+    //
+    // The pin stays EXHAUSTIVE — a third key fails here exactly as a second one
+    // would have before.
+    expect(Reflect.ownKeys(options)).toEqual(["catalogState", "lentActionGrant"]);
+    // No bound card on this turn, so no authority at all: the ordinary case.
+    expect(options.lentActionGrant).toBeNull();
     // ...and not on the prototype either.
     expect(Object.getPrototypeOf(options)).toBe(Object.prototype);
     const state = options.catalogState as ChatMcpCatalogState;
@@ -462,7 +479,7 @@ describe("lever 2: the cacheable prefix is byte-identical across turns", () => {
 });
 
 // ---------------------------------------------------------------------------
-// LEVER 2, the harder half (codex round-1, finding 4)
+// LEVER 2, the harder half (convergence round 1, finding 4)
 //
 // A composer that declares its own head stable proves little. This drives a
 // source that GENUINELY changes between two turns — the pending-confirmation
@@ -498,7 +515,7 @@ describe("lever 2: a changing volatile source moves only the tail", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PRECEDENCE THROUGH THE REAL RUNTIME (codex round-2, finding 1)
+// PRECEDENCE THROUGH THE REAL RUNTIME (convergence round 2, finding 1)
 //
 // The composer's own suite pins the ordering property on a synthetic fragment
 // record. These drive `runAssistantTurn` end to end, so what is asserted is the
@@ -556,7 +573,7 @@ describe("policy outranks user-controlled content by position, not by hope", () 
 });
 
 // ---------------------------------------------------------------------------
-// THE MUTABLE FREEZE STATE, THROUGH THE REAL RUNTIME (codex round-2, finding 2)
+// THE MUTABLE FREEZE STATE, THROUGH THE REAL RUNTIME (convergence round 2, finding 2)
 //
 // `instanceContext` used to splice the freeze note into the instance-identity
 // sentence while being classified stable. The chat's own `agent_source_publish`

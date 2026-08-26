@@ -294,22 +294,24 @@ describe("the REAL manifest", () => {
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
-    // design#132 (lifecycle-b W1) moved the pin to the drawing that makes the
-    // schedule ONE FORM in five readings. Every pin the rows were read against
-    // before this move is still here: the previous head becomes `previousPin`,
-    // and the head before THAT is APPENDED to `priorPins` rather than replacing
-    // what was already in it. The whole point of the drift record is that a pin
-    // move leaves a trail, so the assertions walk the WHOLE trail rather than
-    // only checking the head — a move that dropped an older pin on its way past
-    // would still satisfy a head-only check.
-    expect(m.specCommit).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
+    // design#134 moved the pin to the drawing that gives the run-progress
+    // card a placeholder reading in the review slot and withdraws the prompt
+    // window from every reading inside a conversation. Every pin the rows were
+    // read against before this move is still here: the previous head becomes
+    // `previousPin`, and the head before THAT is APPENDED to `priorPins` rather
+    // than replacing what was already in it. The whole point of the drift
+    // record is that a pin move leaves a trail, so the assertions walk the
+    // WHOLE trail rather than only checking the head — a move that dropped an
+    // older pin on its way past would still satisfy a head-only check.
+    expect(m.specCommit).toContain("458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.previousPin).toContain("71398a49c1f8adfe6176ab0dda25486920fac958");
+    expect(m.specCommitDrift.previousPin).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
     expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     for (const prior of [
       "6c20871b4108176c1d0193f19ecd2947f6c6355f",
       "92c1be7c6f864dec6382a9ef01e7b2e1c38aa871",
+      "71398a49c1f8adfe6176ab0dda25486920fac958",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -325,7 +327,7 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-25/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-26/);
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
