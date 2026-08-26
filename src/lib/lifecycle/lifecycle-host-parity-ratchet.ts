@@ -211,13 +211,23 @@ export type HostParityRatchetRow = {
  * composition cells are RECORDED here rather than left off — a host set that
  * grows silently is a host set nobody read, which `host-unratcheted` refuses.
  *
- * `recommendation_hold` is the mirror image: it is composed on the run card,
- * and it now draws on the chat thread too — S9b (#2786) landed that mount, so
- * the chat_thread cell moved from `owed` to `hosts` and is RECORDED as a
- * `transcript` observation, read off the shared column rendering a held
- * dispatch turn. The widget cell stays owed by S9f (#2790), which is why this
- * slice consumes the widget row as an observation rather than asserting a card
- * that no branch has landed.
+ * `recommendation_hold` is on all four hosts too, and each cell was landed by a
+ * named slice:
+ *
+ *   · `run_card`, by COMPOSITION. The run screen's long-standing mount.
+ *   · `chat_thread`, by TRANSCRIPT. S9b (#2786) landed the conversation-origin
+ *     hold: a run started from a conversation now carries a verified launch
+ *     frame, is created with the "a person is present" mark and parks BEFORE
+ *     dispatch, so the shared column draws the card on the held dispatch turn.
+ *   · `site_widget`, by TRANSCRIPT. S9f (#2790) made the card's read and its two
+ *     decisions broker-aware, the in-code credential guard that withheld it went
+ *     with them, and the shared conversation column now mounts it at the
+ *     `agent_run` slot on a host whose run card cannot carry it.
+ *   · `page_gate_region`, by COMPOSITION. S9f's review route composes
+ *     `RecommendationHoldCard` above the review card, keyed by the run (plan §9).
+ *
+ * Each owed row was struck in the change that made its own observation flip —
+ * the only moment a row may be struck — so this kind now owes nothing.
  */
 export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   Record<LifecycleCardKind, HostParityRatchetRow>
@@ -256,10 +266,13 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   recommendation_hold: {
-    hosts: Object.freeze({ chat_thread: "transcript", run_card: "composition" }),
-    owed: Object.freeze([
-      { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2790 (S9f)" },
-    ]),
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
+    owed: Object.freeze([]),
   },
   // cinatra#2928 (lifecycle-b W2a) registers the HITL screen as the fifth kind
   // so a run can STATE that it is paused asking for input. W2a draws nothing —

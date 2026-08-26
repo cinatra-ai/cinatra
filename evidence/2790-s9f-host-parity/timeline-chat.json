@@ -1,0 +1,102 @@
+[
+  {
+    "step": "T1",
+    "what": "held at the recommendation hold; the run has produced NOTHING",
+    "at": "2026-08-23T10:25:18.513Z",
+    "db": {
+      "runStatus": "pending_input",
+      "humanPresent": true,
+      "parkCheckpoint": "recommendation",
+      "parkStatus": "parked",
+      "parkCreatedAt": "2026-08-23T10:25:01.033Z",
+      "representationRows": 0,
+      "producedOutboxRows": 0,
+      "reviewGateRows": 0,
+      "selectionRows": 0
+    }
+  },
+  {
+    "step": "T2a",
+    "what": "the provider presence placeholder is removed so the agent's own model call resolves the scripted runtime",
+    "at": "2026-08-23T10:25:23.507Z",
+    "db": {
+      "shippedWriter": "clearOpenAIConnection",
+      "readBack": "S9FCHAT PROVIDER_CLEAR {\"storeResolvesAKey\":false,\"revalidateThrewOutsideRequestScope\":\"Invariant: static generation store missing in revalidatePath /agents\"}"
+    }
+  },
+  {
+    "step": "T2",
+    "what": "the decisions are written and the hold is RELEASED",
+    "at": "2026-08-23T10:25:57.748Z",
+    "db": {
+      "runStatus": "pending_approval",
+      "parkStatus": "released",
+      "parkResolvedAt": "2026-08-23T10:25:29.911Z",
+      "selections": [
+        {
+          "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "selection_source": "user_adjusted",
+          "selected_at": "2026-08-23T10:25:29.903Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T10:25:29.903Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/web-research-skill:web-research",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T10:25:29.903Z"
+        }
+      ],
+      "representationRows": 0,
+      "reviewGateRows": 0
+    }
+  },
+  {
+    "step": "T3/T4",
+    "what": "the step executed, wrote its own output, and the sweeper opened the review",
+    "at": "2026-08-23T10:26:15.970Z",
+    "db": {
+      "runStatus": "completed",
+      "runCompletedAt": "2026-08-23T10:26:02.703Z",
+      "representations": [
+        {
+          "id": "798dc74f-cf02-45dc-845e-af98d86137a3",
+          "artifact_id": "fc615acf-22d6-401e-9ba2-2c54d64959fe",
+          "resource_id": "697b73fe-fd34-4c24-b171-d62edc272ac3",
+          "revision": 1,
+          "form": "file",
+          "created_at": "2026-08-23T10:26:02.616Z"
+        }
+      ],
+      "outbox": [
+        {
+          "event_id": "5310fc97038a98fb98bf00cee818ebf35da58e970e0c4c786a427925a7d3c76b",
+          "artifact_id": "fc615acf-22d6-401e-9ba2-2c54d64959fe",
+          "representation_revision_id": "798dc74f-cf02-45dc-845e-af98d86137a3",
+          "emitter": "createSemanticArtifact",
+          "origin_kind": "agent_produced",
+          "created_at": "2026-08-23T10:26:02.616Z",
+          "processed_at": "2026-08-23T10:26:13.046Z"
+        }
+      ],
+      "gates": [
+        {
+          "id": "f2875e94-b97e-49c9-9296-398689b1fcef",
+          "review_task_id": "lifecycle-review:5310fc97038a98fb98bf00cee818ebf35da58e970e0c4c786a427925a7d3c76b",
+          "status": "pending",
+          "created_at": "2026-08-23T10:26:12.872Z"
+        }
+      ]
+    }
+  },
+  {
+    "step": "T5",
+    "what": "the pictures of the reviewed state are taken",
+    "at": "2026-08-23T10:26:44.271Z",
+    "db": {
+      "url": "/chat/cinatra-ai/cinatra-assistant/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c"
+    }
+  }
+]

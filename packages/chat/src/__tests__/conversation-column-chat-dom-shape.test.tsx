@@ -34,18 +34,24 @@ import { cleanup } from "@testing-library/react";
 // panel. Replaced here for the same reasons set out in
 // `conversation-column-inventory.test.tsx`; none of them is part of the SHAPE
 // this file measures.
-// The message list now mounts the §V recommendation card directly, and that
-// card statically imports its cookie-bound server actions. Replaced here for
-// the same reason the pending-call and undo actions above are: they reach a
-// database, and none of them is part of what this file measures. Any test that
-// mounts the conversation column needs these two.
+// The recommendation card's own graph. The shared column now mounts that card
+// at the `agent_run` slot on BOTH of its arms — the cookie `/chat` transcript
+// (cinatra#2794, S9b) and the site widget (cinatra#2790, S9f) — and the card
+// statically imports its cookie-bound server actions, which reach a database.
+// Replaced here for the same reason the pending-call and undo actions above
+// are: none of them is part of what this file measures, and without these the
+// column does not mount at all — an empty column would look like a passing
+// negative arm. Any test that mounts the conversation column needs both.
 vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
-  confirmRunRecommendationAction: async () => ({ ok: true }),
-  skipRunRecommendationAction: async () => ({ ok: true }),
+  confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+  skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
 }));
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: async () => [],
+  getSkillsForAgentAction: async () => [],
+  getFieldRendererContextForAgentBuilderAction: async () => ({}),
+  confirmRunSkillSelectionAction: async () => ({ ok: true }),
 }));
 vi.mock("../pending-call-actions", () => ({
   listPendingToolConfirmations: async () => ({ rows: [] }),

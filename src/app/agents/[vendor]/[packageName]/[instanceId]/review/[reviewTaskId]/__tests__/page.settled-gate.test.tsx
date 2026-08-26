@@ -91,6 +91,15 @@ vi.mock("@cinatra-ai/agents/review-gate-card", () => ({
     />
   ),
 }));
+// The recommendation card mounts on this same gate region (cinatra#2790 S9f),
+// ABOVE the review gate. It is a different card with its own suites, and its
+// real body reads the run store and the declared host, so this suite — which is
+// about the REVIEW gate's composition — stubs it to a marker that emits no
+// `data-lifecycle-card` of its own. Every assertion below names the review
+// gate's card explicitly, so the marker cannot answer for it either way.
+vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
+  RecommendationHoldCard: () => <div data-testid="recommendation-hold-card" />,
+}));
 vi.mock("@cinatra-ai/agents/lifecycle-card-runtime", () => ({
   LifecycleCardSurfaceProvider: ({
     host,

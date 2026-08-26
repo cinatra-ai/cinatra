@@ -46,12 +46,11 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Button } from "@/components/ui/button";
 
-import {
-  RunSurfaceRail,
-  isRunSurfaceStepSelectable,
-  type RunSurfaceStep,
-} from "../run-surface-rail";
-import { RUN_SURFACE_RAIL_LABELS } from "../run-surface-rail-labels";
+import { RunSurfaceRail } from "../run-surface-rail";
+import { isRunSurfaceStepSelectable } from "../run-surface-rail-step";
+// The rows are built by the SAME mapping the screen calls, so a row that
+// promises an opening the frame would refuse fails here rather than shipping.
+import { buildSetupRailSteps, type SetupRailStep } from "../setup-run-surface-steps";
 import { setupStepReachedForRunStatus } from "../run-status";
 
 vi.mock("lucide-react", () => {
@@ -172,29 +171,15 @@ async function recommendationSurface() {
  *  instead of quietly agreeing with a literal typed into the harness. */
 async function setupSteps(
   opts: { runStatus?: string; recommendationReached?: boolean } = {},
-): Promise<RunSurfaceStep[]> {
+): Promise<SetupRailStep[]> {
   const reached =
     opts.recommendationReached !== undefined
       ? opts.recommendationReached
       : setupStepReachedForRunStatus(opts.runStatus);
   return [
-    {
-      key: "schedule",
-      label: RUN_SURFACE_RAIL_LABELS.schedule,
-      surface: <SchedulerForm />,
-    },
-    {
-      key: "recommendation",
-      label: RUN_SURFACE_RAIL_LABELS.recommendation,
-      reached,
-      surface: await recommendationSurface(),
-    },
-    {
-      key: "review",
-      label: RUN_SURFACE_RAIL_LABELS.review,
-      reached: false,
-      surface: null,
-    },
+    { key: "schedule", surface: <SchedulerForm /> },
+    { key: "recommendation", reached, surface: await recommendationSurface() },
+    { key: "review", reached: false, surface: null },
   ];
 }
 
@@ -202,7 +187,15 @@ async function renderSetupSurface(
   opts: { runStatus?: string; recommendationReached?: boolean } = {},
 ) {
   return render(
-    <RunSurfaceRail steps={await setupSteps(opts)} initialSelectedKey="schedule" />,
+    // THE SAME COMPOSITION THE SCREEN MOUNTS. The frame draws the two columns;
+    // the page draws the box that holds them, which is where the `run-surface`
+    // contract root and its anchors live on every run-page state.
+    <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
+      <RunSurfaceRail
+        steps={buildSetupRailSteps(await setupSteps(opts))}
+        initialSelection="schedule"
+      />
+    </div>,
   );
 }
 
@@ -398,15 +391,15 @@ describe("the setup run page draws the two-column run surface", () => {
     // to any step cannot draw one.
     const { container } = render(
       <RunSurfaceRail
-        steps={[
-          { key: "schedule", label: "Schedule", surface: <SchedulerForm /> },
-          { key: "detail", label: "Review", surface: <RunProgress /> },
-        ]}
-        initialSelectedKey="schedule"
+        steps={buildSetupRailSteps([
+          { key: "schedule", surface: <SchedulerForm /> },
+          { key: "review", surface: <RunProgress /> },
+        ])}
+        initialSelection="schedule"
       />,
     );
     expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
-    fireEvent.click(container.querySelector('[data-action="open-detail-step"]')!);
+    fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
     expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="scheduler-form"]')).toBeNull();
   });
@@ -485,18 +478,18 @@ describe("a step the run has not reached cannot be opened", () => {
     // check alone.
     const { container } = render(
       <RunSurfaceRail
-        steps={[
-          { key: "schedule", label: "Schedule", surface: <SchedulerForm /> },
-          { key: "detail", label: "Review", surface: <RunProgress />, reached: false },
-        ]}
-        initialSelectedKey="schedule"
+        steps={buildSetupRailSteps([
+          { key: "schedule", surface: <SchedulerForm /> },
+          { key: "review", surface: <RunProgress />, reached: false },
+        ])}
+        initialSelection="schedule"
       />,
     );
 
     const row = rows(container)[1];
     expect(row.getAttribute("aria-disabled")).toBe("true");
-    expect(row.getAttribute("data-action")).toBe("detail-step-unavailable");
-    expect(container.querySelector('[data-action="open-detail-step"]')).toBeNull();
+    expect(row.getAttribute("data-action")).toBe("review-step-unavailable");
+    expect(container.querySelector('[data-action="open-review-step"]')).toBeNull();
 
     fireEvent.click(row);
 
@@ -513,10 +506,11 @@ describe("a step the run has not reached cannot be opened", () => {
     // open, and no empty step surface is mounted under a row that does.
     const { container } = render(
       <RunSurfaceRail
-        steps={[
-          { key: "recommendation", label: "Recommendation", surface: null },
-          { key: "review", label: "Review", surface: null, reached: false },
-        ]}
+        steps={buildSetupRailSteps([
+          { key: "recommendation", surface: null },
+          { key: "review", surface: null, reached: false },
+        ])}
+        initialSelection="schedule"
       />,
     );
 
@@ -526,8 +520,11 @@ describe("a step the run has not reached cannot be opened", () => {
       expect(row.getAttribute("data-run-surface-rail-selected")).toBe("false");
       expect(row.hasAttribute("aria-current")).toBe(false);
     }
-    expect(detailColumn(container)[0].hasAttribute("data-run-surface-selected-step")).toBe(
-      false,
+    // The frame says out loud that it is showing the run's own detail rather
+    // than any step — and the page composed none, so the column is empty
+    // because there is nothing to show, not because a row opened onto nothing.
+    expect(detailColumn(container)[0].getAttribute("data-run-surface-selected-step")).toBe(
+      "detail",
     );
     expect(detailColumn(container)[0].childNodes.length).toBe(0);
   });
@@ -537,7 +534,10 @@ describe("a step the run has not reached cannot be opened", () => {
     // through to the first row that HAS a surface, rather than painting the
     // empty right column cinatra#2970 forbids.
     const { container } = render(
-      <RunSurfaceRail steps={await setupSteps()} initialSelectedKey="review" />,
+      <RunSurfaceRail
+        steps={buildSetupRailSteps(await setupSteps())}
+        initialSelection="review"
+      />,
     );
 
     expect(detailColumn(container)[0].getAttribute("data-run-surface-selected-step")).toBe(
@@ -552,17 +552,19 @@ describe("a step the run has not reached cannot be opened", () => {
     const surface = <SchedulerForm />;
     // Reached is a THIRD answer: unstated leaves the row openable, because
     // silence is not a claim that the run is still short of the step.
-    expect(isRunSurfaceStepSelectable({ key: "a", label: "A", surface })).toBe(true);
-    expect(
-      isRunSurfaceStepSelectable({ key: "a", label: "A", surface, reached: true }),
-    ).toBe(true);
-    expect(
-      isRunSurfaceStepSelectable({ key: "a", label: "A", surface, reached: false }),
-    ).toBe(false);
-    // No surface, no opening — whatever the rail was told about reaching it.
-    expect(isRunSurfaceStepSelectable({ key: "a", label: "A", surface: null })).toBe(false);
-    expect(
-      isRunSurfaceStepSelectable({ key: "a", label: "A", surface: null, reached: true }),
-    ).toBe(false);
+    expect(isRunSurfaceStepSelectable({ surface }, null)).toBe(true);
+    expect(isRunSurfaceStepSelectable({ surface, reached: true }, null)).toBe(true);
+    expect(isRunSurfaceStepSelectable({ surface, reached: false }, null)).toBe(false);
+    // No surface AND nothing to fall back to, no opening — whatever the rail was
+    // told about reaching it.
+    expect(isRunSurfaceStepSelectable({ surface: null }, null)).toBe(false);
+    expect(isRunSurfaceStepSelectable({ surface: null, reached: true }, null)).toBe(false);
+    // A page that DOES compose a run detail is the case the run page is: the
+    // settled recommendation carries no surface of its own on purpose, and its
+    // row opens onto the reading already beside it (cinatra#2790).
+    expect(isRunSurfaceStepSelectable({ surface: null }, surface)).toBe(true);
+    expect(isRunSurfaceStepSelectable({ surface: null, reached: false }, surface)).toBe(
+      false,
+    );
   });
 });

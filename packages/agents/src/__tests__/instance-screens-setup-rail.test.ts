@@ -30,6 +30,12 @@ const SCREEN_SRC = fs.readFileSync(
   "utf-8",
 );
 
+/** The step-to-row mapping the screen hands its steps to. */
+const STEP_ROWS_SRC = fs.readFileSync(
+  path.join(__dirname, "..", "setup-run-surface-steps.tsx"),
+  "utf-8",
+);
+
 /**
  * The setup branch of `TriggerScreen`: from the steps it builds to the end of
  * the surface it mounts them in.
@@ -45,12 +51,12 @@ function sliceBetween(from: string, to: string): string {
   return SCREEN_SRC.slice(start, end);
 }
 
-const SETUP_BRANCH = sliceBetween("const setupRailSteps", "</AgentPageLayout>");
+const SETUP_BRANCH = sliceBetween("const setupSteps: SetupRailStep[]", "</AgentPageLayout>");
 
 /** The scheduler step's surface, as the screen composes it once, above. */
 const SCHEDULER_SURFACE = sliceBetween(
   "const schedulerStepSurface = (",
-  "const setupRailSteps",
+  "const setupSteps: SetupRailStep[]",
 );
 
 /** `TriggerScreen`'s whole body, so the branches BESIDE the setup surface can be
@@ -64,16 +70,25 @@ describe("the setup run page draws the run surface, not a single column", () => 
   it("mounts the two-column run surface with the scheduler open on first paint", () => {
     expect(SETUP_BRANCH).toContain("<RunSurfaceRail");
     expect(SETUP_BRANCH).toContain("steps={setupRailSteps}");
-    expect(SETUP_BRANCH).toContain('initialSelectedKey="schedule"');
+    expect(SETUP_BRANCH).toContain('initialSelection="schedule"');
+    // The box that HOLDS the two columns is the page's, on this run-page state
+    // exactly as on every other one — the `run-surface` contract root a capture
+    // recipe measures rail 1 / detail 1 inside.
+    expect(SETUP_BRANCH).toContain('data-conformance-id="run-surface"');
+    expect(SETUP_BRANCH).toContain('data-run-detail-contract=""');
   });
 
   it("names the three setup steps — the scheduler, the skills recommendation, the review", () => {
     for (const key of ["schedule", "recommendation", "review"]) {
       expect(SETUP_BRANCH).toContain(`key: "${key}"`);
     }
-    for (const label of ["schedule", "recommendation", "review"] as const) {
-      expect(SETUP_BRANCH).toContain(`RUN_SURFACE_RAIL_LABELS.${label}`);
-    }
+    // The words are the drawing's own, read by KEY from the one label set, so a
+    // step named here cannot ship a row with an empty title.
+    expect(SETUP_BRANCH).toContain("buildSetupRailSteps(setupSteps)");
+    expect(STEP_ROWS_SRC).toContain("label={RUN_SURFACE_RAIL_LABELS[step.key]}");
+    expect(STEP_ROWS_SRC).toContain(
+      'import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";',
+    );
   });
 
   it("makes the scheduling form the SCHEDULE step's surface — not a column of its own", () => {
@@ -91,6 +106,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
     const step = start < 0 || end < 0 ? "" : SETUP_BRANCH.slice(start, end);
     expect(step).toContain('<LifecycleCardSurfaceProvider host="run_card">');
     expect(step).toContain("<RecommendationHoldCard");
+    // ONE mount in this screen. The run page mounts the same renderer in its own
+    // screen (`SetupScreen`) and the two never render together, but a SECOND
+    // mount inside THIS screen would be two instances of the one renderer on one
+    // page, which is what cinatra#2573 retired.
+    expect(TRIGGER_SCREEN.match(/<RecommendationHoldCard\b/g) ?? []).toHaveLength(1);
   });
 
   it("draws NO run progress with any setup step — the run has not run", () => {
@@ -137,6 +157,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
       "properties={properties}",
       "setupComplete={setupComplete}",
       "durationEstimate={durationEstimate}",
+      // cinatra#2980: a run whose one-off schedule has already fired keeps the
+      // form as a READING. The prop is the schedule step's, so it is listed with
+      // the rest rather than smuggled in beside them.
+      "readOnly={scheduleFrozen}",
     ]);
     // ONE mount in the whole screen: the step owns the form, and no second
     // column draws a copy of it.
@@ -144,7 +168,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
   });
 
   it("keeps the finished-run notice above the form, inside the scheduler step", () => {
-    expect(SCHEDULER_SURFACE).toContain("shouldShowFinishedRunNotice(trigger, run.status)");
+    expect(SCHEDULER_SURFACE).toContain("{finishedNotice ? (");
+    expect(TRIGGER_SCREEN).toContain(
+      "finished: run ? shouldShowFinishedRunNotice(trigger, run.status) : false,",
+    );
     const noticeAt = SCHEDULER_SURFACE.indexOf("data-run-finished-notice");
     const formAt = SCHEDULER_SURFACE.indexOf("<TriggerScreenClient");
     // Both have to BE there: a deleted notice would otherwise "precede" the form
@@ -165,7 +192,7 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(TRIGGER_SCREEN).toContain(") : run ? (");
     expect(TRIGGER_SCREEN).toContain("schedulerStepSurface\n        )}");
     // The steps exist only for a run.
-    expect(SETUP_BRANCH).toContain("const setupRailSteps: RunSurfaceStep[] = run");
+    expect(SETUP_BRANCH).toContain("const setupSteps: SetupRailStep[] = run");
     expect(SETUP_BRANCH).toContain("    : [];");
   });
 

@@ -1,0 +1,60 @@
+== agent_runs ==
+-[ RECORD 1 ]-+-------------------------------------
+id            | aef0f05a-94c9-41ed-a497-798603ecd6bc
+status        | completed
+human_present | t
+source_type   | agent_builder
+run_by        | 50395d2d-1d98-4583-b33a-6e04aab476d1
+org_id        | 197ba74d-3ac5-4647-bcde-7b662323f524
+template_id   | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
+created_at    | 2026-08-24 23:51:38.08015+00
+completed_at  | 2026-08-24 23:53:32.024+00
+error         | (none)
+
+== lifecycle_continuation_park ==
+   checkpoint   |  status  |          created_at           |          resolved_at          
+----------------+----------+-------------------------------+-------------------------------
+ recommendation | released | 2026-08-24 23:51:38.831212+00 | 2026-08-24 23:52:38.561688+00
+(1 row)
+
+== run_selected_skill_revisions ==
+                       skill_id                        |   selection_source    |          selected_at          
+-------------------------------------------------------+-----------------------+-------------------------------
+ @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-24 23:52:38.553849+00
+ @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-24 23:52:38.553849+00
+ @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-24 23:52:38.553849+00
+(3 rows)
+
+== representation ==
+-[ RECORD 1 ]-------------------------------------
+id          | 10a8b16d-65a8-4cf1-8015-30000daa8d26
+artifact_id | 7da21d06-07ce-4863-985e-185aa4db3eda
+resource_id | 11e18650-6ddf-4840-9b3f-698efc59f163
+revision    | 1
+form        | file
+created_at  | 2026-08-24 23:53:31.893182+00
+
+== resource the run produced ==
+                  id                  | kind |     mime      | size_bytes 
+--------------------------------------+------+---------------+------------
+ 11e18650-6ddf-4840-9b3f-698efc59f163 | blob | text/markdown |       6232
+(1 row)
+
+== artifact_produced_outbox ==
+                             event_id                             |        emitter         |  origin_kind   |          created_at           |         processed_at          
+------------------------------------------------------------------+------------------------+----------------+-------------------------------+-------------------------------
+ 77945697eae00893a545980ce4f1a2b69f63457a99bcea1fdfaac36afc6bdbae | createSemanticArtifact | agent_produced | 2026-08-24 23:53:31.893182+00 | 2026-08-24 23:53:45.716264+00
+(1 row)
+
+== artifact_review_gates ==
+                  id                  |                                  review_task_id                                   | status  |          created_at           
+--------------------------------------+-----------------------------------------------------------------------------------+---------+-------------------------------
+ 93a125c7-b078-4b39-96d8-740735d458fb | lifecycle-review:77945697eae00893a545980ce4f1a2b69f63457a99bcea1fdfaac36afc6bdbae | pending | 2026-08-24 23:53:45.585598+00
+(1 row)
+
+== template ==
+            package_name             
+-------------------------------------
+ @cinatra-ai/blog-draft-writer-agent
+(1 row)
+

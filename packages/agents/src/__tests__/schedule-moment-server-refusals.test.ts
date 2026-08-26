@@ -253,3 +253,186 @@ describe("a recurring schedule's change applies to its future ticks", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE OTHER ONE-OFF (cinatra#2980).
+//
+// Plan (A) §7.2 item 4 (amended 2026-08-25): "once a one-off has fired it cannot
+// be changed". A run set to **Run right after setup** is a one-off too — its row
+// is `immediate`, and the immediate path stamps `releasedAt` through
+// `markTriggerReleased` exactly as a `scheduled` fire does. The rule is about
+// the KIND of schedule, never about which word the row happens to carry, so
+// every refusal above must hold for it identically.
+// ---------------------------------------------------------------------------
+
+/** A "Run right after setup" row, with or without the stamp that says it fired. */
+function immediate(releasedAt: Date | null) {
+  return {
+    runId: RUN_ID,
+    triggerType: "immediate",
+    scheduledAt: null,
+    cronExpression: null,
+    timezone: "UTC",
+    enabled: true,
+    releasedAt,
+    jobSchedulerId: null,
+  };
+}
+
+/** The run as the reported screen finds it: the immediate trigger has fired and
+ *  the run it started is over. */
+const finishedRun = { ...armedRun, status: "completed" };
+
+describe("a fired 'Run right after setup' schedule cannot be changed either", () => {
+  it("REFUSES a recurring schedule on the fired run's own row", async () => {
+    store.readAgentRunById.mockResolvedValue(finishedRun);
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/already fired/i);
+    expect(result.ok === false && result.error).toMatch(/start a new run/i);
+  });
+
+  it("REFUSES a one-off schedule on the fired run's own row", async () => {
+    store.readAgentRunById.mockResolvedValue(finishedRun);
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "scheduled",
+      scheduledAt: futureNaive(),
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/already fired/i);
+  });
+
+  it("gives it the SAME refusal a fired 'Schedule for later' row gets", async () => {
+    // One rule, one sentence: the reader is told the same thing whichever
+    // one-off they set, because it is the same fact about the same moment.
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(oneOff(new Date()));
+    const forScheduled = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+    const forImmediate = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+
+    expect(forImmediate).toEqual(forScheduled);
+  });
+
+  it("refuses BEFORE any write — no row rewritten, no schedule installed", async () => {
+    store.readAgentRunById.mockResolvedValue(finishedRun);
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+
+    await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+
+    expect(triggerStore.createOrUpdateRunTrigger).not.toHaveBeenCalled();
+    expect(triggerStore.deleteRunTriggerByRunId).not.toHaveBeenCalled();
+    expect(schedule.cancelTriggerSchedule).not.toHaveBeenCalled();
+    expect(schedule.scheduleTrigger).not.toHaveBeenCalled();
+  });
+
+  // THE REPLAY THIS MUST NOT REFUSE. `scheduleTrigger` stamps the release for an
+  // immediate trigger BEFORE the dispatch that follows it, and the worker that
+  // installs a stated schedule is at-least-once: a crash in that window leaves a
+  // stamped row whose retry still has to finish. An immediate request against an
+  // immediate row rewrites no schedule — it is the same instruction arriving
+  // twice — so this guard lets it through to the ladder above, which is what
+  // decides whether a dispatch may happen at all.
+  it("does not refuse a REPLAYED immediate arm on a fired immediate row", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "immediate",
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  // THE EXEMPTION IS "RUN NOW, AGAIN" AND NOTHING ELSE. A request that says
+  // `immediate` while carrying a schedule is not a replay of the same
+  // instruction — and the upsert would persist those fields onto the fired row
+  // whatever the type says — so it is refused with the rest.
+  it("refuses an 'immediate' request that carries a schedule on a fired row", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(new Date()));
+
+    const withCron = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "immediate",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+    expect(withCron.ok).toBe(false);
+    expect(withCron.ok === false && withCron.error).toMatch(/already fired/i);
+
+    const withInstant = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "immediate",
+      scheduledAt: futureNaive(),
+      timezone: "UTC",
+    });
+    expect(withInstant.ok).toBe(false);
+    expect(withInstant.ok === false && withInstant.error).toMatch(/already fired/i);
+
+    expect(triggerStore.createOrUpdateRunTrigger).not.toHaveBeenCalled();
+  });
+
+  // …and the other direction is unchanged: a fired ONE-OFF asked to run now is
+  // still refused, exactly as cinatra#2928 shipped it.
+  it("still refuses an immediate arm on a fired 'Schedule for later' row", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(oneOff(new Date()));
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "immediate",
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/already fired/i);
+  });
+
+  // THE OVER-REFUSAL THIS MUST NOT BECOME. An immediate row exists on every run
+  // that was armed with "Run right after setup", and until it fires it is an
+  // ordinary changeable schedule — the first arm itself reaches this function
+  // with a row already written (the immediate path upserts, releases, upserts
+  // again). Freezing on the row's TYPE rather than on its release stamp would
+  // refuse those.
+  it("still accepts a change while the immediate row has NOT fired", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(immediate(null));
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(triggerStore.createOrUpdateRunTrigger).toHaveBeenCalled();
+  });
+});

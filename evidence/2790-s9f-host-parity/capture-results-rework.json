@@ -1,0 +1,1787 @@
+{
+  "results": [
+    {
+      "cell": "S1__recommendation-card__chat_thread__held",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "e3c7d6789dfc5b4854713764f9d1ecfc52d65888836d5d596cc49604202948c1",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 421,
+        "listFullyInViewport": true,
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
+      },
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:51:57.852Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "S1__recommendation-card__chat_thread__held__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "e6718a55984715a522335b00a592eb4b00e98a0cf4b166e0c67b53f2ae8e3a38",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 421,
+        "listFullyInViewport": true,
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
+      },
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:51:58.983Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "R5__recommendation-card__run_card__held",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "a34f7b442d842ea26af6fe2b6ec98da3304bf5d0aa8dd9dbf95f5429e739924b",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "run_card",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "true",
+        "railStepSettled": "false",
+        "railStepText": "1Recommendation",
+        "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": [
+          "1Recommendation"
+        ],
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:52:14.592Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "R5__recommendation-card__run_card__held__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "e44d48c8229f2d06d0d6a7dde1815776ebb9c8c1aba2a8b30dbd491f3a0c2f0d",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "run_card",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "true",
+        "railStepSettled": "false",
+        "railStepText": "1Recommendation",
+        "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": [
+          "1Recommendation"
+        ],
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:52:15.692Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "S2__recommendation-card__chat_thread__decided",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "9f377efb92c613d62abc65b7c3fbc63e21101192d510c7ea7ded09dd34cfbbcb",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-hitl-skill-picker]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 744,
+        "listFullyInViewport": true,
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
+      },
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:53:04.388Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "S2__recommendation-card__chat_thread__decided__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "54828703ebaa93d84976d9c2f890cba4e13c3cfc222e4165371410a364713fe3",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-hitl-skill-picker]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 744,
+        "listFullyInViewport": true,
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
+      },
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:53:05.544Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 38,
+        "bridgeRunSelects": 6,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
+    },
+    {
+      "cell": "R6__recommendation-card__run_card__decided",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "5eaf5a46d1770161949fda232460d3a7f0eaf776692bbba5b37ee0ade486a801",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "run_card",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1Review"
+        ],
+        "agenticRunProgressHeadings": 1,
+        "headings": [
+          "Blog Draft Writer Agent (7)",
+          "Step 1",
+          "Review",
+          "Agentic Run Progress",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:54:03.425Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 40,
+        "bridgeRunSelects": 7,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "R6__recommendation-card__run_card__decided__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "2c11583633b2ac83f2e9ae49238df7442215725e384f98f4588d0b614c0c60d7",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "run_card",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1Review"
+        ],
+        "agenticRunProgressHeadings": 1,
+        "headings": [
+          "Blog Draft Writer Agent (7)",
+          "Step 1",
+          "Review",
+          "Agentic Run Progress",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T23:54:04.536Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 40,
+        "bridgeRunSelects": 7,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "3947",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
+    }
+  ],
+  "wire": [
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.305Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.310Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.396Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.758Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.773Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:51:04.787Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:09.326Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:13.383Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:51:13.426Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:51:13.472Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:18.374Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:23.458Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:25.448Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:25.552Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-24T23:51:25.700Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-24T23:51:26.280Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:40.509Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:44.061Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:51:44.105Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:51:44.214Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:44.297Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:46.643Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:48.981Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:49.646Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:52.664Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:53.940Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:55.675Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:59.042Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:59.109Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.021Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.114Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.231Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.236Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:22.653Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:24.956Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:25.660Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:28.656Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:29.943Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:31.639Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:34.667Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:35.198Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:37.666Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:40.496Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:40.725Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:43.627Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:44.902Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:46.634Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:50.170Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:50.301Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.443Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.529Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.619Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.624Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:55.300Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:57.438Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:58.101Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:01.093Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:02.410Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:04.118Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:07.510Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:07.622Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:10.111Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:12.419Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:13.119Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:16.090Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:17.624Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:19.101Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:22.152Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:22.643Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:25.122Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:27.426Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:28.104Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:31.162Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:32.446Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.273Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.314Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.437Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.527Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:36.916Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:39.134Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:39.833Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:42.858Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:44.110Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:45.832Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:49.284Z"
+    }
+  ],
+  "pageErrors": []
+}

@@ -1335,38 +1335,49 @@ describe("the two modes on the real tree", () => {
     expect(collectContractViolations()).toEqual([]);
   });
 
-  it("the REQUIRED gate — no flag at all — still FAILS today, now on the HOST gap", () => {
+  it("the REQUIRED gate — no flag at all — still FAILS today, on the fifth kind's missing card", () => {
     // The ordinary run is the done-check. This is the claim "the gate fails on
     // main": it has to be true of the run somebody actually makes, not of an
-    // opt-in flag nobody passes.
+    // opt-in flag nobody passes. What it fails ON has moved twice — first the
+    // undrawn kinds, then §IX's other half (`recommendation_hold` reaching two
+    // of the four hosts), and now the fifth kind — and that is the point of
+    // pinning it.
     //
-    // THE NAME PINS THE HOST GAP because that is the finding this arm was
-    // written for and the acceptance manifest binds it by name; the fifth
-    // kind's row is asserted here too, and named below.
-    //
-    // WHAT IT FAILS ON HAS MOVED, and that is the point of pinning it. The two
-    // kinds this epic drew are gone from the findings (cinatra#2789 drew §VII,
-    // cinatra#2788 drew §VI). TWO things are left, and both are asserted below:
-    // §IX's other half — `recommendation_hold` reaches two of the four hosts —
-    // and the FIFTH kind, `agent_hitl_screen`, which cinatra#2928 registered
-    // without drawing (its card is owed to cinatra#2930). The done-check stays
-    // red until both land. A gate that went green here while a kind still
-    // missed two hosts, or had no card at all, would be the same dishonesty in
-    // a new place.
+    // ONE HALF IS CLOSED HERE AND ONE IS NOT, and the pin says which.
+    // cinatra#2789 and cinatra#2788 drew §VII and §VI, and cinatra#2790 (S9f)
+    // mounted the recommendation card on the two hosts that carried a gap — so
+    // no "has no production mount on host" finding is left. What remains is the
+    // FIFTH kind, `agent_hitl_screen`, which cinatra#2928 registered without
+    // drawing (its card is owed to cinatra#2930). The done-check stays red until
+    // that one lands. A gate that went green here while a kind had no card at
+    // all would be the same dishonesty in a new place.
     const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(1);
-    expect(out).toMatch(/'recommendation_hold' has no production mount on host 'site_widget'/);
-    expect(out).toMatch(/'recommendation_hold' has no production mount on host 'page_gate_region'/);
-    // …and the fifth kind, registered by cinatra#2928 and drawn by nobody yet,
-    // is NAMED. The required gate's other half is that it says which card is
-    // missing, not merely that something is.
+    // The one finding left, NAMED. The required gate's other half is that it
+    // says which card is missing, not merely that something is.
     expect(out).toMatch(/'agent_hitl_screen' has no card of its own/);
+    // …and the host gap S9f closed is gone, in BOTH directions: a gate that went
+    // green on a rule by dropping it would read the same as one that met it, so
+    // the rule is re-read from the lenient arm below rather than assumed.
+    expect(out).not.toMatch(/has no production mount on host/);
     // …and it names NEITHER of the two kinds that were drawn. A done-check that
     // kept reporting a drawn card as missing would be the mirror image of the
     // dishonesty this gate exists to end.
     expect(out).not.toMatch(/'verification_summary' has no card of its own/);
     expect(out).not.toMatch(/'trigger_schedule_proposal' has no card of its own/);
+    // THE MOUNT RULE IS STILL ARMED, read off the gate's own lenient arm: it
+    // counts the kinds it found a drawn owner for and states that every mount it
+    // enumerated carries a host declaration. So the silence above is a
+    // measurement of four hosts, not a table that stopped being consulted.
+    const audit = spawnSync(process.execPath, [GATE, "--audit"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    expect(audit.status).toBe(0);
+    expect(audit.stdout + audit.stderr).toMatch(
+      /4\/5 kinds drawn by a named owner, every mount host-declared/,
+    );
   });
 
   it("the lenient read is the one that needs a flag, and counts the drawn kinds", () => {

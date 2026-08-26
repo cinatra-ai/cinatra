@@ -1,0 +1,1052 @@
+[
+  {
+    "cell": "S3__review-card__chat_thread__pending",
+    "declaredHost": "chat_thread",
+    "declaredKind": "artifact_review_gate",
+    "declaredState": "pending",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7796521a-e94c-4950-bced-94ae3cbcffbd",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S3__review-card__chat_thread__pending.png",
+    "sha256": "9d0808f321fb245713cf916812591a8a2878eea3a532cdbe3df2b32e2dada271",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:20.218Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:19.804Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The same conversation, further down, on a chain with no stood-in leg: the run this conversation's own turn started executed its step, wrote its own output, and the shipped sweeper opened the review on it. The review card is drawn IN THE CHAT on the chat_thread host, with the DECIDED skills row still above it in the same conversation — the whole window, earlier turns included. The review reached the conversation the way the plan says it does: the person asked, and the model chose the primitive that answered. The record's own `providerEvidence` block carries the negative screens (`preRouterShortCircuits`, `preRouterAttempts`, `scriptedRuntimeLines`, `noProviderRefusals`, `mcpDependencyFailures` — all 0) and the process-chain read, with the same limits stated in README.md.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T5",
+      "what": "the review card is in the conversation and the pictures are taken",
+      "at": "2026-08-25T12:57:18.892Z",
+      "db": {
+        "url": "/chat/cinatra-ai/cinatra-assistant/7796521a-e94c-4950-bced-94ae3cbcffbd",
+        "reviewTaskIdPresent": true,
+        "gateStatus": "pending",
+        "gateCreatedAt": "2026-08-25T12:56:34.423Z"
+      }
+    },
+    "rootAttributes": {
+      "data-lifecycle-card": "artifact_review_gate",
+      "data-lifecycle-card-state": "pending",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-conformance-id": "review-gate-card"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": {
+      "turns": 4,
+      "listTop": 88,
+      "listBottom": 1551,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\ncompleted\nRun complete\nThis run finished. Its output is in the run transcript below.\nOpen the run page\nS9f Capture Owner\nSC\nIs there anything waiting on me for review?\nCinatra\nYes — there is 1 item waiting on you for review.\nThe review card is shown above. Open it there to approve, reject, or inspect the artifact.\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "gate": {
+      "state": "pending",
+      "host": "chat_thread",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 353,
+      "gateTop": 870,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    }
+  },
+  {
+    "cell": "S3__review-card__chat_thread__pending__dark",
+    "declaredHost": "chat_thread",
+    "declaredKind": "artifact_review_gate",
+    "declaredState": "pending",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7796521a-e94c-4950-bced-94ae3cbcffbd",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S3__review-card__chat_thread__pending__dark.png",
+    "sha256": "9f2d42737bba44b0dd5514eeb658c84782d11a4490bfd549291dcf705f358cf0",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:21.415Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:21.124Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The same window, the same review card in the same conversation, in the dark palette.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T5",
+      "what": "the review card is in the conversation and the pictures are taken",
+      "at": "2026-08-25T12:57:18.892Z",
+      "db": {
+        "url": "/chat/cinatra-ai/cinatra-assistant/7796521a-e94c-4950-bced-94ae3cbcffbd",
+        "reviewTaskIdPresent": true,
+        "gateStatus": "pending",
+        "gateCreatedAt": "2026-08-25T12:56:34.423Z"
+      }
+    },
+    "rootAttributes": {
+      "data-lifecycle-card": "artifact_review_gate",
+      "data-lifecycle-card-state": "pending",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-conformance-id": "review-gate-card"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": {
+      "turns": 4,
+      "listTop": 88,
+      "listBottom": 1551,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe Blog Draft Writer Agent is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\ncompleted\nRun complete\nThis run finished. Its output is in the run transcript below.\nOpen the run page\nS9f Capture Owner\nSC\nIs there anything waiting on me for review?\nCinatra\nYes — there is 1 item waiting on you for review.\nThe review card is shown above. Open it there to approve, reject, or inspect the artifact.\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "gate": {
+      "state": "pending",
+      "host": "chat_thread",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 353,
+      "gateTop": 870,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    }
+  },
+  {
+    "cell": "S4__recommendation-card__page_gate_region__decided",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided.png",
+    "sha256": "e5c6d30097b875c1786e70a35b546bee6fbe5c6dd3ee23561fc50b5b7f9f2eb1",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:36.845Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:36.560Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The review page for the SAME run, in the declared browser window (1440x1700 CSS px, deviceScaleFactor 2, uncropped): the decided skills row above the review gate card the shipped sweeper opened on the output this run's own step wrote. Nothing in the row is pressable; everything pressable is in the gate card. The measured order is in this record's `order`, the gate's own reading in `gate`, and the island's resolved target text in `reviewTarget`.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T6",
+      "what": "the review page is opened for the same run",
+      "at": "2026-08-25T12:57:36.558Z",
+      "db": {
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/<review task id>",
+        "rowState": "decided",
+        "order": {
+          "card": true,
+          "gate": true,
+          "cardTop": 191,
+          "gateTop": 233,
+          "cardAboveGate": true,
+          "domOrder": "card-then-gate"
+        },
+        "gate": {
+          "state": "pending",
+          "host": "page_gate_region",
+          "decisionBar": true,
+          "decisionButtons": [
+            "Comment",
+            "Reject",
+            "Approve"
+          ]
+        },
+        "reviewTargetResolved": true
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 233,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "gate": {
+      "state": "pending",
+      "host": "page_gate_region",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "reviewTargetResolved": true,
+    "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post · revision 7fe0f4ed-2ea… · pinned · organization · organization · text/markdown · updated 2026-08-25T12:56:11.718Z\nFloor\nstructured data\nreview target unavailable — slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact — showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n7fe0f4ed-2ead-4b30-b986-8204dcf040f0\nPreview\nDownload\nCommand Palette\nSearch for a command to run..."
+  },
+  {
+    "cell": "S4__recommendation-card__page_gate_region__decided__dark",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided__dark.png",
+    "sha256": "90dab47d1d03c1443db618d729609bbdca17b05b5672f2eb3a5f5570adadef50",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:38.127Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:37.752Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The same review page in the same declared window, same run, in the dark palette.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T6",
+      "what": "the review page is opened for the same run",
+      "at": "2026-08-25T12:57:36.558Z",
+      "db": {
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/<review task id>",
+        "rowState": "decided",
+        "order": {
+          "card": true,
+          "gate": true,
+          "cardTop": 191,
+          "gateTop": 233,
+          "cardAboveGate": true,
+          "domOrder": "card-then-gate"
+        },
+        "gate": {
+          "state": "pending",
+          "host": "page_gate_region",
+          "decisionBar": true,
+          "decisionButtons": [
+            "Comment",
+            "Reject",
+            "Approve"
+          ]
+        },
+        "reviewTargetResolved": true
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 233,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "gate": {
+      "state": "pending",
+      "host": "page_gate_region",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "reviewTargetResolved": true,
+    "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post · revision 7fe0f4ed-2ea… · pinned · organization · organization · text/markdown · updated 2026-08-25T12:56:11.718Z\nFloor\nstructured data\nreview target unavailable — slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact — showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n7fe0f4ed-2ead-4b30-b986-8204dcf040f0\nPreview\nDownload\nCommand Palette\nSearch for a command to run..."
+  },
+  {
+    "cell": "R2__recommendation-card__page_gate_region__decided__above-gate",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R2__recommendation-card__page_gate_region__decided__above-gate.png",
+    "sha256": "be6abcbc8b2b3efc1d27de3671c1ff29b1001b8c4e455da72f463544db6f31d2",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:42.137Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:41.744Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The SAME decided row IN ITS PAGE, uncropped and FULL-LENGTH, with the REVIEW GATE CARD beneath it still AWAITING its decision (Comment / Reject / Approve). This is the ordering plan section 6.4 asks for, in the only composition a real flow produces: the run-start decision settled above the after-the-fact one that is still open. This is the one framing in this set that is not the browser window: it is the same page at the same window WIDTH, carried to its full length, which is what this cell exists to show and what `S4` — the declared window on the same page, same run, minutes apart — cannot. The measured order is in `order`, the gate's own reading in `gate`.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T6",
+      "what": "the review page is opened for the same run",
+      "at": "2026-08-25T12:57:36.558Z",
+      "db": {
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/<review task id>",
+        "rowState": "decided",
+        "order": {
+          "card": true,
+          "gate": true,
+          "cardTop": 191,
+          "gateTop": 233,
+          "cardAboveGate": true,
+          "domOrder": "card-then-gate"
+        },
+        "gate": {
+          "state": "pending",
+          "host": "page_gate_region",
+          "decisionBar": true,
+          "decisionButtons": [
+            "Comment",
+            "Reject",
+            "Approve"
+          ]
+        },
+        "reviewTargetResolved": true
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "page",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 233,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "gate": {
+      "state": "pending",
+      "host": "page_gate_region",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "reviewTargetResolved": true,
+    "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post · revision 7fe0f4ed-2ea… · pinned · organization · organization · text/markdown · updated 2026-08-25T12:56:11.718Z\nFloor\nstructured data\nreview target unavailable — slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact — showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n7fe0f4ed-2ead-4b30-b986-8204dcf040f0\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
+    "windowGrownTo": {
+      "width": 1440,
+      "height": 1700
+    }
+  },
+  {
+    "cell": "R4__recommendation-card__page_gate_region__decided__above-gate__dark",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R4__recommendation-card__page_gate_region__decided__above-gate__dark.png",
+    "sha256": "c9170b63bd630b22f95db19ed0f2cba7556a69f047dc72208b13f300559e86d1",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-decision-bar\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-25T12:57:43.337Z",
+    "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+    "providerEvidence": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T12:57:43.047Z",
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 144,
+      "bridgeRunSelects": 3,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "21230",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 87,
+      "deltaSinceStart": {
+        "publicMcpCallbacks": 9,
+        "bridgeRunSelects": 1
+      }
+    },
+    "note": "The same full-length page framing as R2, same run, in the dark palette: the decided row above the still-open review gate card.",
+    "runId": "aa84c060-15e9-4298-90fe-8cb33c130d6b",
+    "dbAt": {
+      "step": "T6",
+      "what": "the review page is opened for the same run",
+      "at": "2026-08-25T12:57:36.558Z",
+      "db": {
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/<review task id>",
+        "rowState": "decided",
+        "order": {
+          "card": true,
+          "gate": true,
+          "cardTop": 191,
+          "gateTop": 233,
+          "cardAboveGate": true,
+          "domOrder": "card-then-gate"
+        },
+        "gate": {
+          "state": "pending",
+          "host": "page_gate_region",
+          "decisionBar": true,
+          "decisionButtons": [
+            "Comment",
+            "Reject",
+            "Approve"
+          ]
+        },
+        "reviewTargetResolved": true
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "page",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 233,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "gate": {
+      "state": "pending",
+      "host": "page_gate_region",
+      "decisionBar": true,
+      "decisionButtons": [
+        "Comment",
+        "Reject",
+        "Approve"
+      ]
+    },
+    "reviewTargetResolved": true,
+    "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post · revision 7fe0f4ed-2ea… · pinned · organization · organization · text/markdown · updated 2026-08-25T12:56:11.718Z\nFloor\nstructured data\nreview target unavailable — slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact — showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n7fe0f4ed-2ead-4b30-b986-8204dcf040f0\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
+    "windowGrownTo": {
+      "width": 1440,
+      "height": 1700
+    }
+  }
+]

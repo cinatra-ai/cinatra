@@ -282,6 +282,78 @@ describe("OrchestratorStepperPanel — the marked review gate (cinatra#2623)", (
   });
 });
 
+// ---------------------------------------------------------------------------
+// "ON THE RUN PAGE, THE SAME IS TRUE" (cinatra#2997)
+// ---------------------------------------------------------------------------
+//
+// The maintainer's request rebuilt the run card: a placeholder for the review
+// screen while the agent works, the review screen itself once the work opens
+// one. This panel is the run page's OTHER card — the one a flow or orchestrator
+// run gets — and such a run reaches the same moment: it finishes, and the
+// shipped sweeper opens a review on what it produced. Its terminal card
+// therefore becomes the same screen, from the run's own server-read slot.
+describe("the terminal card becomes the review screen (cinatra#2997)", () => {
+  it("a completed run whose review is open draws the ONE review card, not a completion notice", async () => {
+    interruptContext = null;
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps({
+          initialStatus: "completed",
+          initialReviewGate: { ref: "server-minted-ref", awaiting: false },
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("review-gate-card")).not.toBeNull());
+    expect(document.querySelector("[data-run-completion]")).toBeNull();
+    for (const view of reviewCardViews) {
+      expect(view).toMatchObject({ ref: "server-minted-ref" });
+    }
+  });
+
+  it("a completed run whose review is still opening keeps the placeholder up", async () => {
+    interruptContext = null;
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps({
+          initialStatus: "completed",
+          initialReviewGate: { ref: null, awaiting: true },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-conformance-id="review-gate-placeholder"]'),
+      ).not.toBeNull(),
+    );
+    expect(document.querySelector("[data-run-completion]")).toBeNull();
+  });
+
+  it("a completed run with nothing reviewable keeps its completion notice", async () => {
+    interruptContext = null;
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps({
+          initialStatus: "completed",
+          initialReviewGate: { ref: null, awaiting: false },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
+    );
+    expect(screen.queryByTestId("review-gate-card")).toBeNull();
+    expect(
+      document.querySelector('[data-conformance-id="review-gate-placeholder"]'),
+    ).toBeNull();
+  });
+});
+
 describe("the review branch is a MOUNT, not a second renderer", () => {
   it("the stepper composes the shared card and defines no review drawing of its own", () => {
     const stepper = readFileSync(

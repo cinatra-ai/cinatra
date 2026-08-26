@@ -84,7 +84,7 @@ import {
   HELD_TURN_PAUSED_TEXT,
   HELD_TURN_RUNNING_TEXT,
   HELD_TURN_SKILL_ID,
-  INLINE_RUN_PAGE_LINK,
+  AGENT_RUN_SLOT,
   RETIRED_ROW_CONFIRM,
   RETIRED_ROW_SKIP,
   TRANSCRIPT_SLOT,
@@ -173,7 +173,7 @@ interface CardAnchors {
   slot: string | null;
   /**
    * Whether that SAME container is the `agent_run` part's own — measured by the
-   * one thing only that container holds: the inline run panel for this run id.
+   * name the container carries: `data-agent-run-slot="<runId>"`.
    * `null` when the caller passed no run id (nothing to pin against yet).
    *
    * `slot !== null` alone would only say "inside some marked slot container", and
@@ -218,7 +218,7 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
       retiredB,
       marker,
       decisionAttr,
-      runLinkSel,
+      runSlotSel,
       pinnedRunId,
     }) => {
       const roots = [...document.querySelectorAll(root)];
@@ -227,15 +227,14 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
       const q = (sel: string) => (card ? card.querySelectorAll(sel).length : 0);
       const chipEls = card ? [...card.querySelectorAll(chipSel)] : [];
       const slotContainer = card ? card.closest(slotSel) : null;
-      // The inline run panel's own link out, built by the platform from the run id
-      // — present in the `agent_run` container and in no other.
+      // The `agent_run` container names its own run — the container the card was
+      // drawn in must be the one dispatched for THIS run.
       const slotIsProducingAgentRun =
         pinnedRunId === null
           ? null
           : slotContainer
-            ? [...slotContainer.querySelectorAll(runLinkSel)].some((a) =>
-                (a.getAttribute("href") ?? "").endsWith(`/${pinnedRunId}`),
-              )
+            ? slotContainer.matches(runSlotSel) &&
+              slotContainer.getAttribute("data-agent-run-slot") === pinnedRunId
             : false;
       return {
         roots: roots.length,
@@ -277,7 +276,7 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
       retiredB: RETIRED_ROW_SKIP,
       marker: CHAT_HOLD_MARKER,
       decisionAttr: DECISION_ATTR,
-      runLinkSel: INLINE_RUN_PAGE_LINK,
+      runSlotSel: AGENT_RUN_SLOT,
       pinnedRunId: runId ?? null,
     },
   );
@@ -556,7 +555,7 @@ async function expectCardAtProducingSlot(
     throw new Error(
       `${String(err)} — the card was drawn at slot ${
         last?.slot ?? "(none)"
-      }, whose container does not carry the inline run panel for ${runId}: it is a marked ` +
+      }, whose container is not the one named for run ${runId}: it is a marked ` +
         "transcript slot, but not the `agent_run` part's own",
     );
   });

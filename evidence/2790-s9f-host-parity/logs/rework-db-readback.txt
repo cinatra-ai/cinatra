@@ -1,0 +1,52 @@
+# cinatra#2790 (S9f) rework — the RAW database readback for the pictured run.
+# Produced by psql against the capture lane's own database. Every microsecond
+# value quoted in RUN-READBACK.md and TIMELINE.md is in this file.
+
+== agent_runs ==
+-[ RECORD 1 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+id            | 8ff25a9b-2e54-4daf-acd1-9688a1e196b1
+template_id   | 83c38f46-1b9f-42d7-87ab-2c4f82644f5d
+status        | failed
+source_type   | agent_builder
+human_present | t
+run_by        | 6beab699-f0dc-47fd-b0d5-b191e44e4d9b
+org_id        | d78e8d02-6bd3-4652-bd80-d419addd1f89
+created_at    | 2026-08-23 23:38:20.260378+00
+completed_at  | 2026-08-23 23:39:50.537+00
+error         | artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cinatra-ai/blog-post-artifact]: titleFrom output "title" did not resolve to a non-empty string
+
+== lifecycle_continuation_park ==
+-[ RECORD 1 ]------------------------------
+checkpoint  | recommendation
+status      | released
+created_at  | 2026-08-23 23:38:21.032623+00
+resolved_at | 2026-08-23 23:39:20.358286+00
+
+== run_selected_skill_revisions ==
+                       skill_id                        |   selection_source    |          selected_at          
+-------------------------------------------------------+-----------------------+-------------------------------
+ @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-23 23:39:20.352069+00
+ @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-23 23:39:20.352069+00
+ @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-23 23:39:20.352069+00
+(3 rows)
+
+== output row counts (representation / produced-outbox / review-gates) ==
+ representation | produced_outbox | review_gates 
+----------------+-----------------+--------------
+              0 |               0 |            0
+(1 row)
+
+== the openai_connection row AFTER the sequence (no key member) ==
+        key        |                                              value                                               
+-------------------+--------------------------------------------------------------------------------------------------
+ openai_connection | {"defaultModel":"gpt-5.5","serviceTier":"flex","promptCachingEnabled":true,"availableModels":[]}
+(1 row)
+
+== the three runs this lane drove ==
+                  id                  | status |          created_at           |        completed_at        |                                                          error                                                           
+--------------------------------------+--------+-------------------------------+----------------------------+--------------------------------------------------------------------------------------------------------------------------
+ 7eddddbb-25cd-4ff2-9523-f22c1587ede3 | failed | 2026-08-23 23:23:10.263667+00 | 2026-08-23 23:25:20.98+00  | WayFlow task failed
+ a2622ce0-0690-470c-8944-640f46ff778a | failed | 2026-08-23 23:30:39.831118+00 | 2026-08-23 23:32:12.286+00 | artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): (binding-resol
+ 8ff25a9b-2e54-4daf-acd1-9688a1e196b1 | failed | 2026-08-23 23:38:20.260378+00 | 2026-08-23 23:39:50.537+00 | artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cina
+(3 rows)
+
