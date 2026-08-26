@@ -90,16 +90,42 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.key).toBe(STORED_ANTHROPIC_KEY);
   });
 
-  it("falls back to the OTHER provider rather than sitting dark", () => {
-    // Committed to Anthropic, but only OpenAI was ever configured. Extraction is
-    // a background capability: refusing the key that is right there would leave
-    // the graph unextracted for a reason the operator never chose.
+  it("NEVER substitutes the other vendor for a COMMITTED one — extraction stays off", () => {
+    // Committed to Anthropic, but only OpenAI was ever configured. Extraction
+    // sends ROW CONTENT to whichever vendor runs it, so the operator's choice is
+    // binding: a stale OpenAI connection must NOT quietly start receiving object
+    // bodies. Off, with the cause named, is the correct answer here.
     metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
     readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
 
     const resolved = resolveKnowledgeGraphProviderKey();
-    expect(resolved.provider).toBe("openai");
-    expect(resolved.key).toBe(STORED_KEY);
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    // The OpenAI key was present and was deliberately left unused.
+    expect(resolved.reason).toContain("anthropic");
+    expect(resolved.reason).toContain("NOT substituted");
+  });
+
+  it("the same rule holds in the other direction (committed OpenAI, only Anthropic stored)", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "openai");
+    metadata.set(ANTHROPIC_CONNECTION_KEY, { apiKey: STORED_ANTHROPIC_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.reason).toContain("openai");
+  });
+
+  it("tries BOTH vendors only while nothing is committed yet", () => {
+    // A fresh install before the setup saga's commit step. There is no operator
+    // choice to violate, so a configured vendor should still index.
+    metadata.delete(DEFAULT_PROVIDER_KEY);
+    metadata.set(ANTHROPIC_CONNECTION_KEY, { apiKey: STORED_ANTHROPIC_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("anthropic");
+    expect(resolved.key).toBe(STORED_ANTHROPIC_KEY);
+    expect(resolved.reason).toContain("no default provider is committed yet");
   });
 
   it("coerces an unsupported committed provider back to OpenAI", () => {

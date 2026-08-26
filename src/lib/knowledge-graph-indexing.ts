@@ -132,17 +132,35 @@ function storedKeyPresentButUnreadable(): boolean {
  * pulls the connector-config cache and the sealing layer with it; the metadata
  * primitive this file already imports does not.
  *
- * Anything other than the two supported values (an install defaulted to Gemini,
- * an out-of-band edit, a fresh install with nothing committed) reads as
- * `openai` — the same coercion the authoritative accessor applies, and the same
- * value this function returned before multi-provider existed.
+ * The return distinguishes four states, because "the operator chose openai" and
+ * "the operator has not chosen yet" must NOT be treated alike — see the
+ * cross-vendor rule in `resolveKnowledgeGraphProviderKey`:
+ *
+ *   "openai" / "anthropic" — COMMITTED to a vendor this indexer can run.
+ *   "unsupported"          — committed to a vendor cinatra stores no connection
+ *                            for (gemini/groq/azure). There is no key to
+ *                            resolve, so this coerces to OpenAI exactly as it
+ *                            did before multi-provider existed.
+ *   "uncommitted"          — nothing written yet (a fresh install before the
+ *                            setup saga's commit step). No operator choice
+ *                            exists to violate.
  */
-function readPreferredExtractionProvider(): KnowledgeGraphExtractionProvider {
+type CommittedExtractionProvider =
+  | KnowledgeGraphExtractionProvider
+  | "unsupported"
+  | "uncommitted";
+
+function readCommittedExtractionProvider(): CommittedExtractionProvider {
+  // `null` as the fallback is load-bearing: it is how "no row" is told apart
+  // from a row that actually says `openai`.
   const stored = readMetadataValueInternal<unknown>(
     "connector_config:llm_default_provider",
-    "openai",
+    null,
   );
-  return stored === "anthropic" ? "anthropic" : "openai";
+  if (stored === null || stored === undefined || stored === "") return "uncommitted";
+  if (stored === "anthropic") return "anthropic";
+  if (stored === "openai") return "openai";
+  return "unsupported";
 }
 
 /**
@@ -185,14 +203,33 @@ function readStoredAnthropicKey(): string | null {
  */
 export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution {
   let storedReadError: string | null = null;
-  let preferred: KnowledgeGraphExtractionProvider = "openai";
+  let committed: CommittedExtractionProvider = "uncommitted";
 
   try {
-    preferred = readPreferredExtractionProvider();
+    committed = readCommittedExtractionProvider();
 
-    // Try the committed provider first, then the other one.
+    // A COMMITTED vendor is BINDING — the indexer never silently substitutes
+    // the other one.
+    //
+    // The earlier shape here tried the committed vendor and then fell back to
+    // the other. That reads as helpful and is not: extraction sends ROW CONTENT
+    // to whichever vendor runs it. An install committed to Anthropic whose key
+    // is momentarily undecryptable, with a stale OpenAI connection still on
+    // file, would have begun shipping object bodies to OpenAI — a vendor the
+    // operator did not choose — and the only trace was a reason string. A
+    // provider choice that a background job can silently override is not a
+    // choice. So a committed vendor with no usable key means extraction is OFF,
+    // and `describeKnowledgeGraphIndexing` says which vendor to fix.
+    //
+    // `uncommitted` is the one case that legitimately tries both: no choice has
+    // been made yet, so there is nothing to violate, and an install that
+    // configured a vendor before finishing setup should still index.
     const order: KnowledgeGraphExtractionProvider[] =
-      preferred === "anthropic" ? ["anthropic", "openai"] : ["openai", "anthropic"];
+      committed === "anthropic"
+        ? ["anthropic"]
+        : committed === "openai" || committed === "unsupported"
+          ? ["openai"]
+          : ["openai", "anthropic"];
 
     for (const provider of order) {
       if (provider === "anthropic") {
@@ -203,10 +240,10 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
             provider: "anthropic",
             source: "stored-connection",
             reason:
-              preferred === "anthropic"
+              committed === "anthropic"
                 ? "resolved from the app's stored Anthropic provider configuration"
                 : "resolved from the app's stored Anthropic provider configuration " +
-                  "(the committed default provider has no usable key)",
+                  "(no default provider is committed yet)",
             storedReadFailed: false,
           };
         }
@@ -222,10 +259,13 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
           provider: "openai",
           source: "stored-connection",
           reason:
-            preferred === "openai"
+            committed === "openai"
               ? "resolved from the app's stored OpenAI provider configuration"
-              : "resolved from the app's stored OpenAI provider configuration " +
-                "(the committed default provider has no usable key)",
+              : committed === "unsupported"
+                ? "resolved from the app's stored OpenAI provider configuration " +
+                  "(the committed default provider is one cinatra stores no connection for)"
+                : "resolved from the app's stored OpenAI provider configuration " +
+                  "(no default provider is committed yet)",
           storedReadFailed: false,
         };
       }
@@ -256,11 +296,20 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     key: null,
     provider: null,
     source: null,
+    // NAME the committed vendor. Since a committed choice is binding, "off" now
+    // has a vendor-specific cause, and an operator who reads "no key" while a
+    // DIFFERENT vendor is configured would otherwise have no way to tell that
+    // the other key is deliberately not being used.
     reason: storedReadError
-      ? `no usable extraction provider key: the stored configuration could not be read ` +
-        `(${storedReadError}) and OPENAI_API_KEY is unset`
-      : "no OpenAI or Anthropic provider key is configured in the app and " +
-        "OPENAI_API_KEY is unset",
+      ? `no usable extraction provider key: the stored ` +
+        `${committed === "anthropic" ? "Anthropic" : "OpenAI"} configuration could not be ` +
+        `read (${storedReadError}) and OPENAI_API_KEY is unset`
+      : committed === "anthropic" || committed === "openai"
+        ? `the committed extraction provider (${committed}) has no key configured in the ` +
+          `app, and OPENAI_API_KEY is unset. A key for the OTHER vendor is deliberately ` +
+          `NOT substituted — extraction sends row content, so it runs on the vendor you chose.`
+        : "no OpenAI or Anthropic provider key is configured in the app and " +
+          "OPENAI_API_KEY is unset",
     storedReadFailed: storedReadError !== null,
   };
 }
