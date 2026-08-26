@@ -24,7 +24,10 @@ import { runResourceProjectMove } from "@/lib/resource-project-move";
 // than silently dropped. No new route-graph edge: `@/lib/objects-store` (already
 // imported below, and reachable from every locked route these handlers serve)
 // already pulls this module in for the ambient path.
-import { shouldAutoTagProject } from "@/lib/project-inheritance";
+import {
+  resolveProjectInheritanceForType,
+  shouldAutoTagProject,
+} from "@/lib/project-inheritance";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
@@ -1009,9 +1012,14 @@ export function createObjectsPrimitiveHandlers() {
       // Project refinement the row will carry, threaded into the create probe
       // so the OBO project-axis ceiling evaluates against the REAL project this
       // row lands in (#1885 C1: "the create probe carries real ownership +
-      // projectId"). The authoritative project_id write happens in the store
-      // from the SAME resolution (explicit binding forwarded below), so the
-      // probe and the write can never disagree.
+      // projectId"). On the EXPLICIT branch the store writes from the same
+      // resolution (the binding forwarded below), so probe and write cannot
+      // disagree there. On the ambient branch they can: the probe carries the
+      // frame's projectId unfiltered, while the writer runs the frame through
+      // `resolveProjectInheritanceForType`, which drops it for a substrate
+      // type — that row lands with `project_id` NULL after being probed
+      // against the frame's project. Pre-existing ambient behaviour, unchanged
+      // here.
       //
       // The frame is read INSIDE the ambient branch on purpose: on the explicit
       // path this handler must not so much as touch the request-scoped frame, so
@@ -1168,6 +1176,15 @@ export function createObjectsPrimitiveHandlers() {
         });
       }
 
+      // The project tag the WRITER will resolve on the ambient path: the frame
+      // value run through the same pure helper the store uses, so the collision
+      // rule below compares what the write actually does, not what the caller
+      // said. `null` on the explicit path — that branch is compared against the
+      // caller's own request instead.
+      const ambientResolvedProjectId = hasExplicitProjectBinding
+        ? null
+        : resolveProjectInheritanceForType(probeProjectId, persistedType);
+
       // --- Collision semantics (cinatra#1377) -------------------------------
       //
       // Identity resolution can steer this save onto an EXISTING row (the
@@ -1226,8 +1243,10 @@ export function createObjectsPrimitiveHandlers() {
         // one would otherwise be silently swallowed by the writer's
         // `COALESCE(EXCLUDED.project_id, objects.project_id)` preserve arm.
         //
-        // An OMITTED projectId requests nothing, so the ambient path keeps its
-        // existing behavior: the writer preserves the row's project tag.
+        // An OMITTED projectId requests nothing — but the writer's preserve arm
+        // is `COALESCE(EXCLUDED.project_id, objects.project_id)`, so a resolved
+        // ambient project does NOT preserve: it overwrites. The ambient half of
+        // the rule is below.
         if (
           hasExplicitProjectBinding &&
           explicitProjectId !== (existingRow.projectId ?? null)
@@ -1236,6 +1255,34 @@ export function createObjectsPrimitiveHandlers() {
             code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
             message:
               "this save resolves to an existing object whose project differs from the requested projectId; move it with objects_update (projectId) instead",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // The AMBIENT half. A save with no `projectId`, made inside a frame that
+        // resolves to project P, lands on a row already bound to project Q: the
+        // COALESCE arm writes P over Q. That takes the row OUT of Q's sealed
+        // room — with none of the move path's source-side authorization on Q
+        // (which this caller may hold nothing on) and no `resource_project_moves`
+        // audit row. Same defect the explicit refusal above prevents, so it gets
+        // the same refusal and the same remedy.
+        //
+        // Deliberately NOT refused: an UNTAGGED row (`project_id` NULL) that
+        // inherits the active frame. That is the documented write-time
+        // inheritance, and it is purely additive — the row becomes visible in
+        // P's project-mode reads and is removed from nobody's, because a NULL
+        // tag was never inside any project's room. Only a change that DEPRIVES a
+        // project of a row it holds needs the audited move path.
+        if (
+          !hasExplicitProjectBinding &&
+          ambientResolvedProjectId !== null &&
+          existingRow.projectId != null &&
+          ambientResolvedProjectId !== existingRow.projectId
+        ) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
+            message:
+              "this save resolves to an existing object bound to a different project than the active project context; move it with objects_update (projectId) instead",
             retryable: false,
             details: { objectId },
           });
@@ -1385,8 +1432,11 @@ export function createObjectsPrimitiveHandlers() {
 
       // Sealed-room read filter. When the caller supplies a projectId, 404-hide
       // if the actor has no read+ grant on it. The actor's projectGrants axis
-      // is routed through the MCP registries (A2A path) and read here via the
-      // ActorContext-shaped fields stamped on `request.actor`. Platform admins
+      // is stamped by this package's MCP registry for the transport-resolved
+      // identity pair (packages/objects/src/mcp/registry.ts) and by
+      // `actorContextToObjectsEnvelope` for the in-process session client, and
+      // is read here via the ActorContext-shaped fields stamped on
+      // `request.actor`. An unresolved axis is NO grants. Platform admins
       // bypass the grant check. The actual SQL `AND project_id = $projectId`
       // runs inside `listObjectsByFilter` (data layer); this preserves the
       // non-bypassable SQL re-filter.

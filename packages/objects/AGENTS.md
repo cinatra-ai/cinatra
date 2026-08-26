@@ -317,7 +317,7 @@ anything the actor cannot satisfy. Widening beyond that is promotion, not a save
 
 | Input | Behavior |
 |---|---|
-| omitted | ambient inheritance, unchanged (frame `projectId`, substrate exclusion applied) |
+| omitted | ambient inheritance (frame `projectId`, substrate exclusion applied); on a collision with a row bound to another project, refused — see collision semantics |
 | `null` | no project (substrate write); the ambient frame is **ignored, not consulted** |
 | `"<id>"` | bind the row to that project; the ambient frame is **ignored, not consulted** |
 
@@ -331,6 +331,13 @@ gate is not an existence oracle), then `assertProjectWritable(…, "write")`
 axis counts as no grants in both helpers — the gate fails closed. Postgres row
 authorization is unchanged and remains the data-access boundary.
 
+The axis itself reaches the actor from the transport: `packages/objects/src/mcp/registry.ts`
+resolves it through `resolveActorGrantsForUserInOrg` for the **same** `userId`/`orgId`
+pair the request frame carries (the in-process session client carries it on the
+`ActorContext` instead — `actorContextToObjectsEnvelope`). A frame with no identity
+pair, or a failed resolution, leaves the axis unresolved, which both gates read as no
+grants.
+
 **Collision semantics.** Identity resolution can steer a save onto an existing row
 (the upsert's `ON CONFLICT` arm). Then:
 
@@ -342,8 +349,17 @@ authorization is unchanged and remains the data-access boundary.
   rather than accepted-and-silently-dropped;
 - an explicit `projectId` that differs from the row's current project is
   **refused** with a pointer to `objects_update`'s move path, which carries the
-  move authorization and the `resource_project_moves` audit row. An *omitted*
-  `projectId` requests nothing and the writer preserves the tag as before;
+  move authorization and the `resource_project_moves` audit row;
+- an *omitted* `projectId` requests nothing, but the writer's preserve arm is
+  `COALESCE(EXCLUDED.project_id, objects.project_id)` — a resolved ambient
+  project overwrites rather than preserves. So a save inside a frame for project
+  P that lands on a row already bound to project **Q** is **refused** with the
+  same code and the same remedy: it would take the row out of Q's sealed room
+  with no authorization on Q and no audit row. Two ambient cases are **not**
+  refused, and both leave the row inside every room it was already in: a frame
+  that resolves to no project (no frame, or a substrate type) preserves the
+  tag, and an **untagged** row still inherits the active frame — the documented
+  write-time inheritance, which is purely additive;
 - a collision onto a **soft-deleted** row is **refused**. `upsertObjectAndEnqueue`'s
   `ON CONFLICT` arm never clears `deleted_at` (only the canonical twin writer
   does), so the write would rewrite the row, bump its version and emit the outbox
@@ -360,7 +376,7 @@ onto the run's tool result by `normalizePrimitiveError`).
 | Code | Raised when |
 |---|---|
 | `OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED` | an explicit binding names a pan-project substrate type (CRM / catalog); dropping it silently would misreport where the row landed |
-| `OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED` | the save resolves to an existing row whose project differs from the requested `projectId` |
+| `OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED` | the save resolves to an existing row whose project differs from the requested `projectId`, or (no `projectId` supplied) from the project the active frame resolves to while the row is bound to another one |
 | `OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED` | the save resolves to an existing row and requests a different `ownerLevel` / `ownerId` / `visibility` |
 | `OBJECTS_COLLISION_ROW_DELETED` | the save resolves to a soft-deleted row, which this writer would rewrite without undeleting |
 | `OBJECTS_WRITE_PRECONDITION_FAILED` | the writer's armed `collisionGuard` blocked the `DO UPDATE` arm and nothing was written |

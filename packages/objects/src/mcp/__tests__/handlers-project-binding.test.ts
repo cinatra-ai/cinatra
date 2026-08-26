@@ -91,8 +91,37 @@ vi.mock("@/lib/objects-store", () => ({
 
 let frameEmpty = true;
 const frameStore: { projectContext?: { projectId: string | null } } = {};
+/** A frame pushed by `mcpRequestContextStorage.run(...)` — the shape the real
+ *  MCP transport hands the registry. Wins over `frameStore` while it is set. */
+let runFrame: Record<string, unknown> | undefined;
 vi.mock("@cinatra-ai/mcp-server", () => ({
-  mcpRequestContextStorage: { getStore: () => (frameEmpty ? undefined : frameStore) },
+  mcpRequestContextStorage: {
+    getStore: () => runFrame ?? (frameEmpty ? undefined : frameStore),
+    run: async (store: Record<string, unknown>, fn: () => Promise<unknown>) => {
+      const previous = runFrame;
+      runFrame = store;
+      try {
+        return await fn();
+      } finally {
+        runFrame = previous;
+      }
+    },
+  },
+}));
+
+// --- the canonical grant assembly the registry resolves the actor's axis from -
+//
+// Captured so the identity-coherence assertion can check WHICH pair the
+// registry asked about; the returned grants stand in for the caller's real
+// project axis.
+
+const grantResolverCalls: Array<{ userId: string; orgId: string }> = [];
+let resolvedGrants: Array<{ projectId: string; effectiveRole: string; accessSource: string }> = [];
+vi.mock("@/lib/auth-session", () => ({
+  resolveActorGrantsForUserInOrg: async (userId: string, orgId: string) => {
+    grantResolverCalls.push({ userId, orgId });
+    return { projectGrants: resolvedGrants, teamIds: [] };
+  },
 }));
 
 // --- classifier / identity --------------------------------------------------
@@ -195,6 +224,7 @@ vi.mock("@/lib/project-writable", async () => {
 });
 
 import { handlers } from "../handlers";
+import { registerObjectsPrimitives } from "../registry";
 import { objectTypeRegistry } from "../../registry";
 import { upsertObjectAndEnqueue } from "@/lib/objects-store";
 import { createDeterministicObjectsClient } from "../client/deterministic-client";
@@ -279,6 +309,9 @@ beforeEach(() => {
   existingRows.clear();
   delete frameStore.projectContext;
   frameEmpty = true;
+  runFrame = undefined;
+  grantResolverCalls.length = 0;
+  resolvedGrants = [];
   classifiedType = PROJECTABLE_TYPE;
   identityHash = null;
   (upsertObjectAndEnqueue as unknown as ReturnType<typeof vi.fn>).mockClear();
@@ -535,9 +568,68 @@ describe("objects_save collision semantics (cinatra#1377 AC3)", () => {
     expect(upsertCalls[0].explicitProjectBinding).toBe("prj-open");
   });
 
-  it("an OMITTED projectId on a collision requests nothing — ambient behavior preserved", async () => {
+  it("an OMITTED projectId with NO active frame preserves the row's tag", async () => {
     existingRows.set("obj-stable", makeRow({ projectId: "prj-other" }));
 
+    // No frame → the writer resolves NULL → its COALESCE arm preserves the
+    // row's project. Nothing changes, so nothing is refused.
+    await save({});
+
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].hasExplicitKey).toBe(false);
+  });
+
+  it("an ambient frame naming a DIFFERENT project than the row is refused — the retag is a move", async () => {
+    // The writer's `COALESCE(EXCLUDED.project_id, objects.project_id)` arm
+    // writes the frame's project OVER the row's, which takes the row out of
+    // prj-other's sealed room with no authorization on prj-other and no
+    // `resource_project_moves` audit row.
+    existingRows.set("obj-stable", makeRow({ projectId: "prj-other" }));
+    frameEmpty = false;
+    frameStore.projectContext = { projectId: "prj-open" };
+
+    const err = (await captureThrow(() => save({}))) as PrimitiveInvocationError;
+
+    expect(err).toBeInstanceOf(PrimitiveInvocationError);
+    expect(err.code).toBe("OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED");
+    expect(err.message).toContain("objects_update");
+    expect(err.retryable).toBe(false);
+    expect(upsertCalls).toHaveLength(0);
+  });
+
+  it("an ambient frame naming the row's OWN project changes nothing and proceeds", async () => {
+    existingRows.set("obj-stable", makeRow({ projectId: "prj-open" }));
+    frameEmpty = false;
+    frameStore.projectContext = { projectId: "prj-open" };
+
+    await save({});
+
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].hasExplicitKey).toBe(false);
+  });
+
+  it("an UNTAGGED row still inherits the active frame — inheritance is additive, not a move", async () => {
+    existingRows.set("obj-stable", makeRow({ projectId: null }));
+    frameEmpty = false;
+    frameStore.projectContext = { projectId: "prj-open" };
+
+    await save({});
+
+    // A NULL tag was inside no project's room, so tagging it deprives nobody.
+    // This is the documented write-time inheritance and stays allowed.
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].hasExplicitKey).toBe(false);
+  });
+
+  it("a SUBSTRATE type resolves to no tag, so an ambient frame cannot retag its row", async () => {
+    classifiedType = SUBSTRATE_TYPE;
+    existingRows.set("obj-stable", makeRow({ projectId: "prj-other" }));
+    frameEmpty = false;
+    frameStore.projectContext = { projectId: "prj-open" };
+
+    // The handler compares what the WRITE resolves to, and the writer runs the
+    // frame through the same substrate filter — which drops it. Nothing is
+    // retagged, so nothing is refused.
     await save({});
 
     expect(upsertCalls).toHaveLength(1);
@@ -754,5 +846,126 @@ describe("the explicit path is frame-independent (cinatra#1377 AC4)", () => {
 
     expect(upsertCalls).toHaveLength(1);
     expect(upsertCalls[0].hasExplicitKey).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The actor the MCP REGISTRY builds (cinatra#1377 AC1/AC2 — the named transport)
+// ---------------------------------------------------------------------------
+//
+// Every assertion above drives `handlers.objects_save` with a hand-written
+// actor. That proves the gate, not the transport: the gates read
+// `actor.projectGrants`, and an actor assembled without that axis is refused
+// for every caller that is not a platform admin. These tests therefore drive
+// the SAME real handler through `registerObjectsPrimitives`, so the actor under
+// test is the one the registry actually assembles from the request frame.
+
+type RegisteredTool = { name: string; handler: (input: unknown) => Promise<unknown> };
+
+function registerPrimitives(): Map<string, RegisteredTool["handler"]> {
+  const tools = new Map<string, RegisteredTool["handler"]>();
+  const server = {
+    registerTool: (name: string, _meta: unknown, handler: (input: unknown) => Promise<unknown>) => {
+      tools.set(name, handler);
+    },
+    registerResource: () => {},
+    registerPrompt: () => {},
+    registerScreen: () => {},
+  };
+  registerObjectsPrimitives(server as never);
+  return tools;
+}
+
+/** Call `objects_save` the way the transport does: inside a request frame, with
+ *  no actor of our own — the registry builds it. */
+async function saveOverTransport(
+  input: Record<string, unknown>,
+  frame: Record<string, unknown>,
+): Promise<unknown> {
+  const tools = registerPrimitives();
+  const saveTool = tools.get("objects_save");
+  if (!saveTool) throw new Error("objects_save was not registered");
+  const { mcpRequestContextStorage } = (await import("@cinatra-ai/mcp-server")) as unknown as {
+    mcpRequestContextStorage: {
+      run: (store: Record<string, unknown>, fn: () => Promise<unknown>) => Promise<unknown>;
+    };
+  };
+  return mcpRequestContextStorage.run(frame, () =>
+    saveTool({ rawData: { name: "x" }, typeHint: classifiedType, ...input }),
+  );
+}
+
+describe("the registry-built actor carries the project axis (cinatra#1377 AC1/AC2)", () => {
+  it("a caller holding write on the project binds the row over the MCP transport", async () => {
+    resolvedGrants = [
+      { projectId: "prj-open", effectiveRole: "write", accessSource: "user" },
+    ];
+
+    await saveOverTransport({ projectId: "prj-open" }, { userId: "usr-1", orgId: ORG });
+
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].explicitProjectBinding).toBe("prj-open");
+  });
+
+  it("resolves the axis for the frame's OWN identity pair — no other id is consulted", async () => {
+    resolvedGrants = [
+      { projectId: "prj-open", effectiveRole: "write", accessSource: "user" },
+    ];
+
+    await saveOverTransport({ projectId: "prj-open" }, { userId: "usr-1", orgId: ORG });
+
+    expect(grantResolverCalls).toEqual([{ userId: "usr-1", orgId: ORG }]);
+  });
+
+  it("a caller holding only READ on the project is refused over the same transport", async () => {
+    resolvedGrants = [
+      { projectId: "prj-readonly", effectiveRole: "read", accessSource: "user" },
+    ];
+
+    const err = await captureThrow(() =>
+      saveOverTransport({ projectId: "prj-readonly" }, { userId: "usr-1", orgId: ORG }),
+    );
+
+    expect((err as { statusCode?: number }).statusCode).toBe(403);
+    expect(upsertCalls).toHaveLength(0);
+  });
+
+  it("a caller holding NO grant is 404-hidden, and the project id is not echoed", async () => {
+    resolvedGrants = [];
+
+    const err = await captureThrow(() =>
+      saveOverTransport({ projectId: "prj-foreign" }, { userId: "usr-1", orgId: ORG }),
+    );
+
+    expect((err as { statusCode?: number }).statusCode).toBe(404);
+    expect(err.message).toBe("Project not found");
+    expect(upsertCalls).toHaveLength(0);
+  });
+
+  it("a frame with no user identity resolves no axis at all — fail closed", async () => {
+    resolvedGrants = [
+      { projectId: "prj-open", effectiveRole: "write", accessSource: "user" },
+    ];
+
+    const err = await captureThrow(() =>
+      saveOverTransport({ projectId: "prj-open" }, { orgId: ORG }),
+    );
+
+    expect((err as { statusCode?: number }).statusCode).toBe(404);
+    expect(grantResolverCalls).toHaveLength(0);
+    expect(upsertCalls).toHaveLength(0);
+  });
+
+  it("an omitted projectId needs no axis — ambient inheritance is untouched", async () => {
+    resolvedGrants = [];
+
+    await saveOverTransport(
+      {},
+      { userId: "usr-1", orgId: ORG, projectContext: { projectId: "prj-ambient" } },
+    );
+
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].hasExplicitKey).toBe(false);
+    expect(probes.find((p) => p.action === "object.create")?.projectId).toBe("prj-ambient");
   });
 });
