@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   decideRecommendationContinuation,
   deriveConfirmedSelection,
+  deriveSelectionFromOfferedSet,
   resolveRunSkillDelivery,
   summarizeRecommendationEfficacy,
   SELECTION_SOURCES,
@@ -173,6 +174,116 @@ describe("deriveConfirmedSelection", () => {
       adjustedSkillIds: ["b"],
     });
     expect(out.map((s) => s.skillId)).toEqual(["a"]);
+  });
+});
+
+describe("deriveSelectionFromOfferedSet (cinatra#2906)", () => {
+  // The set the card actually put on screen: one chip the scorer recommended,
+  // one it scored BELOW `recommendThreshold`. The row draws both — it offers
+  // every candidate and marks which of them it recommends — so both are chips a
+  // reader can press Confirm on.
+  const offer = [
+    { skillId: "a", skillRevisionId: "a@1", recommended: true, rank: 1 },
+    { skillId: "b", skillRevisionId: "b@1", recommended: false, rank: 2 },
+  ];
+  const bothHonourable = ["a", "b"];
+
+  it("pins a kept id to the revision the OFFER carried", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["a"],
+      honourableSkillIds: bothHonourable,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.selection).toEqual([
+      {
+        skillId: "a",
+        skillRevisionId: "a@1",
+        selectionSource: SELECTION_SOURCES.recommendedConfirmed,
+      },
+    ]);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE OFFER IS THE MEMBERSHIP TEST, NEVER THE `recommended` FLAG.
+  //
+  // `deriveConfirmedSelection` above stamps `user_forced` for an id its scored
+  // set does not CONTAIN: the reader put a skill on the run that was never
+  // scored for it, which is why that path needs a separately supplied pin. An
+  // id the set does contain is `recommended_confirmed` however it scored — a
+  // candidate below `recommendThreshold` is still a chip the card offered and
+  // the reader took as offered.
+  //
+  // Keying the stamp off the flag instead makes `user_forced` the record of a
+  // chip the reader pressed CONFIRM on. The settled row then prints that chip
+  // `Adjusted`, because `decidedSkillsFromEvidence` reads both human-edit
+  // sources as §V's adjusted mark — so the card reports a decision the reader
+  // did not take.
+  // -------------------------------------------------------------------------
+  it("stamps a kept BELOW-THRESHOLD offered skill recommended_confirmed — offered, not forced on", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["b"],
+      honourableSkillIds: bothHonourable,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.selection).toEqual([
+      {
+        skillId: "b",
+        skillRevisionId: "b@1",
+        selectionSource: SELECTION_SOURCES.recommendedConfirmed,
+      },
+    ]);
+  });
+
+  it("stamps a below-threshold offered skill settled through ADJUST user_adjusted", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["b"],
+      adjustedSkillIds: ["b"],
+      honourableSkillIds: bothHonourable,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.selection.map((s) => s.selectionSource)).toEqual([SELECTION_SOURCES.userAdjusted]);
+  });
+
+  it("keeps the ADJUST relabel off the pin — an adjusted chip still rides its offered revision", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["a"],
+      adjustedSkillIds: ["a"],
+      honourableSkillIds: bothHonourable,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.selection).toEqual([
+      { skillId: "a", skillRevisionId: "a@1", selectionSource: SELECTION_SOURCES.userAdjusted },
+    ]);
+  });
+
+  it("REFUSES a kept id the offer never carried, rather than pinning one off the wire", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["a", "ghost"],
+      honourableSkillIds: [...bothHonourable, "ghost"],
+    });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.staleSkillIds).toEqual(["ghost"]);
+  });
+
+  it("REFUSES a kept id the offer can no longer honour", () => {
+    const out = deriveSelectionFromOfferedSet({
+      offered: offer,
+      confirmedSkillIds: ["a"],
+      honourableSkillIds: ["b"],
+    });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.staleSkillIds).toEqual(["a"]);
   });
 });
 
