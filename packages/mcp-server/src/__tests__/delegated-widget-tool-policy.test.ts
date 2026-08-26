@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "../core-delegated-chat-surface";
 import {
   DELEGATED_WIDGET_BOUND_CARD_ACTION,
   DELEGATED_WIDGET_NAMED_AGENT_START,
@@ -118,10 +118,10 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
     //   · everything chat reaches of this family, the widget reaches (no
     //     widget reduction — the half the correction is about).
     for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
-      expect(isDelegatedChatMcpToolAllowed(tool), tool).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(tool), tool).toBe(true);
     }
     const chatLifecyclePulls = LIFECYCLE_PULL_PRIMITIVES.filter((name) =>
-      isDelegatedChatMcpToolAllowed(name),
+      isCoreDelegatedChatAdmitted(name),
     );
     expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual(
       [...chatLifecyclePulls].sort(),
@@ -198,16 +198,24 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
   it.each(KINDS)(
     "%s: `agent_run` itself stays OFF the widget allowlist (cinatra#2790)",
     (kind) => {
-      // THE INVARIANT THIS SLICE DID NOT TOUCH. The chat allowlist holds
-      // `agent_run` with its template ids, timeouts and polling surface; the
-      // widget's closed set does not, and the one narrow start is deliberately
-      // not a second door onto it. Nothing is offered inside a third-party
-      // application that the widget's own credential cannot do — acceptance 4.
+      // THE INVARIANT THIS SLICE DID NOT TOUCH. Chat is admitted to `agent_run`
+      // with its template ids, timeouts and the run reads beside it; the
+      // widget's closed set holds neither, and the one narrow start is
+      // deliberately not a second door onto it. Nothing is offered inside a
+      // third-party application that the widget's own credential cannot do —
+      // acceptance 4.
+      //
+      // THE CHAT SIDE IS ASKED THROUGH THE ADMISSION, not through a list
+      // (cinatra#2817, pull request #2914, merged into this branch): chat's
+      // reach is now decided by the host's own declaration for a primitive, so
+      // `agent_run` is admitted because it is DECLARED (`dispatch`), and
+      // `agent_named_start` is refused because the host declares no core
+      // primitive of that name at all — the widget's door is the widget's.
       expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run")).toBe(false);
       expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_get")).toBe(false);
-      expect(isDelegatedChatMcpToolAllowed("agent_run")).toBe(true);
+      expect(isCoreDelegatedChatAdmitted("agent_run")).toBe(true);
       // And chat does NOT get a second name for a road it already has.
-      expect(isDelegatedChatMcpToolAllowed("agent_named_start")).toBe(false);
+      expect(isCoreDelegatedChatAdmitted("agent_named_start")).toBe(false);
     },
   );
 

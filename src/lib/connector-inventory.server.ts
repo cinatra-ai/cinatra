@@ -305,6 +305,37 @@ export function buildCapabilityKeyResolver(
     ordered.find((entry) => primitiveName.startsWith(entry.prefix))?.connectorKey ?? null;
 }
 
+/**
+ * The capability-key resolver for the LIVE MCP transport's request-scoped plan
+ * (cinatra#2817 slice 1).
+ *
+ * CATALOG-ONLY, and that is the point: which connector OWNS a primitive-name
+ * space is a property of the catalog, not of who is asking. The per-actor half
+ * — whether this actor holds an authorized connection — stays where it belongs,
+ * in the chat catalog's availability filter. So this resolver needs no actor
+ * and is safe on the transport, where a chat-delegated request has no cookie
+ * and the actor is resolved much later.
+ *
+ * Failure is NOT a refusal: an unreadable catalog yields a resolver that gates
+ * nothing, exactly as a primitive matching no prefix is not gated. The gate
+ * that decides what is CALLABLE is the admission evaluator, never this.
+ */
+export async function buildCatalogCapabilityKeyResolver(): Promise<
+  (primitiveName: string) => string | null
+> {
+  try {
+    const catalog = await DEFAULT_CONNECTOR_INVENTORY_DEPS.listCatalog();
+    return buildCapabilityKeyResolver(
+      catalog.map((entry) => ({
+        connectorKey: entry.connectorKey,
+        mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
+      })),
+    );
+  } catch {
+    return () => null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Production wiring — imported lazily by the MCP module so the heavy host graph
 // (pg pool, permissions store, catalog registry) is not pulled into the MCP

@@ -25,7 +25,7 @@
 //   · the provider SDKs (`openai`, `@anthropic-ai/sdk`, `@google/genai`) — the
 //     bodies asserted below are the JSON those SDKs actually serialized;
 //   · the authoritative tool-policy allow sets
-//     (`delegatedChatAllowedToolNames()` / `delegatedWidgetAllowedToolNames()`),
+//     (`[...coreDelegatedChatAdmittedNames()]` / `delegatedWidgetAllowedToolNames()`),
 //     and the provider capability matrix that parameterizes the cases.
 //
 // FIXTURED, deliberately, because it is ambient configuration and not the
@@ -173,7 +173,7 @@ import {
 } from "@/lib/extension-capabilities-registry";
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
 import { BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS } from "@cinatra-ai/agents/llm-provider-policy";
-import { delegatedChatAllowedToolNames } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { coreDelegatedChatAdmittedNames } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import { delegatedWidgetAllowedToolNames } from "@cinatra-ai/mcp-server/delegated-widget-tool-policy";
 // The connectors' REAL adapter factories. Imported by path (the packages'
 // `exports` maps do not publish the adapter module) — this file is a test, so
@@ -270,7 +270,7 @@ type Surface =
 
 function surfaces(): Surface[] {
   return [
-    { id: "browser chat", widgetPrincipal: null, allowed: delegatedChatAllowedToolNames() },
+    { id: "browser chat", widgetPrincipal: null, allowed: [...coreDelegatedChatAdmittedNames()] },
     {
       id: "widget/wordpress",
       widgetPrincipal: WIDGET_PRINCIPALS.wordpress,
@@ -657,14 +657,14 @@ describe("OpenAI — the self-MCP catalog is ONE hosted reference at the wire", 
     assertNoFlattenedCatalog(
       "openai / dev-424 retry",
       openAiFunctionToolNames(retryBody),
-      delegatedChatAllowedToolNames(),
+      [...coreDelegatedChatAdmittedNames()],
     );
   });
 
   // NEGATIVE CONTROL — a serializer forced to flatten, driven through the SAME
   // real SDK to the SAME wire. Proves the assertion fires AND names the tools.
   it("NEGATIVE CONTROL: a flattening serializer fails the gate and NAMES the tools", async () => {
-    const flattened = delegatedChatAllowedToolNames().slice(0, 3);
+    const flattened = [...coreDelegatedChatAdmittedNames()].slice(0, 3);
     expect(flattened.length, "the chat allow-list is empty — the control is vacuous").toBe(3);
 
     invalidateProvidersForPackage(TEST_PACKAGE);
@@ -708,7 +708,7 @@ describe("OpenAI — the self-MCP catalog is ONE hosted reference at the wire", 
       assertNoFlattenedCatalog(
         "openai / negative control",
         openAiFunctionToolNames(body),
-        delegatedChatAllowedToolNames(),
+        [...coreDelegatedChatAdmittedNames()],
       );
     } catch (err) {
       thrown = err as Error;

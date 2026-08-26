@@ -605,6 +605,29 @@ export async function dispatchVersionedOnlyExtensionMcpTool(
  * memoised map applies no schema validation, so the dispatch-time decision is
  * authoritative there and the S7 chokepoints remain correct.
  */
+/** The MCP result envelope for a plain extension-handler value (mirrors the
+ * connector modules): arrays → { items }, objects → as-is, scalars/undefined →
+ * { result }. Shared by the live-transport replay (`src/lib/mcp-server.ts`) and
+ * the pinned self-invoker dispatch (`extension-authorized-dispatch.ts`) so the
+ * two surfaces stay byte-identical.
+ *
+ * It lives in THIS module, which both consumers already import, rather than in
+ * `extension-authorized-dispatch.ts`: that module pulls the pinned-dispatch
+ * graph, and the live transport needs the envelope WITHOUT it
+ * (`src/lib/mcp-server.ts` used to reach the pinned dispatcher statically
+ * for this one pure function). */
+export function wrapExtensionToolResult(raw: unknown) {
+  const resolved = raw === undefined ? null : raw;
+  return {
+    content: [{ type: "text", text: JSON.stringify(resolved) }],
+    structuredContent: Array.isArray(resolved)
+      ? { items: resolved }
+      : typeof resolved === "object" && resolved !== null
+        ? (resolved as Record<string, unknown>)
+        : { result: resolved },
+  };
+}
+
 export async function dispatchPlannedExtensionMcpTool(
   planned:
     | {
@@ -678,6 +701,13 @@ export type DiscoveryDefaultTool = {
   handler: (input: unknown) => unknown | Promise<unknown>;
   /** The registration's typed delegated-chat declaration. Narrow-only. */
   delegatedChat?: DelegatedChatToolClass;
+  /**
+   * The EXACT version of the record that produced this registration
+   * (cinatra#2817 slice 1), or `null`/absent when the host cannot state one.
+   * Carried so the per-request plan can bind the registration to the version
+   * that is actually about to serve it.
+   */
+  resolvedVersion?: string | null;
 };
 
 /** One tool a per-request MCP server build must register for the CURRENT caller. */

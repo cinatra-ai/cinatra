@@ -83,6 +83,9 @@ import {
   transitionRunStatus,
   RunTransitionError,
 } from "./store";
+import { AuthzError } from "@/lib/authz";
+import type { ActorRoleHints } from "./auth-policy";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
   createOrUpdateRunTrigger,
   readRunTriggerByRunId,
@@ -915,16 +918,50 @@ export async function resolveProposalForReader(
  * proposal's own CONSUME row — the one row that recorded all three, at the one
  * moment they were all true.
  *
- * FOUR REFUSALS, ALL `absent`, and each is deliberate:
+ * TWO BINDINGS, ONE CARD (cinatra#3004). A run reaches this call by one of two
+ * histories, and each carries its own proof of who may read it:
  *
- *   · the run came from no proposal — its schedule is the run's own scheduling
- *     step's and the Trigger tab is that schedule's surface. Drawing it here
- *     would be a second renderer of one thing on one host.
- *   · the reader is not the person who confirmed it — the proposal was bound to
- *     ONE (user, org) pair and stays bound to it. A colleague with run access
- *     reads the run's own Trigger tab, not somebody else's proposal card.
+ *   · IT CAME FROM A PROPOSAL — the consume row recorded (viewer, organization,
+ *     template) at the one moment all three were true, and that row is the
+ *     binding, re-checked against the live reader.
+ *   · IT CAME FROM THE RUN'S OWN SCHEDULING STEP — there is no proposal and never
+ *     was one, so the binding is THE RUN'S OWN ACCESS CONTROL, re-run here
+ *     against the live reader: `readAgentRunById` with the reader's actor and
+ *     role hints is the same probe every other run surface takes, so an owner, a
+ *     co-owner of a shared run and an organization administrator each read this
+ *     schedule exactly where they already read the run — and nobody else does.
+ *     This used to answer `absent`, on the reading that "the Trigger tab is that
+ *     schedule's surface" and drawing the card here would be a second renderer
+ *     of one thing. cinatra#3004 retires that surface: the schedule tab now
+ *     mounts THIS card, so refusing here would leave the ordinary run — the one
+ *     scheduled on its own step, which is most of them — with no schedule drawn
+ *     on any page at all.
+ *
+ *     WITHOUT AN ACCESS CONTEXT IT FAILS CLOSED to the run's own owner in the
+ *     reader's own organization. A caller that cannot present the reader's
+ *     standing cannot be granted the standing's answer.
+ *
+ * AND THE RUN IS THE BINDING ON THIS PATH WHETHER OR NOT A PROPOSAL MADE IT.
+ * This call is only ever reached through a RUN-scoped ref, which the run's own
+ * pages mint for a reader they have already authorized for that run; the
+ * proposal's (user, org) pair binds the TOKEN path, where the token IS the
+ * subject. Asking the token's binding here refused a co-owner of a shared run
+ * and an organization administrator on a run a conversation had created — the
+ * readers the retired surface drew that schedule for, off the run's own row.
+ * So the run's access control decides on every road in, and the consume row is
+ * read for what it actually records: which schedule kind this run settled into.
+ *
+ * THE REFUSALS THAT STAY, all `absent`, and each is deliberate:
+ *
+ *   · the run's own access control refuses the reader.
  *   · the organization does not match the reader's active one.
  *   · the run or its template has vanished.
+ *   · an `immediate` row on a run with no proposal — **Run right after setup**
+ *     names no moment to open a schedule step onto, and that run's surface is
+ *     the first-step form, which draws its own read-only reading once the row
+ *     has fired (cinatra#2980). Written as an allow-list of the two scheduled
+ *     kinds, so a kind added later is absent by default rather than drawn
+ *     unnamed.
  *
  * There is NO proposal phase on this path, and that is structural rather than
  * an omission: Confirm CREATES the run, so a run exists only after a proposal
@@ -934,17 +971,42 @@ export async function resolveProposalForReader(
 export async function resolveProposalForRun(
   runId: string,
   actor: ConfirmProposalActor,
+  /**
+   * The reader's standing, for the no-proposal branch (cinatra#3004). Optional
+   * because the proposal branch never needs it and a caller that holds no
+   * session cannot invent one; absent, that branch falls back to the run's own
+   * owner, which is the narrowest true answer rather than a wider guess.
+   */
+  access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints },
 ): Promise<ProposalResolution> {
   const consumed = await readProposalConsumeByRunId(runId);
-  if (!consumed) return { phase: "absent" };
-  // The proposal's own binding, re-checked against the LIVE reader. Neither
-  // half comes from the caller: both are read off the row the confirm
-  // transaction wrote.
-  if (consumed.consumedBy !== actor.userId) return { phase: "absent" };
-  if (consumed.orgId !== actor.orgId) return { phase: "absent" };
+  // THE RUN IS THE BINDING (cinatra#3004), and the run's OWN access control is
+  // what says so — the same probe the run's pages take, so this card is neither
+  // narrower nor wider than the run it belongs to. It is asked on EVERY road
+  // in: a schedule a conversation created is still that run's schedule, and the
+  // proposal token's (user, org) pair binds the token path, not this one.
+  let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
+  try {
+    run = access
+      ? await readAgentRunById(runId, access.actor, access.roles)
+      : await readAgentRunById(runId);
+  } catch (err) {
+    // A denial is an ABSENCE here, like every other refusal on this call: the
+    // reader learns nothing about a run they may not see.
+    if (err instanceof AuthzError) return { phase: "absent" };
+    throw err;
+  }
+  if (!run) return { phase: "absent" };
+  if (run.orgId !== actor.orgId) return { phase: "absent" };
+  // Fail closed where no standing was presented: the owner, and only them.
+  if (!access && run.runBy !== actor.userId) return { phase: "absent" };
+  // The consume row is read for the one thing it records that the trigger row
+  // does not: that a CONFIRMED PROPOSAL created this run, which is what lets an
+  // `immediate` card keep being drawn below.
+  const templateId = consumed ? consumed.templateId : run.templateId;
 
   const [template, trigger, intent] = await Promise.all([
-    readAgentTemplateById(consumed.templateId),
+    readAgentTemplateById(templateId),
     readRunTriggerByRunId(runId),
     readInstallIntent(runId),
   ]);
@@ -958,6 +1020,13 @@ export async function resolveProposalForRun(
   // Neither a trigger row nor an install intent means there is nothing armed to
   // draw the chrome of — the install never reached the outbox.
   if (!triggerType) return { phase: "absent" };
+  // A run that came from no proposal draws the card only for the two SCHEDULED
+  // kinds — see the header. A confirmed proposal keeps drawing whatever it
+  // settled into, `immediate` included: that card is the answer to a schedule
+  // the reader stated in a conversation, and it has always been drawn.
+  if (!consumed && triggerType !== "scheduled" && triggerType !== "recurring") {
+    return { phase: "absent" };
+  }
 
   return {
     phase: "settled",

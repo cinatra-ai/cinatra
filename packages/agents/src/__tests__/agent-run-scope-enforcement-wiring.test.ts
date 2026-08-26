@@ -410,7 +410,7 @@ describe("layer 2: shared dispatch guard", () => {
     for (const rel of [
       "packages/agents/src/trigger-service.ts",
       "packages/agents/src/run-actions.ts",
-      "packages/agents/src/trigger-tab-client.tsx",
+      "packages/agents/src/run-schedule-tab.tsx",
       "packages/agents/src/schedule-proposal-card.tsx",
       "src/lib/lifecycle/trigger-schedule-proposal-card.ts",
     ]) {

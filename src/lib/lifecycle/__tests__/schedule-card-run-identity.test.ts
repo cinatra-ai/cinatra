@@ -84,20 +84,41 @@ describe("the run-scoped resolve", () => {
   it("routes a run ref to the RUN path and a token to the reader path — never both", async () => {
     resolveProposalForRun.mockResolvedValue({ phase: "absent" });
     await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
-    expect(resolveProposalForRun).toHaveBeenCalledWith("run-42", {
-      userId: "u-1",
-      orgId: "org-1",
-    });
+    expect(resolveProposalForRun).toHaveBeenCalledWith(
+      "run-42",
+      { userId: "u-1", orgId: "org-1" },
+      // cinatra#3004: the run path also carries the reader's STANDING, because a
+      // run whose schedule came from its own scheduling step is read under the
+      // RUN's access control. `undefined` where the caller presented none — the
+      // service then falls back to the run's own owner.
+      undefined,
+    );
     expect(resolveProposalForReader).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     resolveProposalForReader.mockResolvedValue({ phase: "absent" });
     await resolveTriggerScheduleProposalCard({ ref: "cst_token", ...READER });
+    // The TOKEN path takes no standing: a proposal is bound to one person, and
+    // that binding is the token's own.
     expect(resolveProposalForReader).toHaveBeenCalledWith("cst_token", {
       userId: "u-1",
       orgId: "org-1",
     });
     expect(resolveProposalForRun).not.toHaveBeenCalled();
+  });
+
+  it("hands the run path the standing the caller presented, and never one it made up", async () => {
+    resolveProposalForRun.mockResolvedValue({ phase: "absent" });
+    const access = {
+      actor: { userId: "u-1" } as never,
+      roles: { orgRole: "admin", actorOrganizationId: "org-1" } as never,
+    };
+    await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER, access });
+    expect(resolveProposalForRun).toHaveBeenCalledWith(
+      "run-42",
+      { userId: "u-1", orgId: "org-1" },
+      access,
+    );
   });
 
   it("a run the binding does not hold for draws NO card and carries NO body", async () => {
