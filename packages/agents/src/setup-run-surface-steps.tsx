@@ -52,6 +52,7 @@ export function buildSetupRailSteps(
           label={RUN_SURFACE_RAIL_LABELS[step.key]}
           displayStep={index + 1}
           reached={step.reached}
+          settled={step.settled}
           selectable={selectable}
           conformanceId="run-surface-rail-step"
           indicatorConformanceId="run-surface-rail-indicator"

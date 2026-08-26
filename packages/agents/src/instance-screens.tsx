@@ -20,6 +20,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
 import {
   listReviewGatesForRun,
+  readReviewGate,
   readRunReviewSlot,
   readVerificationRecordsForGates,
 } from "./artifact-review-gate-store";
@@ -31,7 +32,7 @@ import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
 // The step from the run's review slot to what the review step draws
 // (cinatra#2970). A leaf, so this server component can call it.
-import { runReviewStepReading } from "./run-review-slot-reading";
+import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
@@ -1806,6 +1807,21 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     entry: recommendationEntry,
     parkStatus: recommendationPark?.status,
   });
+  // AND HOW DOES THE ROW READ once the question has been answered
+  // (cinatra#2975)? The ratified drawing: "A resolved gate stays on the rail as
+  // read-only history — its entry keeps its place and records how it was
+  // settled." The run page's own recommendation row has drawn that since
+  // cinatra#2790 — the completed circle in place of the numeral — and this
+  // page's rows did not, so a run came back from its own Confirm still numbered.
+  //
+  // A TERMINAL PARK IS NOT A DECIDED ONE, here for the reason it is not above:
+  // `policy_unresolved` reads as `settled` for the ENTRY — the row keeps its
+  // place — and nobody answered it, so there is nothing for a completed circle
+  // to record. That is the same read `recommendationRailStepOpens` just made
+  // (for a settled entry it IS `status === "released"`), so it is asked once
+  // rather than derived a second time from the park.
+  const recommendationSettled =
+    recommendationEntry === "settled" && recommendationStepOpens;
   //
   // THE REVIEW STEP: `readRunReviewSlot` (cinatra#2997), the same reader the run
   // page's panel asks, and `runReviewStepReading` for the step from its two
@@ -1815,6 +1831,29 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // another.
   const runReviewSlot = run ? await readRunReviewSlot(run.id) : null;
   const reviewStepReading = runReviewStepReading(runReviewSlot);
+  // AND WAS THAT GATE ANSWERED? The rail's history reading again — plan (A) §4.2
+  // keeps a decided review "on the run's audit trail and on the rail as
+  // read-only history". The slot names WHICH gate is the run's; the gate's own
+  // row says whether it was answered, which is the same shape the recommendation
+  // row above reads its park's status in. Read only where the slot named a gate,
+  // and behind the same access door `readAgentRunById` already cleared: it is a
+  // plain run-scoped read, and only the row's status is taken from it — the
+  // decision's evidence belongs to the card (cinatra#2573).
+  //
+  // AND ONLY THE BRANCH THAT DRAWS THE RAIL PAYS FOR IT. A run whose schedule is
+  // already armed renders the persistent trigger tab below instead of the setup
+  // surface, and a row nobody draws needs no reading — the same discipline
+  // `triggerStepDurationEstimate` follows on the run page (cinatra#2952), where
+  // a computation is made on the branch that draws it and nowhere else.
+  const drawsSetupRail = Boolean(run) && !(showPersistentTab && trigger);
+  const reviewGate =
+    run && drawsSetupRail && runReviewSlot?.reviewTaskId
+      ? await readReviewGate(run.id, runReviewSlot.reviewTaskId)
+      : null;
+  const reviewStepSettled = runReviewStepSettled({
+    reading: reviewStepReading,
+    gateStatus: reviewGate?.status,
+  });
 
   // ── THE SCHEDULER STEP'S OWN SURFACE (cinatra#2970) ──────────────────────
   //
@@ -1965,6 +2004,18 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     ? [
         {
           key: "schedule",
+          // AND NO SETTLED READING FOR THIS ONE (cinatra#2975), which is a
+          // finding rather than an omission. The drawing's history row is a
+          // resolved GATE's, and a schedule is not a gate: plan (A) §7.2 step 5
+          // opens this step "to see the configuration or change it", and draws
+          // the line itself — "a trigger decides *when* the agent runs, and a
+          // review card exists only after the agent has run". Nor is a fired
+          // schedule finished: §7.2 keeps a recurring one editable after it
+          // fires, and puts the fired one-off's read-only reading in the FORM —
+          // "the form stays as a read-only reading with no controls at all",
+          // which the step's own surface above already draws. The run page's
+          // schedule row draws no settled reading either, and inventing one here
+          // would make the same step read two ways on two screens.
           surface: schedulerStepSurface,
         },
         {
@@ -1974,6 +2025,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           // draws, and a run that never held has nothing for this step — so its
           // row is closed and muted rather than opening an empty column.
           reached: recommendationStepOpens,
+          // AND ONCE IT IS ANSWERED the row is the rail's read-only history row:
+          // the completed circle in place of the numeral, the title
+          // unhighlighted. The row keeps its place either way.
+          settled: recommendationSettled,
           // The ONE renderer of this interaction (cinatra#2573), on the host
           // this screen declares. It is handed over only where the run has a
           // recommendation the card will actually draw: an element of a card
@@ -1997,6 +2052,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           // this step, and its row is closed and muted — the plan draws no "no
           // review yet" screen and none is invented here.
           reached: reviewStepReading !== "none",
+          // A DECIDED gate is history on the rail the same way, and what its row
+          // opens is unchanged: the card draws its own settled reading from its
+          // own state ladder.
+          settled: reviewStepSettled,
           surface: reviewStepSurface,
         },
       ]

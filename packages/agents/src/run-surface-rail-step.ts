@@ -67,6 +67,22 @@ export type RunSurfaceRailStep = {
    */
   reached?: boolean;
   /**
+   * HAS THIS STEP'S GATE BEEN ANSWERED? Drives the row's resolved-gate history
+   * reading (cinatra#2975): the completed circle in place of the numeral, the
+   * title unhighlighted.
+   *
+   * The ratified drawing: "A resolved gate stays on the rail as read-only
+   * history — its entry keeps its place and records how it was settled." Named
+   * as `recommendation-rail-entry.ts` names it, because it IS that module's
+   * `settled` reading arriving at the row the setup page draws.
+   *
+   * It says nothing about whether the row can be OPENED — a settled row opens
+   * exactly what the page gave it — and it is not implied by `reached`: a hold
+   * that expired undecided is terminal without anybody having answered it, and a
+   * completed circle there would record a decision that was never taken.
+   */
+  settled?: boolean;
+  /**
    * Can this step be opened at all, whatever the two fields above say? The
    * page's own override, for a step whose openability it reads from something
    * neither of them carries. Defaults to unstated, which is not "no".

@@ -39,6 +39,7 @@
 // however it is drawn, and by whichever module — can open an empty column.
 // ---------------------------------------------------------------------------
 
+import { Check } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -148,6 +149,16 @@ export function runSurfaceRailTitleClass(selected: boolean) {
  * It reads the selection from the frame's own context exactly as those rows do,
  * so the frame stays the single authority on what can be opened: a press on a
  * closed row reaches `select`, which refuses it.
+ *
+ * AND IT DRAWS THE RESOLVED-GATE HISTORY ROW (cinatra#2975), because the rail
+ * has exactly one row component and a reading only one of its rows could make is
+ * not a reading of the rail. The ratified drawing: "A resolved gate stays on the
+ * rail as read-only history — its entry keeps its place and records how it was
+ * settled." That is the completed circle in place of the numeral and the title
+ * unhighlighted — the same three class helpers, the same circle, one glyph
+ * instead of one numeral. `RecommendationRailStepRow` has drawn it since
+ * cinatra#2790; the setup run page's rows could not, so a run whose skills
+ * question had just been answered came back to that page still numbered.
  */
 export function RunSurfaceRailRow({
   selectionKey,
@@ -157,6 +168,7 @@ export function RunSurfaceRailRow({
   indicatorConformanceId,
   action,
   reached,
+  settled = false,
   selectable = true,
   rowAttributes,
 }: {
@@ -177,6 +189,11 @@ export function RunSurfaceRailRow({
   /** Has the run reached this step? `undefined` states nothing — see
    *  `RunSurfaceRailStep.reached`. */
   reached?: boolean;
+  /** Has this step's gate been ANSWERED? A settled row is the rail's read-only
+   *  history row: the completed circle where the numeral was, and the title left
+   *  unhighlighted because the surface is not on it. It changes neither what the
+   *  row opens nor whether it can be opened — see `RunSurfaceRailStep.settled`. */
+  settled?: boolean;
   /** Can this row be opened? A row that cannot is still DRAWN — the rail is the
    *  run's series of steps and hiding a row would hide the series — but it does
    *  not act: no click handler, `aria-disabled` so assistive technology is told
@@ -199,6 +216,9 @@ export function RunSurfaceRailRow({
       data-run-surface-rail-step-key={selectionKey}
       data-run-surface-rail-selected={selected ? "true" : "false"}
       data-run-surface-rail-reached={reached === undefined ? undefined : reached ? "true" : "false"}
+      // Mirrors the gate rows' own `data-…-step-settled`, so one capture reads
+      // the settled circle the same way on every rail it appears in.
+      data-run-surface-rail-settled={settled ? "true" : "false"}
       data-conformance-id={conformanceId}
       data-action={action}
       aria-current={selected ? "step" : undefined}
@@ -214,10 +234,17 @@ export function RunSurfaceRailRow({
     >
       <span
         data-conformance-id={indicatorConformanceId}
-        className={runSurfaceRailIndicatorClass(emphasised)}
+        // A settled circle is FILLED whether or not its step is the open one:
+        // it is what the rail already gives a completed step, and it is what
+        // makes the row read as history rather than as something still ahead.
+        className={runSurfaceRailIndicatorClass(emphasised || settled)}
       >
-        {displayStep}
+        {settled ? <Check className="h-3 w-3" /> : displayStep}
       </span>
+      {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
+          "the completed circle in place of the numeral, the title
+          unhighlighted". No status word is added beside it: the drawing shows
+          none. */}
       <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
     </Button>
   );

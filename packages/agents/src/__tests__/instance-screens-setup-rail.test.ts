@@ -273,4 +273,60 @@ describe("the setup run page draws the run surface, not a single column", () => 
     // exactly as the run page's own seed is.
     expect(REVIEW_STEP_SURFACE).toContain("encodeLifecycleGateRef({");
   });
+
+  it("reads BOTH gate rows' settled state off the run — and gives the schedule none", () => {
+    // cinatra#2975. The ratified drawing keeps a resolved gate on the rail as
+    // read-only history — "its entry keeps its place and records how it was
+    // settled" — and this screen drew all three rows with nothing but a numeral,
+    // so a run came back from its own Confirm still reading "2 Recommendation".
+
+    // THE SKILLS ROW: the ENTRY's own `settled` reading, narrowed by the
+    // companion predicate. A park the TTL sweeper left behind is terminal and
+    // nobody answered it, so it has no decision to record.
+    expect(TRIGGER_SCREEN).toContain("const recommendationSettled =");
+    expect(TRIGGER_SCREEN).toContain(
+      'recommendationEntry === "settled" && recommendationStepOpens;',
+    );
+    const recommendation = SETUP_BRANCH.slice(
+      SETUP_BRANCH.indexOf('key: "recommendation"'),
+      SETUP_BRANCH.indexOf('key: "review"'),
+    );
+    expect(recommendation).toContain("settled: recommendationSettled,");
+
+    // THE REVIEW ROW: the run's own gate row, read where the slot named a gate —
+    // the same shape the row above reads its park's status in, and only the
+    // status is taken from it.
+    expect(TRIGGER_SCREEN).toContain(
+      "await readReviewGate(run.id, runReviewSlot.reviewTaskId)",
+    );
+    expect(TRIGGER_SCREEN).toContain("const reviewStepSettled = runReviewStepSettled({");
+    expect(TRIGGER_SCREEN).toContain("gateStatus: reviewGate?.status,");
+    // …and only the branch that DRAWS the rail pays for that read: a run whose
+    // schedule is armed renders the persistent trigger tab instead of the setup
+    // surface, and a row nobody draws needs no reading.
+    expect(TRIGGER_SCREEN).toContain(
+      "const drawsSetupRail = Boolean(run) && !(showPersistentTab && trigger);",
+    );
+    expect(TRIGGER_SCREEN).toContain(
+      "run && drawsSetupRail && runReviewSlot?.reviewTaskId",
+    );
+    const review = SETUP_BRANCH.slice(SETUP_BRANCH.indexOf('key: "review"'));
+    expect(review).toContain("settled: reviewStepSettled,");
+
+    // AND THE SCHEDULE ROW CARRIES NONE, which is a finding rather than an
+    // omission. The history row is a resolved GATE's; a schedule is not a gate,
+    // a recurring one stays editable after it fires, and the fired one-off's
+    // read-only reading lives in the FORM (cinatra#2980) that this step's own
+    // surface already draws. The run page's schedule row has none either.
+    const schedule = SETUP_BRANCH.slice(
+      SETUP_BRANCH.indexOf('key: "schedule"'),
+      SETUP_BRANCH.indexOf('key: "recommendation"'),
+    );
+    expect(schedule).toContain("surface: schedulerStepSurface,");
+    expect(schedule).not.toContain("settled:");
+
+    // ONE ROW COMPONENT DRAWS ALL THREE, so the reading reaches the row through
+    // the same mapping the labels do rather than through a second kind of row.
+    expect(STEP_ROWS_SRC).toContain("settled={step.settled}");
+  });
 });
