@@ -1,5 +1,167 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
+## Round 8 (2026-08-26) — all seven cells re-shot after the settled row and the merge of main
+
+> **Why the whole set was taken again.** Round 7's seven cells were shot before
+> two changes this branch then took, and a picture taken before a change is the
+> record of what came before it:
+>
+> 1. **The settled row on the setup rail** — a decided gate row now reads as the
+>    ratified drawing's resolved-gate history row: the completed circle where the
+>    numeral was, the title left unhighlighted. Round 7's C10c still showed
+>    `2 Recommendation` on a run that had come back from its own Confirm.
+> 2. **The merge of `main` 803fe94045fe (cinatra#3006)** — the schedule form now
+>    stays in the rail's schedule step after Continue, armed; there is no Trigger
+>    tab and no "Trigger configuration" card anywhere; the breadcrumb and the tab
+>    say **Schedule**, never *Trigger*. Round 7's C9 was shot on a head where
+>    arming a one-off took the page to a second screen.
+>
+> So **C7, C9, C10, C10b, C10c, C11 and C11b are all re-shot here, light and
+> dark**, on this head, from real runs. **The set's other sixteen pictures are
+> byte-identical** — to the file at the previous head AND, for the twelve the
+> SHA-256 table below lists, to that table — and `page-controls.json`'s two **C8**
+> records are byte-identical in the same place in the file. The canonical capture
+> index is untouched.
+
+### What the two changes look like in the pixels
+
+| cell | round 7 | round 8 |
+|---|---|---|
+| **C10c** | the decided row still read `2 Recommendation` — the numeral where the drawing wants the completed circle | the row draws the **completed circle with the check glyph** in place of the numeral (`railStepIndicatorText` **""**, `railStepIndicatorHasCheckGlyph` **true**, `data-run-surface-rail-settled="true"`), and the detail column holds the settled chip `Blog Content Skill ✓ CONFIRMED` |
+| **C9** | Continue on a one-off armed ahead handed the screen to a second drawing of the same facts | the SAME run page comes back with the **armed form still inside the schedule step** — *Schedule for later* selected, `27.08.2026, 09:30`, `Europe/Berlin`, the press now reading *Save changes* — the rail still beside it, and a **Schedule** tab added to the strip |
+
+Both are measured as well as shown. Every record in `page-controls.json` now
+carries two readings the round 7 sidecar had no field for, counted off the live
+page by the same reader that measures every other anchor:
+
+- **per rail row** — `railStepIndicatorText` and `railStepIndicatorHasCheckGlyph`,
+  read at the row's own indicator (`[data-conformance-id="run-surface-rail-indicator"]`),
+  so "the completed circle in place of the numeral" is a reading and not a claim;
+- **per page** — `pageTabs`, `breadcrumbTrail`, `triggerWordOccurrences` and
+  `triggerConfigurationCards`. On **all fourteen** cells the word *Trigger* occurs
+  **0** times in what a person can read and there are **0** "Trigger
+  configuration" cards; the breadcrumb ends in **Schedule** on every one.
+
+One clause is worth stating exactly, because the picture alone could be
+misread: on C10c the settled row is also the **selected** one — it had to be
+pressed to open the settled chip — so its title carries the SELECTION's emphasis.
+The settling itself adds none, which is the drawing's clause; the row's own
+`before` reading in the same record (`selectedStep: "schedule"`) is the settled
+row while it is not the open one.
+
+### The cells, and what each one is
+
+| cell | reading | run |
+|---|---|---|
+| **C7** | the first-time run page: two columns, the rail NAMING `1 Schedule` / `2 Recommendation` / `3 Review`, the unchanged scheduling form open in the right column, no run progress | a run that was never pressed |
+| **C9** | the SAME run page after **Continue** with a one-off armed ahead — the armed form still in the schedule step | a second run, one press later |
+| **C10** | the skills-recommendation row pressed on a run with a **LIVE hold** — the hold card, in the right column | a run held at its skills question |
+| **C10b** | the same row on a run with **no park at all** — closed, muted, `aria-disabled="true"`, and a forced press changes nothing | the C7 run |
+| **C10c** | the same row after the hold was **DECIDED** on the card — the settled chip, and the rail's resolved-gate history row | a second held run, after Confirm |
+| **C11** | the review row pressed once a **gate is on file** — the review card in place | a completed run that produced a reviewable artifact |
+| **C11b** | the review row pressed **while the run works** — the placeholder with the spinning icon | two runs caught inside the outbox→gate window |
+
+### Six runs, and why one could not carry them all
+
+Each reason is a property of the screen under proof, and **one of them changed
+with cinatra#3006**:
+
+1. **Arming a one-off no longer leaves the setup surface** — the form stays in the
+   schedule step — but it does move the run out of the first-shown state C7 is
+   drawn for. So C7 and C10b stand on one run that was never pressed, and C9 on a
+   second that was.
+2. **The hold only fires for an agent that HAS a candidate skill**, and a hold is
+   either live or decided, never both. A skill was assigned through the app's own
+   **Matches** tab (`drivers/2975-r7-assign-skill.mjs`; the row is in the readback
+   as `@cinatra-ai/author-agent` ↔ `@cinatra-ai/chat:blog-content`, `source: manual`),
+   and C10 and C10c stand on two runs of that agent.
+3. **The review step needs a run that produced a reviewable artifact**, and its
+   *working* reading lives only between the artifact's PENDING outbox row and the
+   gate the sweeper opens from it. That window was **measured, not assumed**:
+   `20:53:45.163 → 20:54:14.008` (**28.8 s**) on one run and
+   `21:04:23.8 → 21:04:51.0` (**27.2 s**) on the other — long enough for one
+   shutter, not two contexts — so C11b's two themes come from two runs, and C11 is
+   shot on the first of them once its gate is on file.
+   `drivers/2975-r8-drive-review-run.mjs` answers the run's approval steps and
+   fires the capture inside the window; it re-presses after a cool-down rather
+   than once and for all, which is what the round 7 catcher could not do.
+
+### What this lane could NOT do, said plainly
+
+- **The marketplace still could not install anything.** Its own screen says
+  installing needs the package registry connected, and this lane holds no registry
+  credential — even with the instance's own local registry up and its 112 bundled
+  packages published to it. The agent under proof and its dependency were
+  installed through the product's OTHER install path, the **Upload Extension**
+  screen (`drivers/2975-r7-install-extension.mjs`), from a zip built out of this
+  branch's own pinned extension source. Both rows are in the readback
+  (`installedAgents`, `owner_level: organization`).
+- **The first runs of this lane could not materialise an artifact** until the
+  instance namespace was provisioned, which the app says itself: *"Instance
+  namespace is not configured. Run /setup/name to provision a registry identity."*
+  It was provisioned through that step, the app's own screen, with a neutral name.
+- **Five turns were refused before the ingress was warmed.** The runtime HEADs the
+  public MCP URL with a 2.5 s budget and refuses the turn outright if it does not
+  answer; the route's first compile on this dev server exceeds that, and warmed it
+  answers in about 0.3 s. All five refusals are quoted in the runtime evidence
+  rather than trimmed out.
+- **What the review card DRAWS INSIDE ITSELF is still a lane reading, not this
+  issue's.** On these pixels the card's content rung says *"review target
+  unavailable — slot 'detail', reason 'no-semantic-renderer'"* and falls back to
+  the generic read-only view of the artifact. That is the artifact type's
+  renderer, not the review step, and nothing here changes it.
+- **"Estimated run duration — Unavailable."** is still on the scheduler step. The
+  resolver sends no duration copy; recorded in this set since its round 2 and
+  unchanged.
+
+### The runtime
+
+`node scripts/dev-server.mjs` (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, on a **dedicated lane database** on the local verify
+Postgres and Redis, loopback-only, with the agent runtime and the instance's own
+package registry brought up beside it. It is **not** a production-equivalent build
+— every record is labelled `dev-runtime`. Cells are shot at `deviceScaleFactor: 2`,
+uncropped, at the full 1440x900 window (2880x1800 device pixels).
+
+The provider is REAL and was configured **through the app's own `/setup/model`
+form**, so the app sealed the credential itself; it is in no file, no argument, no
+log and no record here. `cinatra.usage_events` records what the instance actually
+called: provider `openai`, models `gpt-5.5` (17 calls) and `gpt-5.5-2026-04-23`
+(23 calls) — **40** calls, 514,819 input and 10,051 output tokens.
+`CINATRA_TEST_LLM_PROVIDER` is set in nothing this lane starts, and the server log
+carries **zero** scripted-runtime lines. What this round can NOT say is stated
+rather than implied: this host prints **no environment at all** for the listening
+process, so the process-table read establishes nothing —
+`serverEnvAvailable: false` in `readback/2975-r8-readback.json`, which is why the
+positive evidence is the usage rows, the **62** `POST /api/mcp 200` callbacks from
+the provider's own servers over the public ingress, the **3**
+`[llm-bridge-run-select] served-by=run_token` lines the agent runtime produced, and
+the absent scripted lines.
+
+### The direct-SQL writes this lane made, disclosed
+
+Two, both provisioning and neither a record: the lane account was given the
+`admin` role in Better Auth's own table, and a membership row was written so the
+account belongs to the organization the instance's boot import stamped every agent
+template with (`evidence/2970-setup-rail/drivers/01-lane-setup.mjs`,
+`02-join-template-org.mjs`, which carry the same disclosure). Everything else —
+every run, trigger, park, outbox row, gate, install row and skill match — was
+written by the app itself through its own screens.
+
+### Where this round's own artefacts are
+
+`2975-r8-walk.json` (the executable plan) ·
+`drivers/2975-reshoot-page-controls.mjs` (the capture driver, extended this round
+with the settled-indicator and page-wording readings above and nothing else) ·
+`drivers/2975-r8-drive-review-run.mjs` and `drivers/2975-r8-press-approval.mjs`
+(the review run's own drivers) · `readback/2975-r8-readback.json` (the rows and the
+runtime screens) · `readback/2975-r8-runtime-evidence.txt` (the server's own lines,
+with the grep that produced each block and the public origin, host address and
+funnel name all redacted) · `readback/2975-r8-read-back.mjs` (the readback driver).
+The chain drivers reused from the earlier rounds live in
+`evidence/2970-setup-rail/drivers/` and beside this file.
+
+
 ## Round 7 (2026-08-26) — every cell of round 6 re-shot on the fixed head, and the three readings the fix defines
 
 > **Why the whole round was re-shot.** Round 6's four cells were taken BEFORE the
@@ -516,22 +678,22 @@ the current reading of every cell it re-shot.)
 | `C3__run-page-configured__dark.png` | `63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d` | record `S9d-C3__schedule-card__run_card__decided__dark` |
 | `C6__chat-ran__light.png` | `e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
 | `C6__chat-ran__dark.png` | `ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
-| `C7__run-setup-scheduling-step__light.png` | `a81dd65f4e393f32f4fd3ff5b1c3895edafc75011715fa42ca7e8fea36a95261` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
-| `C7__run-setup-scheduling-step__dark.png` | `534081e8532a18564580d6e3f4a4b13e010144aab3c0433e0c486d7438f67efb` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C7__run-setup-scheduling-step__light.png` | `3ad925f93ea247b139c5643b7448add44862058826c4074a16458d0ee999317d` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C7__run-setup-scheduling-step__dark.png` | `17e8411014fcf00df2d0db4575bae8a340fb145e3c15163c9737b0861959379f` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
 | `C8__run-detail-after-fire__light.png` | `3831af1d87c0a6f4dd60a6b284149d23d472ecbaf2653448fcb792009e64c359` | page control (light) — no index record |
 | `C8__run-detail-after-fire__dark.png` | `86fff475add5688313ea40b11e92b77a65ac601110e0eee0af6e2024a8a32514` | page control (dark) — no index record |
-| `C9__run-setup-continue-armed__light.png` | `1bd431eab8e3b40515a73ab7b953a772fe106cfbe9e457a2c3047c74642e9888` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
-| `C9__run-setup-continue-armed__dark.png` | `59a5ca4a7dbaf0282cd6abf843e72c704c806d36fc1881ce04e9f20b217fda6a` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
-| `C10__run-setup-recommendation-step-opened__light.png` | `8a9d2412cdf7aafb864a75699e4397b2c470c26840c5194d3813fb94603eb136` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
-| `C10__run-setup-recommendation-step-opened__dark.png` | `1c5da95d7aeda19f5c9ec322e597ea130e5cf1e659e4e5f782a08b5cda653202` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
-| `C10b__run-setup-recommendation-row-closed__light.png` | `21f5edb032152bc0003f460e32ef6f5915586bc6963a56ac83a63c263c4a7cab` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
-| `C10b__run-setup-recommendation-row-closed__dark.png` | `7bc1c5cb6b9df196d05ad2b7d46fc45e395264613415c8919f5b63c78abfe099` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
-| `C10c__run-setup-recommendation-step-settled__light.png` | `4a2e850fc297ef6dd0306dc8675733417a649fd6149475ce84a4ce8f30647dbe` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
-| `C10c__run-setup-recommendation-step-settled__dark.png` | `8db18c07246ea931b8f7ba5d540a956d9a7639001217248a20ebe1c3debefbcf` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
-| `C11__run-setup-review-step-opened__light.png` | `32d934bfe7a1c1c4763cf64a637ef7de8de3d82807c6195980332cc9c33639f7` | page control (light) — no index record — **re-shot and renamed 2026-08-26 (round 7)** |
-| `C11__run-setup-review-step-opened__dark.png` | `9f0f7118072bf7480e3475e37ef833e2b715c35e745314509d6af25b3b3dea98` | page control (dark) — no index record — **re-shot and renamed 2026-08-26 (round 7)** |
-| `C11b__run-setup-review-step-working__light.png` | `9e7763a02d1c8a9b934470b7cf7064eaaf3538243c9e104c1edc696285711a5f` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
-| `C11b__run-setup-review-step-working__dark.png` | `0ce7bd4271f28a9c5009338613db5b803c1dee5b72dd5e39431515546c15b46f` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
+| `C9__run-setup-continue-armed__light.png` | `c65de76126d348f0a7cb38500712080b1df692964f5033519b491f36f3a7c780` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C9__run-setup-continue-armed__dark.png` | `8713f030d0aae34b8b438d09888de2fb3ad3ee8bdc9ba8bcca30220f06d96666` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10__run-setup-recommendation-step-opened__light.png` | `45ef0a12a66d0c53e7a44540e0cd7e676027639426a59ea8573a59394f9b6a11` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10__run-setup-recommendation-step-opened__dark.png` | `72afd7dc2714bf5cf025faee6d928793f13f6a96f9d3a48234c83bc7976083d2` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10b__run-setup-recommendation-row-closed__light.png` | `3a105639302e2315a3aa61209b958cb34e7849291e6242df33796c2b7778a216` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10b__run-setup-recommendation-row-closed__dark.png` | `b86589025965da31f054964d4ea4a23474c7b2e198e2ea2a679bcf173aa94caf` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10c__run-setup-recommendation-step-settled__light.png` | `fe5f67ba8f173f24950c45bc7c502dbf9ad76edb65b17d52797877d24de42d39` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C10c__run-setup-recommendation-step-settled__dark.png` | `cfc36d860ffe225c721a2e74b921c2fc6dca5818e4c7755dd3c964ce8d8e4f73` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C11__run-setup-review-step-opened__light.png` | `9b9a85ff45e566cd06c824050ae18c6dd2f67a4f572ed57fb5640b74e36ec86a` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C11__run-setup-review-step-opened__dark.png` | `cbb862c800ba20b3693f7712971fe00fba0b7a794398bdccc046d37bc1e88d7e` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C11b__run-setup-review-step-working__light.png` | `5f767ed075e0014c64832e0f688e6d4d80d10723f9443823ba7e8176ed68d195` | page control (light) — no index record — **re-shot 2026-08-26 (round 8)** |
+| `C11b__run-setup-review-step-working__dark.png` | `f8013bda36f14676c3072529fee237c5266292e06143bdbc09315601d3ec5a86` | page control (dark) — no index record — **re-shot 2026-08-26 (round 8)** |
 
 The two round 2's **C3** records were deleted from
 `scripts/ci/chat-hitl-capture-index.json` (56 records → 54) together with their

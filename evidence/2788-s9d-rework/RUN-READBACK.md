@@ -1,6 +1,60 @@
 # RUN-READBACK — the rows behind the pictures
 
-**Round 7 (2026-08-26) is the current round**, and its rows are committed rather
+**Round 8 (2026-08-26) is the current round**, and its rows are committed rather
+than only quoted: `readback/2975-r8-readback.json` holds every run, trigger, park,
+outbox row, gate and usage aggregate as `readback/2975-r8-read-back.mjs` printed
+them, unedited, and `readback/2975-r8-runtime-evidence.txt` holds the server log
+lines this file narrates, with the grep that produced each block and the instance's
+public origin, host address and funnel name all redacted. Where a number here and a
+row there disagree, the row is right.
+
+## Round 8 — what the database says
+
+**Eight runs exist on this lane; six carry a cell.** Every one was created by the
+app's own dispatch after a person asked for it in the app's own chat. Nothing was
+inserted, updated or seeded.
+
+| fact | value |
+|---|---|
+| runs that carry a cell | `5e22c046…` (C7, C10b) · `ee1e9e32…` (C9) · `1677f60d…` (C10) · `6c0399ff…` (C10c) · `814d19ea…` (C11, C11b light) · `7da4a7a5…` (C11b dark) |
+| `human_present` / `source_type` on every one | `t` / `agent_builder` |
+| the live hold | `1677f60d…`, one `lifecycle_continuation_park`, checkpoint `recommendation`, **`parked`** at capture time |
+| the decided hold | `6c0399ff…`, the same park **`released`** — `parked` `20:11:54.583` → `released` `20:15:22.834`, when **Confirm** was pressed on the card |
+| the armed one-off | `ee1e9e32…`, one `agent_run_triggers` row, `scheduled`, `2026-08-27 07:30:00+00`, `Europe/Berlin`, `enabled`, `released_at` NULL — armed AHEAD and still ahead when both C9 frames were shot |
+| the immediate runs | one `agent_run_triggers` row each, `immediate`, released at once |
+| review gates | 2, each opened by the sweeper from that run's own `artifact_produced_outbox` row, both `pending` at capture time |
+| the outbox→gate windows | `20:53:45.163` → `20:54:14.008` — **28.8 s** (C11b light, C11) · `21:04:23.617` → `21:04:50.927` — **27.2 s** (C11b dark) |
+| the skill that makes a hold possible | `skill_matches`: `@cinatra-ai/author-agent` ↔ `@cinatra-ai/chat:blog-content`, `source` **manual**, `matched` **t**, written by the app's own Matches tab |
+| the installs the lane had to make | `@cinatra-ai/blog-draft-writer-agent` **0.1.4** and its dependency `@cinatra-ai/context-selection-agent` **0.1.1**, both `owner_level: organization`, both through the **Upload Extension** screen |
+| provider | `openai`, models `gpt-5.5` (17 calls) and `gpt-5.5-2026-04-23` (23 calls) — **40** calls, 514,819 input / 10,051 output tokens |
+| the agent runtime's own calls | **3** `[llm-bridge-run-select] served-by=run_token` lines — the runtime resolving this instance's sealed connection by the run's own token |
+| the provider's callbacks | **62** `POST /api/mcp 200` over the public ingress |
+| scripted-runtime lines | **0** |
+| what cannot be established | this host prints no environment for the listening process, so the process-table read establishes nothing — recorded as `serverEnvAvailable: false` rather than letting a null read as "absent" |
+
+### The two runs that carry NO cell, and why they failed
+
+Both are in the table above and neither is hidden. `03c764ce…` and `21d070b5…`
+each ran on the real provider and each **failed at artifact materialization**,
+with the app's own words: *"the run declared artifact output(s) it did not produce
+(1 of 1 failed): (binding-resolution): failed to load the run package's artifact
+bindings: Instance namespace is not configured. Run /setup/name to provision a
+registry identity."* The namespace was then provisioned through that step — the
+app's own screen — and every run after it completed. They are left on the lane as
+the record of that, not trimmed away.
+
+### The direct-SQL writes this lane made, disclosed
+
+Two, both provisioning and neither a record: the lane account was given the `admin`
+role in Better Auth's own table, and a membership row was written so the account
+belongs to the organization the instance's boot import stamped every agent template
+with (`evidence/2970-setup-rail/drivers/01-lane-setup.mjs`, `02-join-template-org.mjs`,
+which carry the same disclosure). Everything else — every run, trigger, park,
+outbox row, gate, install row and skill match — was written by the app itself
+through its own screens.
+
+
+**Round 7 (2026-08-26) was the previous round**, and its rows are committed rather
 than only quoted: `readback/2975-r7-readback.json` holds every run, trigger, park,
 outbox row, gate and usage aggregate as `readback/2975-r7-read-back.mjs` printed
 them, unedited, and `readback/2975-r7-runtime-evidence.txt` holds the server log

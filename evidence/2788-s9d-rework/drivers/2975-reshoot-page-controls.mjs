@@ -82,17 +82,50 @@ const READ_CONTROLS = () => {
       .filter(Boolean)
       .slice(0, 14),
     detailColumnTextLength: (detail?.textContent ?? "").replace(/\s+/g, " ").trim().length,
-    rows: rows.map((el) => ({
-      tag: el.tagName.toLowerCase(),
-      key: el.getAttribute("data-run-surface-rail-step-key"),
-      text: (el.textContent ?? "").replace(/\s+/g, " ").trim(),
-      selected: el.getAttribute("data-run-surface-rail-selected"),
-      reached: el.getAttribute("data-run-surface-rail-reached"),
-      ariaDisabled: el.getAttribute("aria-disabled"),
-      dataAction: el.getAttribute("data-action"),
-      nativeDisabled: el.hasAttribute("disabled"),
-      tabIndex: el.tabIndex,
-    })),
+    rows: rows.map((el) => {
+      // THE SETTLED ROW IS READ AT ITS OWN CIRCLE (cinatra#2975, round 8). The
+      // ratified drawing's resolved-gate history row is "the completed circle in
+      // place of the numeral, the title unhighlighted", so the reading that
+      // decides it is what the INDICATOR holds: a numeral, or the check glyph
+      // with no text at all. Both are read off the live node the row draws, not
+      // described — `railStepIndicatorText` is "" exactly when the numeral is
+      // gone, and `railStepIndicatorHasCheckGlyph` is true exactly when the
+      // glyph replaced it.
+      const indicator = el.querySelector('[data-conformance-id="run-surface-rail-indicator"]');
+      return {
+        tag: el.tagName.toLowerCase(),
+        key: el.getAttribute("data-run-surface-rail-step-key"),
+        text: (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+        selected: el.getAttribute("data-run-surface-rail-selected"),
+        reached: el.getAttribute("data-run-surface-rail-reached"),
+        settled: el.getAttribute("data-run-surface-rail-settled"),
+        railStepIndicatorText: (indicator?.textContent ?? "").replace(/\s+/g, " ").trim(),
+        railStepIndicatorHasCheckGlyph: Boolean(indicator?.querySelector("svg")),
+        ariaDisabled: el.getAttribute("aria-disabled"),
+        dataAction: el.getAttribute("data-action"),
+        nativeDisabled: el.hasAttribute("disabled"),
+        tabIndex: el.tabIndex,
+      };
+    }),
+    /* THE WORDING THE PAGE USES FOR THIS STEP (cinatra#3006, round 8). The
+       merged main says it in two places a reader can check without opening a
+       component: the breadcrumb and the tab strip say "Schedule", never
+       "Trigger", and no "Trigger configuration" card is drawn anywhere. All
+       three are counted off the live page. */
+    pageTabs: Array.from(document.querySelectorAll('[role="tab"]'))
+      .map((t) => (t.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean),
+    breadcrumbTrail: Array.from(
+      document.querySelectorAll('nav[aria-label="breadcrumb"] li, [data-slot="breadcrumb-item"]'),
+    )
+      .map((t) => (t.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean),
+    /** How often the literal word "Trigger" appears in what a person can read. */
+    triggerWordOccurrences: ((document.body.innerText ?? "").match(/\bTrigger\b/g) ?? []).length,
+    /** A "Trigger configuration" card anywhere on the page. */
+    triggerConfigurationCards: Array.from(document.querySelectorAll("h1,h2,h3,h4,p,span,div")).filter(
+      (n) => (n.textContent ?? "").replace(/\s+/g, " ").trim() === "Trigger configuration",
+    ).length,
     /** Where the run surface sits in the picture, in device pixels. */
     runSurfaceRect: (() => {
       const el = document.querySelector("[data-conformance-id='run-surface']");
