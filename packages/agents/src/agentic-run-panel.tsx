@@ -68,6 +68,7 @@ import {
   runStatusBadgeLabel,
   statusBadgeVariant,
   type HitlGateContext as HitlContext,
+  type RunWaitInterruptDescriptor,
 } from "./run-surface-status";
 // Pending-approval recovery book-keeping — pure classification
 // of each derived-context hydration attempt, plus the BOUNDED predicates that
@@ -299,6 +300,8 @@ type RunPollResponse = {
    *  panels share one answer; declared here because it is part of the shape
    *  this response really has. */
   reviewGate?: RunReviewSlot | null;
+  /** The run's own recorded lifecycle moment (cinatra#2930). */
+  lifecycleMoment?: string | null;
 };
 
 
@@ -425,6 +428,12 @@ export function AgenticRunPanel({
   const [hitlContext, setHitlContext] = useState<HitlContext | null>(
     initialHitlContext ?? null,
   );
+  // THE MOMENT THE RUN STATES (cinatra#2930, epic #2926 W3), read off the row
+  // through the poll rather than derived from the shape of the pause. `null`
+  // until a poll answers, and for every run created before the column existed —
+  // which is why the card treats an absent moment as "draw", keeping the screen
+  // this panel has always shown.
+  const [runLifecycleMoment, setRunLifecycleMoment] = useState<string | null>(null);
   // What the LAST derived-context hydration attempt did.
   // `hitlContext` alone cannot tell "not yet" from "never": both are null. This
   // carries the attempt count and the last failure so a paused run without a
@@ -673,6 +682,22 @@ export function AgenticRunPanel({
     justSubmittedXRendererRef.current = null;
   }
   const effectiveHitlContext: HitlContext | null = suppression.context;
+
+  // THE BADGE READS THE RUN'S OWN MOMENT (cinatra#2930, epic #2926 W3).
+  //
+  // The plan: "No screen re-derives a moment from a task id or from the shape of
+  // a pause; a wait for a setup field and a wait for a review are two different
+  // recorded facts, not one status a screen has to tell apart."
+  // `classifyRunWaitInterrupt` was made a READER of the row by W2a, and the
+  // reader has been reading nothing here: this panel passed the gate context
+  // alone, which carries no moment, so the badge always fell through to the two
+  // heuristics beneath it. Carrying the stated moment beside the context is what
+  // finally hands the reader the recorded fact — and it changes no copy for any
+  // run whose moment and heuristic already agreed.
+  const statedWaitDescriptor: RunWaitInterruptDescriptor | null =
+    effectiveHitlContext === null && runLifecycleMoment === null
+      ? null
+      : { ...(effectiveHitlContext ?? {}), lifecycleMoment: runLifecycleMoment };
 
   // -------------------------------------------------------------------------
   // Chat prompt-window HITL state lift.
@@ -1050,6 +1075,9 @@ export function AgenticRunPanel({
           }
           if (Array.isArray(data?.messages)) setMessages(data.messages);
           if (data?.hitlContext !== undefined) setHitlContext(data.hitlContext ?? null);
+          if (data?.lifecycleMoment !== undefined) {
+            setRunLifecycleMoment(data.lifecycleMoment ?? null);
+          }
           outcome = classifyHitlDerivation(
             typeof data?.status === "string" ? data.status : null,
             data?.hitlContext ?? null,
@@ -1636,7 +1664,7 @@ export function AgenticRunPanel({
           {statusIcon(status)}
           {/* A setup-field INPUT pause must not read as "pending approval" —
               the discriminator is the interrupt itself, never the status. */}
-          <span>{runStatusBadgeLabel(status, effectiveHitlContext)}</span>
+          <span>{runStatusBadgeLabel(status, statedWaitDescriptor)}</span>
         </Badge>
       </div>
 

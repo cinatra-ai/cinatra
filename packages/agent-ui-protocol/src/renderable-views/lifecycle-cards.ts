@@ -130,45 +130,118 @@ export function lifecycleMomentParksRun(moment: LifecycleMoment): boolean {
 }
 
 /**
- * How a kind REACHES a surface on the one wire.
+ * WHERE A KIND'S TRUTH LIVES, AND HOW IT REACHES A SURFACE (cinatra#2930, W3).
  *
- * - `data_part` — the producer mints a versioned ref envelope at the tool_result
- *   arm and it rides a `DATA_PART` (this slice).
- * - `interrupt`  — the kind arrives as a TYPED `INTERRUPT` because the run is
- *   genuinely BLOCKED on the answer. `recommendation_hold` is the only one:
- *   the run waits, so a fire-and-forget data part would be the wrong frame.
- *   Its typed-interrupt discriminator lands with S4 (#2568); the kind is
- *   declared here so the registry is complete and the S4 slice fills a named
- *   seam instead of inventing a parallel one.
+ * The record used to be ONE axis — how the kind rides the wire — and that
+ * conflated two different questions the injected-card work has to answer
+ * separately:
+ *
+ * `canonical` — WHICH FACT DECIDES THE CARD IS LIVE.
+ *   - `run_state` — the run itself states the moment, its card kind and the
+ *     card's server-checked reference, and every host mounts the card FROM that
+ *     row. Nothing is asked of a model, and a reload re-reads the same row.
+ *   - `data_part` — there is no run yet, so the part in the turn IS the whole
+ *     state. Exactly one kind is ever this, and only for as long as it has no
+ *     run: a schedule a person stated in a conversation, held until Confirm.
+ *
+ * `represent` — HOW THE CARD REACHES A TRANSCRIPT on the one wire.
+ *   - `data_part` — the producer mints a versioned ref envelope and it rides a
+ *     `DATA_PART`.
+ *   - `interrupt` — the kind arrives as a TYPED `INTERRUPT` because the run is
+ *     genuinely BLOCKED on the answer; its durable anchor in the turn is the
+ *     `agent_run` part of the dispatch it belongs to, which is what the card is
+ *     mounted at and re-read from after a reload.
+ *
+ * THE TWO ARE INDEPENDENT, and `recommendation_hold` is why: the run is blocked
+ * on it, so its representation is an interrupt — and its truth has always been
+ * the run's own row, which is what makes the mount survive a reload. The plan's
+ * `{ canonical: run_state, represent: data_part }` for the run-carried kinds is
+ * therefore stated per kind rather than as one value for all five: `represent`
+ * keeps the wire axis cinatra#2928 ratified for the two blocked kinds — flipping
+ * them would empty `LIFECYCLE_INTERRUPT_KINDS` and give two kinds a resolve
+ * envelope the run wire never mints — while `canonical` is the axis W3 adds.
  */
 export const LIFECYCLE_CARD_CARRIAGE = {
-  artifact_review_gate: "data_part",
-  verification_summary: "data_part",
-  recommendation_hold: "interrupt",
-  trigger_schedule_proposal: "data_part",
+  artifact_review_gate: { canonical: "run_state", represent: "data_part" },
+  verification_summary: { canonical: "run_state", represent: "data_part" },
+  recommendation_hold: { canonical: "run_state", represent: "interrupt" },
+  // THE ONE KIND WHOSE CANONICAL CARRIAGE MOVES. While the schedule is HELD it
+  // is a person's own instruction read back to them and nothing is written —
+  // the signed reference in the turn is the whole state, so the part is
+  // canonical. Confirm creates the run with the schedule in hand, and from then
+  // on the run carries the moment: see `canonicalCarriageForKind`.
+  trigger_schedule_proposal: { canonical: "data_part", represent: "data_part" },
   // `agent_hitl_screen` is an INTERRUPT for the same reason
   // `recommendation_hold` is: the run is genuinely BLOCKED on the answer, so a
   // fire-and-forget data part would be the wrong frame. It carries no
-  // data-part view type and therefore no resolve envelope.
-  agent_hitl_screen: "interrupt",
-} as const satisfies Record<LifecycleCardKind, "data_part" | "interrupt">;
+  // data-part view type and therefore no resolve envelope. Its truth is the
+  // run's own stated moment.
+  agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
+} as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
+
+/** Which fact decides a card is live. */
+export type LifecycleCanonicalCarriage = "run_state" | "data_part";
+
+/** How a card reaches a transcript on the one wire. */
+export type LifecycleRepresentCarriage = "data_part" | "interrupt";
+
+export type LifecycleCardCarriageRow = {
+  canonical: LifecycleCanonicalCarriage;
+  represent: LifecycleRepresentCarriage;
+};
 
 export type LifecycleCardCarriage =
   (typeof LIFECYCLE_CARD_CARRIAGE)[LifecycleCardKind];
 
+/**
+ * The kinds a RUN carries — the ones the platform injects from run state.
+ *
+ * `trigger_schedule_proposal` is deliberately absent while it is held and
+ * present once it is confirmed, which is a fact about a moment rather than
+ * about a kind — `canonicalCarriageForKind` is the reader that states it.
+ */
+export const LIFECYCLE_RUN_CARRIED_KINDS = LIFECYCLE_CARD_KINDS.filter(
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].canonical === "run_state",
+) as ReadonlyArray<LifecycleCardKind>;
+
+/**
+ * The canonical carriage of a kind AT A MOMENT.
+ *
+ * Only the schedule reads its second argument: held, the signed part in the
+ * turn is the whole state; confirmed, the run carries the moment like every
+ * other run-carried kind. Every other kind answers from the table alone.
+ */
+export function canonicalCarriageForKind(
+  kind: LifecycleCardKind,
+  state?: { scheduleConfirmed?: boolean },
+): LifecycleCanonicalCarriage {
+  if (kind === "trigger_schedule_proposal" && state?.scheduleConfirmed === true) {
+    return "run_state";
+  }
+  return LIFECYCLE_CARD_CARRIAGE[kind].canonical;
+}
+
+/** True when a kind's card is mounted from the run's own stated moment. */
+export function isRunCarriedLifecycleKind(
+  kind: LifecycleCardKind,
+  state?: { scheduleConfirmed?: boolean },
+): boolean {
+  return canonicalCarriageForKind(kind, state) === "run_state";
+}
+
 /** The kinds that ride a `DATA_PART` — i.e. the registered lifecycle viewTypes. */
 export const LIFECYCLE_DATA_PART_VIEW_TYPES = LIFECYCLE_CARD_KINDS.filter(
-  (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "data_part",
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "data_part",
 ) as ReadonlyArray<LifecycleDataPartViewType>;
 
 /** The kinds that ride an `INTERRUPT` — the run is BLOCKED on the answer. */
 export const LIFECYCLE_INTERRUPT_KINDS = LIFECYCLE_CARD_KINDS.filter(
-  (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "interrupt",
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "interrupt",
 ) as ReadonlyArray<LifecycleInterruptKind>;
 
 /** A lifecycle kind carried as a `DATA_PART` renderable view. */
 export type LifecycleDataPartViewType = {
-  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "data_part"
+  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K]["represent"] extends "data_part"
     ? K
     : never;
 }[LifecycleCardKind];
@@ -184,7 +257,7 @@ export function isLifecycleDataPartViewType(
 
 /** A lifecycle kind carried as a typed `INTERRUPT` (the run waits on it). */
 export type LifecycleInterruptKind = {
-  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "interrupt"
+  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K]["represent"] extends "interrupt"
     ? K
     : never;
 }[LifecycleCardKind];

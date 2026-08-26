@@ -10,7 +10,7 @@
  *
  * ONE type-agnostic screen on which a human reviews an artifact produced inside an
  * agent run and approves, rejects, or comments on it. Ratified design spec
- * `specs/app-artifact-review.html` @ design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 (owner-approved) — build
+ * `specs/app-artifact-review.html` @ design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f (owner-approved) — build
  * EXACTLY to §I–VI, no invented affordances.
  *
  * The surface reads as a review DOCUMENT (§I): a gate header (what is under
