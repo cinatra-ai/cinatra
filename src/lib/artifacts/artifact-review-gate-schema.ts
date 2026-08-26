@@ -988,3 +988,86 @@ export function artifactReviewFormProvenanceSchemaQueries(schemaName: string): Q
     },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// run_recommendation_offered_set — WHAT THE CARD ACTUALLY OFFERED (cinatra#2906)
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT THIS TABLE CLOSES. A run pauses and offers a short list of skills.
+// The reader keeps some of it and presses Confirm. The server did not record
+// what was on the card: it asked for the list again, from scratch, and recorded
+// against that new answer. A revision published in between re-pinned a confirmed
+// skill to a version nobody saw; an assignment withdrawn in between dropped a
+// skill the reader plainly kept; and when everything dropped, the run executed
+// on the agent's ordinary skill set while the card reported success.
+//
+// SHAPE. One row per (hold, skill) — the four fields that decide an outcome, and
+// none of the ones that only decide how a chip looked. `hold_id` is the park the
+// card was drawn against, which is exactly what the row already hands back on
+// confirm, so the confirm can read its own offer without trusting the client for
+// a value that decides what executes.
+//
+// THE OFFER IS CLAIMED ONCE. The FIRST draw writes the hold's rows and every
+// later draw reads them back; nothing replaces them. The UNIQUE (hold_id,
+// skill_id) keeps a re-run of that write idempotent, and the store takes a
+// per-hold advisory lock so two concurrent first draws cannot leave a union of
+// two partial offers. A replace-on-redraw table would move the offer under a
+// reader still looking at the first card, and their confirm would then resolve
+// against revisions they were never shown - the very substitution this table
+// exists to prevent.
+//
+// NO FOREIGN KEY, on the family precedent: `run_selected_skill_revisions`,
+// `run_rejected_recommendations` and `run_recommendation_skips` all carry a bare
+// `run_id text NOT NULL`, and this table is read beside them on the same path.
+//
+// DEGRADES TO TODAY. A deployment whose bootstrap has not yet created this table
+// simply has no snapshot to read, and the confirm keeps its pre-#2906 behaviour
+// — so the table's absence costs the fix, never the decision.
+//
+// WHY THIS LEAF. The bootstrap DDL for a new table must live in a module
+// `drizzle-store.ts` ALREADY imports, or a new first-party module joins the
+// route budgets the route-graph ratchet locks. This leaf is already in that
+// graph and already hosts the rest of this family.
+// ---------------------------------------------------------------------------
+
+/** The table name, shared by the schema builder, the store, and the tests. */
+export const RUN_RECOMMENDATION_OFFERED_SET_TABLE = "run_recommendation_offered_set";
+/** Name of the by-hold index every read of an offer drives. */
+export const RUN_RECOMMENDATION_OFFERED_SET_HOLD_INDEX =
+  "run_recommendation_offered_set_hold_idx";
+/** Name of the by-run index the per-run efficacy reads drive. */
+export const RUN_RECOMMENDATION_OFFERED_SET_RUN_INDEX =
+  "run_recommendation_offered_set_run_idx";
+
+export function runRecommendationOfferedSetSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (
+  id                text PRIMARY KEY,
+  run_id            text NOT NULL,
+  -- The park the card was drawn against: the offer belongs to a HOLD, not to a
+  -- run, because one run can be parked, decided and parked again.
+  hold_id           text NOT NULL,
+  skill_id          text NOT NULL,
+  -- The EXACT revision the chip was drawn at — the pin the confirm honours.
+  skill_revision_id text NOT NULL,
+  -- Whether the scorer recommended it AT DRAW TIME, which is what the efficacy
+  -- split must be measured against.
+  recommended       boolean NOT NULL,
+  -- Its 1-based rank in the offered ordering at draw time.
+  offered_rank      integer NOT NULL,
+  offered_at        timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT run_recommendation_offered_set_uniq UNIQUE (hold_id, skill_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_OFFERED_SET_HOLD_INDEX}
+  ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (hold_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_OFFERED_SET_RUN_INDEX}
+  ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (run_id)`,
+    },
+  ];
+}

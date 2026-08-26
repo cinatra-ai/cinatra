@@ -137,6 +137,9 @@ export async function confirmRunRecommendationAction(input: {
         ...(write.targetArtifactKind ? { targetArtifactKind: write.targetArtifactKind } : {}),
         ...(write.forcedRevisions ? { forcedRevisions: write.forcedRevisions } : {}),
         ...(write.adjustedSkillIds ? { adjustedSkillIds: write.adjustedSkillIds } : {}),
+        // The hold the core's binding validated (cinatra#2906): the confirm
+        // honours THAT hold's offer, never a fresh read of the run's park.
+        ...(write.holdId ? { holdId: write.holdId } : {}),
       }),
     ...(input.promptText !== undefined ? { promptText: input.promptText } : {}),
     ...(input.declaredProducedTypes ? { declaredProducedTypes: input.declaredProducedTypes } : {}),
