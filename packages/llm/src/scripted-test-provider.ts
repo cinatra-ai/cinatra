@@ -291,6 +291,228 @@ function runScriptedAgentRunReference(input: {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// The AGENT START (cinatra#2935, lifecycle-b W5d).
+// ---------------------------------------------------------------------------
+// The reference arm above SHOWS a run somebody already started. This one STARTS
+// one, and it exists because W5d moved that job to the assistant. From the plan
+// (PLAN: Agents Lifecycle (B), section 4):
+//
+//   "starting an agent by naming it becomes something the assistant does — an
+//    agent tag is addressed to the conversation's assistant, which starts the
+//    agent; nothing dispatches before the model."
+//
+// With nothing dispatching before the model, a key-free development stack had
+// no way to start an agent from a conversation at all: the assistant is now the
+// only road, and on such a stack the assistant is this stand-in. So the reading
+// lives HERE, in the model layer, beside every other reading this module makes
+// (`scriptedTurnAsksForLifecyclePull`, `scriptedTurnAsksForScheduleProposal`,
+// `scriptedTurnNamesAgentRun`) and for the reason those give: choosing which
+// primitive a turn calls is the one thing a real model decides on this path, so
+// the host asks the provider instead of deriving an intent of its own.
+//
+// THIS IS NOT THE REMOVED PRE-ROUTER COMING BACK, and the difference is
+// structural rather than a matter of degree. What W5d removed was a SERVER
+// reader that ran BEFORE the model, on the real product path, in every runtime,
+// and short-circuited the turn hard. What is added here reads a sentence AS the
+// model, on a path `assertScriptedProviderNotProduction` fences to an explicit
+// development runtime, and decides exactly one thing: which tool to call. The
+// REAL `agent_run` primitive still resolves the template, runs the whole
+// authorization ladder, applies the creation preflight, evaluates the
+// recommendation checkpoint and decides whether the run parks. This module
+// starts nothing itself and reports nothing it was not told.
+//
+// WHAT IS STOOD IN FOR, SAID EXACTLY: the model's reading of the sentence, and
+// its wording of the answer. Nothing below it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The START verb.
+ *
+ * Naming an agent is not asking for one to run — "what does
+ * `@cinatra-ai/lint-policy-agent` do?" names one and asks for prose — so a verb
+ * is required beside the name. The list is the one a person actually writes;
+ * it is matched against the USER'S INSTRUCTIONS ONLY, exactly like every other
+ * intent in this module.
+ *
+ * IT IS A BLUNT READING, AND THAT IS STATED RATHER THAN HIDDEN. A verb anywhere
+ * in the sentence beside a package name anywhere else is enough, so "do not run
+ * `@cinatra-ai/<slug>`" reads as a start, exactly as a poor model would read it.
+ * Two things bound what that can cost. The arm exists ONLY under
+ * `assertScriptedProviderNotProduction`'s explicit development runtime, so no
+ * real conversation can reach it; and the reading grants nothing — the REAL
+ * primitive decides whether the template exists, whether it may run here, and
+ * whether the caller may run it, so the worst outcome is one refused or one
+ * extra run on a throwaway stack.
+ */
+const AGENT_START_INTENT = /\b(use|run|invoke|call|dispatch|execute|launch)\b/i;
+
+/**
+ * The canonical package form, `@cinatra-ai/<slug>`.
+ *
+ * Read from the LOWERCASED sentence: npm scope and package names are lowercase
+ * by definition, and the chat client's own mention tokenizer folds case when it
+ * lexes a scoped reference, so `@Cinatra-AI/Some-Agent` and
+ * `@cinatra-ai/some-agent` are one identifier and must resolve to one package.
+ */
+const CANONICAL_AGENT_PACKAGE_PATTERN = /@cinatra-ai\/([a-z][a-z0-9-]*)/;
+
+/**
+ * The legacy `cinatra_<slug>` wording, which is what a person writes when they
+ * want NO mention token in the sentence at all.
+ *
+ * Read from the RAW text, case-SENSITIVELY, and that is deliberate: this form
+ * produces no mention token, so it has no client tokenizer to be in parity
+ * with, while folding case would read ordinary shouted identifiers such as
+ * `CINATRA_THEME` as an agent and try to start one.
+ */
+const LEGACY_AGENT_PACKAGE_PATTERN = /\bcinatra_([a-z][a-z0-9-]+)(?:[-_ ]tool|\b)/;
+
+/**
+ * The agent this turn asks to start, as a canonical package name, or null.
+ *
+ * Exported for the reason `scriptedTurnAsksForLifecyclePull` is: a host that
+ * must decide something BEFORE the turn — which the cookie-session `/chat`
+ * branch does — asks the provider rather than deriving a second answer.
+ *
+ * Naming a package grants nothing. The name is inert on its own: the REAL
+ * primitive decides whether that template exists, whether it may be run at all
+ * on this instance, and whether this caller may run it.
+ */
+export function scriptedTurnStartsAgent(instructions: string): string | null {
+  if (!AGENT_START_INTENT.test(instructions)) return null;
+  const canonical = instructions.toLowerCase().match(CANONICAL_AGENT_PACKAGE_PATTERN);
+  if (canonical) return `@cinatra-ai/${canonical[1]}`;
+  const legacy = instructions.match(LEGACY_AGENT_PACKAGE_PATTERN);
+  if (legacy) return `@cinatra-ai/${legacy[1]}`;
+  return null;
+}
+
+/**
+ * The `inputParams` the person wrote into the sentence, as the JSON STRING the
+ * primitive takes — `"{}"` when they wrote none.
+ *
+ * A real model reads the inputs out of the request; this reads only the ones
+ * stated outright, anchored on the parameter's own name so an example object
+ * quoted in prose is not mistaken for the request. It INVENTS nothing: a
+ * sentence carrying no inputs starts the agent with none, and the primitive's
+ * own schema decides whether that is enough.
+ */
+export function scriptedTurnAgentInputParams(instructions: string): string {
+  const marker = instructions.match(/\binput[\s_]?params?\b\s*[:=]?\s*(?=\{)/i);
+  if (!marker || marker.index === undefined) return "{}";
+  const start = instructions.indexOf("{", marker.index);
+  if (start === -1) return "{}";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < instructions.length; i += 1) {
+    const ch = instructions[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth > 0) continue;
+      try {
+        const parsed: unknown = JSON.parse(instructions.slice(start, i + 1));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return JSON.stringify(parsed);
+        }
+      } catch {
+        return "{}";
+      }
+      return "{}";
+    }
+  }
+  return "{}";
+}
+
+/** What the start primitive answered, read defensively. */
+function parseAgentStartAnswer(result: string): {
+  runId: string | null;
+  status: string | null;
+  error: string | null;
+} {
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { runId: null, status: null, error: null };
+    }
+    const record = parsed as { runId?: unknown; status?: unknown; error?: unknown };
+    return {
+      runId: typeof record.runId === "string" && record.runId ? record.runId : null,
+      status: typeof record.status === "string" && record.status ? record.status : null,
+      error: typeof record.error === "string" && record.error ? record.error : null,
+    };
+  } catch {
+    return { runId: null, status: null, error: null };
+  }
+}
+
+/**
+ * Call the REAL `agent_run` primitive, then SAY what it answered.
+ *
+ * THE TEXT IS A REPORT, NOT A CLAIM. Both sentences are chosen by the STATUS
+ * the primitive returned, so neither can be true of a turn where the other
+ * happened: a run that parked is described as parked, a run that did not is
+ * described as running, and a start the primitive refused says so and names the
+ * refusal verbatim. That conditional is the same one the removed pre-router
+ * made — it moved to the assistant with the job.
+ *
+ * IT IS ALSO THE ONLY PLACE THE RUN ID CAN COME FROM ON SCREEN. A tool result
+ * feeds the turn's status line and renders no inline text, so a turn that never
+ * says the id never names the run it started. The reader gets the card either
+ * way; the sentence is what makes the turn readable beside it.
+ *
+ * EVENT TENSE, deliberately: this text is persisted with the turn and re-read
+ * long after the card beside it has settled. "The run paused" records what
+ * happened; "the run is paused" would keep asserting a state that stopped being
+ * true the moment somebody decided.
+ */
+async function runScriptedAgentStart(input: {
+  packageName: string;
+  instructions: string;
+  callSelfMcpTool: ScriptedSelfMcpDispatch;
+  onText: (chunk: string) => void;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): Promise<void> {
+  const id = randomUUID();
+  input.onToolCall({ id, name: SCRIPTED_AGENT_RUN_TOOL });
+  const result = await input.callSelfMcpTool({
+    name: SCRIPTED_AGENT_RUN_TOOL,
+    args: {
+      packageName: input.packageName,
+      inputParams: scriptedTurnAgentInputParams(input.instructions),
+    },
+  });
+  input.onToolResult({ id, name: SCRIPTED_AGENT_RUN_TOOL, result });
+
+  const answer = parseAgentStartAnswer(result);
+  if (!answer.runId) {
+    input.onText(
+      `I tried to dispatch \`${input.packageName}\` but the server returned: ` +
+        `${answer.error ?? result}.`,
+    );
+    return;
+  }
+  const status = answer.status ?? "queued";
+  input.onText(
+    status === "pending_input"
+      ? `Dispatched \`${input.packageName}\` (runId: \`${answer.runId}\`, status: ` +
+          `\`${status}\`). The run paused for a decision on the recommended skills.`
+      : `Dispatched \`${input.packageName}\` (runId: \`${answer.runId}\`, status: ` +
+          `\`${status}\`). The agent is running — I'll keep polling for its progress.`,
+  );
+}
+
 /** The pull primitives this provider may drive. NAMES ARE THE CONTRACT — they
  *  must equal the producer's registered names (`src/lib/lifecycle/lifecycle-pull-mcp.ts`)
  *  or the call refuses at the transport and no card mints. */
@@ -636,6 +858,35 @@ export async function runScriptedChatAssistantTurn(input: {
     `You said: "${input.instructions.slice(0, 120)}".`;
   for (const chunk of reply.match(/[\s\S]{1,24}/g) ?? [reply]) {
     input.onText(chunk);
+  }
+
+  // THE AGENT START (cinatra#2935, lifecycle-b W5d) — BELOW the two pull
+  // readings, never above them. A review or a schedule question is the more
+  // specific reading of a sentence that could be taken as both ("run the review
+  // gate check"), so every turn those two claim keeps the answer it has today,
+  // byte for byte, and only a turn they BOTH decline can start anything.
+  if (
+    !scriptedTurnAsksForLifecyclePull(input.instructions) &&
+    !scriptedTurnAsksForScheduleProposal(input.instructions)
+  ) {
+    const startPackage = scriptedTurnStartsAgent(input.instructions);
+    if (startPackage) {
+      try {
+        await runScriptedAgentStart({
+          packageName: startPackage,
+          instructions: input.instructions,
+          callSelfMcpTool: input.callSelfMcpTool,
+          onText: input.onText,
+          onToolCall: input.onToolCall,
+          onToolResult: input.onToolResult,
+        });
+      } catch {
+        // A dispatcher that threw started nothing this module may speak for, so
+        // the turn keeps the text it already streamed and mints no card — the
+        // same degradation the pull arm takes, for the same reason.
+      }
+      return;
+    }
   }
 
   try {

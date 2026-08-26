@@ -99,6 +99,7 @@ import {
   runScriptedWidgetAssistantTurn,
   scriptedTurnAsksForLifecyclePull,
   scriptedTurnAsksForScheduleProposal,
+  scriptedTurnStartsAgent,
 } from "@cinatra-ai/llm/scripted-test-provider";
 // The reserved producer label the sink's recognizer requires. Stamped by THIS
 // module, on THIS module's own record of what it actually dispatched — never by
@@ -853,6 +854,17 @@ export async function runAssistantTurn(
   //     unlabelled and `recognizeLifecycleViewEnvelope` refuses it, so this
   //     branch can no more fabricate a card than its twin can.
   //
+  // A THIRD READING JOINS THEM (cinatra#2935, lifecycle-b W5d): the turn that
+  // asks for an agent to be STARTED. It is here for the reason the other two
+  // are — a key-free stack has no model to choose the tool — and it became
+  // necessary when W5d removed the pre-model dispatch reader: with nothing
+  // dispatching before the model, the assistant is the only road to a run from
+  // a conversation, and on this stack the assistant is the deterministic
+  // provider. The one thing that reading decides is which tool to call; the
+  // REAL `agent_run` primitive behind it resolves the template, runs the whole
+  // authorization ladder, applies the creation preflight and decides for itself
+  // whether the run parks on a recommendation.
+  //
   // `userId` is required and unfaked: without a signed-in human there is no chat
   // identity to delegate, so the turn falls through to the adapter path, whose
   // own guard answers with the authenticated-user error.
@@ -861,7 +873,8 @@ export async function runAssistantTurn(
     scriptedProviderEnabled &&
     userId &&
     (scriptedTurnAsksForLifecyclePull(scriptedInstructions) ||
-      scriptedTurnAsksForScheduleProposal(scriptedInstructions))
+      scriptedTurnAsksForScheduleProposal(scriptedInstructions) ||
+      scriptedTurnStartsAgent(scriptedInstructions) !== null)
   ) {
     const dispatchedResults = new Set<string>();
     const callSelfMcpTool = createScriptedChatSelfMcpDispatch({
