@@ -25,6 +25,10 @@ const BASE: ChatSystemPromptFragments = {
   instanceContext: "\n\nINSTANCE",
   extensionConfirmationPolicy: "\n\nPOLICY",
   userContext: "\n\nUser context:\nUC",
+  // cinatra#3016 (lifecycle-b W5b) — the prompt window's run frame. Non-empty
+  // here for the same reason the bound card is: the ordering case locates
+  // fragments by their own text.
+  runFrameContext: "\n\nRUN FRAME",
   instanceFreezeState: "\n\nFROZEN",
   pendingConfirmationContext: "\n\nPENDING",
   // cinatra#2932 (lifecycle-b W5a) — the bound card. Non-empty here like every
@@ -89,6 +93,7 @@ describe("byte-stability", () => {
       instanceContext: "",
       extensionConfirmationPolicy: "",
       userContext: "",
+      runFrameContext: "",
       instanceFreezeState: "",
       pendingConfirmationContext: "",
       boundCardContext: "",
@@ -115,13 +120,24 @@ describe("ordering", () => {
     expect(lastStable).toBeLessThan(firstVolatile);
   });
 
-  it("the user-controlled fragment leads the volatile tail", () => {
+  it("the user-controlled fragments lead the volatile tail", () => {
     // Precedence, not cost: every policy-bearing volatile fragment must be
-    // read AFTER the section a user can write into.
-    const tail = [...CHAT_SYSTEM_VOLATILE_FRAGMENTS];
-    for (const key of CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS) {
-      expect(tail.indexOf(key)).toBe(0);
-    }
+    // read AFTER every section a user can write into. Stated over the SET
+    // rather than over a single index (cinatra#3016 added a second
+    // user-controlled fragment), which is the same contract the one-fragment
+    // form asserted and stays true as the tail grows.
+    const tail = [...CHAT_SYSTEM_VOLATILE_FRAGMENTS] as string[];
+    const userControlled = new Set<string>(CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS);
+    expect(userControlled.has(tail[0] ?? "")).toBe(true);
+    const lastUserControlled = Math.max(
+      ...[...userControlled].map((key) => tail.indexOf(key)),
+    );
+    const firstPolicyBearing = Math.min(
+      ...tail
+        .map((key, index) => (userControlled.has(key) ? Number.POSITIVE_INFINITY : index))
+        .filter((index) => Number.isFinite(index)),
+    );
+    expect(lastUserControlled).toBeLessThan(firstPolicyBearing);
   });
 });
 

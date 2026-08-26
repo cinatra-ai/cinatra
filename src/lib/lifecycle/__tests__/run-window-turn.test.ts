@@ -5,6 +5,8 @@
 // sees the box), AC4 (the tool-less message when the model cannot act).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type EnforceRunAccess = (
   run: unknown,
@@ -14,7 +16,39 @@ type EnforceRunAccess = (
 ) => Promise<void>;
 const noop: EnforceRunAccess = async () => {};
 const enforceRunAccess = vi.fn<EnforceRunAccess>(noop);
-const readAgentRunById = vi.fn(async () => ({ id: "run-1", templateId: "t-1", orgId: "org-1" }));
+// THE RUN ROW the frame is built from (cinatra#3016). A run has a status and a
+// name; a window that does not carry them cannot answer "what is this step
+// waiting for?" without the person naming the run.
+const RUN_ROW = {
+  id: "run-1",
+  templateId: "t-1",
+  orgId: "org-1",
+  status: "pending_approval",
+  title: "Blog draft",
+  inputParams: {},
+};
+const readAgentRunById = vi.fn(async () => RUN_ROW as Record<string, unknown>);
+// The two GATE READS the frame makes, per run id, so a cross-run negative can
+// assert what was read as well as what was said.
+const hitlReads: string[] = [];
+const triggerReads: string[] = [];
+const hitlByRun: Record<string, unknown> = {
+  "run-1": {
+    xRenderer: "campaign-setup",
+    childRunId: null,
+    reviewTaskId: "task-9",
+    inputSchema: { properties: { callToAction: {}, senderName: {} } },
+    currentValues: { callToAction: "Book a demo", senderName: "Rita" },
+  },
+  "run-2": {
+    xRenderer: "other-renderer",
+    childRunId: null,
+    reviewTaskId: "task-other",
+    inputSchema: { properties: { secretField: {} } },
+    currentValues: { secretField: "the other run's business" },
+  },
+};
+const triggerByRun: Record<string, unknown> = {};
 const appended: Array<{ role: string; text: string; surface: string; replyToSequence: number | null }> = [];
 const stored: Array<{ role: "user" | "assistant"; text: string; surface: string; id: string; runId: string; sequence: number; replyToSequence: number | null; createdAt: Date }> = [];
 let session: unknown = { user: { id: "u-owner", role: "user" }, session: { activeOrganizationId: "org-1" } };
@@ -61,6 +95,32 @@ vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
   },
   readRunWindowMessages: async () => [...stored],
 }));
+// THE FRAME BUILDER, real by default. One switch makes it THROW, so the road's
+// own fail-soft is exercised rather than asserted: with it on, the turn must
+// still answer and must simply carry no frame.
+let frameThrows = false;
+vi.mock("../run-window-frame", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../run-window-frame")>();
+  return {
+    ...actual,
+    buildRunWindowFrame: async (...args: Parameters<typeof actual.buildRunWindowFrame>) => {
+      if (frameThrows) throw new Error("the frame could not be assembled");
+      return actual.buildRunWindowFrame(...args);
+    },
+  };
+});
+vi.mock("@cinatra-ai/agents/hitl-context", () => ({
+  deriveRunHitlContext: async (run: { id: string }) => {
+    hitlReads.push(run.id);
+    return hitlByRun[run.id] ?? null;
+  },
+}));
+vi.mock("@cinatra-ai/agents/trigger-store", () => ({
+  readRunTriggerByRunId: async (runId: string) => {
+    triggerReads.push(runId);
+    return triggerByRun[runId] ?? null;
+  },
+}));
 vi.mock("@/lib/authz/build-actor-context", () => ({
   actorFromSession: (s: { user: { id: string } }) => ({ actorType: "human", source: "ui", userId: s.user.id, organizationId: "org-1", roles: [] }),
 }));
@@ -104,7 +164,11 @@ const mod = await import("../run-window-turn");
 
 beforeEach(() => {
   enforceRunAccess.mockClear().mockImplementation(noop);
-  readAgentRunById.mockClear().mockImplementation(async () => ({ id: "run-1", templateId: "t-1", orgId: "org-1" }));
+  readAgentRunById.mockClear().mockImplementation(async () => RUN_ROW as Record<string, unknown>);
+  hitlReads.length = 0;
+  triggerReads.length = 0;
+  frameThrows = false;
+  for (const key of Object.keys(triggerByRun)) delete triggerByRun[key];
   appended.length = 0;
   stored.length = 0;
   lastTurnArgs = null;
@@ -339,5 +403,193 @@ describe("when the model cannot use tools, the window says so", () => {
     const answer = out.entries.at(-1)?.text ?? "";
     expect(answer).toBe("The assistant could not answer just now — please try again.");
     expect(answer).not.toContain("sk-live");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WINDOW KNOWS ITS RUN, ON EVERY MOUNT (cinatra#3016).
+//
+// The plan: "Outside the chat, the prompt window is the person's conversation with
+// the assistant about the run it sits under — on the run page, the step-by-step
+// screen, the schedule screen, the armed-trigger tab and the review page." A
+// window whose assistant answers "which step do you mean?" is not that
+// conversation, and the person naming a run id to the window that is already
+// mounted under it is the defect these pin.
+// ---------------------------------------------------------------------------
+
+const FIVE_SURFACES = [
+  "run-page",
+  "step-by-step",
+  "schedule",
+  "armed-trigger",
+  "review",
+] as const;
+
+describe("the window hands the assistant the run it sits under", () => {
+  it.each(FIVE_SURFACES)(
+    "the %s mount's turn carries the run's id, status, gate and gate fields",
+    async (surface) => {
+      await mod.runWindowTurn({
+        runId: "run-1",
+        surface,
+        prompt: "what is this step waiting for?",
+      });
+      const frame = (lastTurnArgs as { runFrame?: string }).runFrame ?? "";
+      // The run's identity.
+      expect(frame).toContain("run-1");
+      expect(frame).toContain("pending_approval");
+      // The gate it sits under, and that gate's current fields AND values.
+      expect(frame).toContain("approval");
+      expect(frame).toContain("campaign-setup");
+      expect(frame).toContain("callToAction");
+      expect(frame).toContain("Book a demo");
+      // The screen the person is typing on, so the answer can be about it.
+      expect(frame).toContain(surface);
+      // The message is still what the person typed — the frame is not folded
+      // into their words.
+      const msgs = (lastTurnArgs as { messages: Array<{ content: string }> }).messages;
+      expect(msgs.at(-1)?.content).toBe("what is this step waiting for?");
+    },
+  );
+
+  it("carries the SCHEDULE the window sits under, with its current values", async () => {
+    triggerByRun["run-1"] = {
+      runId: "run-1",
+      triggerType: "recurring",
+      scheduledAt: null,
+      cronExpression: "0 9 * * 3",
+      timezone: "UTC",
+      enabled: true,
+      releasedAt: null,
+      lastFiredAt: null,
+      stoppedAt: null,
+    };
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "armed-trigger",
+      prompt: "what is this step waiting for?",
+    });
+    const frame = (lastTurnArgs as { runFrame?: string }).runFrame ?? "";
+    expect(frame).toContain("schedule");
+    expect(frame).toContain("0 9 * * 3");
+    expect(frame).toContain("UTC");
+  });
+
+  it("reads the gate under the run the access check passed, and no other run", async () => {
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "schedule",
+      prompt: "what is this step waiting for?",
+    });
+    // Read by the run's own id, once, on the row that cleared the access check.
+    expect(hitlReads).toEqual(["run-1"]);
+    expect(triggerReads).toEqual(["run-1"]);
+    const frame = (lastTurnArgs as { runFrame?: string }).runFrame ?? "";
+    expect(frame).not.toContain("run-2");
+    expect(frame).not.toContain("the other run's business");
+  });
+
+  it("gives a person without respond access no frame and no window", async () => {
+    const deny: EnforceRunAccess = async () => {
+      throw new Error("denied");
+    };
+    enforceRunAccess.mockImplementation(deny);
+    await expect(
+      mod.runWindowTurn({ runId: "run-1", surface: "step-by-step", prompt: "what is this step waiting for?" }),
+    ).rejects.toBeInstanceOf(mod.RunWindowAccessDenied);
+    // No model was asked, so no frame was assembled…
+    expect(lastTurnArgs).toBeNull();
+    // …and nothing about the run was read for one.
+    expect(hitlReads).toEqual([]);
+    expect(triggerReads).toEqual([]);
+    // …and the box is not drawn for them at all.
+    expect(await mod.canRespondInRunWindow("run-1")).toBe(false);
+  });
+
+  it("lends the assistant nothing — the frame is state to read, not authority", async () => {
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "run-page",
+      prompt: "approve it for me",
+    });
+    // THE WHOLE ARGUMENT SET, not a substring search. The frame adds exactly
+    // ONE argument to the turn and it is a string; a tool, a grant, an
+    // allowlist or a control smuggled in beside it fails this line, which a
+    // "does it contain the word grant" check would not.
+    expect(Object.keys(lastTurnArgs ?? {}).sort()).toEqual(
+      [
+        "actorContext",
+        "messages",
+        "platformRole",
+        "runFrame",
+        "send",
+        "sessionOrgId",
+        "turnIdentity",
+        "userId",
+      ].sort(),
+    );
+    expect(typeof (lastTurnArgs as { runFrame?: unknown }).runFrame).toBe("string");
+    // No binding is invented where the window offered none, and no grant is
+    // minted here: W5c owns acting.
+    expect((lastTurnArgs as { boundCard?: unknown }).boundCard).toBeUndefined();
+    expect(JSON.stringify(lastTurnArgs)).not.toContain("grant");
+  });
+
+  it("reaches the model through the system context and nowhere else", async () => {
+    // WHAT THIS PINS, EXACTLY: the runtime mentions this argument at TWO sites
+    // and no more — the declaration and the one composition into the turn's
+    // system fragments. Counting every mention rather than one spelling is what
+    // makes a bracket access, a rename or a destructure fail this line too.
+    //
+    // WHAT IT DOES NOT PIN, said plainly rather than left to be discovered: the
+    // whole argument object is passed to helpers inside the runtime, and a
+    // helper that read the frame out of it would add no mention here. The bound
+    // that does hold against that is the one above — the exact set of arguments
+    // the road passes — and neither line is a claim about what a provider does
+    // with the text once it is in the system string.
+    const runtimeSrc = readFileSync(
+      join(__dirname, "..", "..", "assistant-runtime", "runtime.ts"),
+      "utf8",
+    );
+    const mentions = (runtimeSrc.match(/\brunFrame\b/g) ?? []).length;
+    expect(mentions).toBe(2);
+    expect(runtimeSrc).toContain("runFrame?: string;");
+    expect(runtimeSrc).toContain("runFrameContext: args.runFrame ?? \"\"");
+  });
+
+  it("names the run even when it is waiting on nothing", async () => {
+    hitlByRun["run-1"] = undefined;
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "review",
+      prompt: "what is this step waiting for?",
+    });
+    hitlByRun["run-1"] = {
+      xRenderer: "campaign-setup",
+      childRunId: null,
+      reviewTaskId: "task-9",
+      inputSchema: { properties: { callToAction: {}, senderName: {} } },
+      currentValues: { callToAction: "Book a demo", senderName: "Rita" },
+    };
+    expect(out.entries.at(-1)?.text).toBe("Here is what I found.");
+    const frame = (lastTurnArgs as { runFrame?: string }).runFrame ?? "";
+    expect(frame).toContain("run-1");
+    expect(frame).toContain("not waiting");
+  });
+
+  it("answers anyway when the frame itself cannot be assembled", async () => {
+    // The road's own fail-soft, exercised: the builder THROWS. A frame that
+    // cannot be built costs the answer its context, never the answer — and the
+    // turn then carries no frame argument at all rather than an empty one.
+    frameThrows = true;
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "step-by-step",
+      prompt: "what is this step waiting for?",
+    });
+    expect(out.entries.at(-1)?.text).toBe("Here is what I found.");
+    expect((lastTurnArgs as { runFrame?: unknown }).runFrame).toBeUndefined();
+    // …and what the person typed is still stored with the run.
+    expect(appended.map((a) => a.role)).toEqual(["user", "assistant"]);
   });
 });

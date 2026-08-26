@@ -74,6 +74,32 @@ describe("each of the five windows outside the chat is a per-run conversation", 
       expect(src).toMatch(/conversation=\{\[?\.\.\.?runWindow\.entries|conversation=\{runWindow\.entries/);
     });
 
+    // cinatra#3016 — THE MOUNT NAMES ITS RUN. The frame the assistant is handed
+    // is built in the one road from the run the window declares, so a window
+    // that opens the controller without a run is a window whose assistant
+    // cannot know what it sits under — which is exactly the defect the real-run
+    // pictures caught on two of these five screens.
+    it(`${w.name} gives the controller the run it sits under`, () => {
+      const src = read(w.file);
+      const call = src.slice(src.indexOf("useRunWindowConversation({"));
+      // COMMENTS STRIPPED FIRST: a mention of the word in a note above the call
+      // is not an argument, and this claim is about the argument. What is
+      // asserted is exactly what source can carry — the controller is opened
+      // with a `runId` PROPERTY.
+      //
+      // WHERE THE VALUE'S PROVENANCE IS CHECKED INSTEAD, because this line
+      // cannot check it: the screen that mounts these windows resolves the run
+      // once and hands the SAME id to every one of them, which is asserted two
+      // cases below ("the screen hands BOTH values to every window it mounts");
+      // and that a window is drawn at all is read off real DOM by the render
+      // suites named at the top of this file.
+      const args = call
+        .slice(0, call.indexOf(`surface: "${w.surface}"`))
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      expect(args).toMatch(/\brunId\b\s*[,:]/);
+    });
+
     it(`${w.name} holds no window transcript of its own`, () => {
       const src = read(w.file);
       // The exchange is the run's. No window keeps a parallel copy it could

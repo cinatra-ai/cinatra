@@ -218,6 +218,20 @@ export type RunChatTurnArgs = {
    * that never had a composer binding.
    */
   boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  /**
+   * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
+   * lifecycle-b W5b), already composed as text by the window's own road.
+   *
+   * READ STATE, NOT AUTHORITY. It is composed into this turn's system context
+   * and nothing else: no tool is added for it, no grant is minted from it, and
+   * the turn's tool set is byte-identical with and without it. It is present
+   * whether or not the provider can use tools — a conversation-only model can
+   * still answer about the run it was handed, which is the whole point.
+   *
+   * Absent ⇒ the system string is byte-identical to a turn that never had one,
+   * which is every chat turn.
+   */
+  runFrame?: string;
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
@@ -1753,6 +1767,11 @@ export async function runAssistantTurn(
     // must not sit in the head (convergence round 2, finding 2). It follows
     // `userContext` because it is policy-bearing text and policy is read after
     // user-controlled content, never before it (finding 1).
+    // cinatra#3016 — the run a prompt window outside the chat sits under, or
+    // `""`. It follows `userContext` because it is the other user-controlled
+    // fragment, and it is NOT withheld from a conversation-only turn: it is
+    // state to read, not a control to press.
+    runFrameContext: args.runFrame ?? "",
     instanceFreezeState,
     pendingConfirmationContext,
     explicitDispatchDirective,

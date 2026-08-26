@@ -101,6 +101,24 @@ export type ChatSystemPromptFragments = {
    */
   userContext: string;
   /**
+   * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
+   * lifecycle-b W5b), or `""` for every turn that is not one of those windows.
+   *
+   * The run's own recorded state — its identity, the gate it waits on and that
+   * gate's current fields — assembled server-side under the run's access so the
+   * assistant answers "what is this step waiting for?" without the person
+   * naming the run they are already standing on.
+   *
+   * USER-CONTROLLED, and declared so below: a gate's field values and a run's
+   * name are text people typed. It therefore leads the volatile tail beside
+   * `userContext`, ahead of every policy-bearing fragment, and the composer's
+   * constant trailer is still the last thing read.
+   *
+   * It carries no authority: nothing in it grants a tool, a control or a
+   * decision — see `run-window-frame.ts`, which writes it.
+   */
+  runFrameContext: string;
+  /**
    * "This namespace is FROZEN…" — present only once the instance has published
    * its first package, and `""` before that.
    *
@@ -182,6 +200,10 @@ export const CHAT_SYSTEM_STABLE_FRAGMENTS = [
  */
 export const CHAT_SYSTEM_VOLATILE_FRAGMENTS = [
   "userContext",
+  // cinatra#3016 — the prompt window's run frame. User-controlled like the
+  // fragment above it, so the two lead the tail together and every
+  // policy-bearing fragment is read after both.
+  "runFrameContext",
   "instanceFreezeState",
   "pendingConfirmationContext",
   "explicitDispatchDirective",
@@ -197,6 +219,7 @@ export const CHAT_SYSTEM_VOLATILE_FRAGMENTS = [
  */
 export const CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS = [
   "userContext",
+  "runFrameContext",
 ] as const satisfies readonly (keyof ChatSystemPromptFragments)[];
 
 /**

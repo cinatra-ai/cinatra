@@ -66,6 +66,14 @@ async function loadAssistantRuntime() {
   return { runAssistantTurn, buildCinatraAssistantRuntimeConfig };
 }
 
+// THE RUN FRAME IS REACHED THE SAME WAY, and for the same reason (cinatra#3016).
+// Its two gate reads are the run's own — the paused HITL gate and the run's
+// trigger — and neither belongs in the module graph of a screen that called
+// `canRespondInRunWindow` only to decide whether to draw a box.
+async function loadRunWindowFrame() {
+  return import("./run-window-frame");
+}
+
 /**
  * The platform's OWN sentence when the conversation's model cannot operate
  * anything. The plan: "A conversation whose model cannot operate anything lends
@@ -141,6 +149,13 @@ function boundedClaim(
   return { candidateRefs: refs, focusedRef: refs.includes(focused ?? "") ? focused : null };
 }
 
+/** The rows the access check read, handed back rather than read a second time. */
+type RunWindowAccess = {
+  actor: ResolvedWindowActor;
+  run: Awaited<ReturnType<typeof readAgentRunById>>;
+  template: Awaited<ReturnType<typeof readAgentTemplateById>>;
+};
+
 type ResolvedWindowActor = {
   actor: ReturnType<typeof actorFromSession>;
   roleHints: ActorRoleHints;
@@ -164,7 +179,7 @@ async function requireRunWindowAccess(
    * else's template.
    */
   expectTemplateId?: string,
-): Promise<{ actor: ResolvedWindowActor }> {
+): Promise<RunWindowAccess> {
   const session = await getAuthSession();
   if (!session?.user?.id) throw new RunWindowAccessDenied();
 
@@ -210,6 +225,11 @@ async function requireRunWindowAccess(
       orgId,
       platformRole,
     },
+    // THE ROWS THIS CHECK CLEARED (cinatra#3016), so the frame below is built
+    // from the very run the access answer was about — not from a second read
+    // that could name a different one.
+    run,
+    template,
   };
 }
 
@@ -256,7 +276,10 @@ export async function runWindowTurn(
     throw new Error("That message is too long for this window.");
   }
 
-  const { actor } = await requireRunWindowAccess(input.runId, "respondToHitl");
+  const { actor, run, template } = await requireRunWindowAccess(
+    input.runId,
+    "respondToHitl",
+  );
   const claim = boundedClaim(input.boundCard);
 
   // The person's message is committed BEFORE the model runs. A turn that dies
@@ -282,6 +305,35 @@ export async function runWindowTurn(
     platformRole: actor.platformRole,
   });
 
+  // THE RUN THIS WINDOW SITS UNDER, assembled for the assistant (cinatra#3016).
+  //
+  // The plan: the window is "the person's conversation with the assistant about
+  // the run it sits under". Until this frame existed, four of the five windows
+  // handed the model the typed words and nothing else, so the assistant asked
+  // back for "the workflow/run ID" from inside a screen that is already mounted
+  // under exactly one run. The frame is READ STATE — it is what a person can
+  // already see above the box — and it lends nothing: no tool, no grant, no
+  // control (W5c owns acting).
+  //
+  // FAIL-SOFT. A frame that cannot be built costs the answer its context, never
+  // the answer: the turn runs without it, exactly as it did before.
+  let runFrame = "";
+  try {
+    const { buildRunWindowFrame, renderRunWindowFrame } = await loadRunWindowFrame();
+    runFrame = renderRunWindowFrame(
+      await buildRunWindowFrame({
+        run: run as never,
+        template: template as never,
+        surface: input.surface,
+      }),
+    );
+  } catch (err) {
+    console.error(
+      `[run-window] the run frame for run ${input.runId} could not be built`,
+      err,
+    );
+  }
+
   let text = "";
   let toolLess = false;
   let runtimeError: string | null = null;
@@ -305,6 +357,10 @@ export async function runWindowTurn(
       // it under this person's access and mints the single-use grant, or does
       // not; nothing here concludes anything from it.
       ...(claim ? { boundCard: claim } : {}),
+      // The run the window sits under (cinatra#3016). Read state only — the
+      // runtime composes it into the turn's system context and grants nothing
+      // for it.
+      ...(runFrame ? { runFrame } : {}),
       send: (event, data) => {
         const d = (data ?? {}) as Record<string, unknown>;
         if (event === "text") {
