@@ -78,6 +78,17 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   echo "${_WA_YELLOW}==> works-after graphiti: tier 2 (extraction) SKIPPED${_WA_RST} — no OPENAI_API_KEY. Tier 1 (substrate + local embedder + deterministic recovery) still runs, and needs no secret."
 fi
 
+# SNAPSHOT THE LANE'S KEY UNDER A NAME NO TIER WRITES.
+#
+# `load_generated_env` exports every credential-carrying variable the generator
+# names, and `OPENAI_API_KEY` is one of them (graphiti_core reads the bare name
+# during init). So the fake-key wiring tier OVERWRITES `OPENAI_API_KEY` in this
+# shell, and a later `GRAPHITI_TIER_KEY="$OPENAI_API_KEY"` would hand the
+# extraction tier the FAKE key — an arm that claims a real provider proof while
+# running on a string no vendor accepts. Read the real key from here instead;
+# nothing exports over this name.
+WA_LANE_OPENAI_KEY="${OPENAI_API_KEY:-}"
+
 NEO4J_PASSWORD="wa-$(wa_throwaway_hexkey 12)"
 
 cleanup() {
@@ -144,8 +155,157 @@ done
 [ "$EMB_READY" -eq 1 ] || fail "the local embedder did not become ready within 120s."
 wa_info "local embedder ready: $(docker exec "$EMB" curl -fsS http://localhost:8080/health)"
 
+# A body that is valid JSON but not an OBJECT (`[]`, `null`, a scalar) parses and
+# then has no `.get`. That used to escape as a 500 with a traceback while every
+# other malformed input got a 400 — the one shape of bad request that read as a
+# server fault. Asserted here rather than in a unit test because this service
+# ships as a container and has no other harness.
+for BAD_BODY in '[]' 'null' '3' '"x"'; do
+  EMB_STATUS="$(docker exec "$EMB" curl -s -o /dev/null -w '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' -d "$BAD_BODY" \
+    http://localhost:8080/v1/embeddings || echo 000)"
+  [ "$EMB_STATUS" = "400" ] \
+    || fail "the local embedder answered HTTP ${EMB_STATUS} for body ${BAD_BODY}; a malformed body is a bad request (400), not a server fault."
+done
+wa_info "local embedder rejects non-object bodies with 400 (not 500)"
+
+# ---------------------------------------------------------------------------
+# load_generated_env <provider>
+#
+# THE CONFIGURATION UNDER TEST IS THE GENERATOR'S, NOT THIS SCRIPT'S.
+#
+# Every tier below used to hand-roll its graphiti env, which meant the one
+# configuration a real install actually receives — the one
+# `scripts/gen-graphiti-env.mjs#buildGraphitiEnv` writes — was the one
+# configuration the proof matrix never booted. A generator bug therefore could
+# not fail this arm, and one did: the keyed OpenAI branch declared 1536-wide
+# `text-embedding-3-small` while leaving the embedder URL at config.yaml's local
+# 384-wide default, and a green tier 2 said nothing about it. This helper closes
+# that gap by deriving the tier's env from the generator itself.
+#
+# SECRETS NEVER TRAVEL THROUGH THE SUBSTITUTION. The generator emits the
+# credential-carrying variables by NAME only (`KEYVAR <name>`); the shell then
+# exports each from its OWN `$GRAPHITI_TIER_KEY` and passes `-e NAME`, so the key
+# is never a command-line argument and never crosses a pipe. The generator
+# REFUSES to print any value equal to the key, so a future variable that starts
+# carrying one fails the arm instead of leaking it.
+#
+# Sets: GENERATED_ENV_ARGS (the docker -e array) and GENERATED_ENV_SUMMARY (the
+# key-free wiring line this arm logs and asserts on).
+# ---------------------------------------------------------------------------
+load_generated_env() {
+  local provider="$1"
+  GENERATED_ENV_ARGS=()
+  GENERATED_ENV_SUMMARY=""
+  local emitted
+  # The script body is single-quoted so JS `${...}` reaches node untouched. The
+  # ONE value that must come from the shell closes the quotes and reopens them
+  # ('"..."'), so REPO_ROOT does expand — shellcheck reads only the outer quotes.
+  # shellcheck disable=SC2016
+  emitted="$(GRAPHITI_TIER_PROVIDER="$provider" wa_node --input-type=module -e '
+    import { buildGraphitiEnv } from "'"${REPO_ROOT}"'/scripts/gen-graphiti-env.mjs";
+    const key = process.env.GRAPHITI_TIER_KEY ?? "";
+    const { env, hasKey, embedder } = buildGraphitiEnv(key, process.env.GRAPHITI_TIER_PROVIDER);
+    const lines = [];
+    for (const [name, value] of Object.entries(env)) {
+      if (key && value === key) { lines.push(`KEYVAR ${name}`); continue; }
+      if (key && String(value).includes(key)) {
+        console.error(`refusing to emit ${name}: it embeds the resolved key`);
+        process.exit(3);
+      }
+      lines.push(`SET ${name}=${value}`);
+    }
+    lines.push(`SUMMARY hasKey=${hasKey} embedder=${embedder}`);
+    console.log(lines.join("\n"));
+  ')" || fail "buildGraphitiEnv refused to produce an env for provider=${provider}."
+
+  local line name
+  while IFS= read -r line; do
+    case "$line" in
+      "KEYVAR "*)
+        name="${line#KEYVAR }"
+        # Export from THIS shell's key, so the value never appeared above.
+        export "${name}=${GRAPHITI_TIER_KEY}"
+        GENERATED_ENV_ARGS+=(-e "$name")
+        ;;
+      "SET "*)
+        name="${line#SET }"
+        export "${name%%=*}=${name#*=}"
+        GENERATED_ENV_ARGS+=(-e "${name%%=*}")
+        ;;
+      "SUMMARY "*) GENERATED_ENV_SUMMARY="${line#SUMMARY }" ;;
+    esac
+  done <<< "$emitted"
+
+  [ "${#GENERATED_ENV_ARGS[@]}" -gt 0 ] \
+    || fail "buildGraphitiEnv(provider=${provider}) produced no environment at all."
+  # Key-free by construction, and logged so the wiring is READABLE in CI output.
+  wa_info "generator env for provider=${provider}: ${GENERATED_ENV_SUMMARY}; $(
+    printf '%s\n' "$emitted" | grep '^SET EMBEDDER__' | sed 's/^SET //' | tr '\n' ' '
+  )"
+}
+
+neo4j_cypher() {
+  # The password is a per-run throwaway generated above, not a credential.
+  docker exec "$NEO" cypher-shell -u neo4j -p "$NEO4J_PASSWORD" --format plain "$1"
+}
+
+# ---------------------------------------------------------------------------
+# reset_neo4j <why>
+#
+# The embedder WIDTH differs between tiers (384 on the local floor, 1536 on
+# hosted OpenAI), and every tier shares one Neo4j. Vectors of two widths in one
+# store compare wrongly rather than loudly — the exact hazard the generated
+# keyed tier exists to catch — so the store is reset before the width changes.
+#
+# DELETING THE NODES IS NOT ENOUGH. A vector index carries its DIMENSIONS, and
+# an index is SCHEMA: it survives `DETACH DELETE` untouched. A 384-wide index
+# left standing is still the index the 1536-declared server writes through, so
+# clearing only the data would move the silent mismatch one layer down instead
+# of removing it. The vector indexes therefore go too, and graphiti rebuilds
+# them at the declared width on the startup that immediately follows.
+#
+# Only VECTOR indexes are dropped. They are the only dimension-bound ones, and
+# unlike a constraint-backed range index they can be dropped directly.
+# ---------------------------------------------------------------------------
+reset_neo4j() {
+  local why="$1"
+  neo4j_cypher 'MATCH (n) DETACH DELETE n' >/dev/null 2>&1 \
+    || fail "could not clear neo4j data before ${why}."
+
+  local names
+  names="$(neo4j_cypher "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name" 2>/dev/null | tail -n +2 | tr -d '"\r')" \
+    || fail "could not enumerate neo4j vector indexes before ${why}."
+
+  local idx
+  while IFS= read -r idx; do
+    [ -n "$idx" ] || continue
+    neo4j_cypher "DROP INDEX \`${idx}\` IF EXISTS" >/dev/null 2>&1 \
+      || fail "could not drop neo4j vector index '${idx}' before ${why}."
+  done <<< "$names"
+
+  # ASSERTED, not assumed. A width-bound index that survived this would receive
+  # vectors of the other width in silence, which is the whole failure mode.
+  local remaining
+  remaining="$(neo4j_cypher "SHOW INDEXES YIELD type WHERE type = 'VECTOR' RETURN count(*) AS n" 2>/dev/null | tail -n +2 | tr -d '" \r' | head -1)" \
+    || fail "could not re-read neo4j vector indexes after the reset before ${why}."
+  [ "${remaining:-1}" = "0" ] \
+    || fail "neo4j still carries ${remaining} vector index/indexes before ${why}; one of the other width would silently receive these vectors."
+
+  wa_info "neo4j reset before ${why}: nodes deleted, every vector index dropped (the declared embedder width changes)"
+}
+
 # ---------------------------------------------------------------------------
 # start_graphiti <tier>
+#
+# tier=generated-keyed : the env is whatever `buildGraphitiEnv` writes for a
+#                keyed install (see load_generated_env) — the shape a real
+#                configured install receives, booted rather than described.
+#                `GRAPHITI_TIER_KEY` supplies the
+#                credential — a real `OPENAI_API_KEY` when one exists (tier 2,
+#                which then runs the full round trip against hosted embeddings),
+#                and an obviously-fake one otherwise (tier 1c, boot + wiring
+#                only, and it says so).
 #
 # tier=keyless : NO provider key. The LLM slot carries the SAME named sentinel
 #                the bring-up writes (scripts/gen-graphiti-env.mjs). It is not a
@@ -184,6 +344,39 @@ start_graphiti() {
   # inline — naming them would only obscure that they are not credentials.
   local -a key_env
   local llm_provider="openai"
+  # THE GENERATED TIER TAKES ITS WHOLE EMBEDDER + LLM WIRING FROM THE GENERATOR,
+  # so it returns early rather than falling through to the hand-rolled block
+  # below — a hand-rolled `-e` on the same variable would override exactly the
+  # value under test.
+  if [ "$tier" = "generated-keyed" ]; then
+    load_generated_env openai
+    docker run -d --name "$GR" --network "$NET" -p 127.0.0.1::8000 \
+      -v "${REPO_ROOT}/docker/graphiti/config.yaml:/app/mcp/config/cinatra.yaml:ro" \
+      -e CONFIG_PATH=/app/mcp/config/cinatra.yaml \
+      -e DATABASE__PROVIDER=neo4j \
+      -e DATABASE__PROVIDERS__NEO4J__URI="bolt://${NEO}:7687" \
+      -e DATABASE__PROVIDERS__NEO4J__USERNAME=neo4j \
+      -e DATABASE__PROVIDERS__NEO4J__PASSWORD="$NEO4J_PASSWORD" \
+      "${GENERATED_ENV_ARGS[@]}" \
+      -e SEMAPHORE_LIMIT=10 \
+      "$GRAPHITI_IMAGE" >/dev/null
+    wait_graphiti_healthy "$tier"
+    # The generator must name the HOSTED embedder for a keyed install
+    # (cinatra#2591 deliverable 3), and the width it declares must be that
+    # endpoint's. Asserted against the RUNNING container, so a generator that
+    # silently reverts to the local floor fails the arm rather than passing it.
+    local emb_url emb_dim
+    emb_url="$(docker exec "$GR" printenv EMBEDDER__PROVIDERS__OPENAI__API_URL || echo "")"
+    emb_dim="$(docker exec "$GR" printenv EMBEDDER__DIMENSIONS || echo "")"
+    case "$emb_url" in
+      https://api.openai.com/*) ;;
+      *) fail "generated keyed env points the embedder at '${emb_url}' — a keyed install must embed on the vendor it declares, not on the local 384-wide floor (cinatra#2591 deliverable 3)." ;;
+    esac
+    [ "$emb_dim" = "1536" ] \
+      || fail "generated keyed env declares EMBEDDER__DIMENSIONS='${emb_dim}' against ${emb_url}; the declared width must be the width that endpoint serves."
+    wa_info "generated keyed env verified IN THE CONTAINER: embedder ${emb_url} at ${emb_dim} dims"
+    return 0
+  fi
   if [ "$tier" = "keyed" ]; then
     export LLM__PROVIDERS__OPENAI__API_KEY="$OPENAI_API_KEY"
     key_env=(-e LLM__PROVIDERS__OPENAI__API_KEY -e OPENAI_API_KEY)
@@ -215,6 +408,11 @@ start_graphiti() {
     -e SEMAPHORE_LIMIT=10 \
     "$GRAPHITI_IMAGE" >/dev/null
 
+  wait_graphiti_healthy "$tier"
+}
+
+wait_graphiti_healthy() {
+  local tier="$1"
   HOST_PORT=""
   for i in $(seq 1 40); do
     HOST_PORT="$(wa_host_port "$GR" 8000)"
@@ -284,18 +482,49 @@ fi
 wa_group_end
 
 # ---------------------------------------------------------------------------
-# TIER 2 — KEYED. Extraction, which only a real provider can prove.
+# TIER 1c — THE GENERATOR'S OWN KEYED CONFIGURATION, BOOTED. No secret.
+#
+# Tiers 1 and 1b prove the substrate on configurations this script writes. This
+# one proves the configuration a real KEYED install receives, which is a
+# different thing: while no tier called `buildGraphitiEnv`, a generator that
+# mis-wired the keyed branch passed the whole matrix. That is not theoretical —
+# the keyed branch declared 1536-wide `text-embedding-3-small` while leaving the
+# embedder URL at config.yaml's local 384-wide default, and every tier stayed
+# green, because the one configuration an operator actually gets was the one
+# configuration nothing booted.
+#
+# The key here is OBVIOUSLY FAKE, so this tier claims boot + wiring and nothing
+# else — no round trip runs, and nothing is sent to any vendor. Tier 2 runs the
+# same generated configuration with a real key and does the round trip.
+# ---------------------------------------------------------------------------
+wa_group_start "works-after graphiti tier 1c — the generator's keyed configuration boots (no secret)"
+# THE FIRST 1536-WIDE TIER. Tiers 1 and 1b ranked at 384 on the local floor and
+# left 384-wide vector indexes behind them, so the store is reset HERE — before
+# the first server that declares the hosted width boots and rebuilds them — and
+# not later. Tier 2 declares the same 1536 and inherits what this tier built,
+# so it needs no reset of its own.
+reset_neo4j "tier 1c (the first tier that declares the hosted 1536 width)"
+GRAPHITI_TIER_KEY="sk-fake-works-after-wiring-proof-2591" start_graphiti generated-keyed
+wa_info "tier 1c: boot + embedder wiring proven on buildGraphitiEnv's own output; the key is fake, so extraction and ranking are NOT claimed here"
+wa_group_end
+
+# ---------------------------------------------------------------------------
+# TIER 2 — KEYED. Extraction, which only a real provider can prove — and now on
+# the configuration the GENERATOR writes, not a hand-rolled one.
 # ---------------------------------------------------------------------------
 if [ "$RUN_KEYED" = "1" ]; then
-  wa_group_start "works-after graphiti tier 2 — extraction on a real provider"
-  start_graphiti keyed
+  wa_group_start "works-after graphiti tier 2 — extraction on a real provider, on the generated env"
+  # No reset here: tier 1c already dropped the 384-wide schema and let graphiti
+  # rebuild it at 1536, which is the width this tier declares too. Nothing wrote
+  # a vector in between.
+  GRAPHITI_TIER_KEY="$WA_LANE_OPENAI_KEY" start_graphiti generated-keyed
   MARKER="WorksAfterMarker$(wa_throwaway_hexkey 6)"
   GRAPHITI_URL="$GRAPHITI_URL" WORKS_AFTER_MARKER="$MARKER" WORKS_AFTER_TIER="keyed" \
     WORKS_AFTER_DEADLINE_MS="${WORKS_AFTER_DEADLINE_MS:-120000}" \
     wa_node --conditions=react-server --import tsx "${REPO_ROOT}/scripts/ci/works-after/rt/graphiti-roundtrip.ts" \
     || fail "graphiti tier 2 (episode -> extraction -> searchable entity) failed."
   wa_group_end
-  echo "${_WA_GREEN}==> works-after graphiti PASSED${_WA_RST} — tier 1 (substrate + local embedder + deterministic recovery) AND tier 2 (extraction) both green."
+  echo "${_WA_GREEN}==> works-after graphiti PASSED${_WA_RST} — tier 1 (substrate + local embedder + deterministic recovery), tier 1b (anthropic selection), tier 1c (the generator's keyed configuration boots) AND tier 2 (extraction + hosted-embedder ranking on that same generated configuration) all green."
 else
-  echo "${_WA_GREEN}==> works-after graphiti PASSED (tier 1)${_WA_RST} — substrate + local embedder + deterministic recovery green; extraction tier skipped (no key)."
+  echo "${_WA_GREEN}==> works-after graphiti PASSED (tiers 1, 1b, 1c)${_WA_RST} — substrate + local embedder + deterministic recovery green, and the generator's keyed configuration BOOTS with its hosted-embedder wiring asserted in the container; extraction tier skipped (no key), so extraction and hosted-embedder RANKING are not claimed."
 fi
