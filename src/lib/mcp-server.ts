@@ -28,6 +28,7 @@ import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
+import { createLentActionMcpModule } from "@/lib/lifecycle/lent-action-mcp";
 import { createScheduleProposalMcpModule } from "@/lib/lifecycle/schedule-proposal-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createConnectorInventoryMcpModule } from "@/lib/connector-inventory-mcp";
@@ -145,6 +146,19 @@ const postConnectorPlatformModules = [
   // anywhere on the lifecycle surface; both delegated tool policies reject that
   // class by construction (structural test in src/lib/lifecycle/__tests__).
   createLifecyclePullMcpModule(),
+  // THE LENT ACTION (cinatra#2932, lifecycle-b W5a):
+  // lifecycle_bound_card_decide — the ONE primitive that RESOLVES a lifecycle
+  // interaction, and the one deliberate exception to the rule stated three
+  // comments above. It sits beside the pull module because it is the same
+  // surface seen from the other side: the pull shows the person what is
+  // waiting, this presses ONE control of the ONE card their message was bound
+  // to. Reaching it is not permission to use it — without the server-minted,
+  // single-use grant on the request frame it does nothing at all, and with one
+  // it runs the card's own decision path under the person's own credential.
+  // Both delegated tool policies name it explicitly, with a typed CarveOut
+  // twin, and the structural rule test names the exception where it is
+  // enforced rather than exempting the scanner.
+  createLentActionMcpModule(),
   // The schedule PROPOSAL producer (cinatra#2569, epic #2564 S5):
   // schedule_proposal_render — the tool that fills S1's deliberately empty
   // `trigger_schedule_proposal` producer allowlist. Read-only in the same sense
@@ -315,7 +329,7 @@ export async function registerAllCapabilities(
     // entries (the MCP SDK validates input against `~standard` of this schema —
     // the resolved version's, per the S8 contract). The dispatch below is
     // PLAN-PINNED: it re-resolves the edge at call time and REFUSES on drift
-    // (codex round-0 #3 — input validated against one version's schema must
+    // (convergence round 0 #3 — input validated against one version's schema must
     // never reach another version's handler).
     const registration = entry.tool;
     const dispatchPlanned =
@@ -592,7 +606,7 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // transport, and an unmarked versioned-only name would be blocked as an
   // unclassified primitive even for its legitimately edge-bound caller.
   // Collision-skipped names are unmarked for the same reason the live builder
-  // unmarks them (codex round-0 #4).
+  // unmarks them (convergence round 0 #4).
   markEffectiveExtensionMcpTools(unionEffective);
   unmarkEffectiveExtensionMcpToolCollisions(unionSkipped);
 

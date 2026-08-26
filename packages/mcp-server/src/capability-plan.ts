@@ -243,6 +243,31 @@ const CORE_PROPOSAL_OVERRIDE = {
   agent_creation_request_edit: "dispatch",
   agent_creation_request_list: "read",
   agent_creation_request_get: "read",
+  // cinatra#2932 (lifecycle-b W5a, merged in from main as cinatra#2988) — the
+  // LENT ACTION.
+  //
+  // RE-DERIVED, NOT INHERITED. Main added this name to the INTERIM declaration
+  // shim in `delegated-chat-tool-policy.ts`. This branch DELETED that shim,
+  // which is the obligation the shim's own header set for #2817: "the classes
+  // must be RE-DERIVED from what registrations actually declare, never
+  // inherited from here". So the class is restated here, at the host's real
+  // declaration table, where it becomes a release-versioned admission record
+  // bound to `(owner, version, name, digest(declaration))` rather than a name
+  // on a list. Without it the merge would silently WITHDRAW a feature main has
+  // already shipped: the primitive stays on the widget perimeter and falls off
+  // chat, which is the parity break `lifecycle-no-decide-primitives` catches.
+  //
+  // `dispatch` is the honest class of the three on offer: the primitive hands
+  // work to a path that runs under its OWN actor — the person's own credential,
+  // resolved live — rather than returning data (`read`) or enumerating a
+  // catalog (`discovery`). It sits in the OVERRIDE literal, not `CORE_EXACT`,
+  // because the name carries `decide` and must pass the destructive-verb
+  // backstop by the separately-audited mechanism.
+  //
+  // ADMISSION IS STILL NOT PERMISSION. The handler refuses unless the request
+  // frame carries a server-minted, signed, SINGLE-USE grant naming the person,
+  // the message, the one bound card and the one control.
+  lifecycle_bound_card_decide: "dispatch",
 } as const;
 /**
  * Every core/bundled primitive the host declares for, and the class it declares.
@@ -252,7 +277,7 @@ const CORE_PROPOSAL_OVERRIDE = {
  * admitted past the destructive-verb backstop by a separately audited
  * mechanism, and folding them into one object would erase the structural signal
  * that says so — a reviewer diffing the core set against its class table would
- * silently pick up seven names that are not in it.
+ * silently pick up eight names that are not in it.
  */
 export const HOST_PRIMITIVE_DECLARATIONS: Readonly<Record<string, DelegatedChatToolClass>> =
   Object.freeze({ ...CORE_EXACT, ...CORE_PROPOSAL_OVERRIDE });

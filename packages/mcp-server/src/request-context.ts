@@ -347,6 +347,32 @@ export type McpRequestContext = {
    * input; undefined for every ordinary request.
    */
   verifiedSubmissionId?: string;
+  /**
+   * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
+   *
+   * WHAT IT IS. A server-minted, signed, single-use authority naming the person,
+   * the message, the ONE bound card and the ONE control the assistant may press
+   * on it. It is minted at SEND time for a message typed under a bound card and
+   * relayed here on a header of the hosted self-MCP reference.
+   *
+   * WHAT IT IS NOT. It is not the actor token: the actor token says WHO is
+   * calling and carries no message and no card, so it can never say what THIS
+   * turn may press. Both must be present, and the grant is matched against the
+   * frame's own identity by its consumer — holding a grant is not being its
+   * subject.
+   *
+   * TRUST BOUNDARY. ONLY the transport boundary writes this field, and only
+   * through `resolveRequestLentActionGrant` below, which admits it for the two
+   * delegations a PERSON types under and drops it everywhere else. It is never
+   * read from a tool argument: an argument is something a model can invent.
+   *
+   * IT IS AN OPAQUE STRING HERE, ON PURPOSE. This package holds no app secret
+   * and takes no dependency on the codec; the app-layer consumer verifies the
+   * signature, the life and the four claims. A malformed value therefore reads
+   * as "a grant that will not verify", which is the same fail-closed outcome as
+   * no grant at all.
+   */
+  lentActionGrant?: string;
 };
 
 /**
@@ -357,6 +383,56 @@ export type McpRequestContext = {
  * is the only writer of an authenticated frame; downstream registries read it.
  */
 export const mcpRequestContextStorage = new AsyncLocalStorage<McpRequestContext>();
+
+// ---------------------------------------------------------------------------
+// The LENT-ACTION GRANT header, admitted (cinatra#2932, lifecycle-b W5a).
+//
+// PURE AND SYNCHRONOUS so the admission rule is directly unit-testable, and in
+// THIS module — the request-context frame it fills — rather than a new file, so
+// the locked route graphs do not grow (route-graph ratchet), exactly as
+// `resolveRequestRunContext` above states for itself.
+//
+// THREE RULES, ALL FAIL-CLOSED:
+//
+//   1. ONLY WHERE A PERSON TYPED. A grant is the authority of a human who sent a
+//      message under a bound card, so it is admitted for the two delegations
+//      that carry one — the browser chat's `chat` OBO and the site widget's
+//      `public_site_widget` OBO — and DROPPED for every other frame. An
+//      `agent_run` delegation is a machine acting inside a run: it has no
+//      message, no composer and nobody to be the subject of a grant, so a header
+//      on that frame is discarded rather than honoured. A frame with no
+//      delegation at all is the machine/session transport and is likewise not a
+//      typed message.
+//   2. SHAPE BEFORE SUBSTANCE. Bounded length and the codec's own base64url
+//      alphabet. This is not verification — that needs the app secret and
+//      happens app-side — it is refusing to carry an obvious non-grant onto the
+//      frame.
+//   3. ONE HEADER, ONE GRANT. A repeated or list-valued header is refused
+//      outright rather than split, because "which of these did you mean" is not
+//      a question an authority may answer for a caller.
+// ---------------------------------------------------------------------------
+
+/** The header the hosted self-MCP reference carries a lent-action grant on. */
+export const LENT_ACTION_GRANT_HEADER = "x-cinatra-lent-grant";
+
+/** The codec's bound. Kept in step with the app-side codec by its own test. */
+const LENT_ACTION_GRANT_MAX_LENGTH = 512;
+
+export function resolveRequestLentActionGrant(input: {
+  /** The raw header value, or null/undefined when absent. */
+  headerValue?: string | null;
+  /** The VERIFIED delegation this request authenticated as. */
+  delegatedActor?: DelegatedMcpActor | null;
+}): string | undefined {
+  const raw = input.headerValue;
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  if (value.length === 0 || value.length > LENT_ACTION_GRANT_MAX_LENGTH) return undefined;
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
+  const delegation = input.delegatedActor?.delegation;
+  if (delegation !== "chat" && delegation !== "public_site_widget") return undefined;
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // Run-context precedence for one MCP request (#1195).
@@ -504,7 +580,7 @@ export function resolveRequestRunContext(input: {
   // The legacy channel that CLAIMED a run id on this request.
   //
   // Read from the RAW input, DELIBERATELY before the durable-"invalid"
-  // suppression above (codex round-1 finding, #1195 flip). A suppressed claim is
+  // suppression above (convergence round 1 finding, #1195 flip). A suppressed claim is
   // still a claim: computing this from the post-suppression value would make
   // `durable:"invalid"` + a header run id resolve to suppressed-but-NOT-denied,
   // so the transport would serve the request with the run id merely dropped —

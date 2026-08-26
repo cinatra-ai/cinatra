@@ -43,7 +43,6 @@ import {
 } from "./actions";
 // Chat prompt-window HITL drive.
 import {
-  ambiguousComposerRefusal,
   classifyPromptForGate,
   createChatGateRegistry,
   resolveComposerRouting,
@@ -381,7 +380,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // ever release them. The registry decides that on the THREAD, not on the
     // stream count: an ended turn stays nameable until its reveal commits, so
     // the ledger outlives the last stream and a switch made after it still has
-    // to drop it (codex round 2). The stillOnOriginThread guard inside
+    // to drop it (convergence round 2). The stillOnOriginThread guard inside
     // streamResponse short-circuits any late setMessages chunks arriving after
     // this point, so an aborted stream cannot mutate the new thread's list.
     if (streams.resetForThread(activeThreadId)) setStreamingCount(0);
@@ -560,7 +559,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       ownerUserId: userId,
     };
     // A SAVE THAT LANDED releases the ledger's RUN half and adopts the baseline;
-    // ISSUING one releases nothing (codex round 4, finding 1) — a failed one wrote
+    // ISSUING one releases nothing (convergence round 4, finding 1) — a failed one wrote
     // no mirror row. Fenced on its OWN thread, like every resumed await here.
     saveChatThreadInOrder(thread).then(() => { if (activeThreadIdRef.current !== thread.id) return; streams.noteSavedTranscript(messages); loadedFingerprintRef.current = fingerprintMessages(messages); }, () => {});
     // Real activity: advance this thread's updatedAt in-place. The sidebar's
@@ -594,7 +593,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
   // ./ag-ui-chat-client. This wrapper owns registry + guard.
-  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string, assistant?: string, anchorMessageId?: string | null) {
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string, assistant?: string, anchorMessageId?: string | null, boundCard?: { refs: string[]; focused: string | null }) {
     const assistantId = generateId();
     const abortController = new AbortController();
     // The ORIGIN thread this turn was dispatched FOR (captured BEFORE the handshake
@@ -616,6 +615,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           content: m.content,
           ...(m.attachments && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         })),
+        // cinatra#2932 — the bound-card CLAIM, read at send time by the caller
+        // and threaded verbatim. Omitted when the composer has no card on
+        // screen, so an ordinary turn's request body is unchanged.
+        ...(boundCard ? { boundCard } : {}),
         ui: {
           updateMessages: (updater) =>
             setMessages((prev) => (stillOnOriginThread() ? updater(prev) : prev)),
@@ -641,7 +644,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // negotiation surfaces a turn error on a never-blank assistant bubble —
   // there is no legacy fallback to retry over. Externals are webhook-polled
   // and never touch this dispatcher.
-  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string, assistant?: string, anchorMessageId?: string | null) {
+  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string, assistant?: string, anchorMessageId?: string | null, boundCard?: { refs: string[]; focused: string | null }) {
     const threadId = activeThreadIdRef.current;
     if (!threadId) {
       // Unreachable in practice: every caller dispatches inside an active
@@ -665,7 +668,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       );
       return;
     }
-    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint, assistant, anchorMessageId);
+    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint, assistant, anchorMessageId, boundCard);
   }
 
   async function submitEmbed() {
@@ -843,17 +846,29 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     }
 
     // -----------------------------------------------------------------------
-    // Chat prompt-window HITL drive. If an inline HITL gate is
-    // open, classify this message: a gate response is submitted via the SAME
-    // approval path the embedded form uses (AgenticRunPanel single source of
-    // truth) and does NOT trigger an LLM turn; a non-response falls through
-    // to normal chat routing below.
+    // ONE ROAD, for everything except a waiting screen's fields (cinatra#2932,
+    // lifecycle-b W5a). What you type goes to the assistant; the two arms that
+    // used to act on it first — a sentence filed as a bound review's comment,
+    // and this page's own several-reviews refusal — are gone, with their
+    // replacements in the same change. The FIELD-GATE arm stays until #2934
+    // builds the control that would replace it. `inline-hitl-classify.ts` states
+    // which arm went where and why one did not.
     //
-    // A FOCUSED REVIEW CARD (cinatra#2566) is the other thing the composer can
-    // be bound to. Where it goes — and when it refuses to guess — is decided by
-    // the pure `resolveComposerRouting`; this block only carries the outcome
-    // out. See that function for the precedence and why ambiguity is refused.
+    // The review binding is read at SEND time — a card can be focused, decided
+    // or unmounted while the reader is typing — and carried with the message as
+    // a CLAIM the server re-checks under the reader's own access.
     // -----------------------------------------------------------------------
+    const composerSnapshot = composerFocusStore.getSnapshot();
+    const boundCardClaim =
+      composerSnapshot.eligible.length > 0
+        ? {
+            refs: [...composerSnapshot.eligible],
+            focused:
+              resolveComposerTarget(composerSnapshot).kind === "target"
+                ? composerSnapshot.focused
+                : null,
+          }
+        : null;
     {
       // Append an assistant ack AND persist it, mirroring the immediate
       // user-message save above. Without the explicit save the gate path's
@@ -890,32 +905,12 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           console.error("[chat] saveChatThread (gate ack) failed:", err),
         );
       };
-      // Read the binding at SEND time, not at render time: a card can be
-      // focused, decided or unmounted while the reader is typing, and the
-      // message must be routed by what is true when they press send.
+      // Read the FIELD GATE at SEND time, not at render time: a gate can open or
+      // close while the reader is typing. A bound review is no longer read here
+      // at all — it travels with the message as `boundCardClaim` above.
       const composerRouting = resolveComposerRouting({
-        target: resolveComposerTarget(composerFocusStore.getSnapshot()),
         latestOpenGate: getLatestOpenGate(),
-        commentActionFor: composerFocusStore.getCommentAction,
       });
-
-      if (composerRouting.kind === "refuse-ambiguous") {
-        // Nothing was sent — not to a review, not to the model. Said out loud,
-        // because the alternative is a comment landing on a review the reader
-        // did not choose.
-        persistAck(ambiguousComposerRefusal(composerRouting.count));
-        return;
-      }
-
-      if (composerRouting.kind === "review-comment") {
-        // The reader's text IS the comment — no classifier, no field wrap. The
-        // action is the CARD's own, so this lands in the same decision module,
-        // with the same validation order, that pressing Comment on the card
-        // lands in.
-        const result = await composerRouting.comment(trimmed);
-        persistAck(result.message);
-        return;
-      }
 
       const gate = composerRouting.kind === "field-gate" ? composerRouting.gate : undefined;
       if (gate) {
@@ -1016,7 +1011,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         // Cinatra takeover — launch the stream FIRST so beginStream() registers the
         // abort controller in the same render batch that clears pendingExternalHandle
         // (removes the visible gap before the cinatra thinking indicator).
-        void streamResponse(currentMessages, "cinatra");
+        void streamResponse(currentMessages, "cinatra", undefined, undefined, undefined, undefined, boundCardClaim ?? undefined);
         setPendingExternalHandle(null);
       }, EXTERNAL_TAKEOVER_MS);
       return;
@@ -1031,10 +1026,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // is non-throwing (internal try/catch writes errors into the assistant message),
       // so void dispatch cannot leak an unhandled rejection.
       const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
-      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector);
+      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
     } else {
       // ChatGPT mode: preserve the existing synchronous, blocking behavior.
-      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector);
+      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
     }
   }
 

@@ -41,7 +41,10 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy,
+  LENT_ACTION_GRANT_HEADER,
+  resolveRequestLentActionGrant,
+} from "./request-context";
 import { resolveFrameOrgWriteAuthority, type OrgWriteAuthorityForwardOptions } from "./org-write-authority-forward";
 import { normalizeMcpBasePath as normalizePath } from "./handshake-urls";
 import { inferRequestOrigin, rewriteJsonOriginResponse } from "./origin-rewrite";
@@ -743,6 +746,11 @@ export {
 } from "./runtime-server";
 export {
   mcpRequestContextStorage,
+  // cinatra#2932 (lifecycle-b W5a) — the lent-action grant header name and its
+  // pure admission rule, re-exported so the app-side minter names the SAME
+  // header the transport reads instead of a second literal that can drift.
+  LENT_ACTION_GRANT_HEADER,
+  resolveRequestLentActionGrant,
   type DelegatedMcpActor,
   type McpRequestContext,
 } from "./request-context";
@@ -1132,6 +1140,15 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // `enforceMcpBoundary` still gate the rest.
       delegatedActor,
       delegatedRestricted: delegatedActor?.delegation === "chat",
+      // The LENT-ACTION GRANT (cinatra#2932, lifecycle-b W5a). Admitted by the
+      // pure rule in ./request-context — only on the two delegations a person
+      // types under, only inside the codec's shape. This boundary is the ONLY
+      // writer of the field; nothing downstream may take it from a tool
+      // argument.
+      lentActionGrant: resolveRequestLentActionGrant({
+        headerValue: request.headers.get(LENT_ACTION_GRANT_HEADER),
+        delegatedActor,
+      }),
       // Forward the agent-run OBO scope-ceiling chain onto the request frame so
       // the boundary can read it. Only agent-run delegations carry a ceiling;
       // chat / session / machine callers leave it undefined.

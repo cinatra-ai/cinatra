@@ -56,6 +56,13 @@ import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
 // chat surface used to deliver skills to a provider and leave NO trace, so an
 // audit could only be settled at the wire.
 import { recordTurnSkillDelivery } from "@/lib/agent-run-skills-used";
+// cinatra#2932 (lifecycle-b W5a) — the send-time half of the lent action: the
+// bound card re-checked under the reader's own access, and the single-use grant
+// this turn's self-MCP reference carries.
+import {
+  issueTurnLentActionGrant,
+  type TurnBoundCard,
+} from "@/lib/lifecycle/bound-card-binding";
 import {
   buildTurnSkillDeliveryRows,
   type TurnSkillDeliveryRow,
@@ -196,6 +203,21 @@ export type RunChatTurnArgs = {
    * records nothing) the first time a new entry point forgot to pass it.
    */
   turnIdentity: { turnId: string; runId: string };
+  /**
+   * The BOUND CARD this message was sent with (cinatra#2932, lifecycle-b W5a).
+   *
+   * A CLAIM, NOT A CONCLUSION. The composer sends the refs of the cards it had
+   * on screen and the one the reader pressed, if any; it decides nothing. The
+   * runtime re-resolves every ref under the reader's OWN access, applies the
+   * binding rule to what survives, and only then mints the single-use grant this
+   * turn's self-MCP reference carries. A page that offers refs the reader may
+   * not see binds nothing; a page that claims one card while two are really open
+   * gets the platform's refusal anyway.
+   *
+   * Absent ⇒ no binding, no grant, and a system string byte-identical to a turn
+   * that never had a composer binding.
+   */
+  boundCard?: { candidateRefs: string[]; focusedRef: string | null };
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
@@ -461,7 +483,7 @@ async function buildUserContext(userId?: string): Promise<string> {
 // the namespace here lets the LLM emit the correct `@<vendor>/<slug>` package
 // name from the first scaffold, instead of pattern-matching off the shipped
 // Cinatra examples.
-// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, codex round-2 finding 2).
+// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, convergence round 2 finding 2).
 //
 // These two things have DIFFERENT LIFETIMES and used to share one sentence:
 //
@@ -1034,6 +1056,12 @@ export async function runAssistantTurn(
   // so it never carries the requirement either and its request stays
   // byte-identical to before.
   let selfMcpCapabilityRequired: LlmCapabilityRequirement | undefined;
+  // cinatra#2932 (lifecycle-b W5a) — declared at TURN scope because two places
+  // read it: the tool assembly, which puts the grant on the self-MCP reference,
+  // and the system fragments below, which tell the model what it may press. A
+  // conversation-only turn assembles no tools, so it keeps the default — no
+  // grant, and nothing said about a control it could not operate.
+  let turnBoundCard: TurnBoundCard = { grant: null, systemContext: "" };
   // The provider's skill contribution to the system prompt: an availability cue
   // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
   // provider. Declared out here because both branches below feed it.
@@ -1252,6 +1280,28 @@ export async function runAssistantTurn(
   // A mint/build failure returns null on BOTH paths → the same fail-closed error
   // below (the widget path never silently falls back to the chat token or the
   // machine token).
+  // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The claim
+  // the composer sent is resolved under the reader's OWN live standing and the
+  // binding rule is applied to what survived; a bound card mints ONE single-use
+  // grant for ONE of its controls, which rides this turn's self-MCP reference as
+  // a header. Nothing bound and nothing minted is the ordinary case and costs
+  // the turn nothing — `systemContext` is `""` and the system string is
+  // byte-identical to a turn that never had a composer binding.
+  turnBoundCard = await issueTurnLentActionGrant({
+    claim: args.boundCard ?? null,
+    userId: widgetPrincipal ? widgetPrincipal.userId : userId,
+    orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
+    // The turn's DURABLE identity is the grant's one-per-message key, so a
+    // retried send of the same turn cannot mint a second spendable authority.
+    messageId: args.turnIdentity.turnId,
+    // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from the turn's
+    // last user message, here on the server, and stored with the grant — so what
+    // lands on the card is what they typed and the model supplies no text at
+    // all. `null` when the turn carries no user message, which lands an empty
+    // comment rather than an invented one.
+    messageText:
+      [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
+  });
   const chatCinatraMcpTool = widgetPrincipal
     ? await buildLlmMcpServerToolForWidget(
         adapter.provider,
@@ -1275,6 +1325,9 @@ export async function runAssistantTurn(
           platformRole: widgetPrincipal.platformRole,
         },
         issueWidgetMcpActorToken,
+        // cinatra#2932 — the widget is on the same road; it carries the grant
+        // exactly as the chat page does.
+        { lentActionGrant: turnBoundCard.grant },
       )
     : await buildLlmMcpServerToolForChat(
         adapter.provider,
@@ -1286,6 +1339,8 @@ export async function runAssistantTurn(
             userId,
             sessionOrgId,
           }),
+          // cinatra#2932 — this turn's lent-action grant, or null.
+          lentActionGrant: turnBoundCard.grant,
         },
       );
   if (!chatCinatraMcpTool) {
@@ -1350,7 +1405,7 @@ export async function runAssistantTurn(
   // deployments. The SKILL.md uses `@<vendor>/<slug>` as a placeholder;
   // this context substitutes the real vendor.
   // Two fragments from one read: stable identity for the cacheable head, and
-  // the MUTABLE freeze state for the volatile tail (codex round-2, finding 2).
+  // the MUTABLE freeze state for the volatile tail (convergence round 2, finding 2).
   const { identity: instanceContext, freezeState: instanceFreezeState } =
     buildInstanceContext();
 
@@ -1686,12 +1741,17 @@ export async function runAssistantTurn(
     extensionConfirmationPolicy,
     userContext,
     // Volatile: `agent_source_publish` can flip this mid-conversation, so it
-    // must not sit in the head (codex round-2, finding 2). It follows
+    // must not sit in the head (convergence round 2, finding 2). It follows
     // `userContext` because it is policy-bearing text and policy is read after
     // user-controlled content, never before it (finding 1).
     instanceFreezeState,
     pendingConfirmationContext,
     explicitDispatchDirective,
+    // cinatra#2932 — what this turn is bound to and the ONE control it may
+    // press, or the platform's own refusal to relay. `""` when nothing is
+    // bound, which is every ordinary turn. A conversation-only turn holds no
+    // tools, so it is told nothing about a control it could not operate.
+    boundCardContext: conversationOnly ? "" : turnBoundCard.systemContext,
     // AC#5: the conversation-only degrade notice (empty for tool-capable
     // providers).
     conversationOnlyNotice,

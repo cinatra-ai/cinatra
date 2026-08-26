@@ -108,6 +108,35 @@ const ALLOWED_PROPOSAL_OVERRIDE = new Set<string>([
   "agent_creation_request_edit",
   "agent_creation_request_list",
   "agent_creation_request_get",
+  // ---------------------------------------------------------------------
+  // cinatra#2932 (lifecycle-b W5a) — THE ONE LIFECYCLE DECISION EXCEPTION, and
+  // it is here rather than hidden because the plan requires it to be readable:
+  //
+  //   "The written rule that the model never decides, and its tests, are
+  //    rewritten openly to name this one exception where it is enforced."
+  //
+  // THE NAME CARRIES `decide` ON PURPOSE. It therefore hits the verb backstop
+  // below and cannot reach chat without THIS entry plus its typed `CarveOut`
+  // twin (src/lib/authz/carve-out.ts, at the delegated-chat-token boundary). A name
+  // chosen to slip past the backstop would have concealed the class the
+  // primitive belongs to — the opposite of what an exception should do.
+  //
+  // WHY IT IS SAFE, AND IT IS NOT THE ALLOWLIST THAT MAKES IT SO. Reaching the
+  // tool is not permission to use it. The handler refuses unless the request
+  // frame carries a server-minted, signed, SINGLE-USE grant naming the person,
+  // the message, the ONE bound card and the ONE control — minted only when a
+  // human sent a message with that card bound, spent atomically before any
+  // effect, and matched against the frame's own identity. A prompt-injected
+  // model holds no grant and this primitive does exactly nothing for it; a
+  // model that does hold one can press ONE button of the ONE card the person
+  // was looking at, once, and the card's own decision path runs under the
+  // person's own credential with the same checks, the same CAS and the same
+  // audit row a press produces.
+  //
+  // THE CLASS IS NOT REOPENED. `agent_run_resume`, `approvals_decide` and
+  // `agent_creation_request_decide` stay unreachable: this is one named
+  // primitive, not a lifted backstop.
+  "lifecycle_bound_card_decide",
 ]);
 
 // Defense-in-depth: even if a primitive is mistakenly admitted, deny anything

@@ -88,6 +88,16 @@ const CALLABLE_BEFORE_2817: readonly string[] = [
   "extensions_purge_execute",
   "extensions_search",
   "gmail_aliases_list",
+  // ADDED DELIBERATELY, AND NOT BY THIS BRANCH (merge of cinatra#2988 into
+  // cinatra#2817). The lent action is reach MAIN granted, under cinatra#2932
+  // (lifecycle-b W5a): main put the name on `ALLOWED_PROPOSAL_OVERRIDE`, so on
+  // main a delegated chat can already see and call it. This literal is "what
+  // was callable before the perimeter swap", and after the merge the answer to
+  // that question includes this name. Leaving it out would make the gate assert
+  // that #2817 must WITHDRAW a primitive main ships — the opposite of
+  // non-widening. The swap still adds nothing of its own: the branch-side delta
+  // against this list is still empty in both directions.
+  "lifecycle_bound_card_decide",
   "linkedin_accounts_list",
   "media_feeds_list",
   "metric_cost_budget_get",
@@ -134,9 +144,12 @@ describe("the perimeter swap did not change what is callable", () => {
     expect(removed).toEqual([]);
   });
 
-  it("the frozen list is the real one (83 names), not an empty set passing vacuously", () => {
-    expect(CALLABLE_BEFORE_2817).toHaveLength(83);
-    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(83);
+  // 83 names when this branch was cut, 84 after main's cinatra#2988 added the
+  // lent action to its own allowlist — see the entry itself for why it counts
+  // as reach that already existed rather than reach this swap granted.
+  it("the frozen list is the real one (84 names), not an empty set passing vacuously", () => {
+    expect(CALLABLE_BEFORE_2817).toHaveLength(84);
+    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(84);
     expect([...CALLABLE_BEFORE_2817]).toEqual([...CALLABLE_BEFORE_2817].sort());
   });
 });

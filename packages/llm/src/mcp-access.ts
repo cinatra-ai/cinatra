@@ -337,12 +337,30 @@ function buildCinatraMcpServerTool(
   serverUrl: string,
   authorizationHeader: string,
   allowedTools: string[] | null = null,
+  /**
+   * The LENT-ACTION GRANT for this turn (cinatra#2932, lifecycle-b W5a), or
+   * null when the turn carries no bound card.
+   *
+   * IT RIDES THE REFERENCE, NOT THE TOKEN. The plan asks for the grant to be
+   * "carried to the platform's own tool server through the hosted self-MCP
+   * reference", and this is that carriage: a second header beside the
+   * Authorization one, relayed by the provider on every call of this turn's
+   * self-MCP reference and admitted at the transport boundary
+   * (`resolveRequestLentActionGrant`). It is deliberately NOT a claim on the
+   * actor token: the actor token says who is calling and is reused across
+   * surfaces, while a grant is per message, per card and per control, and
+   * folding the two would make one credential mean two things.
+   */
+  lentActionGrant: string | null = null,
 ): LlmMcpServerTool {
   return {
     type: "mcp",
     serverLabel: "cinatra",
     serverUrl,
-    headers: { Authorization: authorizationHeader },
+    headers: {
+      Authorization: authorizationHeader,
+      ...(lentActionGrant ? { "X-Cinatra-Lent-Grant": lentActionGrant } : {}),
+    },
     serverDescription:
       "Cinatra enterprise intelligence MCP: read agents, workflows, " +
       "objects/lists/projects, content connectors, cubes, artifact authoring, skills. " +
@@ -451,7 +469,13 @@ export async function buildLlmMcpServerToolForChat(
   // leaves the reference unrestricted, which is the pre-existing behavior and
   // stays safe because the authoritative transport gate still decides what is
   // callable. The host passes state whenever it can resolve it.
-  options: { catalogState?: ChatMcpCatalogState } = {},
+  options: {
+    catalogState?: ChatMcpCatalogState;
+    /** This turn's lent-action grant, when a bound card was sent with the
+     *  message (cinatra#2932). Absent ⇒ the reference carries no grant and the
+     *  lent action does nothing for the turn. */
+    lentActionGrant?: string | null;
+  } = {},
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
@@ -469,6 +493,7 @@ export async function buildLlmMcpServerToolForChat(
       // is a host state bug. Fall back to unrestricted and let the
       // authoritative gate hold rather than encode a bug as a hint.
       derived && derived.length > 0 ? derived : null,
+      options.lentActionGrant ?? null,
     );
   } catch (err) {
     console.warn(
@@ -504,6 +529,10 @@ export async function buildLlmMcpServerToolForWidget(
   provider: Extract<LlmProvider, "openai" | "anthropic">,
   actor: WidgetMcpActor,
   issueActorToken: WidgetMcpActorTokenIssuer,
+  /** This turn's lent-action grant, when a bound card was sent with the message
+   *  (cinatra#2932, lifecycle-b W5a). The widget is on the same road as the chat
+   *  page, so it carries the grant the same way. */
+  options: { lentActionGrant?: string | null } = {},
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
@@ -517,6 +546,8 @@ export async function buildLlmMcpServerToolForWidget(
     return buildCinatraMcpServerTool(
       serverUrl,
       `Bearer ${issueActorToken(actor)}`,
+      null,
+      options.lentActionGrant ?? null,
     );
   } catch (err) {
     console.warn(
