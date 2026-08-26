@@ -28,7 +28,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
@@ -348,6 +348,18 @@ describe("a form fill that fails is still said out loud", () => {
     // The success path must add nothing: the stored exchange already carries
     // the answer, and a second copy beside it is the parallel transcript this
     // slice removed from every window.
+    //
+    // ASSERTING ABSENCE ALONE WOULD PROVE NOTHING — a window that never called
+    // the endpoint at all would pass it. So the call is watched: it must have
+    // been made, to the assist route, and it must have RESOLVED before the
+    // absence is read.
+    let resolved = false;
+    const assist = vi.fn(async (url: string) => {
+      expect(String(url)).toContain("/hitl-assist");
+      resolved = true;
+      return { ok: true, status: 200, json: async () => ({ message: "Done." }) };
+    });
+    vi.stubGlobal("fetch", assist);
     const { SchedulePromptWindow } = await import("../schedule-prompt-window");
     render(
       <SchedulePromptWindow
@@ -359,9 +371,13 @@ describe("a form fill that fails is still said out loud", () => {
     );
     await settle();
     fireEvent.click(screen.getByText("send-run-window-turn"));
+    await waitFor(() => expect(resolved).toBe(true));
     await settle();
+    expect(assist).toHaveBeenCalled();
+    // Neither the failure line nor the endpoint's own words appear: the answer
+    // the reader sees is the STORED one.
     expect(screen.queryByText(/Could not fetch suggestions/i)).toBeNull();
-    expect(screen.queryByText(/^Done\.$/)).toBeNull();
+    expect(screen.queryByText("Done.")).toBeNull();
   });
 });
 

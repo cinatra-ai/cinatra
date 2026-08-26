@@ -115,9 +115,11 @@ export function SchedulePromptWindow({
    * platform outcome exactly this way.
    */
   const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
-  // Offset well past the stored positions so a platform line can never take a
-  // stored entry's React key.
-  const outcomeIdRef = useRef(1_000_000);
+  // NEGATIVE, so a platform line can never take a stored entry's React key.
+  // The store's positions and the controller's optimistic ids are both positive
+  // and unbounded, so an offset — however large — is only PROBABLY disjoint;
+  // the sign is disjoint by construction.
+  const outcomeIdRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -192,7 +194,7 @@ export function SchedulePromptWindow({
         setOutcomeLines((prev) => [
           ...prev,
           {
-            id: ++outcomeIdRef.current,
+            id: --outcomeIdRef.current,
             role: "assistant",
             content: "Could not fetch suggestions — please try again.",
           },
