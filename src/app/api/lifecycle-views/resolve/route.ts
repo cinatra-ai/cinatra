@@ -221,6 +221,12 @@ export async function POST(request: Request): Promise<Response> {
       // empty string is never a valid binding, so the resolve answers `absent`.
       userId: actorCtx.actor.userId ?? "",
       orgId: actorCtx.orgId,
+      // THE READER'S STANDING TRAVELS WITH THE REQUEST (cinatra#3004). A
+      // run-addressed card for a run that came from no proposal is read under
+      // the RUN's own access control, so the resolver is handed exactly what
+      // this route already placed — never a wider claim, and never a role the
+      // caller asserted about itself.
+      access: { actor: actorCtx.actor, roles: actorCtx.roleHints },
     });
     return Response.json(
       {

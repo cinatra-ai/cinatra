@@ -281,6 +281,26 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   // exist is exactly the false evidence the ratchet exists to refuse; the
   // `owed` list is how a kind declares its cells honestly until the slice that
   // lands them arrives.
+  //
+  // W3 (cinatra#2930) DID NOT STRIKE THESE, and the reason is a conflict worth
+  // writing down rather than working around. This kind's cells are gated on its
+  // ANCHORS, and the anchor contract is digest-pinned to a design commit
+  // (scripts/audit/chat-hitl-anchor-contract.json — "adding a host cell"
+  // invalidates the digest, and "the only way back is an explicit
+  // re-ratification: re-examine the anchors against the drawing at the new
+  // pin"). There is no ratified drawing of this card at the pinned commit: the
+  // plan's own wave 1 draws "only what this plan adds and no ratified drawing
+  // covers" and does not list the HITL screen, and the plan's Conformance
+  // section rules that "a screen without a drawing is not built". Striking a
+  // cell here would therefore have required either re-ratifying a digest against
+  // a drawing that does not exist, or shipping a card with none. The mount stays
+  // owed to this issue until the drawing lands.
+  //
+  // WHAT W3 DID LAND FOR THIS KIND: its carriage record now states that its
+  // truth is the run's own row (`canonical: run_state`), the coordinator feeds
+  // the outbox when its moment opens, and the held-turn contract records that
+  // its only delivery is the platform's — so the card that draws it has a
+  // substrate to mount on and nothing left to invent.
   agent_hitl_screen: {
     hosts: Object.freeze({}),
     owed: Object.freeze([

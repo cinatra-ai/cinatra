@@ -52,9 +52,11 @@ function sliceBetween(from: string, to: string): string {
 
 const SETUP_BRANCH = sliceBetween("const setupSteps: SetupRailStep[]", "</AgentPageLayout>");
 
-/** The scheduler step's surface, as the screen composes it once, above. */
+/** The schedule step's surface, as the screen composes it once, above — both
+ *  its readings: the first-step form, and the schedule the run already carries
+ *  (cinatra#3004). */
 const SCHEDULER_SURFACE = sliceBetween(
-  "const schedulerStepSurface = (",
+  "const scheduleFormSurface = (",
   "const setupSteps: SetupRailStep[]",
 );
 
@@ -100,9 +102,9 @@ describe("the setup run page draws the run surface, not a single column", () => 
     // The form is composed once, into the step, and the step is what the
     // surface is handed. A second `<TriggerScreenClient` inside this branch
     // would be exactly the single column this issue removes.
-    expect(SETUP_BRANCH).toContain("surface: schedulerStepSurface");
+    expect(SETUP_BRANCH).toContain("surface: scheduleStepSurface");
     expect(SETUP_BRANCH.match(/<TriggerScreenClient/g)).toBeNull();
-    expect(SCREEN_SRC).toContain("const schedulerStepSurface = (");
+    expect(SCREEN_SRC).toContain("const scheduleFormSurface = (");
   });
 
   it("hands the skills-recommendation step the one shipped renderer, host-declared", () => {
@@ -170,7 +172,12 @@ describe("the setup run page draws the run surface, not a single column", () => 
       // cinatra#2980: a run whose one-off schedule has already fired keeps the
       // form as a READING. The prop is the schedule step's, so it is listed with
       // the rest rather than smuggled in beside them.
-      "readOnly={scheduleFrozen}",
+      //
+      // cinatra#3004 adds the second half of the same rule: a run that HAS a
+      // schedule and reaches this reading only because no card ref could be
+      // minted is a reading too — it must not offer to arm a schedule the
+      // reader cannot currently see.
+      "readOnly={scheduleFrozen || scheduleTabSurface}",
     ]);
     // ONE mount in the whole screen: the step owns the form, and no second
     // column draws a copy of it.
@@ -191,16 +198,26 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(noticeAt).toBeLessThan(formAt);
   });
 
-  it("leaves the other two branches of the screen alone", () => {
-    // The armed run keeps its persistent trigger tab, at Narrow, ahead of the
-    // setup surface; and `/trigger` reached without a run still draws the form
-    // on its own, because there is no run whose steps could be named.
-    expect(TRIGGER_SCREEN).toContain("{showPersistentTab && trigger && run ? (");
-    expect(TRIGGER_SCREEN.indexOf("<TriggerTabClient")).toBeLessThan(
+  it("gives an ARMED run the same rail, with its schedule inside the step", () => {
+    // cinatra#3004. The armed run used to be handed a SCREEN of its own — the
+    // retired "Trigger configuration" drawing — which took the rail away from
+    // the reader the moment they pressed Continue on it. The schedule it
+    // carries is a reading of the schedule STEP now, so one branch of this
+    // screen draws every run and the press that arms a schedule comes back to
+    // the step it was pressed in.
+    expect(TRIGGER_SCREEN).toContain("{run ? (");
+    expect(SCREEN_SRC).not.toContain("TriggerTabClient");
+    // The step picks its reading ABOVE the rail, so the rail is handed one
+    // surface and no branch of the screen draws the schedule beside it.
+    expect(TRIGGER_SCREEN).toContain("const scheduleStepSurface = scheduleTabRef ? (");
+    expect(TRIGGER_SCREEN.match(/<RunScheduleTab\b/g) ?? []).toHaveLength(1);
+    expect(TRIGGER_SCREEN.indexOf("<RunScheduleTab")).toBeLessThan(
       TRIGGER_SCREEN.indexOf("<RunSurfaceRail"),
     );
-    expect(TRIGGER_SCREEN).toContain(") : run ? (");
-    expect(TRIGGER_SCREEN).toContain("schedulerStepSurface\n        )}");
+    expect(SETUP_BRANCH).not.toContain("<RunScheduleTab");
+    // And `/trigger` reached WITHOUT a run still draws the form on its own,
+    // because there is no run whose steps could be named.
+    expect(TRIGGER_SCREEN).toContain("scheduleFormSurface\n        )}");
     // The steps exist only for a run.
     expect(SETUP_BRANCH).toContain("const setupSteps: SetupRailStep[] = run");
     expect(SETUP_BRANCH).toContain("    : [];");
@@ -301,14 +318,14 @@ describe("the setup run page draws the run surface, not a single column", () => 
     );
     expect(TRIGGER_SCREEN).toContain("const reviewStepSettled = runReviewStepSettled({");
     expect(TRIGGER_SCREEN).toContain("gateStatus: reviewGate?.status,");
-    // …and only the branch that DRAWS the rail pays for that read: a run whose
-    // schedule is armed renders the persistent trigger tab instead of the setup
-    // surface, and a row nobody draws needs no reading.
+    // …and only the branch that DRAWS the rail pays for that read. Since
+    // cinatra#3004 that branch is every run on this route — an armed schedule
+    // is a reading inside the schedule step rather than a screen of its own —
+    // so the `run` guard is the whole condition, and `/trigger` reached with
+    // `new` has no run to read a row off anyway.
+    expect(TRIGGER_SCREEN).not.toContain("drawsSetupRail");
     expect(TRIGGER_SCREEN).toContain(
-      "const drawsSetupRail = Boolean(run) && !(showPersistentTab && trigger);",
-    );
-    expect(TRIGGER_SCREEN).toContain(
-      "run && drawsSetupRail && runReviewSlot?.reviewTaskId",
+      "run && runReviewSlot?.reviewTaskId",
     );
     const review = SETUP_BRANCH.slice(SETUP_BRANCH.indexOf('key: "review"'));
     expect(review).toContain("settled: reviewStepSettled,");
@@ -322,7 +339,7 @@ describe("the setup run page draws the run surface, not a single column", () => 
       SETUP_BRANCH.indexOf('key: "schedule"'),
       SETUP_BRANCH.indexOf('key: "recommendation"'),
     );
-    expect(schedule).toContain("surface: schedulerStepSurface,");
+    expect(schedule).toContain("surface: scheduleStepSurface,");
     expect(schedule).not.toContain("settled:");
 
     // ONE ROW COMPONENT DRAWS ALL THREE, so the reading reaches the row through

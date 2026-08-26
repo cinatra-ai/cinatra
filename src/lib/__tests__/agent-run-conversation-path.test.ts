@@ -29,6 +29,13 @@ import { findChatConversationPathForAgentRun } from "../assistant-thread-store";
 
 const RUN_ID = "85bd2267-3f9a-4f0d-a1da-bb3a54f1a50d";
 const THREAD_ID = "cc862657-cbad-4aa9-b815-36eb839510da";
+// AMENDED BY cinatra#2930 (lifecycle-b W3). The lookup is one query serving two
+// readers now — this path, and the run outbox's read of the TURN it injects the
+// moment's card into — so the row carries the turn's own columns and the
+// thread's id is aliased. A card injected into one turn and a notification
+// pointing at another would be the same defect wearing two hats, which is why
+// the two answers come out of one row rather than two queries.
+const TURN_ID = "3f0a1f5e-7b3c-4a51-9a2e-1e5f5cbb90aa";
 
 function rowsOnce(rows: Array<Record<string, unknown>>) {
   runPostgresQueriesSync.mockReturnValueOnce([{ rows }]);
@@ -58,7 +65,8 @@ describe("findChatConversationPathForAgentRun", () => {
   it("builds the bound container's path, exactly as the chat codec does", () => {
     rowsOnce([
       {
-        id: THREAD_ID,
+        id: TURN_ID,
+        thread_row_id: THREAD_ID,
         assistant_package: "@cinatra-ai/cinatra-assistant",
         instance_id: null,
         title_slug: "draft-a-blog-post",
@@ -77,7 +85,8 @@ describe("findChatConversationPathForAgentRun", () => {
   it("keeps the site instance for an instance-scoped thread", () => {
     rowsOnce([
       {
-        id: THREAD_ID,
+        id: TURN_ID,
+        thread_row_id: THREAD_ID,
         assistant_package: "@acme/site-assistant",
         instance_id: "site-3",
         title_slug: "weekly-sync",
@@ -97,7 +106,8 @@ describe("findChatConversationPathForAgentRun", () => {
   it("addresses a thread by its id before a title slug is minted", () => {
     rowsOnce([
       {
-        id: THREAD_ID,
+        id: TURN_ID,
+        thread_row_id: THREAD_ID,
         assistant_package: "@cinatra-ai/cinatra-assistant",
         instance_id: null,
         title_slug: null,
@@ -116,7 +126,8 @@ describe("findChatConversationPathForAgentRun", () => {
   it("puts an UNBOUND thread in the implicit-default container", () => {
     rowsOnce([
       {
-        id: THREAD_ID,
+        id: TURN_ID,
+        thread_row_id: THREAD_ID,
         assistant_package: null,
         instance_id: null,
         title_slug: "draft-a-blog-post",

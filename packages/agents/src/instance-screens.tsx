@@ -69,10 +69,11 @@ import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
 import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
 import { TriggerScreenClient } from "./trigger-screen-client";
 import { estimateRunDuration } from "./trigger-duration-estimate";
-import { TriggerTabClient } from "./trigger-tab-client";
 // §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d), reached
-// through the run page's SCHEDULE STEP — see the mount below.
+// through the run page's SCHEDULE STEP and — since cinatra#3004 — through the
+// run's own schedule tab. Two adapters, one renderer; see the mounts below.
 import { ScheduleRailStepRow, ScheduleStepSurface } from "./schedule-rail-step";
+import { RunScheduleTab } from "./run-schedule-tab";
 // §V's card at its plan-designated rail position (cinatra#2790, epic #2784 S9f):
 // the recommendation is the run's FIRST step, and it answers the SAME question
 // the setup run page's recommendation row asks (cinatra#2970) — one predicate,
@@ -100,15 +101,17 @@ import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-ste
 // `undefined` rather than the label (cinatra#2970).
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 import { readRunTriggerByRunId } from "./trigger-store";
-import type { GatedStep } from "./trigger-infer-side-effects";
-import cronstrue from "cronstrue";
+// Did a confirmed conversation proposal create this run? The one fact the
+// schedule-step picker below cannot read off the trigger row itself.
+import { readProposalConsumeByRunId } from "./trigger-schedule-proposal-store";
 
 // ---------------------------------------------------------------------------
-// Trigger tab visibility helper.
+// Schedule tab visibility helper.
 //
 // Visibility rule:
 //   - agent_run_triggers row exists AND triggerType IN ('scheduled','recurring')
-//     → show the persistent Trigger tab (TriggerTabClient)
+//     → show the persistent Schedule tab, which since cinatra#3004 IS the
+//       schedule form (`RunScheduleTab` → `ScheduleProposalCard`)
 //   - otherwise → show the first-step form (TriggerScreenClient)
 //
 // Exported so the unit test can lock the rule independently of DB / auth.
@@ -120,6 +123,49 @@ export function shouldShowPersistentTab(
     !!trigger &&
     (trigger.triggerType === "scheduled" || trigger.triggerType === "recurring")
   );
+}
+
+/**
+ * WHICH of the two `run_card` schedule adapters a screen draws (cinatra#3004).
+ *
+ * One renderer, two adapters: the run detail opens the schedule as a step in its
+ * rail (`ScheduleStepSurface`), and the run's own schedule tab is the form on
+ * its own (`RunScheduleTab`). They are exclusive because they are different
+ * ROUTES — one run is never both screens at once — and this is the picker that
+ * says so in code rather than leaving it to be inferred from two mounts in one
+ * file.
+ *
+ * `"none"` where there is nothing to draw, and that is the WHOLE reading on both
+ * screens: a step or a tab that opens onto an empty column is the defect this
+ * answers. A run with no trigger row has no schedule for either adapter to open
+ * onto; a row of a kind the card resolver refuses draws nothing either, so no
+ * step is offered for it. The two SCHEDULED kinds are named — the same
+ * allow-list `shouldShowPersistentTab` and the resolver read — so a kind added
+ * later is absent by default rather than drawn as an empty step.
+ *
+ * `fromProposal` is the one widening, and only on the RUN DETAIL: a run created
+ * by confirming a schedule stated in a conversation keeps drawing whatever it
+ * settled into, `immediate` included, because that card has always been the
+ * answer to a schedule the reader stated and the resolver still draws it. The
+ * TAB is not widened by it — a proposal in a conversation is not what puts a
+ * schedule tab on a run's page, and `shouldShowPersistentTab` has always been
+ * the whole rule there.
+ */
+export type RunScheduleAdapter = "rail_step" | "schedule_tab" | "none";
+
+export function runScheduleAdapterFor(input: {
+  screen: "run_detail" | "schedule_tab";
+  trigger: { triggerType: string } | null;
+  /** Did a confirmed conversation proposal create this run? */
+  fromProposal?: boolean;
+}): RunScheduleAdapter {
+  if (input.trigger === null) return "none";
+  if (input.screen === "schedule_tab") {
+    return shouldShowPersistentTab(input.trigger) ? "schedule_tab" : "none";
+  }
+  return shouldShowPersistentTab(input.trigger) || input.fromProposal === true
+    ? "rail_step"
+    : "none";
 }
 
 /** Terminal run statuses — no dispatch left (cinatra#2482). */
@@ -721,7 +767,28 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // decides; WHAT the step may show is re-resolved against the live reader on
   // the endpoint, which answers `absent` for a run this reader did not confirm a
   // proposal for. A run that cannot mint a ref (no app secret) draws none either.
-  const scheduleRailRef = run && trigger ? encodeScheduleRunRef({ runId: run.id }) : null;
+  //
+  // AND ONLY WHERE THE STEP OPENS ONTO SOMETHING (cinatra#3004). The card the
+  // step mounts draws no DOM at all for a row its resolver answers `absent`
+  // for, so a step offered for such a row is a rail row that opens an empty
+  // column. The picker reads the resolver's own allow-list; the one row it
+  // cannot decide from the trigger type alone is a run created by confirming a
+  // schedule stated in a CONVERSATION, whose card is drawn whatever kind it
+  // settled into — so that one fact is read, and only when it can change the
+  // answer.
+  const scheduleFromProposal =
+    run && trigger && !shouldShowPersistentTab(trigger)
+      ? (await readProposalConsumeByRunId(run.id)) !== null
+      : false;
+  const scheduleRailRef =
+    run &&
+    runScheduleAdapterFor({
+      screen: "run_detail",
+      trigger,
+      fromProposal: scheduleFromProposal,
+    }) === "rail_step"
+      ? encodeScheduleRunRef({ runId: run.id })
+      : null;
   // cinatra#2487: ONE predicate for the strip on every route (was an inline
   // duplicate of shouldShowPersistentTab here, `!!run` on /trigger, and nothing
   // at all on /permissions — so the strip's contents changed between tabs).
@@ -1719,10 +1786,21 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   });
 
   // Visibility rule:
-  //   - row exists AND triggerType IN ('scheduled','recurring') → persistent tab
+  //   - row exists AND triggerType IN ('scheduled','recurring') → the schedule
+  //     surface, which IS the schedule form (cinatra#3004)
   //   - otherwise → first-step form
   const trigger = run ? await readRunTriggerByRunId(run.id) : null;
   const showPersistentTab = shouldShowPersistentTab(trigger);
+  // THE SURFACE IS THE FORM (cinatra#3004). The schedule this run carries is
+  // drawn by the one renderer every other surface uses, addressed by the RUN —
+  // the same ref the run detail's schedule step is opened on, so the two read
+  // one schedule and cannot disagree about its state. A run that cannot mint a
+  // ref falls back to the first-step form below, exactly as a run with no
+  // schedule does.
+  const scheduleTabSurface =
+    runScheduleAdapterFor({ screen: "schedule_tab", trigger }) === "schedule_tab";
+  const scheduleTabRef =
+    run && scheduleTabSurface ? encodeScheduleRunRef({ runId: run.id }) : null;
   // A fired one-off cannot be changed (cinatra#2980, plan (A) §7.2 item 4), so
   // the standalone form below is drawn as a reading rather than as a control,
   // and the notice above it says which of the two facts hold.
@@ -1738,22 +1816,11 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // Defense-in-depth alongside the releaseTriggerNow server-action role
   // check.
 
-  // Server-side cron preview (mirrors the client-side cronstrue formatting
-  // in trigger-screen-client.tsx) so the persistent tab renders the same
-  // human-readable schedule label without re-parsing on the client.
-  let cronPreview: string | null = null;
-  if (trigger?.triggerType === "recurring" && trigger.cronExpression) {
-    try {
-      cronPreview = cronstrue.toString(trigger.cronExpression);
-    } catch {
-      cronPreview = null;
-    }
-  }
-
-  // gatedSteps[] is persisted as JSON-as-text on agent_templates.gated_steps
-  // and deserialized by the store layer to GatedStep[] | null. Templates with
-  // NULL default to an empty array here.
-  const gatedSteps: GatedStep[] = template.gatedSteps ?? [];
+  // NO SERVER-RENDERED SCHEDULE SUMMARY, AND NO HELD-STEPS TREE (cinatra#3004).
+  // The retired drawing needed both: a cron sentence for its "Trigger
+  // configuration" rows and the template's gated steps for its tree. The form
+  // draws the schedule in its own option rows, read back from the installed row
+  // by the resolver, so neither is computed here any more.
 
   // ── WHAT HAS THIS RUN GOT TO SHOW FOR THESE STEPS? (cinatra#2970) ───────
   //
@@ -1840,14 +1907,16 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // plain run-scoped read, and only the row's status is taken from it — the
   // decision's evidence belongs to the card (cinatra#2573).
   //
-  // AND ONLY THE BRANCH THAT DRAWS THE RAIL PAYS FOR IT. A run whose schedule is
-  // already armed renders the persistent trigger tab below instead of the setup
-  // surface, and a row nobody draws needs no reading — the same discipline
+  // AND ONLY THE BRANCH THAT DRAWS THE RAIL PAYS FOR IT — the same discipline
   // `triggerStepDurationEstimate` follows on the run page (cinatra#2952), where
-  // a computation is made on the branch that draws it and nowhere else.
-  const drawsSetupRail = Boolean(run) && !(showPersistentTab && trigger);
+  // a computation is made on the branch that draws it and nowhere else. Since
+  // cinatra#3004 that branch is EVERY run on this route: arming a schedule no
+  // longer hands the screen to a second drawing of the same facts, it fills
+  // this rail's schedule step, so the only screen here with no rail at all is
+  // `/trigger` reached with `new` — which has no run to read a row off in the
+  // first place, and the `run` guard already answers that.
   const reviewGate =
-    run && drawsSetupRail && runReviewSlot?.reviewTaskId
+    run && runReviewSlot?.reviewTaskId
       ? await readReviewGate(run.id, runReviewSlot.reviewTaskId)
       : null;
   const reviewStepSettled = runReviewStepSettled({
@@ -1855,18 +1924,34 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     gateStatus: reviewGate?.status,
   });
 
-  // ── THE SCHEDULER STEP'S OWN SURFACE (cinatra#2970) ──────────────────────
+  // ── THE SCHEDULE STEP'S OWN SURFACE (cinatra#2970, cinatra#3004) ─────────
   //
-  // The scheduling form exactly as it is today, in its first-shown state, with
-  // the same Continue that arms the trigger — not one prop of it changes here.
-  // What changes is only WHERE it is drawn: it is one step of the run surface
-  // below, opened in the run detail beside the rail, instead of standing alone
-  // in the middle of a single-column page.
+  // TWO READINGS OF ONE STEP, and which one it draws is decided by the schedule
+  // the run actually carries:
   //
-  // It keeps its declared body role: a single column of form controls is Narrow
-  // (Application Design — Agents §III), and Narrow is an inset that sits inside
-  // whatever frame holds it.
-  const schedulerStepSurface = (
+  //   • NO SCHEDULE YET — the scheduling form exactly as it is today, in its
+  //     first-shown state, with the same Continue that arms the trigger. Not
+  //     one prop of it changes here; what changes is only WHERE it is drawn —
+  //     one step of the run surface below, opened in the run detail beside the
+  //     rail, instead of standing alone in the middle of a single-column page.
+  //
+  //   • A SCHEDULE ON FILE — that schedule, drawn by the one renderer every
+  //     other surface uses (cinatra#3004): "The schedule surface on the agent's
+  //     page shows the schedule form itself in its respective state — never a
+  //     'Trigger configuration' card — the same form as in the chat and on the
+  //     run page."
+  //
+  // AND THE PRESS THAT ARMS ONE STAYS IN THIS STEP (cinatra#3004). Continue on
+  // a scheduled or recurring kind navigates nowhere — it re-renders this route
+  // — so the run comes straight back to this step with its armed schedule in
+  // it. What happened before was that the whole screen was handed to a second
+  // drawing of the same facts, and the rail the reader pressed from went with
+  // it.
+  //
+  // Both readings keep the declared body role: a single column of form controls
+  // is Narrow (Application Design — Agents §III), and Narrow is an inset that
+  // sits inside whatever frame holds it.
+  const scheduleFormSurface = (
     <AgentPanelBody role="narrow">
       {/*
         CONTEXT ABOVE THE FORM (cinatra#2482), and since cinatra#2980 the
@@ -1907,6 +1992,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         cannot be changed any more: the form stays as a **read-only** reading
         with no controls at all." The form is not hidden — it is the reading
         of the schedule this run had — and it carries nothing to press.
+
+        AND IT NEVER OFFERS TO ARM A SCHEDULE THIS RUN ALREADY HAS
+        (cinatra#3004). This reading is also where a run whose schedule could
+        not mint a card ref lands. That run HAS a schedule — the step's other
+        reading would have drawn it — so the first-step form is drawn as a
+        reading here too. Offering Continue would let a person replace a
+        schedule they cannot currently see.
       */}
       <TriggerScreenClient
         agentId={agentId}
@@ -1918,9 +2010,26 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         properties={properties}
         setupComplete={setupComplete}
         durationEstimate={durationEstimate}
-        readOnly={scheduleFrozen}
+        readOnly={scheduleFrozen || scheduleTabSurface}
       />
     </AgentPanelBody>
+  );
+
+  // THE SCHEDULE THIS RUN CARRIES, in the state it is in (cinatra#3004). The
+  // one renderer, addressed by the RUN — the same ref the run detail's schedule
+  // step is opened on, so the two surfaces read one schedule and cannot
+  // disagree about its state. `runScheduleAdapterFor` above is what picked it,
+  // and it picks exactly one adapter per screen: this step is the schedule tab's
+  // adapter, and the run detail's rail step is the other.
+  const scheduleStepSurface = scheduleTabRef ? (
+    <AgentPanelBody role="narrow">
+      <RunScheduleTab
+        cardRef={scheduleTabRef}
+        promptWindowTemplateId={template.id}
+      />
+    </AgentPanelBody>
+  ) : (
+    scheduleFormSurface
   );
 
   // ── THE REVIEW STEP'S OWN SURFACE (cinatra#2970; plan (A) §4.2) ──────────
@@ -2016,7 +2125,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           // which the step's own surface above already draws. The run page's
           // schedule row draws no settled reading either, and inventing one here
           // would make the same step read two ways on two screens.
-          surface: schedulerStepSurface,
+          surface: scheduleStepSurface,
         },
         {
           key: "recommendation",
@@ -2096,40 +2205,32 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         {/*
           Declared body role (Application Design — Agents §III, row "Trigger —
           the schedule form"): "A single-column schedule / control stack. Narrow
-          is §VII's stated home for exactly this shape." Both trigger panels —
-          the first-step schedule form and the configured-trigger summary +
-          controls — are that shape, so both declare Narrow. Narrow is an inset:
-          it sits flush-left INSIDE the frame and never resizes the frame.
+          is §VII's stated home for exactly this shape." Both readings of the
+          schedule step — the first-step schedule form and the schedule this run
+          already carries — are that shape, so both declare Narrow. Narrow is an
+          inset: it sits flush-left INSIDE the frame and never resizes the frame,
+          which is what lets either of them stand in the two-column frame below.
         */}
-        {showPersistentTab && trigger && run ? (
-          <AgentPanelBody role="narrow">
-          <TriggerTabClient
-            agentId={agentId}
-            runId={run.id}
-            templateId={template.id}
-            trigger={{
-              triggerType: trigger.triggerType as "scheduled" | "recurring",
-              scheduledAt: trigger.scheduledAt
-                ? trigger.scheduledAt.toISOString()
-                : null,
-              cronExpression: trigger.cronExpression,
-              timezone: trigger.timezone,
-              enabled: trigger.enabled,
-              releasedAt: trigger.releasedAt
-                ? trigger.releasedAt.toISOString()
-                : null,
-              cronPreview,
-            }}
-            gatedSteps={gatedSteps}
-          />
-          </AgentPanelBody>
-        ) : run ? (
-          /* THE SETUP RUN PAGE, AS THE TWO-COLUMN RUN SURFACE (cinatra#2970).
+        {run ? (
+          /* THE SETUP RUN PAGE, AS THE TWO-COLUMN RUN SURFACE (cinatra#2970) —
+             AND IT STAYS THE SCREEN ONCE A SCHEDULE IS ARMED (cinatra#3004).
              The steps on the left, the selected step's surface on the right —
              the same frame every other run-page state draws, and the same
-             column anchors the capture recorder measures on them. The surface
-             takes the FRAME width because it is a two-column frame, not a form;
-             the scheduler step inside it declares Narrow for itself. */
+             column anchors the capture recorder measures on them.
+
+             THE SCHEDULE IS A READING INSIDE THE SCHEDULE STEP, never a screen
+             of its own: the retired drawing took the whole page — a summary of
+             the configuration, a tree of held steps, and a Cancel that DELETED
+             the trigger row, which took the run's own ending with it since every
+             refusal the service makes reads that row. What the step draws now is
+             the schedule form in the state the run's schedule is in, whose
+             ending is **Cancel schedule** — it stops the schedule and leaves the
+             record standing. So the reader who presses Continue here comes back
+             to this rail with the armed form in the step they pressed, and the
+             tab strip's Schedule row keeps naming the surface they are on.
+
+             The surface takes the FRAME width because it is a two-column frame,
+             not a form; the schedule step inside it declares Narrow for itself. */
           <AgentPanelBody role="frame">
             <div
               className="flex items-start gap-6"
@@ -2142,7 +2243,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         ) : (
           /* No run to name steps for (`/trigger` reached with `new`): the form
              stands alone, exactly as it did. */
-          schedulerStepSurface
+          scheduleFormSurface
         )}
       </AgentPageLayout>
     </Main>

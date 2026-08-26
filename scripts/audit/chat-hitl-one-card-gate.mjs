@@ -266,6 +266,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // The epic's table columns, mirrored: component owner, then wire carriage.
     component: "ReviewGateCard",
     wireCarriage: "data_part",
+    deliveries: ["platform_injected", "tool_represented"],
     owner: "packages/agents/src/review-gate-card.tsx",
     // The floor lives in its own module and is composed by the card. Anchors it
     // emits count as the card's, because the card is what mounts it.
@@ -404,6 +405,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     design: "§V (the recommendation card) — the chip row IS the whole card",
     component: "RecommendationHoldCard",
     wireCarriage: "interrupt",
+    deliveries: ["platform_injected"],
     owner: "packages/agents/src/run-recommendation-chip-row.tsx",
     composes: [],
     body: {
@@ -560,6 +562,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     design: "§VI (the schedule proposal card) — three phases, one card",
     component: "ScheduleProposalCard",
     wireCarriage: "data_part",
+    deliveries: ["platform_injected", "tool_represented"],
     owner: "packages/agents/src/schedule-proposal-card.tsx",
     composes: [],
     openObligations: [],
@@ -721,6 +724,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the run page's schedule STEP: the first row of the run detail's left rail, which declares host=\"run_card\" and opens onto the card — the run screen renumbers its own rail around it and mounts no schedule drawing of its own",
         },
+        {
+          module: "packages/agents/src/run-schedule-tab.tsx",
+          adapter: "mount",
+          region: "page_region",
+          surface: "production",
+          why: "the SAME run's schedule tab (cinatra#3004): the agent page's schedule surface, which declares host=\"run_card\" and draws the form on its own — no rail to be a row of. It replaces a second drawing of the same facts (a Trigger-configuration summary, a held-steps tree and a Cancel that deleted the row), so this adapter REMOVES a parallel renderer rather than adding one",
+        },
       ],
       page_gate_region: [
         {
@@ -731,6 +741,22 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card, holding the recommendation hold card above the review gate card, which is the composition the plan requires",
         },
       ],
+    },
+    // TWO ADAPTERS ON THE RUN'S OWN HOST, AND THEY ARE ROUTES (cinatra#3004).
+    // The run detail opens the schedule as a step in its rail; the run's
+    // schedule tab is the same form on its own page region. One run is never
+    // both screens at once, and the picker below is where that is decided in
+    // code rather than inferred from two mounts.
+    exclusions: {
+      run_card: {
+        selector: "runScheduleAdapterFor",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/schedule-run-card-adapters-3004.test.ts",
+          testName:
+            "answers exactly one adapter for every screen and trigger shape — the two run_card schedule adapters are never both chosen",
+        },
+      },
     },
     // All four hosts carry a mount, so there is no `hostGap` to write. §IX's
     // "every card appears on every host" is met for this kind.
@@ -771,6 +797,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     design: "§VII (the verification card) — advisory, no floor",
     component: "VerificationSummaryCard",
     wireCarriage: "data_part",
+    deliveries: ["platform_injected", "tool_represented"],
     owner: "packages/agents/src/verification-summary-card.tsx",
     composes: [],
     openObligations: [],
@@ -934,6 +961,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       "the HITL screen the run page already shows — fields with a Continue button. It carries no card identity of its own today, which is exactly what the plan's section 3 gives it.",
     component: "AgentHitlScreenCard",
     wireCarriage: "interrupt",
+    deliveries: ["platform_injected"],
     owner: null,
     composes: [],
     body: {
@@ -970,6 +998,38 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
  * contributes no owner row; the S1 shell keeps its own row so a second shell
  * definition is still an R1 violation while the shell is still in service.
  */
+/**
+ * THE TWO DELIVERIES, per kind (cinatra#2930, epic #2926 W3).
+ *
+ * The plan's implementation note: "the held-turn contract … and the one-card
+ * gate are updated to the two deliveries." A delivery is WHO decided the card
+ * should be in the conversation:
+ *
+ *   `platform_injected` — the run reached a moment and the platform wrote the
+ *     card into the run's own turn. No model was asked and none can withhold it.
+ *   `tool_represented`  — a "show me" tool brought the card back into view. The
+ *     plan keeps those tools and keeps them second: "recorded as exactly that".
+ *
+ * MIRRORED from src/lib/lifecycle/held-turn-card-contract.ts, which takes both
+ * carriage axes from the protocol registry; the pinned suite next door checks
+ * the two tables agree, so neither can drift alone.
+ */
+export const LIFECYCLE_CARD_DELIVERIES = Object.freeze([
+  "platform_injected",
+  "tool_represented",
+]);
+
+/**
+ * The deliveries a kind really has. Every kind has the injected one — a kind
+ * delivered only by a tool would be a card a model can withhold, which is the
+ * defect this wave closes — and only a DATA_PART-carried kind can also be
+ * re-presented, because an INTERRUPT carriage mints no resolve envelope for a
+ * pull tool to hand back.
+ */
+export function deliveriesFor(kind) {
+  return LIFECYCLE_CARD_CONTRACTS[kind]?.deliveries ?? [];
+}
+
 export const CARD_OWNERS = Object.freeze(
   Object.fromEntries([
     ...Object.entries(LIFECYCLE_CARD_CONTRACTS)

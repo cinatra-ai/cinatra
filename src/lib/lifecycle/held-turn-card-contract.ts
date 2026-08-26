@@ -290,10 +290,47 @@ export const CARRIAGE_ENFORCERS = Object.freeze([
 
 export type CarriageEnforcer = (typeof CARRIAGE_ENFORCERS)[number];
 
+/**
+ * THE TWO DELIVERIES (cinatra#2930, lifecycle-b W3).
+ *
+ * A card reaches a conversation two ways, and the difference is WHO decided it
+ * should be there:
+ *
+ *   `platform_injected`  — the platform wrote the card into the run's own turn
+ *     because the run reached a moment. No model was asked and none can refuse.
+ *     This is the delivery the plan makes canonical: "Every host … mounts the
+ *     moment's card from the run state the moment the coordinator signals it."
+ *   `tool_represented`   — the model called a "show me" tool and the card was
+ *     brought back into view. The plan keeps it, and keeps it SECOND: "The
+ *     'show me' tools the model can call stay as a second way to bring a card
+ *     back into view, recorded as exactly that."
+ *
+ * A row names every delivery its kind really has. A kind delivered only by a
+ * tool would be a card a model can withhold, which is the defect this wave
+ * closes; a kind with no injected delivery must say why in its own comment.
+ */
+export const LIFECYCLE_CARD_DELIVERIES = Object.freeze([
+  "platform_injected",
+  "tool_represented",
+] as const);
+
+export type LifecycleCardDelivery = (typeof LIFECYCLE_CARD_DELIVERIES)[number];
+
 export type ChatThreadCarriageRow = {
   kind: LifecycleCardKind;
   /** How the kind reaches the transcript, mirrored from the protocol package. */
   carriage: "data_part" | "interrupt";
+  /**
+   * WHICH FACT DECIDES THE CARD IS LIVE, mirrored from the protocol package
+   * (cinatra#2930). `run_state` for every run-carried kind; `data_part` only
+   * for the schedule while it is held, when there is no run to carry it.
+   */
+  canonical: "run_state" | "data_part";
+  /**
+   * The deliveries this kind really has, injected first. See
+   * `LIFECYCLE_CARD_DELIVERIES`.
+   */
+  deliveries: readonly LifecycleCardDelivery[];
   /** The canonical part that triggers this kind's chat_thread render. */
   triggeringPart: string;
   /**
@@ -370,7 +407,12 @@ function rootAnchorsFor(kind: LifecycleCardKind): readonly string[] {
 export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = Object.freeze([
   {
     kind: "recommendation_hold",
-    carriage: LIFECYCLE_CARD_CARRIAGE.recommendation_hold,
+    carriage: LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical,
+    // INJECTED ONLY. The hold has no "show me" tool: its carriage is an
+    // INTERRUPT, so there is no resolve envelope for a pull tool to mint, and
+    // the run's own dispatch part is the anchor the card mounts at.
+    deliveries: Object.freeze(["platform_injected"] as const),
     triggeringPart: "the durable agent_run tool result of the held dispatch turn",
     triggerToolName: "agent_run",
     owner: "RecommendationHoldCard",
@@ -428,7 +470,17 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
   },
   {
     kind: "artifact_review_gate",
-    carriage: LIFECYCLE_CARD_CARRIAGE.artifact_review_gate,
+    carriage: LIFECYCLE_CARD_CARRIAGE.artifact_review_gate.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.artifact_review_gate.canonical,
+    // BOTH, and the injected half has TWO mounts that never overlap
+    // (cinatra#2997 × cinatra#2930). In a turn that draws the run card, the card
+    // IS the gate's mount — it reads the run's review slot itself and shows the
+    // gate in place of its placeholder; the outbox writes the part only into a
+    // turn that draws no run card for the run, so the reader gets exactly one
+    // card either way. `artifact_review_gate_render` /
+    // `artifact_review_gates_list` bring it back into view — re-presentation,
+    // recorded as such.
+    deliveries: Object.freeze(["platform_injected", "tool_represented"] as const),
     triggeringPart: "the artifact_review_gate DATA_PART renderable view",
     triggerToolName: null,
     owner: "ReviewGateCard",
@@ -447,7 +499,13 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
   },
   {
     kind: "trigger_schedule_proposal",
-    carriage: LIFECYCLE_CARD_CARRIAGE.trigger_schedule_proposal,
+    carriage: LIFECYCLE_CARD_CARRIAGE.trigger_schedule_proposal.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.trigger_schedule_proposal.canonical,
+    // BOTH, and the CANONICAL side moves. Held, the signed part in the
+    // assistant's own turn is the whole state and `schedule_proposal_render` is
+    // what puts it there; once Confirm creates the run, the run carries the
+    // moment and the outbox injects it.
+    deliveries: Object.freeze(["platform_injected", "tool_represented"] as const),
     triggeringPart: "the trigger_schedule_proposal DATA_PART renderable view",
     triggerToolName: null,
     owner: "ScheduleProposalCard",
@@ -475,7 +533,11 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
   },
   {
     kind: "verification_summary",
-    carriage: LIFECYCLE_CARD_CARRIAGE.verification_summary,
+    carriage: LIFECYCLE_CARD_CARRIAGE.verification_summary.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.verification_summary.canonical,
+    // BOTH. The audit moment injects the reading — the one moment that does
+    // not park the run — and `verification_record_render` re-presents it.
+    deliveries: Object.freeze(["platform_injected", "tool_represented"] as const),
     triggeringPart: "the verification_summary DATA_PART renderable view",
     triggerToolName: null,
     owner: "VerificationSummaryCard",
@@ -494,7 +556,11 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     // STATE the moment; W3 (cinatra#2930) draws and mounts the card, which is
     // why the kind is on BOTH obligation lists below.
     kind: "agent_hitl_screen",
-    carriage: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen,
+    carriage: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen.canonical,
+    // INJECTED ONLY, for the same reason the hold is: an INTERRUPT carriage
+    // mints no resolve envelope, so no tool can pull it back.
+    deliveries: Object.freeze(["platform_injected"] as const),
     triggeringPart: "the agent_hitl_screen INTERRUPT the paused run carries",
     triggerToolName: "agent_run",
     owner: "AgentHitlScreenCard",
