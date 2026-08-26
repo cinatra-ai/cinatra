@@ -64,15 +64,9 @@
       "migrationMechanism": "logical-dump-restore",
       "appManagedSchema": true,
       "upstreamDictated": true,
-<<<<<<< HEAD
       "baselinePin": { "image": "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73", "major": "17", "digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" },
       "coupledAppImages": [
         { "image": "nangohq/nango-server:hosted@sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2", "major": "hosted", "digest": "sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2" }
-=======
-      "baselinePin": { "image": "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193", "major": "17", "digest": "sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193" },
-      "coupledAppImages": [
-        { "image": "nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1", "major": "hosted", "digest": "sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1" }
->>>>>>> 47cf46098 (fix(upgrade-matrix): edit the graphiti entry in place instead of reformatting the file)
       ],
       "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. nango-server is therefore a coupled app image: it owns no volume but migrates THIS data dir at boot, so its pin is drift-checked alongside the engine. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
       "transitions": [
@@ -232,17 +226,10 @@
       "migrationMechanism": "rebuild",
       "appManagedSchema": false,
       "upstreamDictated": false,
-<<<<<<< HEAD
-      "baselinePin": { "image": "zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6", "major": "1.0.2-graphiti-0.28.2", "digest": "sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6" },
-      "notes": "DERIVED state (owns NO volume — the graph lives in Neo4j). knowledge-graph-mcp fronts Neo4j over MCP and re-projects/extracts into it. An upgrade is a repin + rebuild (re-project from source), no backup/RPO of its own; coupled to the neo4j pin. Listed in the matrix as an explicit volume-less entry so the family is covered and a future major re-enters the lane paired with neo4j.",
-      "transitions": [
-        { "from": "1.0.2-graphiti-0.28.2", "to": "1.0.2-graphiti-0.28.2", "supported": true, "mechanism": "rebuild", "skippedMajor": "n-a", "downgrade": false, "notes": "At newest stable upstream; only change is a digest re-pin. A published knowledge-graph-mcp major re-pairs with neo4j and re-runs the works-after round-trip." }
-=======
       "baselinePin": { "image": "cinatra/knowledge-graph-mcp:upstream-425bf248-core-0.29.3", "major": "upstream-425bf248-core-0.29.3", "digest": null },
       "notes": "DERIVED state (owns NO volume — the graph lives in Neo4j). knowledge-graph-mcp fronts Neo4j over MCP and re-projects/extracts into it. An upgrade is a repin + rebuild (re-project from source), no backup/RPO of its own; coupled to the neo4j pin. Listed in the matrix as an explicit volume-less entry so the family is covered and a future major re-enters the lane paired with neo4j.",
       "transitions": [
         { "from": "1.0.2-graphiti-0.28.2", "to": "upstream-425bf248-core-0.29.3", "supported": true, "mechanism": "rebuild", "skippedMajor": "n-a", "downgrade": false, "notes": "cinatra#2591: leaves the stale published wrapper for a BUILD of the maintained upstream MCP server (docker/graphiti/Dockerfile). Zep publishes the same upstream source on the mcp-v* cadence, which lagged graphiti-core with no newer tag available, so there is no tag to re-pin to and no digest to record: the two build args ARE the pin. Derived state, so the transition is a rebuild — episodes re-project from Postgres and the anchors are re-seeded on the next projection cycle. Still paired with the neo4j pin; the works-after graphiti arm builds the same Dockerfile so the proof binds the shipped bytes." }
->>>>>>> 47cf46098 (fix(upgrade-matrix): edit the graphiti entry in place instead of reformatting the file)
       ]
     },
     {
@@ -255,11 +242,7 @@
       "migrationMechanism": "discard-recreate",
       "appManagedSchema": false,
       "upstreamDictated": false,
-<<<<<<< HEAD
       "baselinePin": { "image": "redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576", "major": "8", "digest": "sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576" },
-=======
-      "baselinePin": { "image": "redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005", "major": "8", "digest": "sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005" },
->>>>>>> 47cf46098 (fix(upgrade-matrix): edit the graphiti entry in place instead of reformatting the file)
       "notes": "BullMQ cache/queue backend. The volume holds regenerable cache/queue state, so the fail-safe upgrade path is discard-recreate. Forward RDB is readable (7 -> 8 upgrade in place is fine); DOWNGRADE is unsafe — Redis 8 writes RDB v14 which Redis 7 refuses (crash-loop), so a downgrade requires CLEARING the dump first (documented downgrade path).",
       "transitions": [
         { "from": "7", "to": "8", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": false, "notes": "Applied major. Forward RDB is compatible; the works-after redis arm proves a real bullmq enqueue->run->complete round-trip on 8. Data-preserving guarded superset of discard-recreate for a still-populated 7-era volume: scripts/upgrade/redis-upgrade-major.sh (AOF explicit); upgrade-from fixture: scripts/ci/works-after/upgrade-redis.sh (cinatra#1421/#1422)." },
