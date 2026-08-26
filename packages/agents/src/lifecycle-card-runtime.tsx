@@ -83,6 +83,20 @@ export const LIFECYCLE_RECOMMENDATION_DECIDE_PATH =
  */
 export const LIFECYCLE_HITL_SCREEN_PATH = "/api/lifecycle-views/hitl-screen";
 
+/**
+ * The BROKER ANSWER to that question (cinatra#2930, lifecycle-b W3).
+ *
+ * The other half of the path above, and it exists for the same reason: a server
+ * action cannot carry a host credential, and firing one from a frame that is
+ * same-origin to the app would ride the ambient Cinatra cookie of whoever else
+ * is signed in on that browser. A cookie host never uses this path — it keeps
+ * its server action, unchanged. A credential-declaring host uses it and nothing
+ * else, and the server hands the answer to the SAME approval core the action
+ * calls.
+ */
+export const LIFECYCLE_HITL_SCREEN_SUBMIT_PATH =
+  "/api/lifecycle-views/hitl-screen/submit";
+
 // ---------------------------------------------------------------------------
 // Host declaration — absent means "no host", which means no card.
 // ---------------------------------------------------------------------------

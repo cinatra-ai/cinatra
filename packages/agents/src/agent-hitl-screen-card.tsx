@@ -58,14 +58,49 @@
 //     answer: mount, a change in the run's wire ref, window focus, and its own
 //     submit landing.
 //
-// THE ONE CONTAINMENT, STATED. The Continue submits through the cookie-bound
-// review-task action, so on a credential-declaring host — the site widget,
-// whose frame is same-origin to the app — it is drawn and DISABLED rather than
-// riding whatever ambient Cinatra cookie that browser happens to hold. That is
-// the same containment the widget's run panel already carries on main, and it
-// is recorded rather than smoothed over: the card is present, the question is
-// readable, and the answer is taken where the reader's own credential can carry
-// it. A broker submit is the work that lifts it.
+// ONE ANSWER, TWO DOORS — AND THE WIDGET'S CONTINUE ACTS.
+//
+// The Continue submits the SAME input on every host: the buffered values with
+// `approved`, the context-selector envelope filled only when the renderer wrote
+// none, the attachment envelope for every gate that is not a setup gate, and
+// the setup-loop wrap under the gate's own field name. What differs is only how
+// the reader's identity reaches the server.
+//
+//   · A COOKIE HOST keeps the shipped server action, byte-for-byte unchanged.
+//   · A CREDENTIAL-DECLARING HOST — the site widget, whose frame is same-origin
+//     to the app — posts to the broker submit route with its OWN `cwu_` and
+//     `credentials: "omit"`, so no ambient Cinatra cookie can ride along and
+//     answer as whoever else is signed in on that browser. The server hands
+//     that answer to the SAME approval core the action calls, under the run's
+//     OWN access rules (`run.execute` then `run.approveHitl`) — the in-app
+//     checks, no looser — and the run resumes. The card then re-reads and
+//     settles, exactly as it does on the run page.
+//
+// So the widget's Continue is enabled exactly when the in-app one is. Two
+// things are still refused, and both fail closed:
+//
+//   · A HOST THAT DECLARES NEITHER DOOR — a mis-wired provider, a credential
+//     the provider rejected. There is no identity to answer with, so the
+//     control is drawn and inert and no request is issued.
+//   · A GATE WHOSE FIELD RENDERER IS NOT DECLARED SAFE WITHOUT A SESSION. The
+//     card's read and submit carry the reader's own credential; a renderer
+//     mounted INSIDE the card does not. One that calls its own `"use server"`
+//     action, or that resolves further renderers out of the registry, reaches
+//     the server on whatever ambient Cinatra session that browser holds — which
+//     can belong to a different person. So where there is no cookie session the
+//     card mounts ONLY a renderer whose registry entry declares
+//     `credentialSafe`; anything else draws no renderer and withholds the
+//     Continue, and the card and its fields region are still drawn so the
+//     identity a capture is graded on is intact.
+//
+//     THE ANSWER IS READ OFF THE RESOLVED ENTRY, never off the gate's
+//     `x-renderer` string (convergence). A wire id does not determine which
+//     component is mounted: a manifest binding maps an arbitrary id onto a host
+//     kind, and an extension binding loads a component this repository has never
+//     read. Absent means unsafe, so a grouped-setup form — which resolves its
+//     own children — and every extension binding are withheld too, without
+//     needing to be named. Giving those renderers the host's credential is
+//     their own work, not this slice's.
 // ---------------------------------------------------------------------------
 
 import {
@@ -83,6 +118,7 @@ import { Button } from "@/components/ui/button";
 
 import {
   LIFECYCLE_HITL_SCREEN_PATH,
+  LIFECYCLE_HITL_SCREEN_SUBMIT_PATH,
   useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
@@ -99,6 +135,7 @@ import { fieldRendererRegistry, type FieldRendererContext } from "./field-render
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
+import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   hitlRendererFieldName,
@@ -160,6 +197,46 @@ async function readHitlScreenThroughBroker(
     return parseAgentHitlScreenState((await response.json()) as unknown);
   } catch {
     return null;
+  }
+}
+
+/**
+ * THE BROKER SUBMIT, for a host that proves itself with its own credential.
+ *
+ * The SAME answer the cookie door sends, addressed by the run as well as the
+ * gate: a credential-declaring surface names its card by a run id off the
+ * transcript, so the server re-derives that run's own gate and refuses an id
+ * that is not it. Nothing here is trusted — the route re-authorizes from
+ * scratch and runs the run's own access rules.
+ *
+ * Returns whether the answer LANDED. A refusal is not a landing: the screen
+ * stays exactly as it was with the answer still in hand, which is what the
+ * cookie door does when the action throws.
+ */
+async function submitHitlScreenThroughBroker(input: {
+  runId: string;
+  reviewTaskId: string;
+  values: unknown;
+  fieldName: string | undefined;
+  auth: LifecycleCardAuth;
+}): Promise<boolean> {
+  try {
+    const response = await fetch(LIFECYCLE_HITL_SCREEN_SUBMIT_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...input.auth.headers() },
+      body: JSON.stringify({
+        runId: input.runId,
+        reviewTaskId: input.reviewTaskId,
+        ...(input.values !== undefined ? { values: input.values } : {}),
+        ...(input.fieldName !== undefined ? { fieldName: input.fieldName } : {}),
+      }),
+      credentials: input.auth.credentials,
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { outcome?: { ok?: unknown } };
+    return body?.outcome?.ok === true;
+  } catch {
+    return false;
   }
 }
 
@@ -261,6 +338,108 @@ function presentationHintOf(gate: AgentHitlScreenGate): PresentationHint | null 
   return null;
 }
 
+/**
+ * "Nothing is connected" — the honest starting point, and the whole answer on a
+ * surface that cannot ask. Frozen so it is one identity rather than a new
+ * object per render.
+ */
+const NO_CONNECTED_APPS: FieldRendererContext = Object.freeze({ connectedApps: [] });
+
+/**
+ * THE READER'S CONNECTED SENDING ACCOUNTS, on a host that can ask for them.
+ *
+ * WHY THE CARD HAS TO LOAD THIS. Some shipped renderer conditions are gated on
+ * connectivity — the Gmail sender picker matches only when `connectedApps`
+ * names gmail AND the reader has aliases — and inside a conversation the run
+ * panel now STANDS DOWN in favour of this card. The panel loads this context
+ * for its own screen; without the card loading it too, a signed-in reader with
+ * Gmail connected would reach a sender gate in `/chat` and be handed the plain
+ * schema fallback instead of their alias picker. That is a regression on a
+ * COOKIE host, caused by moving the drawing, and it is fixed by moving the
+ * context with it — through the SAME shipped action the panel calls, so the two
+ * surfaces cannot resolve a different context for the same reader.
+ *
+ * ONLY WHERE THERE IS A SESSION TO ASK WITH. The action is cookie-bound. On a
+ * credential-declaring host it is never called — that is the ambient-cookie
+ * hazard this card's containment exists for — and the context stays "nothing is
+ * connected", which is not a guess: it is the truthful statement that this
+ * surface cannot see the reader's connections, and it makes a connectivity-gated
+ * renderer decline to match rather than draw against connectivity it cannot
+ * prove.
+ */
+function useFieldRendererContext(runId: string, cookieSession: boolean): FieldRendererContext {
+  const [loaded, setLoaded] = useState<{
+    connectedApps: string[];
+    gmailAliases?: { sendAsEmail: string; displayName?: string }[];
+  } | null>(null);
+  useEffect(() => {
+    if (!cookieSession) return;
+    let live = true;
+    void getFieldRendererContextForAgentBuilderAction()
+      .then((data) => {
+        if (live) setLoaded({ connectedApps: data.connectedApps, gmailAliases: data.gmailAliases });
+      })
+      .catch(() => {
+        // A context that could not be read is not a context: the card keeps the
+        // empty one, which declines connectivity-gated renderers rather than
+        // matching them on a guess.
+      });
+    return () => {
+      live = false;
+    };
+  }, [cookieSession]);
+  return useMemo<FieldRendererContext>(() => {
+    if (!cookieSession || loaded === null) return NO_CONNECTED_APPS;
+    return {
+      connectedApps: loaded.connectedApps,
+      ...(loaded.gmailAliases ? { gmailAliases: loaded.gmailAliases } : {}),
+      runId,
+    };
+  }, [cookieSession, loaded, runId]);
+}
+
+/**
+ * The registry entry a gate resolves to, and whether it may be mounted without
+ * a cookie session.
+ *
+ * Resolved the way `AgentHitlScreenFields` resolves it — the same registry, the
+ * same placeholder key, the same schema with the gate's `x-renderer` on it — so
+ * the card's decision and the region's rendering can never disagree about which
+ * component is in question.
+ *
+ * A PRESENTATION HINT short-circuits to `true`: that path draws the card's OWN
+ * `DispatchRenderer` and reaches no registry entry at all.
+ */
+function gateRendererIsSessionFree(runId: string, gate: AgentHitlScreenGate): boolean {
+  if (presentationHintOf(gate) !== null) return true;
+  const fieldSchema: Record<string, unknown> = {
+    ...gate.inputSchema,
+    "x-renderer": gate.xRenderer,
+  };
+  const context: FieldRendererContext = {
+    // REQUIRED, AND THE ASSERTION THAT HID IT IS GONE (convergence). The
+    // registry evaluates every entry's condition by priority, and a shipped
+    // condition reads `context.connectedApps` before anything narrows to its
+    // own renderer — so an omitted field is not a missing hint, it is a throw
+    // on the way to an unrelated gate's renderer. The empty list is the type's
+    // own documented default and it is the TRUTH here: this card knows nothing
+    // about which apps the reader has connected, and a condition gated on one
+    // must therefore not match.
+    connectedApps: [],
+    runId,
+    allFieldValues: gate.currentValues,
+    xRenderer: gate.xRenderer,
+  };
+  const entry = fieldRendererRegistry.resolve(
+    HITL_PLACEHOLDER_FIELD_NAME,
+    fieldSchema,
+    context,
+  );
+  // ABSENT MEANS UNSAFE — including "no entry at all", which draws nothing
+  // anyway and must not be reported as a mountable renderer.
+  return entry?.credentialSafe === true;
+}
+
 export function AgentHitlScreenFields({
   runId,
   gate,
@@ -268,6 +447,8 @@ export function AgentHitlScreenFields({
   onBuffer,
   onSubmitField,
   onSubmitBuffer,
+  withholdRenderer,
+  rendererContext,
 }: {
   runId: string;
   gate: AgentHitlScreenGate;
@@ -276,6 +457,12 @@ export function AgentHitlScreenFields({
   onSubmitField: (payload: unknown, payloadFieldName: string | undefined) => Promise<void>;
   /** The grouped-setup form owns its own submit — this is what it lands on. */
   onSubmitBuffer: (next: Record<string, unknown>) => Promise<void>;
+  /** This renderer talks to the server on its OWN cookie and this host has no
+   *  session — see the header. The region is drawn; the renderer is not. */
+  withholdRenderer?: boolean;
+  /** The reader's connected sending accounts, where the host could ask for
+   *  them. Empty on a host that cannot — see `useFieldRendererContext`. */
+  rendererContext?: FieldRendererContext;
 }): ReactElement {
   const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
@@ -284,13 +471,20 @@ export function AgentHitlScreenFields({
     "x-renderer": gate.xRenderer,
   };
   const context: FieldRendererContext = {
+    // The HOST'S context — the reader's connected sending accounts where the
+    // host could ask for them, and the honest empty list where it could not.
+    // `connectedApps` is REQUIRED and the assertion that hid its absence is
+    // gone: the registry evaluates every condition by priority, and a shipped
+    // one reads it before anything narrows to its own renderer.
+    ...(rendererContext ?? NO_CONNECTED_APPS),
     runId,
     allFieldValues: { ...gate.currentValues, ...buffered },
     xRenderer: gate.xRenderer,
-  } as FieldRendererContext;
-  const entry = hint
-    ? null
-    : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+  };
+  const entry =
+    hint || withholdRenderer === true
+      ? null
+      : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
   const Renderer = entry?.renderer ?? null;
@@ -300,7 +494,12 @@ export function AgentHitlScreenFields({
       className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4"
       data-conformance-id="hitl-screen-fields"
     >
-      {hint !== null ? (
+      {withholdRenderer === true ? (
+        // WITHHELD, not broken: the region is the anchor a capture is graded
+        // on, so it is drawn — empty — rather than the card losing its shape.
+        // The Continue beside it is withheld for the same reason.
+        null
+      ) : hint !== null ? (
         // Presentation-first, exactly as the panel reads it: a gate that
         // embedded a hint is drawn through the generic dispatch renderer rather
         // than through a per-renderer resolution.
@@ -373,7 +572,9 @@ export function AgentHitlScreenContinue({
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
-  /** The host cannot carry this reader's own credential to a decision. */
+  /** This host has NO identity to answer with — neither a cookie session nor a
+   *  declared credential. The control is drawn and inert rather than firing a
+   *  request the server would have to guess the caller of. */
   blocked: boolean;
   onContinue: (payload: Record<string, unknown>) => Promise<void>;
 }): ReactElement {
@@ -387,7 +588,7 @@ export function AgentHitlScreenContinue({
         {...(blocked
           ? {
               title:
-                "Continue this run where you are signed in to Cinatra — this surface cannot carry your own credential to the decision yet.",
+                "Continue this run where you are signed in to Cinatra — this surface carries no credential for the decision.",
             }
           : {})}
         onClick={async () => {
@@ -437,6 +638,7 @@ export function AgentHitlScreenCard({
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
   const cookieSession = useCookieSessionSurface();
+  const rendererContext = useFieldRendererContext(runId, cookieSession);
   const present = host !== null;
 
   const [reloadToken, setReloadToken] = useState(0);
@@ -446,7 +648,16 @@ export function AgentHitlScreenCard({
   // THE HOST OWNS THE GATE WHEN IT OWNS THE DRAWING. See the header: a host that
   // hands in a screen has already decided the run is asking, so the card asks
   // the server nothing on that path and can never withhold what its host draws.
-  const hostSuppliesScreen = screen !== undefined;
+  //
+  // AND ONLY WHERE THERE IS A SESSION TO DRAW IT WITH (convergence). The
+  // production topology already only supplies a screen from the run panel,
+  // which declares a cookie host — but the invariant belongs on the card's own
+  // boundary rather than on a fact about today's callers, because a screen
+  // handed in from a credential-declaring host would be exactly the unaudited
+  // subtree this card's containment exists to keep off that surface. Where it
+  // does not hold the card composes its own body instead, under the rules
+  // above, rather than drawing nothing.
+  const hostSuppliesScreen = screen !== undefined && cookieSession;
 
   // Hooks run unconditionally (rules of hooks); a surface with no declared host —
   // or one that supplies its own screen — asks for nothing, because the empty
@@ -490,23 +701,53 @@ export function AgentHitlScreenCard({
   const submit = useCallback(
     async (payload: unknown, payloadFieldName: string | undefined) => {
       if (!gate) return;
+      // NO IDENTITY, NO REQUEST. A host that declares neither a cookie session
+      // nor a credential has nothing to answer with, and firing either door
+      // from it would be asking the server to guess who is calling. This is the
+      // same silence the Continue's `blocked` state draws.
+      if (!auth && !cookieSession) return;
       setSubmitting(true);
-      try {
-        await approveReviewTask(gate.reviewTaskId, payload, payloadFieldName);
-      } catch (error) {
-        // "already resolved" is the expected race (a double press, the same
-        // gate answered on another surface). Every other failure leaves the
-        // screen exactly as it was, with the answer still in hand.
-        if (!isAlreadyResolvedError(error instanceof Error ? error.message : String(error))) {
-          setSubmitting(false);
-          return;
+      let landed: boolean;
+      if (auth) {
+        // THE BROKER DOOR. The reader's own credential, and never the ambient
+        // cookie of a frame that is same-origin to the app.
+        landed = await submitHitlScreenThroughBroker({
+          runId,
+          reviewTaskId: gate.reviewTaskId,
+          values: payload,
+          fieldName: payloadFieldName,
+          auth,
+        });
+      } else {
+        // THE COOKIE DOOR, unchanged.
+        landed = true;
+        try {
+          await approveReviewTask(gate.reviewTaskId, payload, payloadFieldName);
+        } catch (error) {
+          // "already resolved" is the expected race (a double press, the same
+          // gate answered on another surface). Every other failure leaves the
+          // screen exactly as it was, with the answer still in hand.
+          landed = isAlreadyResolvedError(
+            error instanceof Error ? error.message : String(error),
+          );
         }
       }
       setSubmitting(false);
-      setBuffered(EMPTY_BUFFER);
+      // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
+      // refusal leaves the screen exactly as it was, with the answer in hand.
+      if (landed) setBuffered(EMPTY_BUFFER);
+      // THE CARD RE-READS EITHER WAY (convergence). A landing is
+      // obviously a moment the answer changed — but so is a REFUSAL: the most
+      // common reason a submit is refused is that the gate was already answered
+      // somewhere else, and re-deriving found the run no longer asking. Not
+      // re-reading there left the stale question on screen until the next focus
+      // or remount, which on the review-page mount (no wire ref, so no change
+      // signal) could be a long time. Re-reading is authorized and cheap, and
+      // it is what makes the card settle on the truth rather than on the
+      // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate],
+    [gate, auth, cookieSession, runId],
   );
 
   const onContinue = useCallback(
@@ -533,6 +774,11 @@ export function AgentHitlScreenCard({
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
     const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+    // A renderer that is not declared safe without a session is withheld
+    // wherever there is no session — see the header. The condition is the
+    // ABSENCE of a session rather than the presence of a credential, so a host
+    // that declares neither is covered by it too.
+    const withholdRenderer = !cookieSession && !gateRendererIsSessionFree(runId, gate);
     return (
       <>
         <AgentHitlScreenFields
@@ -542,13 +788,15 @@ export function AgentHitlScreenCard({
           onBuffer={onBuffer}
           onSubmitField={submit}
           onSubmitBuffer={onSubmitBuffer}
+          withholdRenderer={withholdRenderer}
+          rendererContext={rendererContext}
         />
         {isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
             submitting={submitting}
-            blocked={!cookieSession}
+            blocked={(!cookieSession && auth === null) || withholdRenderer}
             onContinue={onContinue}
           />
         ) : null}
@@ -564,6 +812,8 @@ export function AgentHitlScreenCard({
     submit,
     submitting,
     cookieSession,
+    rendererContext,
+    auth,
     onContinue,
     onSubmitBuffer,
   ]);

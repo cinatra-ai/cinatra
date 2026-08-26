@@ -93,6 +93,7 @@ import {
   WIDGET_LIFECYCLE_READ_SCOPE,
   WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+  WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
   WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -175,11 +176,14 @@ export const WIDGET_RECOMMENDATION_READ_GRANT = {
 } as const;
 
 /**
- * The RECOMMENDATION-HOLD DECIDE grant (cinatra#2790, epic #2784 S9f).
+ * The HITL-SCREEN READ grant (cinatra#2930, lifecycle-b W3).
  *
- * It authorizes REACHING the run-start decision as this person. Whether this
- * person may shape THIS run is still the run's own execute-tier gate, taken
- * against this same actor, in the same order, as inside the app.
+ * The same capability as `WIDGET_LIFECYCLE_READ_GRANT` — reading work that
+ * waits on you — consumed at the HITL screen's own audience, because it is the
+ * other kind whose carriage is a typed interrupt and so has no envelope to post
+ * at the resolve route. Same scope, same ladder, same actor; only the audience
+ * differs, and the audience is what makes an already-minted token fail closed
+ * here rather than silently acquiring a surface.
  */
 export const WIDGET_HITL_SCREEN_READ_GRANT = {
   routePath: WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
@@ -188,6 +192,34 @@ export const WIDGET_HITL_SCREEN_READ_GRANT = {
   auditRejected: "widget_lifecycle_read_rejected",
 } as const;
 
+/**
+ * The HITL-SCREEN SUBMIT grant (cinatra#2930, lifecycle-b W3).
+ *
+ * It authorizes REACHING the run's own gate with an answer, as this person. It
+ * is a DECIDE grant and not a read one, because answering a gate drives the run
+ * — the same reason `lifecycle.decide` is separate from `lifecycle.read`
+ * everywhere else, and the reason a token that may show the question does not
+ * thereby become a token that may answer it.
+ *
+ * Whether this person may drive THIS run is NOT decided here. That is the run's
+ * own access ladder — `run.execute` then `run.approveHitl` — enforced by the
+ * shipped approval core against this same actor, in the same order, as inside
+ * the app. This grant only admits the surface.
+ */
+export const WIDGET_HITL_SCREEN_SUBMIT_GRANT = {
+  routePath: WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],
+  auditAuthorized: "widget_lifecycle_decide_authorized",
+  auditRejected: "widget_lifecycle_decide_rejected",
+} as const;
+
+/**
+ * The RECOMMENDATION-HOLD DECIDE grant (cinatra#2790, epic #2784 S9f).
+ *
+ * It authorizes REACHING the run-start decision as this person. Whether this
+ * person may shape THIS run is still the run's own execute-tier gate, taken
+ * against this same actor, in the same order, as inside the app.
+ */
 export const WIDGET_RECOMMENDATION_DECIDE_GRANT = {
   routePath: WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
   requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],
