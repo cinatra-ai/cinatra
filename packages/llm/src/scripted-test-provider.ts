@@ -259,6 +259,18 @@ const AGENT_RUN_ID_PATTERN =
 export const SCRIPTED_AGENT_RUN_TOOL = "agent_run";
 
 /**
+ * The site widget's own start door (cinatra#2935, lifecycle-b W5d).
+ *
+ * NAMES ARE THE CONTRACT: this must equal the primitive registered by
+ * `src/lib/lifecycle/named-agent-start-mcp.ts`, or the call refuses at the
+ * transport and nothing starts. The widget's closed, kind-keyed allowlist
+ * deliberately does not hold `agent_run`, so the two hosts reach the SAME road
+ * through two differently-named doors — which is the whole reason this module
+ * needs both names.
+ */
+export const SCRIPTED_NAMED_AGENT_START_TOOL = "agent_named_start";
+
+/**
  * Does this turn's instruction name an agent run to show?
  *
  * Exported for the same reason `scriptedTurnAsksForLifecyclePull` is: the intent
@@ -434,83 +446,109 @@ export function scriptedTurnAgentInputParams(instructions: string): string {
   return "{}";
 }
 
-/** What the start primitive answered, read defensively. */
+/**
+ * What the start primitive answered, read defensively.
+ *
+ * `message` is the PLATFORM'S OWN REPORT (cinatra#2935, lifecycle-b W5d) — the
+ * sentence this module says back rather than one of its own. The two doors
+ * shape a refusal differently (`agent_run` answers `{ error }`, the widget's
+ * door answers `{ ok: false, message }`), so both are read here and reduced to
+ * one refusal string; a report and a refusal can then be told apart by whether
+ * a run came back, exactly as before.
+ */
 function parseAgentStartAnswer(result: string): {
   runId: string | null;
   status: string | null;
+  report: string | null;
   error: string | null;
 } {
   try {
     const parsed: unknown = JSON.parse(result);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { runId: null, status: null, error: null };
+      return { runId: null, status: null, report: null, error: null };
     }
-    const record = parsed as { runId?: unknown; status?: unknown; error?: unknown };
+    const record = parsed as {
+      ok?: unknown;
+      runId?: unknown;
+      status?: unknown;
+      error?: unknown;
+      message?: unknown;
+    };
+    const message =
+      typeof record.message === "string" && record.message ? record.message : null;
+    const error = typeof record.error === "string" && record.error ? record.error : null;
     return {
       runId: typeof record.runId === "string" && record.runId ? record.runId : null,
       status: typeof record.status === "string" && record.status ? record.status : null,
-      error: typeof record.error === "string" && record.error ? record.error : null,
+      // A report only ever describes a start that happened; a refusal's own
+      // sentence is a refusal, never a report.
+      report: record.ok === false ? null : message,
+      error: error ?? (record.ok === false ? message : null),
     };
   } catch {
-    return { runId: null, status: null, error: null };
+    return { runId: null, status: null, report: null, error: null };
   }
 }
 
 /**
- * Call the REAL `agent_run` primitive, then SAY what it answered.
+ * Call the REAL start primitive for this host, then SAY WHAT THE PLATFORM SAID.
  *
- * THE TEXT IS A REPORT, NOT A CLAIM. Both sentences are chosen by the STATUS
- * the primitive returned, so neither can be true of a turn where the other
- * happened: a run that parked is described as parked, a run that did not is
- * described as running, and a start the primitive refused says so and names the
- * refusal verbatim. That conditional is the same one the removed pre-router
- * made — it moved to the assistant with the job.
+ * THE SENTENCE IS NOT THIS MODULE'S (cinatra#2935, lifecycle-b W5d). It used to
+ * be: this function composed the report itself, from the status the primitive
+ * answered. That was one author too many. The platform now mints the report at
+ * the start — `describeStartedRun`, in the run-status leaf — and both doors
+ * carry it, so the line a reader gets is the same bytes whether the turn ran in
+ * the first-party chat or inside a third-party application. This module relays
+ * it and adds nothing, which is the same treatment it already gave a refusal.
  *
- * IT IS ALSO THE ONLY PLACE THE RUN ID CAN COME FROM ON SCREEN. A tool result
- * feeds the turn's status line and renders no inline text, so a turn that never
- * says the id never names the run it started. The reader gets the card either
- * way; the sentence is what makes the turn readable beside it.
+ * A REFUSAL IS RELAYED THE SAME WAY, verbatim, and a turn that started nothing
+ * never claims a run.
  *
- * EVENT TENSE, deliberately: this text is persisted with the turn and re-read
- * long after the card beside it has settled. "The run paused" records what
- * happened; "the run is paused" would keep asserting a state that stopped being
- * true the moment somebody decided.
+ * THE DOOR IS THE HOST'S. `agent_run` in the first-party chat; the widget's
+ * `agent_named_start`, which its closed allowlist admits and which invokes the
+ * same `agent_run` behind its own gates. Choosing WHICH tool a turn calls is
+ * the one thing a real model decides on this path, so it is what this stand-in
+ * decides — and nothing below it.
+ *
+ * THE DEGRADED PATH IS NAMED RATHER THAN HIDDEN: an answer that carries no
+ * report gets the plain line below, composed from the fields that did come
+ * back AND ONLY THOSE. No shipped primitive answers that way — both doors mint
+ * the sentence — but a turn must still answer, and it may only say what it was
+ * told: an answer that named no status has its status left unsaid rather than
+ * guessed, because a guessed "queued" is a claim about a run nobody made.
  */
 async function runScriptedAgentStart(input: {
   packageName: string;
   instructions: string;
+  /** The start door this host uses. */
+  toolName: string;
   callSelfMcpTool: ScriptedSelfMcpDispatch;
   onText: (chunk: string) => void;
   onToolCall: (call: { id: string; name: string }) => void;
   onToolResult: (result: { id: string; name: string; result: string }) => void;
 }): Promise<void> {
   const id = randomUUID();
-  input.onToolCall({ id, name: SCRIPTED_AGENT_RUN_TOOL });
+  input.onToolCall({ id, name: input.toolName });
   const result = await input.callSelfMcpTool({
-    name: SCRIPTED_AGENT_RUN_TOOL,
+    name: input.toolName,
     args: {
       packageName: input.packageName,
       inputParams: scriptedTurnAgentInputParams(input.instructions),
     },
   });
-  input.onToolResult({ id, name: SCRIPTED_AGENT_RUN_TOOL, result });
+  input.onToolResult({ id, name: input.toolName, result });
 
   const answer = parseAgentStartAnswer(result);
   if (!answer.runId) {
-    input.onText(
-      `I tried to dispatch \`${input.packageName}\` but the server returned: ` +
-        `${answer.error ?? result}.`,
-    );
+    input.onText(answer.error ?? result);
     return;
   }
-  const status = answer.status ?? "queued";
-  input.onText(
-    status === "pending_input"
-      ? `Dispatched \`${input.packageName}\` (runId: \`${answer.runId}\`, status: ` +
-          `\`${status}\`). The run paused for a decision on the recommended skills.`
-      : `Dispatched \`${input.packageName}\` (runId: \`${answer.runId}\`, status: ` +
-          `\`${status}\`). The agent is running — I'll keep polling for its progress.`,
-  );
+  if (answer.report) {
+    input.onText(answer.report);
+    return;
+  }
+  const status = answer.status ? `, status: \`${answer.status}\`` : "";
+  input.onText(`Dispatched \`${input.packageName}\` (runId: \`${answer.runId}\`${status}).`);
 }
 
 /** The pull primitives this provider may drive. NAMES ARE THE CONTRACT — they
@@ -799,6 +837,43 @@ export async function runScriptedWidgetAssistantTurn(input: {
     return;
   }
 
+  // THE AGENT START (cinatra#2935, lifecycle-b W5d) — the widget's own door.
+  //
+  // BELOW the two readings above, for the reason they give: a review question
+  // and a run somebody already started are the more specific readings of a
+  // sentence that could be taken as both, so every turn they claim keeps the
+  // answer it has today. ABOVE the CMS edit stand-in, because asking for an
+  // agent to be started is not an editing instruction however many editing
+  // words surround it — the same order the `/chat` arm uses.
+  //
+  // It exists so the widget host has a road to a run on a key-free stack at
+  // all: with the pre-model reader gone the assistant is the only one, and here
+  // the assistant is this stand-in. The REAL `agent_named_start` primitive
+  // behind it resolves the person's live standing, fences the start to the
+  // agents they may start and invokes `agent_run` under its own gates; this
+  // module starts nothing itself and reports nothing it was not told.
+  if (input.callSelfMcpTool) {
+    const startPackage = scriptedTurnStartsAgent(input.instructions);
+    if (startPackage) {
+      try {
+        await runScriptedAgentStart({
+          packageName: startPackage,
+          instructions: input.instructions,
+          toolName: SCRIPTED_NAMED_AGENT_START_TOOL,
+          callSelfMcpTool: input.callSelfMcpTool,
+          onText: input.onText,
+          onToolCall: input.onToolCall,
+          onToolResult: input.onToolResult,
+        });
+      } catch {
+        // A dispatcher that threw started nothing this module may speak for, so
+        // the turn keeps the text it already streamed and mints no card — the
+        // same degradation the pull arm takes, for the same reason.
+      }
+      return;
+    }
+  }
+
   if (EDIT_INTENT.test(input.instructions)) {
     const id = randomUUID();
     input.onToolCall({ id, name: toolName });
@@ -875,6 +950,7 @@ export async function runScriptedChatAssistantTurn(input: {
         await runScriptedAgentStart({
           packageName: startPackage,
           instructions: input.instructions,
+          toolName: SCRIPTED_AGENT_RUN_TOOL,
           callSelfMcpTool: input.callSelfMcpTool,
           onText: input.onText,
           onToolCall: input.onToolCall,

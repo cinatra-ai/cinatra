@@ -387,3 +387,82 @@ export function deriveProducedOutputTitle(input: {
   const shortId = input.id.length > 8 ? input.id.slice(0, 8) : input.id;
   return `${input.type} ${shortId}`;
 }
+
+// ---------------------------------------------------------------------------
+// THE REPORT A START ANSWERS WITH (cinatra#2935, lifecycle-b W5d).
+// ---------------------------------------------------------------------------
+// From the plan (PLAN: Agents Lifecycle (B), "The card is the visible truth"):
+//
+//   "The assistant's line reports what came back and adds nothing. Where the
+//    sentence and the card could disagree, the card is right."
+//
+// THAT RULE PRESUPPOSES THERE IS SOMETHING TO SAY BACK, and until this change
+// there was not. A start answered with machine fields alone — a run id and a
+// status — so an assistant told to report the answer and add nothing to it had
+// only the envelope to report, and inside a third-party application that is
+// exactly what a reader was shown: the tool result, printed. The same model on
+// the same call relayed the REFUSAL as a sentence, because a refusal already
+// answered with one. The difference was never the host and never the model; it
+// was whether the platform's answer carried a sentence.
+//
+// SO THE PLATFORM WRITES IT, HERE, ONCE, and both doors onto the start road
+// carry the same bytes: `agent_run`, which the conversation's assistant calls,
+// and the site widget's `agent_named_start`, which relays this primitive's
+// answer through its own narrower door. One wording, wherever it appears.
+//
+// CHOSEN BY THE STATUS THE START ANSWERED — never by anything a caller said, and
+// never derived — so the two clauses cannot both be true of one turn: a run that
+// parked is described as parked, a run that did not is described as running.
+//
+// EVENT TENSE, deliberately, in BOTH clauses: this line is persisted with the
+// turn and re-read long after the card beside it has settled, and the assistant
+// that says it back is required to poll the run to a terminal status first.
+// "The run paused" and "The run started" record what happened; "the run is
+// paused" or "the agent is running" would keep asserting a state that stopped
+// being true the moment somebody decided, or the moment the run finished.
+//
+// IT NAMES THE RUN. The card carries the run's own link, but the line is what
+// makes the turn readable beside it — and a turn that never names the run it
+// started cannot be read back later without the card.
+// ---------------------------------------------------------------------------
+
+/** The clause for a start that parked on its recommendation checkpoint. */
+export const RUN_START_PARKED_CLAUSE =
+  "The run paused for a decision on the recommended skills.";
+
+/**
+ * The clause for a start that did not park.
+ *
+ * IT REPORTS THE EVENT, NOT A STATE, and that is what makes it safe to say
+ * back later. "The agent is running" is a claim about NOW: the answer names a
+ * status the moment the start returned, the assistant is required to poll the
+ * run to a terminal status before it replies, and a run can also come back
+ * already settled when a concurrent writer won the dispatch. Any of those makes
+ * a present-tense claim false by the time a person reads it. "The run started"
+ * is true from the moment it happens and stays true; the status the answer
+ * actually named is in the sentence beside it, which is where a reader who
+ * wants the state should get it.
+ */
+export const RUN_START_STARTED_CLAUSE = "The run started.";
+
+/**
+ * The platform's own report for a started run — the sentence the assistant says
+ * back, on every host.
+ *
+ * PURE, and deliberately in this leaf: the report is chosen by the run status
+ * whose vocabulary lives here, and this module imports nothing, so the sentence
+ * can be read by a test, by the primitive that mints it and by the surfaces that
+ * pin it without any of them pulling a graph.
+ */
+export function describeStartedRun(input: {
+  packageName: string;
+  runId: string;
+  status: string;
+}): string {
+  const clause =
+    input.status === "pending_input" ? RUN_START_PARKED_CLAUSE : RUN_START_STARTED_CLAUSE;
+  return (
+    `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
+    `status: \`${input.status}\`). ${clause}`
+  );
+}

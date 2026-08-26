@@ -279,8 +279,9 @@ import {
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
-import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling } from "../auth-policy";
+import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
+import { describeStartedRun } from "../run-status";
 // Removed `getActorContext` / `getActorContextOrThrow` imports.
 // LLM-reachable paths are now fail-closed at the orchestration entry points
 // (requireActorFrame in packages/llm/src/index.ts).
@@ -1129,10 +1130,9 @@ async function handleAgentBuilderRun(
       runId: run.id,
     });
 
-    return { runId: run.id, status: launched.status };
+    return { runId: run.id, status: launched.status, message: describeStartedRun({ packageName: template.packageName ?? identifierForError, runId: run.id, status: launched.status }) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: `Run failed: ${message}` };
+    return startFailureAnswer(err, identifierForError);
   }
 }
 

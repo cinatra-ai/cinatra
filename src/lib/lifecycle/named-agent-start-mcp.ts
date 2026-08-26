@@ -167,8 +167,10 @@ export const NAMED_AGENT_START_TOOL_DESCRIPTION =
   "Use it when the person asks to use, run, start or dispatch an agent and names its package " +
   "(the canonical scoped form looks like '@cinatra-ai/<slug>'). " +
   "Pass the inputs they gave you in `inputParams` as a stringified JSON object; leave it out when they gave none. " +
-  "It starts at most one run. Report the answer that comes back and add nothing to it — " +
-  "when it refuses, relay the refusal as it is written and do not try another way.";
+  "It starts at most one run. The answer carries `message` — the platform's own sentence about " +
+  "what happened — and that sentence is your reply: say it back exactly as it is written, add nothing " +
+  "to it and never print the answer itself. When it refuses, relay the refusal the same way and do " +
+  "not try another way.";
 
 type McpToolResult = {
   content: { type: "text"; text: string }[];
@@ -340,7 +342,14 @@ export async function handleNamedAgentStart(
       });
     });
 
-  let out: { runId?: string; status?: string; error?: string; code?: string } | null;
+  let out: {
+    runId?: string;
+    status?: string;
+    error?: string;
+    code?: string;
+    /** The platform's own report for the start, minted by `agent_run`. */
+    message?: string;
+  } | null;
   try {
     out = (await invoke(actor, { packageName, inputParams })) as typeof out;
   } catch {
@@ -365,13 +374,29 @@ export async function handleNamedAgentStart(
     });
   }
 
-  // THE DURABLE ANSWER. `{ runId, status }` and nothing else: the conversation
-  // draws the run's card from this tool result, and the card carries its own
-  // link to the run page. A path composed from a run id does not exist, so no
-  // URL is put on this wire (cinatra#2729 defect 1) and the status is COPIED,
-  // never derived — a parked run must reach the transcript as parked so the
-  // held-turn card contract can rebuild its card after a reload.
-  return say({ ok: true, runId: out.runId, status: out.status ?? "queued" });
+  // THE DURABLE ANSWER. The conversation draws the run's card from this tool
+  // result, and the card carries its own link to the run page. A path composed
+  // from a run id does not exist, so no URL is put on this wire (cinatra#2729
+  // defect 1) and the status is COPIED, never derived — a parked run must reach
+  // the transcript as parked so the held-turn card contract can rebuild its
+  // card after a reload.
+  //
+  // AND THE PLATFORM'S REPORT RIDES WITH IT (cinatra#2935, lifecycle-b W5d),
+  // relayed exactly as `agent_run` minted it — the same treatment this surface
+  // already gives a refusal, and for the same reason. Without a sentence in the
+  // answer the assistant has nothing to say back and reads the envelope out
+  // instead, which is what a reader inside a third-party application was shown.
+  // NOTHING IS INVENTED: an answer that carries no report gets none put on it,
+  // because a sentence composed here would be this surface's words about
+  // somebody else's act rather than the platform's own.
+  return say({
+    ok: true,
+    runId: out.runId,
+    status: out.status ?? "queued",
+    ...(typeof out.message === "string" && out.message.length > 0
+      ? { message: out.message }
+      : {}),
+  });
 }
 
 export function registerNamedAgentStartPrimitive(server: McpRuntimeToolServer): void {

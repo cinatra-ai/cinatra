@@ -84,8 +84,16 @@ export const HELD_TURN_MESSAGE =
 export const HELD_TURN_PAUSED_TEXT =
   "The run paused for a decision on the recommended skills.";
 
-/** The sentence a QUEUED dispatch gets. A held turn must NEVER carry it. */
-export const HELD_TURN_RUNNING_TEXT = "The agent is running";
+/**
+ * The sentence a dispatch that did NOT park gets. A held turn must NEVER carry
+ * it, which is the whole of what this constant is for.
+ *
+ * It is EVENT TENSE (cinatra#2935, lifecycle-b W5d) because the platform now
+ * writes it and an assistant says it back after polling the run: a present-tense
+ * "the agent is running" would be a claim about a moment that has already
+ * passed by the time a person reads the line.
+ */
+export const HELD_TURN_RUNNING_TEXT = "The run started.";
 
 // ---------------------------------------------------------------------------
 // THE RATIFIED §V DRAWING'S ANCHORS (#2841 redraw, #2879 slot identity).

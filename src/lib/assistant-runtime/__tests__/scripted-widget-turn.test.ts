@@ -146,6 +146,11 @@ import {
   HELD_TURN_RUNNING_TEXT,
 } from "../../../../tests/e2e/chat-hitl-held-turn/constants";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
+// cinatra#2935 (lifecycle-b W5d) — the PLATFORM'S own report for a started run.
+// The fixtures below answer with it because the real primitive does, and the
+// sentence is read from the minter rather than retyped so the seam cannot drift
+// from what a person is actually shown.
+import { describeStartedRun } from "@cinatra-ai/agents/run-status";
 
 const wpPrincipal: WidgetPrincipal = {
   kind: "public_site_widget",
@@ -493,8 +498,26 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat lifecycle bran
 
 const AGENT_RUN_TOOL = "agent_run";
 const STARTED_RUN_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b";
-const HELD_ANSWER = JSON.stringify({ runId: STARTED_RUN_ID, status: "pending_input" });
-const QUEUED_ANSWER = JSON.stringify({ runId: STARTED_RUN_ID, status: "queued" });
+/** What the REAL primitive answers a start: the run, its status, and the
+ *  platform's own report of both. The report is what the turn says back. */
+const HELD_ANSWER = JSON.stringify({
+  runId: STARTED_RUN_ID,
+  status: "pending_input",
+  message: describeStartedRun({
+    packageName: HELD_TURN_AGENT_PACKAGE,
+    runId: STARTED_RUN_ID,
+    status: "pending_input",
+  }),
+});
+const QUEUED_ANSWER = JSON.stringify({
+  runId: STARTED_RUN_ID,
+  status: "queued",
+  message: describeStartedRun({
+    packageName: HELD_TURN_AGENT_PACKAGE,
+    runId: STARTED_RUN_ID,
+    status: "queued",
+  }),
+});
 const REFUSED_ANSWER = JSON.stringify({
   error: "Agent is not installed on this instance. Install it from the marketplace.",
 });
@@ -555,7 +578,8 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat agent-start br
     expect(results).toHaveLength(1);
     expect(results[0]!.name).toBe(AGENT_RUN_TOOL);
     expect(results[0]!.result).toBe(HELD_ANSWER);
-    // And the turn SAYS what happened: the run id, and the held condition.
+    // And the turn SAYS what happened, in the PLATFORM'S words rather than its
+    // own (cinatra#2935): the run id, and the held condition.
     const text = frames
       .filter((f) => f.event === "text")
       .map((f) => (f.data as { content: string }).content)
@@ -563,6 +587,33 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat agent-start br
     expect(text).toContain(`runId: \`${STARTED_RUN_ID}\``);
     expect(text).toContain(HELD_TURN_PAUSED_TEXT);
     expect(text).not.toContain(HELD_TURN_RUNNING_TEXT);
+  });
+
+  it("CHIP-LABEL STABILITY: the report added to the answer does not move the label the runtime derives from it", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    // The runtime derives the chip label from the result payload, so a field
+    // added to that payload has to be shown not to move it — the same turn is
+    // driven twice, once with the platform's report on the answer and once
+    // without, and the label the sink is handed must be the same string.
+    const labelFor = async (answerText: string): Promise<string | undefined> => {
+      chatDispatchScript.answers = { [AGENT_RUN_TOOL]: answerText };
+      const frames: Array<{ event: string; data: unknown }> = [];
+      await runAssistantTurn(
+        buildCinatraAssistantRuntimeConfig(),
+        argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+      );
+      const result = frames.find((f) => f.event === "tool_result");
+      return (result?.data as { resultLabel?: string } | undefined)?.resultLabel;
+    };
+
+    const withReport = await labelFor(QUEUED_ANSWER);
+    const withoutReport = await labelFor(
+      JSON.stringify({ runId: STARTED_RUN_ID, status: "queued" }),
+    );
+    expect(withReport).toBe(withoutReport);
+    expect(withReport).toBeTruthy();
   });
 
   it("THE STATUS DECIDES THE SENTENCE: a run that did NOT park is never described as parked", async () => {
