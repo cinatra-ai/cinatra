@@ -26,6 +26,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import {
+  readMetadataValueInternal,
   readRawOpenAIConnectionRow,
   readUnsealedOpenAIConnectionRow,
 } from "@/lib/database-metadata";
@@ -33,9 +34,32 @@ import {
 /** Where a resolved key came from. `null` when nothing resolved. */
 export type KnowledgeGraphKeySource = "stored-connection" | "environment";
 
+/**
+ * Which vendor performs ENTITY EXTRACTION in the indexer (cinatra#2591
+ * deliverable 2).
+ *
+ * These are the two the epic's 2026-08-09 ruling names, and the two this repo
+ * stores a connection for. Upstream graphiti also ships Gemini/Groq/Azure
+ * branches; they are deliberately NOT offered here, because cinatra has no
+ * stored connection to resolve a key from — adding one is a connector question,
+ * not a substrate question.
+ *
+ * The EMBEDDER is a separate axis and is never this value: Anthropic publishes
+ * no embeddings API at all, so an Anthropic install always ranks on the local
+ * floor (docker/kg-embedder). See `buildGraphitiEnv` in
+ * `scripts/gen-graphiti-env.mjs`.
+ */
+export type KnowledgeGraphExtractionProvider = "openai" | "anthropic";
+
 export type KnowledgeGraphKeyResolution = {
   /** The resolved key, or null. NEVER log, echo, or serialize this. */
   key: string | null;
+  /**
+   * WHICH vendor the resolved key belongs to, or null when nothing resolved.
+   * The generator keys the container's whole provider block off this, so it
+   * must never disagree with `key`.
+   */
+  provider: KnowledgeGraphExtractionProvider | null;
   source: KnowledgeGraphKeySource | null;
   /** Operator-facing explanation. Key-free by construction. */
   reason: string;
@@ -97,12 +121,60 @@ function storedKeyPresentButUnreadable(): boolean {
 }
 
 /**
- * Resolve the OpenAI key the knowledge-graph indexer should run with.
+ * The operator's COMMITTED default LLM provider, narrowed to the two the
+ * indexer can actually run (cinatra#2591).
+ *
+ * Read straight from the connector-config metadata key rather than through
+ * `@/lib/database#readDefaultLlmProviderFromDatabase`. Two reasons, both about
+ * this module's callers: `scripts/gen-graphiti-env.mjs` imports this file
+ * during a bring-up whose database may not exist yet, and the whole point of
+ * the lazy import there is a SMALL module graph that fails soft. `database.ts`
+ * pulls the connector-config cache and the sealing layer with it; the metadata
+ * primitive this file already imports does not.
+ *
+ * Anything other than the two supported values (an install defaulted to Gemini,
+ * an out-of-band edit, a fresh install with nothing committed) reads as
+ * `openai` — the same coercion the authoritative accessor applies, and the same
+ * value this function returned before multi-provider existed.
+ */
+function readPreferredExtractionProvider(): KnowledgeGraphExtractionProvider {
+  const stored = readMetadataValueInternal<unknown>(
+    "connector_config:llm_default_provider",
+    "openai",
+  );
+  return stored === "anthropic" ? "anthropic" : "openai";
+}
+
+/**
+ * The stored Anthropic key, or null.
+ *
+ * `anthropic_connection` carries NO designated secret field (asserted by
+ * `src/lib/__tests__/connector-config-secret-at-rest.test.ts`), so unlike the
+ * OpenAI row there is no seal to open and no "present but undecryptable" state
+ * to disambiguate — the value is either there or it is not.
+ */
+function readStoredAnthropicKey(): string | null {
+  const row = readMetadataValueInternal<{ apiKey?: unknown } | null>(
+    "connector_config:anthropic_connection",
+    null,
+  );
+  return trimmed(row?.apiKey);
+}
+
+/**
+ * Resolve the PROVIDER and the key the knowledge-graph indexer should run with.
  *
  * Order, and why:
- *  1. the app's STORED provider configuration — the place an operator actually
- *     configures OpenAI, and the source the ruling names;
- *  2. `OPENAI_API_KEY` in the process env — the legacy path. Still honoured
+ *  1. the app's STORED provider configuration for the operator's COMMITTED
+ *     default provider (cinatra#2591 deliverable 2) — the place an operator
+ *     actually configures a vendor, and the source the ruling names;
+ *  2. the OTHER supported provider's stored configuration. An install whose
+ *     default is Anthropic but which only ever configured OpenAI (or the
+ *     reverse) should INDEX rather than sit dark: extraction is a background
+ *     capability, not the operator's chat-facing provider choice, and refusing
+ *     to use a key that is right there would be a silent downgrade of exactly
+ *     the kind this module exists to prevent;
+ *  3. `OPENAI_API_KEY` in the process env — the legacy path. Still honoured
  *     because the works-after/upgrade CI arms and operators who set it in
  *     `.env.local` depend on it, and because it is the only source available
  *     before the database exists (a first bring-up).
@@ -113,23 +185,56 @@ function storedKeyPresentButUnreadable(): boolean {
  */
 export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution {
   let storedReadError: string | null = null;
+  let preferred: KnowledgeGraphExtractionProvider = "openai";
+
   try {
-    // Canonical UNSEALED accessor (cinatra#2587) for the value.
-    const row = readUnsealedOpenAIConnectionRow();
-    const stored = trimmed(row?.apiKey);
-    if (stored) {
-      return {
-        key: stored,
-        source: "stored-connection",
-        reason: "resolved from the app's stored OpenAI provider configuration",
-        storedReadFailed: false,
-      };
-    }
-    // No usable key came back. That is EITHER "none configured" OR "the seal
-    // failed to open" — the fail-closed unseal drops the field either way, so
-    // ask the raw row which one it was.
-    if (storedKeyPresentButUnreadable()) {
-      storedReadError = "the stored key could not be decrypted";
+    preferred = readPreferredExtractionProvider();
+
+    // Try the committed provider first, then the other one.
+    const order: KnowledgeGraphExtractionProvider[] =
+      preferred === "anthropic" ? ["anthropic", "openai"] : ["openai", "anthropic"];
+
+    for (const provider of order) {
+      if (provider === "anthropic") {
+        const stored = readStoredAnthropicKey();
+        if (stored) {
+          return {
+            key: stored,
+            provider: "anthropic",
+            source: "stored-connection",
+            reason:
+              preferred === "anthropic"
+                ? "resolved from the app's stored Anthropic provider configuration"
+                : "resolved from the app's stored Anthropic provider configuration " +
+                  "(the committed default provider has no usable key)",
+            storedReadFailed: false,
+          };
+        }
+        continue;
+      }
+
+      // Canonical UNSEALED accessor (cinatra#2587) for the value.
+      const row = readUnsealedOpenAIConnectionRow();
+      const stored = trimmed(row?.apiKey);
+      if (stored) {
+        return {
+          key: stored,
+          provider: "openai",
+          source: "stored-connection",
+          reason:
+            preferred === "openai"
+              ? "resolved from the app's stored OpenAI provider configuration"
+              : "resolved from the app's stored OpenAI provider configuration " +
+                "(the committed default provider has no usable key)",
+          storedReadFailed: false,
+        };
+      }
+      // No usable key came back. That is EITHER "none configured" OR "the seal
+      // failed to open" — the fail-closed unseal drops the field either way, so
+      // ask the raw row which one it was.
+      if (storedKeyPresentButUnreadable()) {
+        storedReadError = "the stored key could not be decrypted";
+      }
     }
   } catch (err) {
     // Error CLASS only — a decrypt/DB error must never carry key material.
@@ -140,6 +245,7 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
   if (fromEnv) {
     return {
       key: fromEnv,
+      provider: "openai",
       source: "environment",
       reason: "resolved from OPENAI_API_KEY in the environment (legacy path)",
       storedReadFailed: storedReadError !== null,
@@ -148,11 +254,13 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
 
   return {
     key: null,
+    provider: null,
     source: null,
     reason: storedReadError
-      ? `no usable OpenAI provider key: the stored configuration could not be read ` +
+      ? `no usable extraction provider key: the stored configuration could not be read ` +
         `(${storedReadError}) and OPENAI_API_KEY is unset`
-      : "no OpenAI provider key is configured in the app and OPENAI_API_KEY is unset",
+      : "no OpenAI or Anthropic provider key is configured in the app and " +
+        "OPENAI_API_KEY is unset",
     storedReadFailed: storedReadError !== null,
   };
 }
@@ -237,9 +345,11 @@ export function describeKnowledgeGraphIndexing(state: KnowledgeGraphProviderKeyS
   }
   if (state.providerKey === "absent") {
     return (
-      `knowledge-graph indexing OFF — no provider key (${state.reason}). ` +
-      "Objects are still saved and listed; they are not indexed into the graph. " +
-      "Configure OpenAI in the app, then re-run the bring-up (`npm run kg:refresh`)."
+      `knowledge-graph EXTRACTION OFF — no provider key (${state.reason}). ` +
+      "Objects are still saved and listed, and they are still SEEDED and RANKED " +
+      "through their deterministic anchor nodes on the local embedder floor " +
+      "(cinatra#2591); what is off is entity extraction. Configure OpenAI or " +
+      "Anthropic in the app, then re-run the bring-up (`npm run kg:refresh`)."
     );
   }
   return (

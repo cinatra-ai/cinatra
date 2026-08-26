@@ -78,6 +78,19 @@ export const GRAPHITI_KEY_NAMES = [
   "OPENAI_API_KEY",
 ];
 
+// The Anthropic extraction key's own variable (cinatra#2591 deliverable 2). It
+// is deliberately NOT in GRAPHITI_KEY_NAMES: those three all carry the SAME
+// OpenAI value, and an Anthropic key must never be written into any of them.
+// `OPENAI_API_KEY` in particular is read by graphiti_core during init and by the
+// EMBEDDER's OpenAI-shaped client — on an Anthropic install that client points
+// at the local floor, so putting the Anthropic key there would both be wrong
+// and put a credential on a wire that has no business seeing it.
+export const GRAPHITI_ANTHROPIC_KEY_NAME = "LLM__PROVIDERS__ANTHROPIC__API_KEY";
+
+/** Every variable that can carry a REAL credential, across both providers.
+ *  `shouldPreserveExisting` scans this set. */
+export const GRAPHITI_ALL_KEY_NAMES = [...GRAPHITI_KEY_NAMES, GRAPHITI_ANTHROPIC_KEY_NAME];
+
 // ---------------------------------------------------------------------------
 // THE EMBEDDER FLOOR, AND A BOOT CRASH IT ALSO FIXES (cinatra#2591).
 //
@@ -165,7 +178,7 @@ export function parseDotenv(contents) {
 // an embedded newline would either truncate the credential or inject an extra
 // variable into the container's environment. Refusing degrades to the honest
 // keyless state, which is strictly safer than a half-written credential.
-export function buildGraphitiEnv(apiKey) {
+export function buildGraphitiEnv(apiKey, provider = "openai") {
   const key = typeof apiKey === "string" ? apiKey.trim() : "";
   const rejected = key && /[\u0000-\u001F\u007F]/.test(key) ? "control-character" : null;
   const usable = rejected ? "" : key;
@@ -193,7 +206,39 @@ export function buildGraphitiEnv(apiKey) {
     };
   }
 
-  // KEYED. Extraction and embeddings both ride the configured OpenAI key.
+  // KEYED, ANTHROPIC (cinatra#2591 deliverable 2). Extraction rides the
+  // Anthropic key; embeddings CANNOT — Anthropic publishes no embeddings API,
+  // which is the whole reason the local floor exists. So this arm is the one
+  // the embedder floor was built for: extraction hosted, ranking local, exactly
+  // ONE vendor in the install.
+  //
+  // The three GRAPHITI_KEY_NAMES variables are still written, and NOT with the
+  // Anthropic key: they carry the local embedder's placeholder, because
+  // graphiti_core reads the bare OPENAI_API_KEY during init and the embedder's
+  // OpenAI-shaped client reads the other two. Pointing them at the local floor
+  // keeps the Anthropic credential on exactly one variable.
+  if (provider === "anthropic") {
+    return {
+      env: {
+        LLM__PROVIDER: "anthropic",
+        [GRAPHITI_ANTHROPIC_KEY_NAME]: usable,
+        // config.yaml already carries the real Anthropic base URL (it has no
+        // no-egress default to undo — an Anthropic block with a local URL could
+        // never serve anything), so it is not restated here.
+        EMBEDDER__PROVIDER: "openai",
+        EMBEDDER__MODEL: LOCAL_EMBEDDER_MODEL,
+        EMBEDDER__DIMENSIONS: LOCAL_EMBEDDER_DIMENSIONS,
+        EMBEDDER__PROVIDERS__OPENAI__API_URL: LOCAL_EMBEDDER_API_URL,
+        EMBEDDER__PROVIDERS__OPENAI__API_KEY: LOCAL_EMBEDDER_PLACEHOLDER_KEY,
+        OPENAI_API_KEY: LOCAL_EMBEDDER_PLACEHOLDER_KEY,
+      },
+      hasKey: true,
+      embedder: "local",
+      rejected: null,
+    };
+  }
+
+  // KEYED, OPENAI. Extraction and embeddings both ride the configured key.
   const env = {};
   for (const name of GRAPHITI_KEY_NAMES) env[name] = usable;
   env.LLM__PROVIDER = "openai";
@@ -212,7 +257,11 @@ export function buildGraphitiEnv(apiKey) {
 // rewrite — see generateGraphitiEnv.
 export function shouldPreserveExisting(existingContents) {
   const parsed = parseDotenv(existingContents ?? "");
-  return GRAPHITI_KEY_NAMES.some((name) => {
+  // Scans BOTH providers' key variables (cinatra#2591): a file written for an
+  // Anthropic install carries its credential only on the Anthropic variable, and
+  // scanning the OpenAI three alone would read that file as keyless and rewrite
+  // a real key away during a cold bring-up.
+  return GRAPHITI_ALL_KEY_NAMES.some((name) => {
     const value = typeof parsed[name] === "string" ? parsed[name].trim() : "";
     // The keyless file is no longer empty (it carries the boot sentinel and the
     // local-embedder placeholder), so "is a key materialized" can no longer be
@@ -281,7 +330,7 @@ export async function generateGraphitiEnv({
   warn = console.warn,
 } = {}) {
   const resolved = await resolve();
-  const { env, hasKey, embedder, rejected } = buildGraphitiEnv(resolved.key);
+  const { env, hasKey, embedder, rejected } = buildGraphitiEnv(resolved.key, resolved.provider);
 
   if (rejected === "control-character") {
     warn(
@@ -340,13 +389,14 @@ export async function generateGraphitiEnv({
   if (hasKey) {
     log(
       `[gen-graphiti-env] knowledge-graph provider key CONFIGURED — ${resolved.reason}; ` +
-        `wrote ${outPath} (${GRAPHITI_KEY_NAMES.length} keys, 0600; embedder: ${embedder}). ` +
+        `wrote ${outPath} (provider: ${resolved.provider ?? "openai"}; ` +
+        `${Object.keys(env).length} vars, 0600; embedder: ${embedder}). ` +
         "The indexer container picks it up when it is (re)created.",
     );
     return {
       state: "configured",
       wrote: true,
-      keyCount: GRAPHITI_KEY_NAMES.length,
+      keyCount: Object.keys(env).length,
       embedder,
     };
   }

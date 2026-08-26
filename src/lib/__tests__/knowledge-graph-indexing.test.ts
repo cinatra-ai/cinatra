@@ -16,9 +16,17 @@ vi.mock("server-only", () => ({}));
 
 const readUnsealedOpenAIConnectionRow = vi.fn();
 const readRawOpenAIConnectionRow = vi.fn(() => null as unknown);
+// cinatra#2591: the resolver now also reads the committed default provider and
+// the stored Anthropic connection, both plain connector-config metadata rows.
+const metadata = new Map<string, unknown>();
+const readMetadataValueInternal = vi.fn(
+  (key: string, fallback: unknown) => (metadata.has(key) ? metadata.get(key) : fallback),
+);
 vi.mock("@/lib/database-metadata", () => ({
   readUnsealedOpenAIConnectionRow: () => readUnsealedOpenAIConnectionRow(),
   readRawOpenAIConnectionRow: () => readRawOpenAIConnectionRow(),
+  readMetadataValueInternal: (key: string, fallback: unknown) =>
+    readMetadataValueInternal(key, fallback),
 }));
 
 import {
@@ -30,6 +38,10 @@ import {
 
 const STORED_KEY = "sk-fake-stored-2582";
 const ENV_KEY = "sk-fake-env-2582";
+const STORED_ANTHROPIC_KEY = "sk-ant-fake-stored-2591";
+
+const DEFAULT_PROVIDER_KEY = "connector_config:llm_default_provider";
+const ANTHROPIC_CONNECTION_KEY = "connector_config:anthropic_connection";
 
 const originalEnvKey = process.env.OPENAI_API_KEY;
 
@@ -37,12 +49,77 @@ beforeEach(() => {
   __resetKnowledgeGraphIndexingCacheForTests();
   readUnsealedOpenAIConnectionRow.mockReset().mockReturnValue(null);
   readRawOpenAIConnectionRow.mockReset().mockReturnValue(null);
+  metadata.clear();
   delete process.env.OPENAI_API_KEY;
 });
 
 afterEach(() => {
   if (originalEnvKey === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = originalEnvKey;
+});
+
+// cinatra#2591 deliverable 2 — the indexer's provider derives from the app's
+// stored configuration, per install, and is no longer hardcoded to OpenAI.
+describe("multi-provider extraction (cinatra#2591)", () => {
+  it("runs extraction on ANTHROPIC when that is the committed default", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
+    metadata.set(ANTHROPIC_CONNECTION_KEY, { apiKey: STORED_ANTHROPIC_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("anthropic");
+    expect(resolved.key).toBe(STORED_ANTHROPIC_KEY);
+    expect(resolved.source).toBe("stored-connection");
+  });
+
+  it("reports OPENAI as the provider on an OpenAI install", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "openai");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(STORED_KEY);
+  });
+
+  it("prefers the COMMITTED provider when BOTH are configured", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
+    metadata.set(ANTHROPIC_CONNECTION_KEY, { apiKey: STORED_ANTHROPIC_KEY });
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("anthropic");
+    expect(resolved.key).toBe(STORED_ANTHROPIC_KEY);
+  });
+
+  it("falls back to the OTHER provider rather than sitting dark", () => {
+    // Committed to Anthropic, but only OpenAI was ever configured. Extraction is
+    // a background capability: refusing the key that is right there would leave
+    // the graph unextracted for a reason the operator never chose.
+    metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(STORED_KEY);
+  });
+
+  it("coerces an unsupported committed provider back to OpenAI", () => {
+    // gemini/groq/azure are upstream-supported but cinatra stores no connection
+    // for them, so there is no key to resolve and the indexer must not claim one.
+    metadata.set(DEFAULT_PROVIDER_KEY, "gemini");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(STORED_KEY);
+  });
+
+  it("reports NO provider when neither vendor is configured", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+  });
 });
 
 describe("resolveKnowledgeGraphProviderKey", () => {
@@ -175,10 +252,17 @@ describe("readKnowledgeGraphIndexingState", () => {
 describe("describeKnowledgeGraphIndexing", () => {
   it("states the OFF case in the operator's terms, without overstating it", () => {
     const line = describeKnowledgeGraphIndexing({ providerKey: "absent", reason: "no key" });
-    expect(line).toContain("knowledge-graph indexing OFF");
+    // EXTRACTION, not "indexing" (cinatra#2591). Saying "indexing OFF" is now
+    // itself the overstatement this test guards against: a keyless install still
+    // seeds every projected row as a deterministic anchor node and still RANKS it
+    // on the local embedder floor. What it cannot do is extract entities.
+    expect(line).toContain("knowledge-graph EXTRACTION OFF");
+    expect(line).not.toContain("knowledge-graph indexing OFF");
     expect(line).toContain("no provider key");
     // Objects still work — the doc claim this issue also corrects.
     expect(line).toContain("Objects are still saved and listed");
+    // And the operator is told BOTH vendors are options (deliverable 2).
+    expect(line).toContain("Anthropic");
   });
 
   it("distinguishes unknown from absent", () => {

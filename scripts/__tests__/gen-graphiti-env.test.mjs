@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  GRAPHITI_ANTHROPIC_KEY_NAME,
   GRAPHITI_KEY_NAMES,
   GRAPHITI_NO_LLM_SENTINEL,
   LOCAL_EMBEDDER_API_URL,
@@ -37,6 +38,9 @@ import {
 
 // Obviously fake, and shaped like nothing real.
 const FAKE_KEY = "sk-fake-not-a-real-key-2582";
+// Obviously fake, and shaped like nothing real. Distinct from FAKE_KEY so a test
+// can prove the Anthropic credential never lands on an OpenAI-shaped variable.
+const FAKE_ANTHROPIC_KEY = "sk-ant-fake-not-a-real-key-2591";
 
 let dir;
 let outPath;
@@ -74,6 +78,54 @@ describe("buildGraphitiEnv (pure)", () => {
     // selection metadata — never a second credential.
     const secretish = Object.entries(env).filter(([, v]) => v === FAKE_KEY).map(([k]) => k);
     expect(secretish.sort()).toEqual([...GRAPHITI_KEY_NAMES].sort());
+  });
+
+  // cinatra#2591 deliverable 2 — MULTI-PROVIDER EXTRACTION.
+  it("runs extraction on ANTHROPIC and ranks on the LOCAL floor", () => {
+    const { env, hasKey, embedder } = buildGraphitiEnv(FAKE_ANTHROPIC_KEY, "anthropic");
+    expect(hasKey).toBe(true);
+    expect(env.LLM__PROVIDER).toBe("anthropic");
+    expect(env[GRAPHITI_ANTHROPIC_KEY_NAME]).toBe(FAKE_ANTHROPIC_KEY);
+
+    // Anthropic publishes NO embeddings API, so an Anthropic install MUST rank
+    // on the local floor — that is the whole reason the floor exists. If this
+    // ever reads "openai" with a hosted URL, the install needs a second vendor
+    // and the deliverable is broken.
+    expect(embedder).toBe("local");
+    expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).toBe(LOCAL_EMBEDDER_API_URL);
+    expect(env.EMBEDDER__DIMENSIONS).toBe(LOCAL_EMBEDDER_DIMENSIONS);
+  });
+
+  it("never writes the Anthropic key onto an OpenAI-shaped variable", () => {
+    const { env } = buildGraphitiEnv(FAKE_ANTHROPIC_KEY, "anthropic");
+    // graphiti_core reads the bare OPENAI_API_KEY at init and the embedder's
+    // OpenAI-shaped client reads the other two. On this arm they all address the
+    // LOCAL floor, so the Anthropic credential must appear on EXACTLY one
+    // variable — anything else would put it on a wire it has no business on.
+    for (const name of GRAPHITI_KEY_NAMES) {
+      expect(env[name]).not.toBe(FAKE_ANTHROPIC_KEY);
+    }
+    expect(env.OPENAI_API_KEY).toBe(LOCAL_EMBEDDER_PLACEHOLDER_KEY);
+    const carrying = Object.entries(env)
+      .filter(([, v]) => v === FAKE_ANTHROPIC_KEY)
+      .map(([k]) => k);
+    expect(carrying).toEqual([GRAPHITI_ANTHROPIC_KEY_NAME]);
+  });
+
+  it("keeps an Anthropic file readable as KEYED by the cold-start guard", () => {
+    // The clobber guard scans for a materialized credential. An Anthropic file
+    // carries none of the three OpenAI names, so a guard that scanned only those
+    // would call it keyless and rewrite a real key away on a cold bring-up.
+    //
+    // Written out by hand rather than round-tripped through buildGraphitiEnv, so
+    // this asserts the GUARD and not the writer: the file below is what an
+    // Anthropic install materializes, and the pre-#2591 guard reads it as empty.
+    const anthropicFile = [
+      `${GRAPHITI_ANTHROPIC_KEY_NAME}=${FAKE_ANTHROPIC_KEY}`,
+      `OPENAI_API_KEY=${LOCAL_EMBEDDER_PLACEHOLDER_KEY}`,
+      `EMBEDDER__PROVIDERS__OPENAI__API_KEY=${LOCAL_EMBEDDER_PLACEHOLDER_KEY}`,
+    ].join("\n");
+    expect(shouldPreserveExisting(anthropicFile)).toBe(true);
   });
 
   it("writes NO credential for a blank key — and still boots the indexer", () => {
