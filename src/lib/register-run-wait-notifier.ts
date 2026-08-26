@@ -27,3 +27,20 @@ import { setRunWaitNotifier } from "@cinatra-ai/agents/run-wait-notifier";
 import { runWaitNotifier } from "@/lib/agent-run-wait-notifications";
 
 setRunWaitNotifier(runWaitNotifier);
+
+// THE RUN OUTBOX IS WIRED FROM HERE TOO (cinatra#2930, epic #2926 W3).
+//
+// The two seams are the same boot concern and want the same two sites: when a
+// run reaches a moment, one of them tells the person where to go and the other
+// puts the moment's card in front of them. Both fire wherever the coordinator
+// states a moment — the Next.js server and the BullMQ run worker — and both are
+// idempotent global-symbol slots, so a boot path that already imports this file
+// is exactly the boot path the outbox needs.
+//
+// It rides HERE rather than being imported at the two boot files directly
+// because both of those are size-ratcheted architecture bottlenecks: the
+// ratchet exists so a baselined file stops accumulating wiring, and adding a
+// line to each to reach a seam this file already reaches would be growing them
+// for nothing. The registration itself lives in its own module, which is what a
+// reader greps for.
+import "@/lib/register-lifecycle-part-outbox";

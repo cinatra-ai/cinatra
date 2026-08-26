@@ -18,7 +18,14 @@ import {
   LIFECYCLE_VIEW_TYPES,
   buildLifecycleViewEnvelope,
   recognizeLifecycleViewEnvelope,
+  LIFECYCLE_PLATFORM_PRODUCER_ACT,
+  LIFECYCLE_PLATFORM_PRODUCER_LABEL,
+  LIFECYCLE_PLATFORM_VIEW_TYPES,
 } from "../lifecycle-view-envelope";
+import {
+  LIFECYCLE_PLATFORM_PRODUCER_ACT as AGENTS_LIFECYCLE_PLATFORM_PRODUCER_ACT,
+  LIFECYCLE_PLATFORM_PRODUCER_LABEL as AGENTS_LIFECYCLE_PLATFORM_PRODUCER_LABEL,
+} from "@cinatra-ai/agents/lifecycle-part-outbox";
 import {
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
@@ -38,6 +45,24 @@ function envelope(overrides?: Record<string, unknown>): string {
 describe("drift pins against the protocol registry", () => {
   it("the local viewType mirror equals the registered DATA_PART lifecycle types", () => {
     expect([...LIFECYCLE_VIEW_TYPES].sort()).toEqual(
+      [...LIFECYCLE_DATA_PART_VIEW_TYPES].sort(),
+    );
+  });
+
+  it("the local PLATFORM producer mirror equals the agents package's own (cinatra#2930)", () => {
+    // This module is pure by design, so the platform tuple is mirrored rather
+    // than imported — and a mirror nobody pins is a second source of truth. A
+    // label that drifted apart here would silently stop admitting the platform's
+    // own injections, and the cards would go back to arriving only when a model
+    // asked for them.
+    expect(LIFECYCLE_PLATFORM_PRODUCER_LABEL).toBe(
+      AGENTS_LIFECYCLE_PLATFORM_PRODUCER_LABEL,
+    );
+    expect(LIFECYCLE_PLATFORM_PRODUCER_ACT).toBe(AGENTS_LIFECYCLE_PLATFORM_PRODUCER_ACT);
+  });
+
+  it("the PLATFORM viewType mirror equals the DATA_PART kinds it may inject (cinatra#2930)", () => {
+    expect([...LIFECYCLE_PLATFORM_VIEW_TYPES].sort()).toEqual(
       [...LIFECYCLE_DATA_PART_VIEW_TYPES].sort(),
     );
   });
@@ -68,10 +93,17 @@ describe("recognizeLifecycleViewEnvelope — the producer bind", () => {
         toolName: REVIEW_TOOL,
         result: envelope(),
       }),
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the answer now carries WHICH
+      // producer minted it, because the platform's injection and a tool's
+      // re-presentation are the same card and two different facts. The PAYLOAD
+      // is unchanged — the sink writes `{ viewType, schemaVersion, ref }` and
+      // carries the delivery beside it — which is pinned in
+      // __tests__/ag-ui-sink-injected-card.test.ts.
     ).toEqual({
       viewType: "artifact_review_gate",
       schemaVersion: LIFECYCLE_ENVELOPE_VERSION,
       ref: "ref-abc",
+      provenance: "tool_represented",
     });
   });
 
@@ -278,10 +310,12 @@ describe("buildLifecycleViewEnvelope", () => {
         toolName: "verification_record_render",
         result: built!,
       }),
+      // AMENDED BY cinatra#2930, for the reason above.
     ).toEqual({
       viewType: "verification_summary",
       schemaVersion: LIFECYCLE_ENVELOPE_VERSION,
       ref: "ref-v1",
+      provenance: "tool_represented",
     });
   });
 

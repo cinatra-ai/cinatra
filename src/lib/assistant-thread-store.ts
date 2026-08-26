@@ -1170,6 +1170,24 @@ export function updateAssistantTurn(
     status?: AssistantTurnStatus;
     runId?: string | null;
     content?: AssistantTurnContent | null;
+    /**
+     * COMPARE AND SET on the content (cinatra#2930, a convergence review, finding 2).
+     *
+     * Writing `content` is a whole-object replacement, so a writer that read the
+     * row, built a new object and wrote it back can silently overwrite whatever
+     * landed in between — the stream route's terminal persistence, or another
+     * moment's card. That is a lost card or a lost turn, and neither is
+     * recoverable afterwards.
+     *
+     * Supplying this pins the write to the object that was READ: the row is
+     * updated only while its content is still byte-equal to it. A writer whose
+     * read went stale simply does not write, which is the safe direction — the
+     * card can be stated again, an overwritten turn cannot be brought back.
+     *
+     * Absent ⇒ unconditional, exactly as before, which is what the stream route
+     * wants: it is the turn's author and has nothing to lose a race with.
+     */
+    ifContentEquals?: AssistantTurnContent | null;
   },
 ): void {
   ensurePostgresSchema();
@@ -1189,11 +1207,21 @@ export function updateAssistantTurn(
     sets.push(`content = $${values.length}::jsonb`);
   }
   values.push(turnId);
+  const idPlaceholder = `$${values.length}`;
+  let guard = "";
+  if ("ifContentEquals" in patch) {
+    // `IS NOT DISTINCT FROM` rather than `=`, so a NULL content compares equal
+    // to a NULL expectation instead of failing every row silently.
+    values.push(
+      patch.ifContentEquals != null ? JSON.stringify(patch.ifContentEquals) : null,
+    );
+    guard = ` AND content IS NOT DISTINCT FROM $${values.length}::jsonb`;
+  }
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `UPDATE "${schema}"."assistant_turns" SET ${sets.join(", ")} WHERE id = $${values.length}`,
+        text: `UPDATE "${schema}"."assistant_turns" SET ${sets.join(", ")} WHERE id = ${idPlaceholder}${guard}`,
         values,
       },
     ],
@@ -1285,12 +1313,38 @@ function buildChatThreadPath(thread: {
  * Resolve the `/chat` path of the conversation that started an agent run, or
  * null when there is none to resolve.
  */
-export function findChatConversationPathForAgentRun(
-  agentRunId: string,
-): string | null {
+/**
+ * THE ONE READ OF "WHICH TURN DISPATCHED THAT AGENT RUN" (cinatra#2930).
+ *
+ * TWO READERS, ONE QUERY, and that is deliberate rather than tidy. The
+ * notification needs the CONVERSATION a run is playing out in; the run outbox
+ * needs the TURN it writes the moment's card into. A card injected into one turn
+ * and a notification pointing at another would be the same defect wearing two
+ * hats — so both answers come out of a single row, matched by a single
+ * predicate, and neither can drift. It is also why this is one sync call site
+ * rather than two: the request-time sync-bridge inventory counts them, and a
+ * second query for the same fact would have been a second thing to keep in step.
+ *
+ * TWO SHAPES, ONE QUESTION, and this is the subtle half. A run is named in a
+ * turn two ways, because two writers persist a turn:
+ *
+ *   · the CLIENT transcript the chat saves — an ordered `agent_run` part
+ *     carrying the run id, which is what this lookup has always matched;
+ *   · the SINK's durable content — an `agent_run` DATA_PART pointing at the
+ *     `tool_call` that dispatched the run, which is the shape the STREAM ROUTE
+ *     writes and therefore the one the outbox has to inject into.
+ *
+ * Matching only the first would send the notification to the right conversation
+ * and write the card into the wrong row — the projection rather than the record.
+ * So both are matched, and the durable one WINS the ordering: it is the turn the
+ * server itself wrote, and a card belongs in the record, not in a copy of it.
+ *
+ * NEVER THROWS. A store that cannot answer means no injection and no
+ * conversation link — never a card written into a turn chosen by a guess.
+ */
+function readAgentRunTurnRow(agentRunId: string): Record<string, unknown> | null {
   const id = typeof agentRunId === "string" ? agentRunId.trim() : "";
   if (!id || id.length > 128) return null;
-  let row: Record<string, unknown> | undefined;
   try {
     ensurePostgresSchema();
     const schema = schemaIdent();
@@ -1298,25 +1352,55 @@ export function findChatConversationPathForAgentRun(
       connectionString: getPostgresConnectionString(),
       queries: [
         {
-          text: `SELECT th.id, th.assistant_package, th.instance_id, th.title_slug
+          text: `SELECT tt.id, tt.thread_id, tt.run_id, tt.assistant_user_id, tt.role,
+                        tt.status, tt.content, tt.created_at, tt.updated_at,
+                        th.id AS thread_row_id, th.assistant_package,
+                        th.instance_id, th.title_slug
                  FROM "${schema}"."assistant_turns" tt
                  JOIN "${schema}"."assistant_threads" th ON th.id = tt.thread_id
-                 WHERE tt.content @> $1::jsonb
-                 ORDER BY tt.created_at DESC, tt.id
+                 WHERE tt.content @> $1::jsonb OR tt.content @> $2::jsonb
+                 ORDER BY (tt.content @> $2::jsonb) DESC, tt.created_at DESC, tt.id
                  LIMIT 1`,
           values: [
             JSON.stringify({ parts: [{ name: "agent_run", runId: id }] }),
+            JSON.stringify({ dataParts: [{ kind: "agent_run", runId: id }] }),
           ],
         },
       ],
     });
-    row = res?.rows?.[0] as Record<string, unknown> | undefined;
+    return (res?.rows?.[0] as Record<string, unknown> | undefined) ?? null;
   } catch {
     return null;
   }
+}
+
+/**
+ * THE TURN AN AGENT RUN IS PLAYING OUT IN (cinatra#2930, epic #2926 W3).
+ *
+ * The run outbox writes the moment's card into the run's OWN turn, so it needs
+ * the turn row rather than the conversation's path. Same predicate, same
+ * newest-first tie-break, and the same never-throws contract as the path reader
+ * below: a store that cannot answer means no injection, never a card written
+ * into a turn chosen by a guess.
+ *
+ * Returns `null` for a run that is not playing out in a conversation at all — a
+ * schedule firing, another agent, an outside system — which is the ordinary
+ * case, not a failure.
+ */
+export function findAssistantTurnForAgentRun(
+  agentRunId: string,
+): AssistantTurn | null {
+  const row = readAgentRunTurnRow(agentRunId);
+  return row ? mapAssistantTurnRow(row) : null;
+}
+
+export function findChatConversationPathForAgentRun(
+  agentRunId: string,
+): string | null {
+  const row = readAgentRunTurnRow(agentRunId);
   if (!row) return null;
   return buildChatThreadPath({
-    id: String(row.id),
+    id: String(row.thread_row_id),
     assistantPackage:
       typeof row.assistant_package === "string" ? row.assistant_package : null,
     instanceId: typeof row.instance_id === "string" ? row.instance_id : null,

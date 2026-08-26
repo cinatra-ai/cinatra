@@ -406,7 +406,11 @@ describe("`absent` reveals nothing about the target", () => {
 
 describe("the recommendation hold stays outside the DATA_PART envelope", () => {
   it("is typed-interrupt carried, so it never rides this resolve", () => {
-    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
+    // AMENDED BY cinatra#2930: two axes now — this assertion is about the
+    // wire one, which is unchanged. Its canonical carriage is the run's own
+    // row, which is what makes the mount survive a reload with no envelope.
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent).toBe("interrupt");
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical).toBe("run_state");
     // cinatra#2928 added a second interrupt kind; what this case is about is
     // that an INTERRUPT kind has no data-part resolve arm, so it asserts the
     // membership rather than the size of the set.
