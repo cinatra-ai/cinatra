@@ -138,9 +138,11 @@ function storedKeyPresentButUnreadable(): boolean {
  *
  *   "openai" / "anthropic" — BOUND to a vendor this indexer can run.
  *   "unsupported"          — bound to a vendor cinatra stores no connection
- *                            for (gemini/groq/azure). There is no key to
- *                            resolve, so this coerces to OpenAI exactly as it
- *                            did before multi-provider existed.
+ *                            for (gemini/groq/azure). It is still a CHOICE, so
+ *                            it binds like any other: extraction resolves
+ *                            NOTHING. "We hold no key for your vendor" explains
+ *                            why THAT key cannot run extraction; it is not an
+ *                            argument for spending a different vendor's.
  *   "unbound"              — the operator has not named a vendor anywhere. No
  *                            choice exists to violate.
  *
@@ -163,16 +165,38 @@ type BoundExtractionProvider =
   | "unsupported"
   | "unbound";
 
-function narrowBoundProvider(stored: unknown): BoundExtractionProvider | null {
+/**
+ * The binding, plus the vendor's own NAME when it is one cinatra cannot run.
+ *
+ * The name is operator-facing only, and it is the whole difference between
+ * "extraction is off" and "extraction is off because this install is bound to
+ * gemini". Since the choice is binding, "off" now has a vendor-specific cause,
+ * and an operator with a perfectly good OpenAI key on file has no other way to
+ * learn why it is deliberately not being used.
+ */
+type BindingRead = { bound: BoundExtractionProvider; vendor: string | null };
+
+/**
+ * The vendor name lands in a reason string that is logged and shown. It comes
+ * from a database row, so it is narrowed to a short lowercase identifier before
+ * it goes anywhere — a name that does not fit is simply omitted, and the
+ * sentence still reads. The binding itself never depends on this.
+ */
+function displayableVendorName(stored: unknown): string | null {
+  if (typeof stored !== "string") return null;
+  return /^[a-z0-9][a-z0-9._-]{0,31}$/.test(stored) ? stored : null;
+}
+
+function narrowBoundProvider(stored: unknown): BindingRead | null {
   // `null` as the fallback is load-bearing: it is how "no row" is told apart
   // from a row that actually says `openai`.
   if (stored === null || stored === undefined || stored === "") return null;
-  if (stored === "anthropic") return "anthropic";
-  if (stored === "openai") return "openai";
-  return "unsupported";
+  if (stored === "anthropic") return { bound: "anthropic", vendor: "anthropic" };
+  if (stored === "openai") return { bound: "openai", vendor: "openai" };
+  return { bound: "unsupported", vendor: displayableVendorName(stored) };
 }
 
-function readBoundExtractionProvider(): BoundExtractionProvider {
+function readBoundExtractionProvider(): BindingRead {
   const committed = narrowBoundProvider(
     readMetadataValueInternal<unknown>("connector_config:llm_default_provider", null),
   );
@@ -181,7 +205,7 @@ function readBoundExtractionProvider(): BoundExtractionProvider {
   const selected = narrowBoundProvider(
     readMetadataValueInternal<unknown>("connector_config:setup_provider_selection", null),
   );
-  return selected ?? "unbound";
+  return selected ?? { bound: "unbound", vendor: null };
 }
 
 /**
@@ -203,20 +227,38 @@ function readStoredAnthropicKey(): string | null {
 /**
  * Resolve the PROVIDER and the key the knowledge-graph indexer should run with.
  *
- * Order, and why:
- *  1. the app's STORED provider configuration for the operator's COMMITTED
- *     default provider (cinatra#2591 deliverable 2) — the place an operator
- *     actually configures a vendor, and the source the ruling names;
- *  2. the OTHER supported provider's stored configuration. An install whose
- *     default is Anthropic but which only ever configured OpenAI (or the
- *     reverse) should INDEX rather than sit dark: extraction is a background
- *     capability, not the operator's chat-facing provider choice, and refusing
- *     to use a key that is right there would be a silent downgrade of exactly
- *     the kind this module exists to prevent;
- *  3. `OPENAI_API_KEY` in the process env — the legacy path. Still honoured
- *     because the works-after/upgrade CI arms and operators who set it in
- *     `.env.local` depend on it, and because it is the only source available
- *     before the database exists (a first bring-up).
+ * THE RULE: A BOUND VENDOR IS BINDING. Extraction sends ROW CONTENT to
+ * whichever vendor runs it, so the vendor is the operator's decision and no
+ * source may quietly override it — not the other vendor's stored connection,
+ * and not the legacy environment key. An install that named a vendor runs
+ * extraction on that vendor or does not run it at all.
+ *
+ * Resolution, and why:
+ *  1. THE BOUND VENDOR'S OWN stored configuration, and only it. The binding is
+ *     the committed `llm_default_provider`, or the wizard's
+ *     `setup_provider_selection` while no commitment exists yet (cinatra#2591
+ *     deliverable 2) — the places an operator actually names a vendor, and the
+ *     source the ruling names.
+ *  2. NOTHING ELSE, once a vendor is bound. A bound vendor with no usable key
+ *     means extraction is OFF, and `describeKnowledgeGraphIndexing` says which
+ *     vendor to fix. This holds for a vendor cinatra cannot run at all
+ *     (gemini/groq/azure): the absence of a key for the operator's choice is
+ *     not a licence to spend someone else's.
+ *
+ *     An earlier shape tried the OTHER supported vendor here, reasoning that an
+ *     install should index rather than sit dark. Do not reinstate it. It reads
+ *     as helpful and is not: it shipped object bodies to a vendor the operator
+ *     never chose, and the only trace was a reason string. A provider choice a
+ *     background job can silently override is not a choice.
+ *  3. UNBOUND installs — and only they — try both stored vendors and then
+ *     `OPENAI_API_KEY` in the process env. No choice exists anywhere, so there
+ *     is nothing to violate. The legacy env path stays because the
+ *     works-after/upgrade CI arms and operators who set it in `.env.local`
+ *     depend on it, and because it is the only source available before the
+ *     database exists (a first bring-up).
+ *
+ * A binding that could not be READ is not "unbound" — the absence of a fact is
+ * not a fact. It resolves nothing either; see `bindingUnknown` below.
  *
  * A database that is unreachable (a cold bring-up brings Postgres up in the
  * same command) is NOT an error here: it degrades to the env fallback, and the
@@ -225,6 +267,9 @@ function readStoredAnthropicKey(): string | null {
 export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution {
   let storedReadError: string | null = null;
   let bound: BoundExtractionProvider = "unbound";
+  // The bound vendor's own name, for the operator-facing reason only. Non-null
+  // only when the binding names a vendor cinatra cannot run.
+  let boundVendor: string | null = null;
   // Did we actually learn the binding, or merely fail to ask? The two must not
   // look alike to the environment path below: "no vendor bound" may use the
   // legacy key, "could not tell" may not.
@@ -235,7 +280,9 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
   let bindingUnknown = false;
 
   try {
-    bound = readBoundExtractionProvider();
+    const read = readBoundExtractionProvider();
+    bound = read.bound;
+    boundVendor = read.vendor;
   } catch {
     // Which failure is this? A first bring-up has no database at all, and the
     // legacy env path exists precisely to serve it. A reachable database that
@@ -273,6 +320,17 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     // bound vendor with no usable key means extraction is OFF, and
     // `describeKnowledgeGraphIndexing` says which vendor to fix.
     //
+    // AND A VENDOR CINATRA CANNOT RUN IS STILL A BOUND VENDOR. `unsupported` is
+    // what the binding read returns for a real product selection cinatra stores
+    // no connection for — `gemini` above all, which the model picker and the
+    // background-job registry both offer and the setup action accepts. Having no
+    // Gemini key explains why the GEMINI key cannot run extraction. It says
+    // nothing about why the OPENAI key may. Coercing to OpenAI here would take
+    // an operator who explicitly chose Gemini and send their object bodies to
+    // OpenAI — the identical defect this issue closed for Anthropic, on a third
+    // vendor, and reached from a stored connection or an inherited env var
+    // alike. So it resolves NOTHING, and the reason names the vendor they chose.
+    //
     // `unbound` is the one case that legitimately tries both: no choice exists
     // anywhere, so there is nothing to violate, and an install that configured
     // a vendor before reaching setup should still index.
@@ -283,13 +341,14 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     // and picking the OpenAI connection just because it happens to be readable
     // is the guess this whole rule exists to refuse. Extraction stays off until
     // the install can say who it chose.
-    const order: KnowledgeGraphExtractionProvider[] = bindingUnknown
-      ? []
-      : bound === "anthropic"
-        ? ["anthropic"]
-        : bound === "openai" || bound === "unsupported"
-          ? ["openai"]
-          : ["openai", "anthropic"];
+    const order: KnowledgeGraphExtractionProvider[] =
+      bindingUnknown || bound === "unsupported"
+        ? []
+        : bound === "anthropic"
+          ? ["anthropic"]
+          : bound === "openai"
+            ? ["openai"]
+            : ["openai", "anthropic"];
 
     for (const provider of order) {
       if (provider === "anthropic") {
@@ -321,11 +380,10 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
           reason:
             bound === "openai"
               ? "resolved from the app's stored OpenAI provider configuration"
-              : bound === "unsupported"
-                ? "resolved from the app's stored OpenAI provider configuration " +
-                  "(the selected default provider is one cinatra stores no connection for)"
-                : "resolved from the app's stored OpenAI provider configuration " +
-                  "(no default provider is committed yet)",
+              // The only other way to reach this loop is `unbound` — an
+              // `unsupported` binding never enters it.
+              : "resolved from the app's stored OpenAI provider configuration " +
+                "(no default provider is committed yet)",
           storedReadFailed: false,
         };
       }
@@ -359,7 +417,14 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
   // is the first-bring-up signature the legacy path exists to serve, while a
   // reachable database that would not answer this question means the binding is
   // genuinely UNKNOWN, and an unknown binding is not a licence to guess.
-  const envRefused = bound === "anthropic" || bindingUnknown;
+  //
+  // A binding to a vendor cinatra cannot run (`unsupported`) refuses it for the
+  // same reason it refuses the stored connection above, and this is the quieter
+  // half of that hole: an env var can be inherited from a shell the operator
+  // never edited, so a Gemini-bound install could ship row content to OpenAI
+  // with nothing anywhere recording a decision.
+  const envRefused =
+    bound === "anthropic" || bound === "unsupported" || bindingUnknown;
   const fromEnv = envRefused ? null : trimmed(process.env.OPENAI_API_KEY);
   if (fromEnv) {
     return {
@@ -371,8 +436,12 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     };
   }
 
-  const envIgnoredForAnthropic =
-    bound === "anthropic" && trimmed(process.env.OPENAI_API_KEY) !== null;
+  // An OpenAI key IS set, and the binding is to some other vendor. Worth saying
+  // out loud: the operator can see the key on file and would otherwise read
+  // "extraction off" as a bug.
+  const envIgnoredForBoundVendor =
+    (bound === "anthropic" || bound === "unsupported") &&
+    trimmed(process.env.OPENAI_API_KEY) !== null;
 
   return {
     key: null,
@@ -387,16 +456,26 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
         "resolved — neither a stored connection nor OPENAI_API_KEY is used as a guess, " +
         "because extraction sends row content and must run on the vendor this install " +
         "actually names."
+      : bound === "unsupported"
+      ? `the selected extraction provider${boundVendor ? ` (${boundVendor})` : ""} is one ` +
+        `cinatra cannot run for knowledge-graph extraction: it stores no connection for ` +
+        `that vendor, so there is no key to resolve. A DIFFERENT vendor's key is ` +
+        `deliberately NOT substituted` +
+        (envIgnoredForBoundVendor
+          ? ", including OPENAI_API_KEY, which is set but belongs to another vendor"
+          : "") +
+        `, because extraction sends row content and must run on the vendor this install ` +
+        `actually names. Select OpenAI or Anthropic to turn extraction on.`
       : storedReadError
       ? `no usable extraction provider key: the stored ` +
         `${bound === "anthropic" ? "Anthropic" : "OpenAI"} configuration could not be ` +
         `read (${storedReadError})` +
-        (envIgnoredForAnthropic
+        (envIgnoredForBoundVendor
           ? ", and OPENAI_API_KEY is set but NOT substituted for the selected vendor"
           : " and OPENAI_API_KEY is unset")
       : bound === "anthropic" || bound === "openai"
         ? `the selected extraction provider (${bound}) has no key configured in the app` +
-          (envIgnoredForAnthropic
+          (envIgnoredForBoundVendor
             ? ", and OPENAI_API_KEY is set but belongs to the OTHER vendor"
             : ", and OPENAI_API_KEY is unset") +
           `. A key for the other vendor is deliberately NOT substituted — extraction ` +

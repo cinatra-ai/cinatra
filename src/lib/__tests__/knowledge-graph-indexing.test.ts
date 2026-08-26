@@ -244,15 +244,54 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.key).toBe(ENV_KEY);
   });
 
-  it("coerces an unsupported committed provider back to OpenAI", () => {
-    // gemini/groq/azure are upstream-supported but cinatra stores no connection
-    // for them, so there is no key to resolve and the indexer must not claim one.
+  it("an install bound to GEMINI resolves NOTHING — not the OpenAI connection", () => {
+    // `gemini` is a real selection in this product (src/lib/mcp-server.ts and
+    // src/lib/background-jobs-registry.ts both enumerate it, and the setup
+    // action accepts it), and cinatra stores no connection for it.
+    //
+    // "There is no Gemini key to resolve" explains why the GEMINI key cannot be
+    // used. It does not explain why the OPENAI key may be. An explicitly bound
+    // vendor is binding whether or not cinatra can run it — the operator chose
+    // where their row content goes, and an absent key for that choice is not a
+    // licence to spend a different vendor's. Same defect class as the Anthropic
+    // hole this issue closed, on a third vendor.
     metadata.set(DEFAULT_PROVIDER_KEY, "gemini");
     readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
 
     const resolved = resolveKnowledgeGraphProviderKey();
-    expect(resolved.provider).toBe("openai");
-    expect(resolved.key).toBe(STORED_KEY);
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    // The operator's only signal: name the vendor they actually chose, or they
+    // cannot tell this "off" from "no key configured anywhere".
+    expect(resolved.reason).toContain("gemini");
+    // NOT a read failure — the binding read fine and said something we honour.
+    // Reporting true here would make the bring-up preserve a stale key file.
+    expect(resolved.storedReadFailed).toBe(false);
+  });
+
+  it("does NOT substitute the legacy OPENAI_API_KEY for a GEMINI-bound install", () => {
+    // The env path is the quietest route of all — an inherited shell variable
+    // the operator never edited. It is bound by the same rule.
+    metadata.set(DEFAULT_PROVIDER_KEY, "gemini");
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.source).toBeNull();
+  });
+
+  it("honours a WIZARD SELECTION of an unrunnable vendor too", () => {
+    // The selection row binds before the saga commits, exactly as it does for
+    // the two supported vendors — otherwise the window between click and commit
+    // is a cross-vendor hole for precisely the operator who chose a third one.
+    metadata.set(SELECTION_KEY, "groq");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.reason).toContain("groq");
   });
 
   it("reports NO provider when neither vendor is configured", () => {
