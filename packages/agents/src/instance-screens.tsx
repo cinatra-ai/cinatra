@@ -116,11 +116,9 @@ export function isTerminalRunStatus(status: string | null | undefined): boolean 
  *   2. the run is TERMINAL — an immediate re-arm has nothing left to dispatch,
  *      and `setRunTriggerForActor` refuses exactly that.
  *
- * It gates the NOTICE only. The form itself always renders: this standalone
- * form is the only way to give a finished immediate run a scheduled/recurring
- * trigger (`shouldShowPersistentTab` routes only scheduled/recurring rows to the
- * persistent tab), and a recurring trigger clones a fresh run — so arming one
- * stays meaningful however this run itself ended.
+ * It gates the NOTICE only — whether the form beneath it can still be USED is a
+ * separate question about the SCHEDULE rather than about the run, and
+ * `shouldFreezeFiredOneOffSchedule` below answers it (cinatra#2980).
  *
  * Exported so the regression test can lock BOTH halves without a DB or session.
  */
@@ -129,6 +127,80 @@ export function shouldShowFinishedRunNotice(
   runStatus: string | null | undefined,
 ): boolean {
   return trigger !== null && isTerminalRunStatus(runStatus);
+}
+
+/**
+ * Has this run's OWN schedule already fired, so that it can no longer be changed
+ * here? (cinatra#2980)
+ *
+ * Plan (A) §7.2 item 4 (amended 2026-08-25): "You can change the schedule this
+ * way for as long as it has not fired; once a one-off has fired it cannot be
+ * changed, and a change to a recurring schedule applies to its future runs."
+ *
+ * **Run right after setup** is a one-off, and its row is `immediate`. The screen
+ * used to read that word as "no schedule to speak of" and kept offering the
+ * form, so a finished run's own trigger row could be replaced with a recurring
+ * schedule — the thing the plan's sentence forbids. The rule is read off the
+ * TRIGGER, exactly as the server reads it:
+ *
+ *   - `releasedAt` is the fired stamp — written when the gate opens, for an
+ *     immediate fire as much as for a scheduled one. It is the schedule's own
+ *     record, never the run's status, which moves for reasons of its own.
+ *   - everything that is NOT recurring is a one-off. Written this way round, a
+ *     one-off kind added later is frozen by default instead of slipping through
+ *     unnamed, which is how `immediate` slipped through.
+ *   - a RECURRING schedule is never frozen by a fire: plan (A) §7.2 keeps its
+ *     scheduler editable, "and a change applies to its future runs".
+ *
+ * The same predicate the server enforces (`setRunTriggerForActor`'s fired-one-off
+ * guard), so the screen never offers what the server would refuse.
+ */
+export function shouldFreezeFiredOneOffSchedule(
+  trigger: { triggerType: string; releasedAt: Date | null } | null,
+): boolean {
+  return (
+    trigger !== null &&
+    trigger.triggerType !== "recurring" &&
+    trigger.releasedAt !== null
+  );
+}
+
+/**
+ * The words above the standalone schedule form, or none (cinatra#2482, #2980).
+ *
+ * Two independent facts, and the copy says only the ones that hold:
+ *
+ *   - `finished` — the RUN is over. It cannot be run again.
+ *   - `frozen`   — its one-off SCHEDULE has fired. It cannot be changed, and the
+ *     form below is drawn as a read-only reading.
+ *
+ * The earlier copy promised what the form no longer does ("You can still give it
+ * a recurring schedule below"), which is the half of cinatra#2980 a reader could
+ * see. What replaces it names the action that DOES work — starting a new run —
+ * in the same words the server's refusal uses, so a person who submits anyway is
+ * not told two different things.
+ *
+ * Exported so the copy is pinned by a test rather than by a reading of the JSX.
+ */
+export function finishedRunNoticeCopy(input: {
+  finished: boolean;
+  frozen: boolean;
+}): { heading: string; body: string } | null {
+  if (!input.finished && !input.frozen) return null;
+  const heading = input.finished
+    ? "This run has already finished"
+    : "This run's schedule has already run";
+  if (!input.frozen) {
+    // A terminal run whose row never released: the run is over, but its schedule
+    // is not spent, so the form still applies and nothing is promised about it.
+    return { heading, body: "It can't be run again." };
+  }
+  return {
+    heading,
+    body: input.finished
+      ? "It can't be run again, and its schedule has already run — a schedule that has run can't be changed. Start a new run to schedule it again."
+      : "A schedule that has run can't be changed. Start a new run to schedule it again.",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1640,6 +1712,14 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   //   - otherwise → first-step form
   const trigger = run ? await readRunTriggerByRunId(run.id) : null;
   const showPersistentTab = shouldShowPersistentTab(trigger);
+  // A fired one-off cannot be changed (cinatra#2980, plan (A) §7.2 item 4), so
+  // the standalone form below is drawn as a reading rather than as a control,
+  // and the notice above it says which of the two facts hold.
+  const scheduleFrozen = shouldFreezeFiredOneOffSchedule(trigger);
+  const finishedNotice = finishedRunNoticeCopy({
+    finished: run ? shouldShowFinishedRunNotice(trigger, run.status) : false,
+    frozen: scheduleFrozen,
+  });
 
   // Server-rendered admin role flag is hoisted to the top of TriggerScreen
   // so the ownership check can apply the admin override. Same comma-split
@@ -1723,40 +1803,27 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         ) : (
           <AgentPanelBody role="narrow">
           {/*
-            cinatra#2482 — finished-run CONTEXT, above the form rather than
-            instead of it.
+            CONTEXT ABOVE THE FORM (cinatra#2482), and since cinatra#2980 the
+            truth about what the form can still do.
 
             The reported repro ends on this screen with no idea that the run is
-            over, so the state has to be said out loud. It must NOT replace the
-            form though: `shouldShowPersistentTab` sends only scheduled/recurring
-            rows to the persistent tab, so this standalone form is the ONLY way
-            to give a finished immediate run a recurring or scheduled trigger —
-            and a recurring trigger clones a fresh run, so arming one here is
-            meaningful however this run itself ended. Hiding the form would take
-            that away (codex round-B finding).
-
-            "Run right after setup" on an already-triggered finished run is the
-            one thing that cannot work, and `setRunTriggerForActor` now refuses
-            exactly that with a message the form renders inline — no silent
-            success, and no bounce back to the run view.
+            over, so the state has to be said out loud. The earlier cut said it
+            and then promised a route it also kept open — "you can still give it
+            a recurring schedule below" — on a run whose own one-off schedule had
+            already fired. Plan (A) §7.2 item 4: "once a one-off has fired it
+            cannot be changed". `setRunTriggerForActor` refuses it, so the screen
+            stops offering it: the copy names the action that works instead, and
+            the form is mounted as a reading.
           */}
-          {run && shouldShowFinishedRunNotice(trigger, run.status) ? (
+          {finishedNotice ? (
             <div
               className="soft-panel rounded-card mb-4 flex flex-col items-start gap-2 p-4"
               data-run-finished-notice=""
             >
               <h2 className="text-sm font-semibold text-foreground">
-                This run has already finished
+                {finishedNotice.heading}
               </h2>
-              {/* Copy names RECURRING specifically. Codex round 2: only a
-                  recurring trigger clones a fresh run per fire — a one-off
-                  `scheduled` arm on a finished run is a pre-existing no-op
-                  (trigger-release-job skips an unarmed run), so promising that
-                  "a schedule" starts a fresh run would overstate it. */}
-              <p className="text-sm text-muted-foreground">
-                It can&apos;t be run again. You can still give it a recurring
-                schedule below — each recurrence starts a fresh run.
-              </p>
+              <p className="text-sm text-muted-foreground">{finishedNotice.body}</p>
               <Link
                 href={`/agents/${agentId}/${encodeURIComponent(instanceId)}`}
                 className="text-sm font-medium text-primary underline-offset-4 hover:underline"
@@ -1766,6 +1833,15 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
               </Link>
             </div>
           ) : null}
+          {/*
+            THE SAME FORM, AS A READING (cinatra#2980).
+            design@fe2182547d4a `specs/app-components.html` § "Standard
+            scheduling step", the "Configured schedule step" reading: "Once a
+            *Run right after setup* or *Schedule for later* schedule has fired it
+            cannot be changed any more: the form stays as a **read-only** reading
+            with no controls at all." The form is not hidden — it is the reading
+            of the schedule this run had — and it carries nothing to press.
+          */}
           <TriggerScreenClient
             agentId={agentId}
             instanceId={instanceId}
@@ -1776,6 +1852,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             properties={properties}
             setupComplete={setupComplete}
             durationEstimate={durationEstimate}
+            readOnly={scheduleFrozen}
           />
           </AgentPanelBody>
         )}
