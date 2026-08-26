@@ -246,6 +246,13 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     try {
       readRawOpenAIConnectionRow();
       bindingUnknown = true;
+      // "Could not ask" — and it MUST be reported as such. The bring-up
+      // generator decides preserve-vs-clear on `storedReadFailed`: a readable
+      // configuration holding no key is a disconnect it must propagate, while
+      // an unreadable one must leave an already-materialized credential alone.
+      // An unknown binding is squarely the second kind, and reporting it as the
+      // first would wipe a working key on a transient read error.
+      storedReadError = "the configured extraction provider could not be determined";
     } catch {
       // No database. `unbound` stands, and the legacy path stays open.
     }
@@ -375,18 +382,19 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     // has a vendor-specific cause, and an operator who reads "no key" while a
     // DIFFERENT vendor is configured would otherwise have no way to tell that
     // the other key is deliberately not being used.
-    reason: storedReadError
+    reason: bindingUnknown
+      ? "the configured extraction provider could not be determined, so no key was " +
+        "resolved — neither a stored connection nor OPENAI_API_KEY is used as a guess, " +
+        "because extraction sends row content and must run on the vendor this install " +
+        "actually names."
+      : storedReadError
       ? `no usable extraction provider key: the stored ` +
         `${bound === "anthropic" ? "Anthropic" : "OpenAI"} configuration could not be ` +
         `read (${storedReadError})` +
         (envIgnoredForAnthropic
           ? ", and OPENAI_API_KEY is set but NOT substituted for the selected vendor"
           : " and OPENAI_API_KEY is unset")
-      : bindingUnknown
-        ? "the configured extraction provider could not be determined, so no key was " +
-          "resolved. OPENAI_API_KEY is deliberately NOT used as a guess — extraction " +
-          "sends row content, so it runs only on a vendor this install actually names."
-        : bound === "anthropic" || bound === "openai"
+      : bound === "anthropic" || bound === "openai"
         ? `the selected extraction provider (${bound}) has no key configured in the app` +
           (envIgnoredForAnthropic
             ? ", and OPENAI_API_KEY is set but belongs to the OTHER vendor"

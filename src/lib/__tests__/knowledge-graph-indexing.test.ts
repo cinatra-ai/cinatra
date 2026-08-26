@@ -187,6 +187,7 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.provider).toBeNull();
     expect(resolved.key).toBeNull();
     expect(resolved.reason).toContain("could not be determined");
+    expect(resolved.storedReadFailed).toBe(true);
   });
 
   it("an UNKNOWN binding resolves nothing from a STORED connection either", () => {
@@ -202,6 +203,9 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.provider).toBeNull();
     expect(resolved.key).toBeNull();
     expect(resolved.reason).toContain("could not be determined");
+    // The bring-up generator preserves an already-materialized key on this
+    // signal. Reporting false here would wipe a working credential.
+    expect(resolved.storedReadFailed).toBe(true);
   });
 
   it("but a first bring-up with NO DATABASE still reaches the legacy env path", () => {
