@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   getActivationGeneration,
   bumpActivationGeneration,
   getActivationControlPlaneSnapshot,
+  admissionReviewIsAfter,
+  nextAdmissionReviewMoment,
   __resetActivationGenerationForTests,
+  __resetAdmissionReviewClockForTests,
 } from "@/lib/extension-activation-generation";
 
 beforeEach(() => __resetActivationGenerationForTests());
@@ -70,5 +73,81 @@ describe("extension activation (control-plane) generation", () => {
     (snap.lastTransitions as unknown as { reason: string }[])[0].reason = "TAMPERED";
     // A fresh snapshot is unaffected.
     expect(getActivationControlPlaneSnapshot().lastTransitions[0].reason).toBe("activate");
+  });
+});
+
+describe("the admission review moment", () => {
+  beforeEach(() => __resetAdmissionReviewClockForTests());
+
+  it("reports the TRUE wall clock and never runs ahead of it", () => {
+    // The whole point of splitting instant from sequence: a clock that invented
+    // a later time to break a tie would let a stamp outlive a teardown that
+    // genuinely followed it, because another process reads the honest clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      for (let i = 0; i < 5; i += 1) {
+        expect(nextAdmissionReviewMoment().at).toBe("2026-05-01T12:00:00.000Z");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("orders two moments from THIS process even inside one millisecond", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      const earlier = nextAdmissionReviewMoment();
+      const later = nextAdmissionReviewMoment();
+      expect(later.at).toBe(earlier.at);
+      expect(admissionReviewIsAfter(later, earlier)).toBe(true);
+      expect(admissionReviewIsAfter(earlier, later)).toBe(false);
+      // And a moment is not after itself.
+      expect(admissionReviewIsAfter(earlier, earlier)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REFUSES to order a same-millisecond tie across processes", () => {
+    // Two epochs cannot be compared, and the caller revokes on `false`. This is
+    // the case the sequence deliberately does NOT paper over.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      const ours = nextAdmissionReviewMoment();
+      const theirs = { at: ours.at, mint: "some-other-process.999" };
+      expect(admissionReviewIsAfter(theirs, ours)).toBe(false);
+      expect(admissionReviewIsAfter(ours, theirs)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the wall clock decide whenever it can", () => {
+    const cutoff = { at: "2026-05-01T12:00:00.000Z", mint: "e.5" };
+    expect(admissionReviewIsAfter({ at: "2026-05-01T12:00:00.001Z", mint: "e.1" }, cutoff)).toBe(true);
+    expect(admissionReviewIsAfter({ at: "2026-05-01T11:59:59.999Z", mint: "e.9" }, cutoff)).toBe(false);
+  });
+
+  it("answers `false` for everything it cannot prove", () => {
+    const cutoff = { at: "2026-05-01T12:00:00.000Z", mint: "e.5" };
+    expect(admissionReviewIsAfter(undefined, cutoff)).toBe(false);
+    expect(admissionReviewIsAfter({}, cutoff)).toBe(false);
+    // Same instant, no mint / an unparseable mint / a lower sequence.
+    expect(admissionReviewIsAfter({ at: cutoff.at }, cutoff)).toBe(false);
+    expect(admissionReviewIsAfter({ at: cutoff.at, mint: "e." }, cutoff)).toBe(false);
+    expect(admissionReviewIsAfter({ at: cutoff.at, mint: "nodot" }, cutoff)).toBe(false);
+    expect(admissionReviewIsAfter({ at: cutoff.at, mint: "e.notanumber" }, cutoff)).toBe(false);
+    expect(admissionReviewIsAfter({ at: cutoff.at, mint: "e.4" }, cutoff)).toBe(false);
+    // ...and `true` for the one case it can.
+    expect(admissionReviewIsAfter({ at: cutoff.at, mint: "e.6" }, cutoff)).toBe(true);
+  });
+
+  it("mints the CANONICAL instant spelling the record normalizer accepts", () => {
+    expect(nextAdmissionReviewMoment().at).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
   });
 });

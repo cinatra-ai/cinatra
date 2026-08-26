@@ -335,11 +335,11 @@ describe("artifact_authoring_chain_get handler", () => {
 // ---------------------------------------------------------------------------
 
 describe("delegated-chat allowlist policy", () => {
-  it("calls isDelegatedChatMcpToolAllowed() for each new primitive (not source-text grep)", async () => {
+  it("calls isCoreDelegatedChatAdmitted() for each new primitive (not source-text grep)", async () => {
     // Exercise the actual policy function so a future deny-token
     // addition that hides the tool fails this test.
-    const { isDelegatedChatMcpToolAllowed } = await import(
-      "@cinatra-ai/mcp-server/delegated-chat-tool-policy"
+    const { isCoreDelegatedChatAdmitted } = await import(
+      "@cinatra-ai/mcp-server/core-delegated-chat-surface"
     );
     for (const name of [
       "artifact_extension_search",
@@ -348,16 +348,16 @@ describe("delegated-chat allowlist policy", () => {
       "artifact_authoring_chain_get",
       "artifacts_get",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name)).toBe(true);
     }
   });
 
   it("denies obvious mutators not on the allowlist (sanity gate)", async () => {
-    const { isDelegatedChatMcpToolAllowed } = await import(
-      "@cinatra-ai/mcp-server/delegated-chat-tool-policy"
+    const { isCoreDelegatedChatAdmitted } = await import(
+      "@cinatra-ai/mcp-server/core-delegated-chat-surface"
     );
     expect(
-      isDelegatedChatMcpToolAllowed("artifact_authoring_DELETE"),
+      isCoreDelegatedChatAdmitted("artifact_authoring_DELETE"),
     ).toBe(false);
   });
 });

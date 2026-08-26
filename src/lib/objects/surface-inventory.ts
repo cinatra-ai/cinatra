@@ -192,16 +192,18 @@ export const LIST_SURFACE = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Delegated-chat allowlist (object-relevant entries). The inventory test
-// asserts the live allowlist matches this set. Chat reads accounts, contacts,
+// Delegated-chat OBJECT SURFACE (object-relevant entries). The inventory test
+// asserts the live admitted set matches this set. Chat reads accounts, contacts,
 // and CRM lists via the canonical `objects_*` (for shared object types) plus
 // the provider-agnostic `crm_*` facade (for CRM read paths).
 //
 // `lists_list` + `lists_get` removed (entries retired alongside the
 // unregistered `lists_*` MCP primitives). The CRM-facade read replacements
-// are listed below; the live allowlist in
-// `packages/mcp-server/src/delegated-chat-tool-policy.ts` `ALLOWED_EXACT`
-// must match this set (parity asserted by the inventory test).
+// are listed below. Every entry must be ADMITTED by the live decision
+// (`evaluateDelegatedChatAdmission` over this build's core records in
+// `packages/mcp-server/src/capability-plan.ts`, cinatra#2817);
+// objects-surface-drift.test.ts asserts that against the real evaluator
+// rather than against a source-file name list.
 // ---------------------------------------------------------------------------
 export const DELEGATED_CHAT_OBJECT_ALLOWLIST: readonly string[] = [
   "objects_list",

@@ -18,17 +18,42 @@ import "server-only";
 import { z } from "zod";
 import type { HostMcpToolRegistration, DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
+import { normalizeDelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import {
-  normalizeDelegatedChatToolClass,
-  readDeclaredDelegatedChatClass,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+  CapabilityPlanRecorder,
+  HOST_PRIMITIVE_OWNER_PACKAGE,
+  HOST_PRIMITIVE_RELEASE_VERSION,
+  primitiveProvenanceStamp,
+  type CapabilityPlan,
+  type HostPrimitiveIdentity,
+  type PlannedPrimitive,
+  type PrimitiveDispatchTarget,
+} from "@cinatra-ai/mcp-server/capability-plan";
 
-export type RegisteredExtensionMcpTool = HostMcpToolRegistration & { packageName: string };
+export type RegisteredExtensionMcpTool = HostMcpToolRegistration & {
+  packageName: string;
+  /**
+   * The EXACT version of the record whose `register(ctx)` produced this
+   * registration (cinatra#2817 slice 1), or `null` for a legacy/dev context
+   * that carries no record version.
+   *
+   * `null` is NOT a neutral value downstream: version-bound admission cannot
+   * match an unversioned identity, so an unversioned registration is refused on
+   * the delegated-chat perimeter. That is the correct fail-closed reading — a
+   * primitive whose version the host cannot state is a primitive the host
+   * cannot have reviewed.
+   */
+  resolvedVersion: string | null;
+};
 
 class ExtensionMcpRegistryImpl {
   private entries: Map<string, RegisteredExtensionMcpTool> = new Map();
 
-  register(packageName: string, tool: HostMcpToolRegistration): void {
+  register(
+    packageName: string,
+    tool: HostMcpToolRegistration,
+    options?: { resolvedVersion?: string | null },
+  ): void {
     const name = tool?.name;
     if (!name || typeof name !== "string") {
       throw new Error(`[extensionMcpRegistry] ${packageName} registered an MCP tool with no name`);
@@ -56,6 +81,7 @@ class ExtensionMcpRegistryImpl {
     this.entries.set(name, {
       ...tool,
       packageName,
+      resolvedVersion: options?.resolvedVersion ?? null,
       delegatedChat: normalizeDelegatedChatToolClass(tool.delegatedChat),
     });
   }
@@ -99,8 +125,12 @@ export const extensionMcpRegistry: ExtensionMcpRegistryImpl =
   _holder[EXTENSION_MCP_REGISTRY_KEY] ??
   (_holder[EXTENSION_MCP_REGISTRY_KEY] = new ExtensionMcpRegistryImpl());
 
-export function registerExtensionMcpTool(packageName: string, tool: HostMcpToolRegistration): void {
-  extensionMcpRegistry.register(packageName, tool);
+export function registerExtensionMcpTool(
+  packageName: string,
+  tool: HostMcpToolRegistration,
+  options?: { resolvedVersion?: string | null },
+): void {
+  extensionMcpRegistry.register(packageName, tool, options);
 }
 
 export function listExtensionMcpTools(): readonly RegisteredExtensionMcpTool[] {
@@ -223,21 +253,20 @@ export type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<u
 
 /**
  * One entry in the host's in-process primitive map: the raw MCP-SDK callback
- * PLUS the typed delegated-chat declaration its registration carried.
+ * PLUS the PLANNED PRIMITIVE its registration produced (cinatra#2817 slice 1).
  *
- * Before the declaration rode along, the in-process self-invoker and the live
- * transport could disagree about the SAME registration — the invoker had no
- * way to apply the narrow-only rule `policedRegisterTool` applies.
+ * The map used to carry only the handler, then (cinatra#2771) the handler plus
+ * the declaration. Neither was enough for version-bound admission: the
+ * in-process self-invoker could name a primitive but not say WHICH package at
+ * WHICH version was about to serve it, so it could not consult an admission
+ * record bound to that exact tuple. Carrying the whole planned entry is what
+ * lets `@/lib/extension-self-mcp` apply the SAME evaluator, against the SAME
+ * primitive identity, that the live transport applies at registration.
  */
 export type CapturedHostPrimitive = {
   handler: CapturedMcpToolHandler;
-  /**
-   * Narrow-only. `undefined` means the registration declared nothing — which
-   * the decision layer now reads as `none` (owner ruling, cinatra#2771) unless
-   * `resolveDelegatedChatClass` supplies the interim class the legacy allowlist
-   * implies for the name.
-   */
-  delegatedChat?: DelegatedChatToolClass;
+  /** The planned identity this capture was recorded under. */
+  planned: PlannedPrimitive;
 };
 
 /** The minimal shape the replay reads off a registered extension tool. */
@@ -253,10 +282,18 @@ export type ReplayedExtensionRegistration = {
  * This config is constructed FROM SCRATCH — only title/description/schema used
  * to be rebuilt — so a field on the original registration is dropped here by
  * DEFAULT, and silently: the declaration would read as present in the registry
- * and absent in the decision. Carrying `delegatedChat` is what makes
- * `policedRegisterTool` see the SAME declaration for a `ctx.mcp.registerTool`
+ * and absent in the decision. Carrying `delegatedChat` is what makes the
+ * registration choke point see the SAME declaration for a `ctx.mcp.registerTool`
  * extension that it sees for a manifest-discovered connector that passes it in
  * `config` directly.
+ *
+ * cinatra#2817 slice 1 adds the PROVENANCE STAMP on the same terms and for the
+ * same reason: the choke point must be able to state the owning package and the
+ * exact resolved version of the registration it is deciding about. The stamp is
+ * written by HOST code from the discovery plan's resolution — never copied from
+ * anything the extension supplied — which is why a connector writing the key
+ * onto its own config buys nothing: a self-asserted owner/version matches no
+ * reviewed admission record and therefore denies.
  *
  * Narrow-only: what rides here can only remove this name from a delegated-chat
  * build, never add it to one.
@@ -264,6 +301,11 @@ export type ReplayedExtensionRegistration = {
 export function buildReplayedExtensionToolConfig(
   name: string,
   registration: ReplayedExtensionRegistration,
+  provenance?: {
+    ownerPackage: string;
+    resolvedVersion: string | null;
+    dispatchTarget?: PrimitiveDispatchTarget;
+  },
 ): Record<string, unknown> {
   return {
     title: name,
@@ -271,20 +313,53 @@ export function buildReplayedExtensionToolConfig(
     // Standard Schema (zod) — the MCP SDK validates against `~standard`.
     inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
     delegatedChat: registration.delegatedChat,
+    // An UNVERSIONED registration is stamped with the sentinel below rather
+    // than left unstamped. Leaving it unstamped would make it read as a
+    // core/bundled host registration and inherit the HOST's identity — and with
+    // it the host's migrated admission records. The sentinel is a real,
+    // never-admitted version string, so the lookup misses and the primitive is
+    // refused, which is the honest outcome for a version the host cannot state.
+    ...(provenance
+      ? primitiveProvenanceStamp({
+          ownerPackage: provenance.ownerPackage,
+          resolvedVersion: provenance.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION,
+          ...(provenance.dispatchTarget ? { dispatchTarget: provenance.dispatchTarget } : {}),
+        })
+      : {}),
   };
 }
 
 /**
+ * The version stamped on a registration whose record version the host cannot
+ * state. Deliberately not a valid semver: no admission record can be written
+ * against it, so it denies wherever version-bound admission applies.
+ */
+export const UNRESOLVED_EXTENSION_VERSION = "0.0.0-unresolved";
+
+/**
  * The pure RECORDING server the self-primitive capture pass runs against: it
  * touches no live transport and only writes into `handlers`.
+ *
+ * cinatra#2817 slice 1: the capture runs through a `CapabilityPlanRecorder`, so
+ * each captured entry carries the SAME planned identity shape the live server's
+ * choke point produces, read off the SAME `config` with the SAME total readers.
+ * The recorder is returned alongside so the caller can read the finished plan.
  *
  * The non-`registerTool` surface is stubbed as no-ops — module registrations
  * only call `registerTool`, but the stubs keep an errant call from throwing.
  */
 export function createSelfPrimitiveRecordingServer(
   handlers: Map<string, CapturedHostPrimitive>,
-): McpRuntimeToolServer {
-  return {
+  options?: {
+    host?: HostPrimitiveIdentity;
+    resolveCapabilityKey?: (name: string) => string | null | undefined;
+  },
+): McpRuntimeToolServer & { capabilityPlan: () => CapabilityPlan } {
+  const recorder = new CapabilityPlanRecorder({
+    host: options?.host ?? HOST_SELF_PRIMITIVE_IDENTITY,
+    resolveCapabilityKey: options?.resolveCapabilityKey,
+  });
+  const server = {
     registerTool: (name: string, config: unknown, handler: CapturedMcpToolHandler) => {
       // Mirror the live server: the MCP SDK rejects a duplicate tool name, so a
       // silent overwrite here would let the self-call surface diverge from the
@@ -294,18 +369,25 @@ export function createSelfPrimitiveRecordingServer(
           `[mcp] duplicate tool registration "${name}" during self-primitive capture (the live server would reject it)`,
         );
       }
-      // Read the declaration off the SAME `config` the live server's
-      // `policedRegisterTool` reads, with the same total reader, so the
-      // recording pass and the live pass cannot disagree about what a module
-      // declared.
-      handlers.set(name, {
-        handler,
-        delegatedChat: readDeclaredDelegatedChatClass(config),
-      });
+      // Plan the registration off the SAME `config` the live server's choke
+      // point plans from, with the same total readers, so the recording pass
+      // and the live pass cannot disagree about what a module declared or about
+      // which package at which version owns it.
+      const planned = recorder.record(name, config);
+      recorder.markRegistered(planned);
+      handlers.set(name, { handler, planned });
       return undefined as never;
     },
     registerResource: () => undefined as never,
     registerPrompt: () => undefined as never,
     registerScreen: () => undefined,
-  } as unknown as McpRuntimeToolServer;
+    capabilityPlan: () => recorder.plan(),
+  };
+  return server as unknown as McpRuntimeToolServer & { capabilityPlan: () => CapabilityPlan };
 }
+
+/** The host identity the self-primitive capture plans core/bundled entries under. */
+export const HOST_SELF_PRIMITIVE_IDENTITY: HostPrimitiveIdentity = {
+  packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
+  version: HOST_PRIMITIVE_RELEASE_VERSION,
+};

@@ -134,9 +134,14 @@ describe("the screen composes through them (source pin)", () => {
   // Pinned to the EXPRESSION, not merely to the prop's presence: `readOnly` set
   // from anything other than the freeze predicate would satisfy a looser pin
   // while leaving the two disconnected.
+  // cinatra#3004 gave this mount a SECOND reason to be a reading — a run whose
+  // schedule surface could not mint a card ref has a schedule it cannot draw,
+  // and must not be offered a form that arms another. The pin reads the reason
+  // THIS issue owns and tolerates the disjunction rather than freezing the whole
+  // expression, which would make every later reason a false regression.
   it("mounts the standalone form read-only when the schedule is frozen", () => {
     expect(SCREEN_SRC).toMatch(
-      /<TriggerScreenClient[\s\S]{0,600}?readOnly=\{scheduleFrozen\}/,
+      /<TriggerScreenClient[\s\S]{0,700}?readOnly=\{scheduleFrozen(?:\s*\|\|[^}]*)?\}/,
     );
   });
 
