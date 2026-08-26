@@ -1,0 +1,320 @@
+{
+  "round": 8,
+  "readAt": "2026-08-26T21:13:35.961Z",
+  "runtime": "dev-runtime",
+  "serverEnvAvailable": false,
+  "runs": [
+    {
+      "id": "03c764ce-6679-49ef-bf71-5ebdb1a309e7",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "failed",
+      "created_at": "2026-08-26T20:03:49.630Z",
+      "started_at": null,
+      "completed_at": "2026-08-26T20:27:33.165Z",
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 1,
+      "triggers": [
+        {
+          "type": "immediate",
+          "scheduled_at": null,
+          "timezone": "Europe/Berlin",
+          "enabled": true,
+          "released_at": "2026-08-26T20:04:39.423+00:00"
+        }
+      ],
+      "review_gates": 0,
+      "parks": null,
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "ee1e9e32-058b-4c97-b63f-e8f1e2a87d06",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "pending_approval",
+      "created_at": "2026-08-26T20:10:03.243Z",
+      "started_at": null,
+      "completed_at": null,
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 1,
+      "triggers": [
+        {
+          "type": "scheduled",
+          "scheduled_at": "2026-08-27T07:30:00+00:00",
+          "timezone": "Europe/Berlin",
+          "enabled": true,
+          "released_at": null
+        }
+      ],
+      "review_gates": 0,
+      "parks": null,
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "6c0399ff-c218-447f-9c80-c939b2262f01",
+      "package_name": "@cinatra-ai/author-agent",
+      "template_name": "Author Agent",
+      "status": "pending_approval",
+      "created_at": "2026-08-26T20:11:53.776Z",
+      "started_at": null,
+      "completed_at": null,
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 0,
+      "triggers": null,
+      "review_gates": 0,
+      "parks": [
+        {
+          "checkpoint": "recommendation",
+          "status": "released",
+          "created_at": "2026-08-26T20:11:54.583088+00:00",
+          "resolved_at": "2026-08-26T20:15:22.834102+00:00"
+        }
+      ],
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "1677f60d-a858-4cb9-9c61-f3a9ef49b29d",
+      "package_name": "@cinatra-ai/author-agent",
+      "template_name": "Author Agent",
+      "status": "pending_input",
+      "created_at": "2026-08-26T20:19:33.845Z",
+      "started_at": null,
+      "completed_at": null,
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 0,
+      "triggers": null,
+      "review_gates": 0,
+      "parks": [
+        {
+          "checkpoint": "recommendation",
+          "status": "parked",
+          "created_at": "2026-08-26T20:19:34.627935+00:00",
+          "resolved_at": null
+        }
+      ],
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "21d070b5-6dd6-4b27-a83b-a018e97a78f0",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "failed",
+      "created_at": "2026-08-26T20:29:49.689Z",
+      "started_at": null,
+      "completed_at": "2026-08-26T20:32:21.200Z",
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 1,
+      "triggers": [
+        {
+          "type": "immediate",
+          "scheduled_at": null,
+          "timezone": "Europe/Berlin",
+          "enabled": true,
+          "released_at": "2026-08-26T20:30:38.695+00:00"
+        }
+      ],
+      "review_gates": 0,
+      "parks": null,
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "814d19ea-c247-4e8d-97e2-e408910487ec",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "completed",
+      "created_at": "2026-08-26T20:35:18.400Z",
+      "started_at": null,
+      "completed_at": "2026-08-26T20:53:45.452Z",
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 1,
+      "triggers": [
+        {
+          "type": "immediate",
+          "scheduled_at": null,
+          "timezone": "Europe/Berlin",
+          "enabled": true,
+          "released_at": "2026-08-26T20:36:06.545+00:00"
+        }
+      ],
+      "review_gates": 1,
+      "parks": null,
+      "produced_outbox_rows": 1
+    },
+    {
+      "id": "5e22c046-0466-456c-ab9d-72f605bf7ee5",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "pending_approval",
+      "created_at": "2026-08-26T20:56:58.607Z",
+      "started_at": null,
+      "completed_at": null,
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 0,
+      "triggers": null,
+      "review_gates": 0,
+      "parks": null,
+      "produced_outbox_rows": 0
+    },
+    {
+      "id": "7da4a7a5-3806-48b0-b262-b2e810c1b52c",
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "template_name": "Blog Draft Writer Agent",
+      "status": "completed",
+      "created_at": "2026-08-26T21:01:50.701Z",
+      "started_at": null,
+      "completed_at": "2026-08-26T21:04:23.716Z",
+      "human_present": true,
+      "source_type": "agent_builder",
+      "trigger_rows": 1,
+      "triggers": [
+        {
+          "type": "immediate",
+          "scheduled_at": null,
+          "timezone": "Europe/Berlin",
+          "enabled": true,
+          "released_at": "2026-08-26T21:02:40.626+00:00"
+        }
+      ],
+      "review_gates": 1,
+      "parks": null,
+      "produced_outbox_rows": 1
+    }
+  ],
+  "outbox": [
+    {
+      "producer_run_id": "814d19ea-c247-4e8d-97e2-e408910487ec",
+      "event_id": "e0f05a46618dde8898fcb815206b566544370415f449993c4ab8c305aa833ede",
+      "status": "processed",
+      "created_at": "2026-08-26T20:53:45.162Z",
+      "processed_at": "2026-08-26T20:54:14.194Z"
+    },
+    {
+      "producer_run_id": "7da4a7a5-3806-48b0-b262-b2e810c1b52c",
+      "event_id": "d54e606cedeb8ccd7831749453ba62b8a48a7b03f985e02358fd79837d91faa4",
+      "status": "processed",
+      "created_at": "2026-08-26T21:04:23.617Z",
+      "processed_at": "2026-08-26T21:04:51.040Z"
+    }
+  ],
+  "gates": [
+    {
+      "run_id": "814d19ea-c247-4e8d-97e2-e408910487ec",
+      "review_task_id": "lifecycle-review:e0f05a46618dde8898fcb815206b566544370415f449993c4ab8c305aa833ede",
+      "status": "pending",
+      "created_at": "2026-08-26T20:54:14.008Z"
+    },
+    {
+      "run_id": "7da4a7a5-3806-48b0-b262-b2e810c1b52c",
+      "review_task_id": "lifecycle-review:d54e606cedeb8ccd7831749453ba62b8a48a7b03f985e02358fd79837d91faa4",
+      "status": "pending",
+      "created_at": "2026-08-26T21:04:50.927Z"
+    }
+  ],
+  "usage": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5-2026-04-23",
+      "calls": 23,
+      "input_tokens": 146833,
+      "output_tokens": 6501
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "calls": 17,
+      "input_tokens": 367986,
+      "output_tokens": 3550
+    }
+  ],
+  "installedAgents": [
+    {
+      "package_name": "@cinatra-ai/author-agent",
+      "kind": "agent",
+      "owner_level": "platform",
+      "status": "active",
+      "version": "0.1.1"
+    },
+    {
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "kind": "agent",
+      "owner_level": "organization",
+      "status": "active",
+      "version": "0.1.4"
+    },
+    {
+      "package_name": "@cinatra-ai/code-reviewer-agent",
+      "kind": "agent",
+      "owner_level": "platform",
+      "status": "active",
+      "version": "0.1.1"
+    },
+    {
+      "package_name": "@cinatra-ai/context-selection-agent",
+      "kind": "agent",
+      "owner_level": "organization",
+      "status": "active",
+      "version": "0.1.1"
+    },
+    {
+      "package_name": "@cinatra-ai/lint-policy-agent",
+      "kind": "agent",
+      "owner_level": "platform",
+      "status": "active",
+      "version": "0.1.0"
+    },
+    {
+      "package_name": "@cinatra-ai/planner-agent",
+      "kind": "agent",
+      "owner_level": "platform",
+      "status": "active",
+      "version": "0.1.1"
+    },
+    {
+      "package_name": "@cinatra-ai/security-reviewer-agent",
+      "kind": "agent",
+      "owner_level": "platform",
+      "status": "active",
+      "version": "0.1.1"
+    }
+  ],
+  "skillMatches": [
+    {
+      "agent_id": "@cinatra-ai/author-agent",
+      "skill_id": "@cinatra-ai/chat:blog-content",
+      "matched": true
+    }
+  ],
+  "screens": {
+    "scriptedRuntimeLines": {
+      "grep": "/CINATRA_UAT_OK|scripted (runtime|provider)|deterministic chat reply/i",
+      "count": 0
+    },
+    "noProviderRefusals": {
+      "grep": "/no provider configured|no model provider/i",
+      "count": 0
+    },
+    "preRouterShortCircuits": {
+      "grep": "/explicit-dispatch pre-router HARD short-circuit/",
+      "count": 0
+    },
+    "publicMcpCallbacks": {
+      "grep": "/POST \\/api\\/mcp 200/",
+      "count": 62
+    },
+    "publicMcpUnreachableRefusals": {
+      "grep": "/public MCP URL .* is unreachable/",
+      "count": 5
+    },
+    "llmBridgeRunSelects": {
+      "grep": "/\\[llm-bridge-run-select\\]/",
+      "count": 3
+    }
+  }
+}

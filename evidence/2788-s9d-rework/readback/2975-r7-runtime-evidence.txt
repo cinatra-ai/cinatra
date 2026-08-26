@@ -1,0 +1,33 @@
+# Round 7 runtime evidence (cinatra#2970, PR #2975).
+# Each block names the grep that produced it. The instance's public origin is
+# redacted everywhere it occurs. A zero-result grep is not a capture of the
+# process environment: this host prints no environment for the listening
+# process, which the readback records as serverEnvAvailable: false.
+
+## grep -E 'public MCP URL .* is unreachable'  (the pre-turn reachability refusals, left in)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL <the lane's public origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+
+## grep -E 'explicit-dispatch pre-router HARD short-circuit'  (the two runs that carry NO cell)
+[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: @cinatra-ai/planner-agent → runId=acccb770-7618-443c-afc9-aea40177dd0f
+[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: @cinatra-ai/planner-agent → runId=7ab4eac6-91bc-4a03-97ac-f294fb2b7c80
+
+## grep -E '\[llm-bridge-run-select\]'  (the agent runtime resolving this instance's sealed connection by run token)
+[llm-bridge-run-select] served-by=run_token run=82268a62-aac6-4c4b-9068-a9634be48559 org=8c2e5b55-5ef6-4f5a-94c6-5e67eade82b3 token-invalid=false token-divergent=false
+[llm-bridge-run-select] served-by=run_token run=82268a62-aac6-4c4b-9068-a9634be48559 org=8c2e5b55-5ef6-4f5a-94c6-5e67eade82b3 token-invalid=false token-divergent=false
+[llm-bridge-run-select] served-by=run_token run=acccb770-7618-443c-afc9-aea40177dd0f org=8c2e5b55-5ef6-4f5a-94c6-5e67eade82b3 token-invalid=false token-divergent=false
+[llm-bridge-run-select] served-by=run_token run=7ab4eac6-91bc-4a03-97ac-f294fb2b7c80 org=8c2e5b55-5ef6-4f5a-94c6-5e67eade82b3 token-invalid=false token-divergent=false
+
+## grep -E 'POST /api/mcp 200' | tail  (the provider's own servers calling back over the public ingress)
+ POST /api/mcp 200 in 41ms (next.js: 3ms, proxy.ts: 2ms, application-code: 36ms)
+ POST /api/mcp 200 in 44ms (next.js: 3ms, proxy.ts: 1993µs, application-code: 39ms)
+ POST /api/mcp 200 in 1278ms (next.js: 2ms, proxy.ts: 1916µs, application-code: 1274ms)
+ POST /api/mcp 200 in 201ms (next.js: 6ms, proxy.ts: 7ms, application-code: 188ms)
+
+## grep -icE 'CINATRA_UAT_OK|scripted (runtime|provider)|deterministic chat reply'
+0
