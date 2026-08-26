@@ -1,102 +1,126 @@
-# cinatra#2931 W4 — the run behind the pictures, read back from the database
+# The rows behind the pictures — cinatra#2931 (W4), 2026-08-26
 
-Every picture in `captures/` is of a row in this file. Nothing here was written
-by hand: the runs were created by the app's own dispatch (a turn typed into
-`/chat`), the artifacts were written by the agent through the shipped
-`/api/llm-bridge` step, the gates were minted by the app's own review-orchestration
-sweep, and the one decision was a real press of **Approve** in a browser.
+Read back from the instance's own database with `SELECT`s after the pictures were
+taken. Values only; nothing here was written by hand.
 
-## The chain, in order
-
-| When (UTC) | What happened | Where it is recorded |
-|---|---|---|
-| 09:12:00 | run 1 created from a turn typed into `/chat` | `agent_runs` |
-| 09:22:15 | run 1 **failed** — the agent runtime was not up yet | `agent_runs.error` |
-| 09:30:25 | run 2 created from a turn typed into `/chat` | `agent_runs` |
-| 09:36:08 | run 2's agent wrote a **text/markdown** artifact (3 710 bytes) | `objects` |
-| 09:36:28 | the sweep minted run 2's **pending** review gate | `artifact_review_gates` |
-| 09:39:18 | run 3 created from a turn typed into `/chat` | `agent_runs` |
-| 10:12:41 | run 3's agent wrote a **text/markdown** artifact (6 506 bytes); run 3 completed | `objects`, `agent_runs` |
-| 10:12:53 | the sweep minted run 3's **pending** review gate | `artifact_review_gates` |
-| 10:42:17 | **Approve** pressed on the review page; gate resolved and the audit row committed | `artifact_review_gates`, `artifact_review_audit` |
-
-## The one row that settles the claim
+## The runs
 
 ```
-artifact_review_audit
-  gate_id        148825cd-b3df-4ca2-a892-6d29e2726c99
-  artifact_id    34a5a1e1-24f9-4619-a622-b56c68018091
-  revision       d93bad0e-077d-4aaf-9e61-b038af0a23c4
-  disposition    approve
-  renderer_kind  first-party      <-- the FORM RUNG, recorded as rendered
-  renderer_package  (null)
-  renderer_digest   (null)
-  created_at     2026-08-25 10:42:17.49567+00
+cinatra.agent_runs
+ id                                    template_id                           status     created_at                     completed_at
+ 06474965-644f-4ffa-9c6a-c6c1ebde492b  3ac23e05-c031-43a8-8596-e502ea21bdd2  completed  2026-08-26 07:05:52.300826+00  2026-08-26 07:22:02.333+00
+ f98093d7-c16d-4f8f-aeea-244ddbc34c04  3ac23e05-c031-43a8-8596-e502ea21bdd2  completed  2026-08-26 07:42:38.934840+00  2026-08-26 07:43:14.199+00
+ run_by = 2660f48b-6a11-423a-afdd-a148139bf86d   org_id = 5063c707-54c8-436b-8519-2d30d5765ca8
 ```
 
-`first-party` is the value this slice adds. It says the host itself rendered the
-declared text form — and it is **not** `floor`, which is what the same review
-would have recorded before this slice and what the floor gate counts. The row
-also proves the constraint half of the change: before the CHECK was widened this
-exact INSERT raised and rolled the whole decision back, so the gate could not
-have reached `resolved` at all.
+Both runs were created by the app's own dispatch from a turn typed into the chat.
+Their setup, schedule and context steps were answered through the app's own
+controls in the browser.
 
-## The raw readback
+## The artifacts
 
 ```
-== agent_runs ==
-                  id                  |  status   |            title            |          created_at           |        completed_at        
---------------------------------------+-----------+-----------------------------+-------------------------------+----------------------------
- e8ae1418-0379-4f61-b929-01d3a54eabee | failed    | Blog Draft Writer Agent (1) | 2026-08-25 09:12:00.912808+00 | 2026-08-25 09:22:15.819+00
- 6d1642ff-b60f-43ed-a7b4-e5962addc00d | failed    | Blog Draft Writer Agent (2) | 2026-08-25 09:30:25.307526+00 | 2026-08-25 09:36:06.921+00
- cb746224-7c97-4686-9149-bec683a0d3f4 | completed | Blog Draft Writer Agent (3) | 2026-08-25 09:39:18.768012+00 | 2026-08-25 10:12:41.978+00
-(3 rows)
-== artifact objects (pinned targets) ==
-                  id                  |                type                 |          created_at           |     mime      | size_bytes |                         title                         | viewer_hint 
---------------------------------------+-------------------------------------+-------------------------------+---------------+------------+-------------------------------------------------------+-------------
- d556377a-9502-4b54-ba84-96efeccdaf7c | @cinatra-ai/blog-post-artifact:post | 2026-08-25 09:36:08.608808+00 | text/markdown | 3710       | Why Small Teams Should Automate Weekly Status Reports | mime
- 34a5a1e1-24f9-4619-a622-b56c68018091 | @cinatra-ai/blog-post-artifact:post | 2026-08-25 10:12:41.780621+00 | text/markdown | 6506       | Why Small Teams Should Automate Weekly Status Reports | mime
-(2 rows)
-== artifact_review_gates ==
-                  id                  |                run_id                |  status  | disposition |         resolved_at          |          created_at           |                                                        pinned_targets                                                        
---------------------------------------+--------------------------------------+----------+-------------+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------
- dbe6f11c-c115-4608-b2fe-93cd45825c67 | 6d1642ff-b60f-43ed-a7b4-e5962addc00d | pending  |             |                              | 2026-08-25 09:36:28.145255+00 | [{"artifactId": "d556377a-9502-4b54-ba84-96efeccdaf7c", "representationRevisionId": "465f4db3-c750-41a4-a23d-167f5a1a3abd"}]
- 148825cd-b3df-4ca2-a892-6d29e2726c99 | cb746224-7c97-4686-9149-bec683a0d3f4 | resolved | approve     | 2026-08-25 10:42:17.49567+00 | 2026-08-25 10:12:53.786039+00 | [{"artifactId": "34a5a1e1-24f9-4619-a622-b56c68018091", "representationRevisionId": "d93bad0e-077d-4aaf-9e61-b038af0a23c4"}]
-(2 rows)
-== artifact_review_audit ==
-                  id                  |               gate_id                |             artifact_id              |      representation_revision_id      | disposition | renderer_kind | renderer_package | renderer_digest |          created_at          
---------------------------------------+--------------------------------------+--------------------------------------+--------------------------------------+-------------+---------------+------------------+-----------------+------------------------------
- f414a4ad-65f6-41fd-b7b8-55f7311ef135 | 148825cd-b3df-4ca2-a892-6d29e2726c99 | 34a5a1e1-24f9-4619-a622-b56c68018091 | d93bad0e-077d-4aaf-9e61-b038af0a23c4 | approve     | first-party   |                  |                 | 2026-08-25 10:42:17.49567+00
-(1 row)
-== applied migrations (tail) ==
-                            name                            |           run_on           
-------------------------------------------------------------+----------------------------
- core__0097_artifact-review-audit-first-party-renderer-kind | 2026-08-25 08:10:11.437557
- core__0096_agent-run-created-at-immutable                  | 2026-08-25 08:10:11.436276
- core__0095_run-recommendation-skip-record                  | 2026-08-25 08:10:11.435064
-(3 rows)
+cinatra.objects
+ id                                    type                                 owner_level   created_at
+ 4c0cada5-04e4-4d55-a7d5-9df172d5da77  @cinatra-ai/blog-post-artifact:post  organization  2026-08-26 07:22:02.026571+00
+ 1b5b641c-fe39-49cf-9b3f-52fe55c14c7d  @cinatra-ai/blog-post-artifact:post  organization  2026-08-26 07:43:14.107187+00
+
+cinatra.representation
+ id (revision)                         artifact_id                           revision  form  declared_mime   size_bytes  created_by_run_id
+ 34d8be8d-09f2-45ff-ad2e-bccf7237a130  4c0cada5-04e4-4d55-a7d5-9df172d5da77  1         file  text/markdown   5789        06474965-644f-4ffa-9c6a-c6c1ebde492b
+ 5681691d-be0c-4323-a1ee-655a3b72429b  1b5b641c-fe39-49cf-9b3f-52fe55c14c7d  1         file  text/markdown   3666        f98093d7-c16d-4f8f-aeea-244ddbc34c04
+
+cinatra.artifact_materializations
+ run_id 06474965-…  extension @cinatra-ai/blog-post-artifact  phase finalized  2026-08-26 07:22:01.153063+00
 ```
 
-## The provider, and its limits
+`declared_mime = text/markdown` is what makes this the acceptance's *markdown
+draft*, and what the card's text rung resolves on.
 
-The drafts were written by the **real** provider. The instance's LLM provider was
-configured through the app's own provider form (the setup wizard's MODEL step),
-so the app sealed the connection itself; the key was never written to a file on
-the capture host, never passed as an argument and never printed. The agent
-runtime reached the model through the shipped `/api/llm-bridge` step — its own
-log line for the producing step is `Write draft via /api/llm-bridge`.
+## The review gates — and the timing defect they record
 
-**Limits, stated rather than glossed.**
+```
+cinatra.artifact_review_gates
+ id                                    run_id      status    disposition  created_at                     resolved_at
+ 28ebc08b-45a2-4210-818e-0f01a6d7e9ef  06474965-…  resolved  approve      2026-08-26 07:22:10.830417+00  2026-08-26 07:58:20.84878+00
+ 08986b6f-efce-4e4c-bf4d-cdd3d8cb89d5  f98093d7-…  pending                2026-08-26 07:43:19.182733+00
+ pinned_targets[0] of 28ebc08b… = {"artifactId":"4c0cada5-…","representationRevisionId":"34d8be8d-…"}
+```
 
-* The two `text/markdown` artifacts are what the agent actually wrote. Run 2's
-  bytes are the agent's whole JSON envelope (`{"title":…,"excerpt":…,"content":"## …"}`),
-  so the card renders that envelope — truthfully, because that is what the
-  artifact holds. Run 3's bytes are clean markdown prose, which is why W7/W8/W9
-  read as an article and W1/W2/W3 read as an envelope. Neither is this slice's
-  doing: the card shows the artifact's real content either way.
-* Run 1 and run 2 failed. Run 1 failed because the agent runtime was not running
-  yet; run 2 failed after its draft was written, on a second flow start with no
-  `idea` input. Run 3 is the clean one, and it is the run W7–W10 photograph.
-* The review gates were minted by the sweep **after** the runs had already
-  terminated, so no run ever parked at a review moment. That is why W5 is a
-  refusal rather than a pass — see README.
+**Each gate is minted after its run has already terminated** —
+`07:22:02.333` → `07:22:10.830` (8.5 s) and `07:43:14.199` → `07:43:19.183`
+(5.0 s). That is why no run parks at a review moment and why the conversation's
+slot flips from the progress card to `Run complete` rather than to the review
+card. Graded as W0's DEVIATION in `README.md`.
+
+## The decision
+
+```
+cinatra.artifact_review_audit
+ gate_id                     28ebc08b-45a2-4210-818e-0f01a6d7e9ef
+ run_id                      06474965-644f-4ffa-9c6a-c6c1ebde492b
+ review_task_id              lifecycle-review:657226db9df0c8fd3517292eb3cae5fdd6eb527d8b1c5d0d8c223785c36ed031
+ artifact_id                 4c0cada5-04e4-4d55-a7d5-9df172d5da77
+ representation_revision_id  34d8be8d-09f2-45ff-ad2e-bccf7237a130
+ disposition                 approve
+ renderer_kind               first-party
+ renderer_package            (null)
+ renderer_digest             (null)
+ created_at                  2026-08-26 07:58:20.84878+00
+```
+
+One audit row, written by the real Approve press. `renderer_kind = first-party`
+is the acceptance's *recorded as rendered*, and it only commits because
+`core__0097` widened the column's CHECK.
+
+## The usage ledger — the model was real
+
+```
+cinatra.usage_events  (created_at > 2026-08-26 07:00Z)
+ provider  model               calls  first_at                       last_at
+ openai    gpt-5.5-2026-04-23  22     2026-08-26 07:21:59.999096+00  2026-08-26 07:44:06.712852+00
+ openai    gpt-5.5             4      2026-08-26 07:06:07.324464+00  2026-08-26 07:49:52.550769+00
+```
+
+`CINATRA_TEST_LLM_PROVIDER` was never set on this instance, and the instance
+environment carries no provider key: the connection is sealed in the database,
+configured through the app's own provider form.
+
+## The widget wire (cell W7)
+
+Recorded by the driver from the browser, present/absent only — never by value.
+
+```
+ label              method  path                            cookie   x-cinatra-widget-user-token  x-cinatra-widget-origin
+ island-document    GET     /lifecycle/review-island        absent   absent                       (none)
+ lifecycle-resolve  POST    /api/lifecycle-views/resolve    absent   present (cwu_)               http://127.0.0.1:8088
+ counts: island-document ×2, lifecycle-resolve ×4
+```
+
+The browser's cookie jar at the moment the pictures were taken held exactly one
+app cookie — `better-auth.session_token`, `domain=localhost`, `SameSite=Lax`,
+`httpOnly` — set by the embed's own hosted-PKCE popup, which is a **top-level**
+window on the app origin. It did not ride any island or lifecycle request,
+because the top-level document is on `127.0.0.1:8088` and that is a different
+site. The island is authenticated by the server-minted credential in its own
+address.
+
+The widget instance row and its connect-site were written by the two shipped
+writers (`writeConnectorConfigToDatabase`,
+`upsertConnectSiteAndMintCredential`), and `deriveFrameBinding` was asserted to
+close before anything was driven:
+
+```
+deriveFrameBinding -> ok: true, client wordpress, instanceId w2931-local-site,
+                      agentSlug wordpress-content-editor, siteOrigin http://127.0.0.1:8088
+```
+
+## The floor gate
+
+```
+$ pnpm gate:artifact-review-floor        # exit 0
+[artifact-review-floor] 2 of 28 artifact types would land on the metadata floor under review (25 packs scanned; defensive states excluded).
+    floor: @cinatra-ai/dashboard-artifact:dashboard [@cinatra-ai/dashboard-artifact] form application/vnd.cinatra.dashboard+json
+    floor: @cinatra-ai/drupal:node [@cinatra-ai/drupal-artifacts] form text/html
+[artifact-review-floor] OK — no new fallbacks (2 baselined; the baseline may only shrink).
+```
