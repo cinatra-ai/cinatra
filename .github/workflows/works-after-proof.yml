@@ -42,7 +42,7 @@ on:
         required: false
         default: ""
       graphiti_image:
-        description: "Override full graphiti image ref (blank = repo pin)"
+        description: "Override full graphiti image ref (blank = build the checked-out docker/graphiti)"
         required: false
         default: ""
       nango_server_image:
@@ -280,9 +280,10 @@ jobs:
             # GRAPHITI_IMAGE: unlike neo4j/redis/postgres, graphiti's compose
             # `image:` is a LOCAL build tag, not something published anywhere to
             # pull — so this workflow only exports GRAPHITI_IMAGE when the
-            # dispatch input explicitly names a genuinely external image to test
-            # against; with no override, graphiti.sh's own default (build from
-            # docker/graphiti) applies, the same as the unexported KG_EMBEDDER_IMAGE.
+            # dispatch input is non-empty (forwarded as-is, with no check that
+            # it names anything external); with no override, graphiti.sh's own
+            # default (build from docker/graphiti) applies, the same as the
+            # unexported KG_EMBEDDER_IMAGE.
             if [ -n "$IN_GRAPHITI" ]; then
               echo "GRAPHITI_IMAGE=${IN_GRAPHITI}"
             fi
