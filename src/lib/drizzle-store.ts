@@ -32,7 +32,7 @@ import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries }
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
 import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries, suggestionDecisionCasSchemaQueries, agentRunHitlGatesSchemaQueries, runRecommendationSkipsSchemaQueries, runRecommendationOfferedSetSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
-import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema"; import { graphitiAnchorNodeSchemaQueries } from "@/lib/graphiti-anchor-node-schema"; // cinatra#2591 — the anchor-node inverse map's own leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
+import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
@@ -2170,7 +2170,7 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS projected_group_id TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_hash TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_at TIMESTAMPTZ` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projection_error TEXT` }, ...graphitiAnchorNodeSchemaQueries(schemaName), // cinatra#2591: the anchor-node inverse map + its recall index (sync leaf, bootstrap-only, no core migration)
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projection_error TEXT` },
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."graphiti_projection_outbox" (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   object_id TEXT NOT NULL,
