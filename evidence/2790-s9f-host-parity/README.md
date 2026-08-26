@@ -19,7 +19,7 @@ round by round and each part still describes the round that wrote it.
 | Cells | Run behind them | When | Proof under the real-run rule |
 |---|---|---|---|
 | `S5a` (+ dark), `S5` (+ dark), `R7a` (+ dark), `R7` (+ dark) | `c0614eeb-07ed-4e16-9a1e-88133a780cfa` | 2026-08-26 | **YES** — the placeholder round (cinatra#2997), `drivers/22-placeholder-and-replacement-sequence.mjs`: one run, started by the app's own dispatch from a person's typed turn, its own question answered through the card's own Continue, its step executed with a real provider connection configured, its output written, and the review opened on it by the shipped sweeper. Same negative screens as the rows below (`preRouterShortCircuits` / `preRouterAttempts` / `scriptedRuntimeLines` / `noProviderRefusals` / `mcpDependencyFailures` all 0, process-chain read at every shutter), same stated attribution limit |
-| `S3` (+ dark), `S4` (+ dark), `R2`, `R4` | `aa84c060-15e9-4298-90fe-8cb33c130d6b` | 2026-08-25 | **YES** — a run the app's own dispatch created from a person's turn, decided by real presses, executed its own step with a real provider connection configured, with no scripted-runtime line anywhere in the app server's log and the scripted switch not found one hop above the listening process — a null there is consistent with absence, not a proof of it — and reviewed by the shipped sweeper. Nothing is seeded and nothing is stood in for. *Which* runtime answered a given model call is not recorded by any row — see *The REVIEW-CELL re-shoot* below for exactly how far the attribution goes |
+| `S4` (+ dark), `R2`, `R4` | `aa84c060-15e9-4298-90fe-8cb33c130d6b` | 2026-08-25 | **YES** — a run the app's own dispatch created from a person's turn, decided by real presses, executed its own step with a real provider connection configured, with no scripted-runtime line anywhere in the app server's log and the scripted switch not found one hop above the listening process — a null there is consistent with absence, not a proof of it — and reviewed by the shipped sweeper. Nothing is seeded and nothing is stood in for. *Which* runtime answered a given model call is not recorded by any row — see *The REVIEW-CELL re-shoot* below for exactly how far the attribution goes |
 | `S1` (+ dark), `S2` (+ dark), `R5` (+ dark), `R6` (+ dark) | `aef0f05a-94c9-41ed-a497-798603ecd6bc` | 2026-08-25 | **YES** — the stood-in-legs re-shoot, `drivers/12-real-chain-sequence.mjs` |
 | `H1` `H2` `H3` `H4` `W1` `W2` `W3` (the widget) | a run SEEDED and parked by the walk, read into the widget by a turn naming it | 2026-08-21 | **NO — SCRIPTED-RUNTIME ERA, kept as dated history.** The card, the presses and the settle in them are real; the assistant reply above them came from the deterministic provider and the run under them was seeded rather than dispatched. They are NOT proof of the chain, and the obstacle that keeps them un-re-shootable is code, not effort — see the next section |
 
@@ -316,19 +316,38 @@ the capture contract were widened for exactly that pair and for nothing else
 carrying the sentence above as its reason. Every other host still names exactly
 one URL class.
 
-**`S3` (+ dark) stays exactly as it was**, and it is now history rather than a
-claim about this branch: it is the picture the maintainer read, the one issue
-#2997 links at its own commit, and it shows what the card did BEFORE this change
-— "Agentic Run Progress / completed / Run complete", the "Open the run page"
-link, and a review card that only arrived after the person asked a second
-question. Its record and its bytes are untouched.
+**`S3` (+ dark) is RETIRED at this evidence commit — its two records are out of
+the canonical capture index and its two pictures are deleted from this branch.**
+It read the conversation BEFORE this change — "Agentic Run Progress / completed /
+Run complete", the "Open the run page" link, and a review card that arrived only
+after the person asked a second question — so keeping it in the set would have
+shown this branch drawing what this branch does not draw. The two files remain in
+git history at `4049bc46`, the commit issue #2997 links them at. What the
+conversation draws HERE is `S5` (+ dark), on run
+`c0614eeb-07ed-4e16-9a1e-88133a780cfa`, recorded at `1929e861551b`: the same
+surface, the same state, read at the branch as it is.
 
-**The four placeholder cells are deliberately NOT in the canonical capture
-index.** A record there is a CARD claim, and the contract requires the claimed
-card's host anchor and root to have been counted on that screen; a placeholder
-screen has no card on it, which is what makes it a placeholder. They are recorded
-in `capture-records-2997.json`, graded here, and left out of the index on purpose
-— `drivers/23-splice-placeholder-records.mjs` carries the same note.
+**The four placeholder cells stay OUT of the canonical capture index, and the
+contract is what keeps them out — re-read line by line for this commit.**
+`requiredAssertionsFor` in `scripts/ci/lib/capture-record-contract.mjs` pushes
+`[data-lifecycle-card-host="<host>"]`, frame-scoped, onto EVERY record whatever
+kind or state it declares, and `CAPTURE_HOSTS` is closed to the four card hosts —
+a cell name carrying no host token is refused outright as
+`record/unclassifiable-cell`. The shipped `ReviewGatePlaceholder`
+(`packages/agents/src/review-gate-states.tsx`) declares no lifecycle card at all:
+it emits `data-conformance-id="review-gate-placeholder"` with `role="status"` and
+`aria-busy="true"`, and the driver counted
+`[data-lifecycle-card-host="run_card"]` **0** and
+`[data-lifecycle-card="artifact_review_gate"]` **0** on all four placeholder
+captures. So this contract has NO kind and NO host under which a placeholder can
+be recorded: filing one anyway fails the evidence gate on
+`record/anchor-count-zero`, and writing counts the driver did not observe is the
+fabrication both halves exist to catch. The four records live in
+`capture-records-2997.json` with their real sha256, run id and DB timestamps, are
+graded cell by cell in `PLAN-WALK.md`, and `drivers/23-splice-placeholder-records.mjs`
+carries the same note. The round's OTHER four cells — `S5` (+ dark) and `R7`
+(+ dark), where the review card IS drawn and the host anchor IS counted — are in
+the canonical index, which is exactly where the line falls.
 
 ### What this round's chain did NOT include, stated
 
@@ -1112,8 +1131,7 @@ says which surface it is.
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
-| `S3__review-card__chat_thread__pending` | 2880×3400 | The same conversation, all four turns in one window: the decided row still above, the run panel reading **`completed` / “Run complete”**, the person's second turn *“Is there anything waiting on me for review?”*, and beneath it **the review card on `chat_thread`** — *“Review requested / Awaiting your decision”*, the target the run's own step wrote (`CINATRA_UAT_OK: scripted title`, `Blog Post Artifact`, `@cinatra-ai/blog-post-artifact:post · revision 798dc74f-cf0… · text/markdown · updated 2026-08-23T10:26:02.616Z`), the composer-binding row, the rationale field and the decision floor `Comment` · `Reject` · `Approve`. |
-| `S3__review-card__chat_thread__pending__dark` | 2880×3400 | The same window, dark palette. |
+| `S5__review-card__run_card__in-conversation__pending` (+ `__dark`) — **the cell that answers this row now** | 2880×3400 | The review card in the conversation, read at this branch: the run's own slot holding *“Review requested / Awaiting your decision”*, the target the run's step wrote, the rationale field and the decision floor `Comment` · `Reject` · `Approve` — with no “Agentic Run Progress” heading (`agenticRunProgressHeadings: 0`) and no “Open the run page” link (`removedLinkByTestId: 0`, `removedLinkByText: 0`). Run `c0614eeb-07ed-4e16-9a1e-88133a780cfa`, recorded at `1929e861551b`. The `S3` cell this row used to name is retired — see *The PLACEHOLDER round* above. |
 | `S4__recommendation-card__page_gate_region__decided` | 2880×3400 | The **review page for the same run**, whole window: `AGENT RUN / Review`, the step rail `1 Review`, the **decided row above** the review gate card, and the gate still open on the same artifact and the same revision, with `Comment` · `Reject` · `Approve`. Nothing pressable in the row (**0/0/0**). |
 | `S4__recommendation-card__page_gate_region__decided__dark` | 2880×3400 | The same page framing, dark palette. |
 

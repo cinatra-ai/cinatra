@@ -13,6 +13,16 @@ show is a quote that should not have been used.
 `c6fbe5a9` (cinatra#2788 into this branch) removed both pictures, and the same
 reading of the same run stays at page framing in `R2` and `R4`.
 
+`S3` (+ `__dark`) is RETIRED too, for a different reason: it read the
+conversation BEFORE cinatra#2997 — the "Agentic Run Progress" card, the "Open the
+run page" link, and a review card that arrived only after a second question — so
+it no longer shows the branch it sits on. Its two records are out of the
+canonical capture index and its two pictures are deleted from this branch (they
+remain in git history at `4049bc46`). The review card in the conversation is
+walked below as `S5__review-card__run_card__in-conversation__pending`
+(+ `__dark`), on run `c0614eeb-07ed-4e16-9a1e-88133a780cfa`, recorded at
+`1929e861551b`.
+
 
 CELL: R2__recommendation-card__page_gate_region__decided__above-gate
 PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
@@ -70,17 +80,6 @@ PLAN> **The row is the whole card** — there is no separate heading plate and n
 PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
 PLAN> **Decisions ride the widget's own proof.** The decide route selects the widget branch from the presented `cwu_` header with **no** session fallback, so a decision from a widget frame can never be recorded against whoever else is signed in on that browser (`src/app/api/lifecycle-views/decide/route.ts:176-194`).
 
-CELL: S3__review-card__chat_thread__pending
-PLAN> **It appears** when a run reaches a review gate — in the conversation where the run lives, and on the run page.
-PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
-PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected.
-PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
-
-CELL: S3__review-card__chat_thread__pending__dark
-PLAN> **It appears** when a run reaches a review gate — in the conversation where the run lives, and on the run page.
-PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
-PLAN> Everyone who looks at that run — in the chat, in the widget, on the run page, on the review page — sees the same card.
-PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
 
 CELL: S4__recommendation-card__page_gate_region__decided
 PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.

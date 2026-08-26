@@ -460,3 +460,16 @@ link's job as a run-id source moved one attribute earlier when the link went.
 `cinatra.agent_runs.error` is EMPTY: the run finished clean, which is what makes
 the two readings it is photographed in — placeholder, then review screen — the
 ordinary path rather than a failure's.
+
+## The cell this run's rows now answer
+
+`S3` — the review card in the conversation — was read out of run
+`aa84c060-15e9-4298-90fe-8cb33c130d6b` in *The review-cell re-shoot* above, on a
+build that still drew the "Agentic Run Progress" card. That cell is retired at
+this evidence commit: its two records are out of the canonical capture index and
+its two pictures are deleted from this branch (they remain in git history at
+`4049bc46`). The conversation's review-card reading is `S5` (+ dark) on THIS run,
+standing on the same `artifact_review_gates` row read out above —
+`b9aea2d6-9248-4552-939f-fc074b88d4f1`, status `pending`, `01:06:02.533` — and
+the run page's is `R7` (+ dark) on that same row. Both were recorded at
+`1929e861551b`.

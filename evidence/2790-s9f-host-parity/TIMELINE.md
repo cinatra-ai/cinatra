@@ -497,3 +497,12 @@ time was read from.
 **The placeholder window is rows 4 to 7: 23.6 seconds**, and it is the window
 this round exists to photograph — the run is done, the review is not open yet,
 and the card says nothing rather than announcing a finished run.
+
+**What this clock replaced.** The `S3` cell that used to carry the review card in
+the conversation was shot on run `aa84c060-15e9-4298-90fe-8cb33c130d6b` at
+`12:57` on 2026-08-25 — before the placeholder change landed on this branch. It
+is retired at this evidence commit: its two records are out of the canonical
+capture index and its two pictures are deleted from this branch (they remain in
+git history at `4049bc46`). Rows 8 and 9 above are what the conversation and the
+run page show instead, on run `c0614eeb-07ed-4e16-9a1e-88133a780cfa`, recorded at
+`1929e861551b`.
