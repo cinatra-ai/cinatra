@@ -9,11 +9,29 @@
 #      bump (it is the prod bootable set's single authority);
 #   2. if (and only if) the lock moved: re-sync the tree to the new pins,
 #      `pnpm install` (pnpm-lock.yaml moves WITH the pins), regenerate the
-#      generated maps and re-run their fail-closed `--check`;
+#      generated maps AND the authz inventory, and re-run their fail-closed
+#      `--check`s;
 #   3. commit exactly the recipe files together on the fixed branch
 #      `auto/dev-lock-bump` (force-updated — one rolling PR, never a stack of
 #      stale ones) and open/refresh the PR. No drift -> clean no-op (and the
 #      rolling PR is retired if an equivalent bump already landed manually).
+#
+# WHAT THE BUMP PR'S OWN GATES NEED (cinatra#2986, maintainer ruling Path A in
+# comment 5413682084). The recipe used to stop short of two things its own
+# required checks demand, so the rolling PR was red for reasons that had nothing
+# to do with the pins:
+#   - `RBAC authz unit tests` checks `src/lib/authz/__generated__/inventory.json`
+#     against a static scan of `packages/`, `extensions/` and `src/`. The
+#     re-sync above rewrites `extensions/`, so the inventory is regenerated here
+#     too (step "Regenerate + check the authz inventory") and joins the verified
+#     dirty-file allowlist.
+#   - `skills-drift-gate` reads the PR DESCRIPTION for a `Skills-*`
+#     acknowledgement when a bumped package is a declared skill dependency. This
+#     workflow NEVER writes one: it derives the skill-linked pin set from the
+#     gate's own pins, and PRESERVES a marked, human-written block across
+#     force-refreshes while the fingerprint of that pin set is unchanged. With no
+#     valid block the description says a person must add one, and the PR stays
+#     red on that gate — truthfully. See scripts/ci/dev-lock-bump-pr-body.mjs.
 #
 # TOKEN BOUNDARY: the repo's Actions policy does not let the default
 # GITHUB_TOKEN create pull requests, so push + PR use the Actions secret
@@ -106,7 +124,7 @@ jobs:
           # the commit body and the PR body.
           node --input-type=module > /tmp/pin-changes.md <<'NODE'
           import { execFileSync } from "node:child_process";
-          import { readFileSync } from "node:fs";
+          import { readFileSync, writeFileSync } from "node:fs";
           const before = new Map(
             JSON.parse(
               execFileSync("git", ["show", "HEAD:cinatra-dev-extensions.lock.json"], { encoding: "utf8" }),
@@ -114,15 +132,28 @@ jobs:
           );
           const after = JSON.parse(readFileSync("cinatra-dev-extensions.lock.json", "utf8")).packages;
           const lines = [];
+          // The same change set in machine-readable form, for the skill-linked
+          // derivation + the body composer. A removal carries the sentinel sha
+          // `(removed)` so a de-listed watched package still moves the
+          // acknowledgement fingerprint.
+          const changed = [];
           for (const p of after) {
             const old = before.get(p.packageName);
             if (old !== p.resolvedSha) {
               lines.push(`- \`${p.packageName}\`: ${old ? old.slice(0, 12) : "(new)"} -> ${p.resolvedSha.slice(0, 12)}`);
+              changed.push({ packageName: p.packageName, resolvedSha: p.resolvedSha });
             }
           }
           for (const [name, sha] of before) {
-            if (!after.some((p) => p.packageName === name)) lines.push(`- \`${name}\`: ${sha.slice(0, 12)} -> (removed)`);
+            if (!after.some((p) => p.packageName === name)) {
+              lines.push(`- \`${name}\`: ${sha.slice(0, 12)} -> (removed)`);
+              // De-listing a package is a change the gate can flag too (the name
+              // is in the diff), so it carries the `(removed)` sentinel sha into
+              // the skill-linked set rather than being invisible to it.
+              changed.push({ packageName: name, resolvedSha: "(removed)" });
+            }
           }
+          writeFileSync("/tmp/pin-changes.json", `${JSON.stringify(changed, null, 2)}\n`);
           console.log(lines.join("\n"));
           NODE
           {
@@ -157,12 +188,30 @@ jobs:
           node scripts/extensions/generate-extension-manifest.mjs
           node scripts/extensions/generate-extension-manifest.mjs --check
 
+      # cinatra#2986 gap 1. `scripts/build-authz-inventory.mjs` statically scans
+      # packages/, extensions/ and src/ for tool registrations, so the re-sync
+      # above can move a registered-tool surface out from under the committed
+      # inventory. Left stale, `RBAC authz unit tests` fails on the bump PR
+      # ("authz inventory is stale. Run `pnpm authz:inventory` to refresh." —
+      # src/lib/authz/__tests__/drift-gate.test.ts). Shaped exactly like the maps
+      # step above: regenerate, then re-run the generator's own fail-closed
+      # --check so a generator that disagrees with what it just wrote aborts the
+      # run instead of committing a file the gate will reject. Mirrored in the
+      # manual recipe (docs/internals/contracts/extension-clone-pinning.md).
+      - name: Regenerate + check the authz inventory
+        if: steps.drift.outputs.drift == 'true'
+        run: |
+          set -euo pipefail
+          pnpm authz:inventory
+          pnpm authz:inventory:check
+
       # Fail-closed commit scope: the dirty set after regeneration must be a
       # SUBSET of the recipe files (dev lock + pnpm-lock.yaml + the
-      # generator's own output list; the dev lock is already known dirty from
-      # the detect step — pnpm-lock.yaml/maps legitimately stay put on a
-      # source-only companion bump). Any path outside the allowlist aborts
-      # the run instead of being silently dropped or silently committed.
+      # generator's own output list + the authz inventory; the dev lock is
+      # already known dirty from the detect step — pnpm-lock.yaml/maps/inventory
+      # legitimately stay put on a source-only companion bump). Any path outside
+      # the allowlist aborts the run instead of being silently dropped or
+      # silently committed.
       - name: Verify the dirty set is exactly the recipe files
         if: steps.drift.outputs.drift == 'true'
         run: |
@@ -171,6 +220,10 @@ jobs:
             echo "cinatra-dev-extensions.lock.json"
             echo "pnpm-lock.yaml"
             node -e "import('./scripts/extensions/generated-manifest-files.mjs').then((m) => console.log(m.GENERATED_MANIFEST_FILES.join('\n')))"
+            # The authz inventory regenerated above (cinatra#2986 gap 1). A
+            # single generator-owned path, named here rather than behind a
+            # directory prefix — same rule as GENERATED_MANIFEST_FILES.
+            echo "src/lib/authz/__generated__/inventory.json"
           } > /tmp/recipe-files.txt
           git status --porcelain=v1 | cut -c4- > /tmp/dirty.txt
           status=0
@@ -182,6 +235,26 @@ jobs:
             fi
           done < /tmp/dirty.txt
           exit "$status"
+
+      # cinatra#2986 gap 2, half one. Which of the packages this bump re-pins
+      # does a PINNED SKILL.md declare as a watched dependency? Derived from
+      # `skills-drift-gate`'s OWN data — the `skills_repos` pins in
+      # `.github/workflows/skills-drift-gate.yml` and the `cinatra-watches`
+      # blocks in the SKILL.md files at those pins — never a list maintained
+      # here. Fail-loud: an unreadable pin or watch block aborts rather than
+      # reporting an empty set (which would read as "nothing to judge").
+      #
+      # TOKEN BOUNDARY: same posture as the lock updater. A host-repo script
+      # that only READS remote text (public skill repos, blob-filtered depth-1
+      # fetch, nothing executed from them), and it runs BEFORE the token step,
+      # so no credential is in scope while it runs.
+      - name: Derive the skill-linked pin set (from skills-drift-gate's own data)
+        if: steps.drift.outputs.drift == 'true'
+        run: |
+          set -euo pipefail
+          node scripts/ci/skills-drift-watched-packages.mjs \
+            --changed-pins /tmp/pin-changes.json \
+            --out /tmp/skill-linked.json
 
       - name: Push rolling branch + open/refresh (or retire) the bump PR
         env:
@@ -223,11 +296,13 @@ jobs:
           git checkout -B auto/dev-lock-bump
           xargs git add -- < /tmp/recipe-files.txt
           git commit -m "$title" \
-            -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/internals/contracts/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
+            -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/internals/contracts/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps + regenerated authz inventory.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
 
           # Idempotency: if the remote rolling branch already holds this
-          # exact TREE (identical pins + lockfile + maps + everything else),
-          # skip the push — no CI re-runs, no PR-update spam.
+          # exact TREE (identical pins + lockfile + maps + inventory +
+          # everything else), skip the push — no CI re-runs, no PR-update spam.
+          # Decided HERE, before anything is written, because the ORDER of the
+          # write and the push matters (see below).
           git fetch origin "+refs/heads/auto/dev-lock-bump:refs/remotes/origin/auto/dev-lock-bump" 2>/dev/null || true
           pushed=true
           if git rev-parse -q --verify "refs/remotes/origin/auto/dev-lock-bump" >/dev/null \
@@ -235,31 +310,67 @@ jobs:
             pushed=false
             echo "Rolling bump branch already holds this exact tree — skipping push." \
               | tee -a "$GITHUB_STEP_SUMMARY"
-          else
+          fi
+
+          # cinatra#2986 gap 2, half two: READ the description before writing
+          # it. This step calls `gh pr edit --body-file` on every refresh, so the
+          # old whole-body template silently destroyed any `Skills-*`
+          # acknowledgement a person had added between scheduled runs. The
+          # composer regenerates every OTHER part of the body from this bump and
+          # carries the ONE marked human block forward while the acknowledgement
+          # fingerprint is unchanged. It never writes an acknowledgement — with
+          # no valid block the body says a person must, and `skills-drift-gate`
+          # stays red until one does.
+          existing="$(find_rolling_pr)"
+          : > /tmp/pr-body-current.md
+          if [ -n "$existing" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${existing}" --jq '.body // ""' > /tmp/pr-body-current.md
+          fi
+
+          node scripts/ci/dev-lock-bump-pr-body.mjs \
+            --old-body /tmp/pr-body-current.md \
+            --pin-changes /tmp/pin-changes.md \
+            --skill-linked /tmp/skill-linked.json \
+            --out /tmp/pr-body.md
+
+          # ORDER IS LOAD-BEARING (codex convergence on cinatra#2986). The force
+          # push emits `pull_request: synchronize`, which STARTS
+          # `skills-drift-gate` for the new head. That run reads the PR
+          # description. If the push went first, the gate would judge the new
+          # pins against the PREVIOUS description — including an acknowledgement
+          # this refresh is about to drop because its fingerprint moved — and
+          # the caller does not subscribe to `pull_request: edited`, so the
+          # later correction would never re-run the check. The new head would
+          # carry a green gate earned by a stale judgment. So on a REFRESH the
+          # body is written FIRST and the branch moves second.
+          #
+          # An OPEN is the other way round by necessity (no PR exists yet to
+          # edit): push, then `gh pr create` with the composed body. That is
+          # safe — a push to a branch with no PR emits no pull_request event, and
+          # the `opened` event that follows already carries this body.
+          #
+          # Failure between the two is benign and LOUD: `set -e` fails the step,
+          # the PR description then describes pins the branch does not yet hold,
+          # and the next scheduled run reconciles both. That is the safe
+          # direction — a description ahead of its branch is visibly wrong, a
+          # gate green earned by a stale judgment is not.
+          if [ -n "$existing" ] && [ "$pushed" = true ]; then
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file /tmp/pr-body.md >/dev/null
+          fi
+
+          if [ "$pushed" = true ]; then
             git push --force \
               "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
               "HEAD:refs/heads/auto/dev-lock-bump"
           fi
 
-          {
-            echo "Automated rolling dev-lock bump, opened by \`.github/workflows/dev-lock-auto-bump.yml\` — see \`docs/internals/contracts/extension-clone-pinning.md\` for the recipe and the lock partition."
-            echo ""
-            echo "The full bump recipe in one commit: \`cinatra-dev-extensions.lock.json\` + \`pnpm-lock.yaml\` + regenerated \`src/lib/generated\` maps. This PR's own CI run is the integration test for the new pins. The branch is force-updated from the current main head on each scheduled run while the PR is open — review and merge it like any deliberate bump PR."
-            echo ""
-            echo "## Pin changes"
-            echo ""
-            cat /tmp/pin-changes.md
-          } > /tmp/pr-body.md
-
-          existing="$(find_rolling_pr)"
           if [ -z "$existing" ]; then
             url="$(gh pr create --repo "$GITHUB_REPOSITORY" \
               --head auto/dev-lock-bump --base main \
               --title "$title" --body-file /tmp/pr-body.md)"
             echo "Opened bump PR: $url" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$pushed" = true ]; then
-            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
-              --title "$title" --body-file /tmp/pr-body.md >/dev/null
             echo "Refreshed bump PR #$existing" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "Bump PR #$existing already current." | tee -a "$GITHUB_STEP_SUMMARY"

@@ -96,11 +96,52 @@ pnpm install
 node scripts/extensions/generate-extension-manifest.mjs
 node scripts/extensions/generate-extension-manifest.mjs --check
 
-# 5. commit lock(s) + pnpm-lock.yaml + any regenerated maps together; open the PR
+# 5. the committed authz inventory must match the pinned tree too: the builder
+#    statically scans packages/, extensions/ and src/ for tool registrations, so
+#    step 2 can move a registered-tool surface out from under it (cinatra#2986).
+#    Left stale, `RBAC authz unit tests` fails on the bump PR.
+pnpm authz:inventory
+pnpm authz:inventory:check
+
+# 6. commit lock(s) + pnpm-lock.yaml + any regenerated maps + the authz
+#    inventory together; open the PR
 ```
 
 The bump PR's own CI run *is* the integration test for the new pins: any
 breakage lands on the bump PR, not on `main` and not on unrelated lane PRs.
+
+### The skills acknowledgement on a bump PR
+
+`skills-drift-gate` reads the PR DESCRIPTION for a `Skills-*` acknowledgement
+whenever the diff touches a surface a pinned `SKILL.md` declares it watches — a
+re-pinned package the skill names under `cinatra-watches: packages:` is exactly
+such a surface. That judgment is a person's to make, on any bump PR, manual or
+automated: whether the skills that watch a re-pinned package are still correct
+at the new pin.
+
+On the ROLLING auto-bump PR the automation carries that judgment forward but
+never makes it. `scripts/ci/skills-drift-watched-packages.mjs` derives the
+skill-linked pin set from the gate's own data (the `skills_repos` pins in
+`.github/workflows/skills-drift-gate.yml` and the `cinatra-watches` blocks at
+those pins), and `scripts/ci/dev-lock-bump-pr-body.mjs` composes the body:
+a `<!-- cinatra:skills-ack v1 fingerprint=… -->` block a person wrote is carried
+verbatim across force-refreshes while that fingerprint is unchanged, and is
+dropped the moment it moves. The fingerprint hashes the skill-linked package pins
+AND the gate's pinned skills universe (its repo pins plus every declared watch
+surface), so both a re-pin of a covered package and a re-pin of the skills
+themselves end the carry. With no valid block the body says a person must add
+one, and the PR stays red on `skills-drift-gate` — truthfully. The automation
+never writes, completes, or rewords an acknowledgement.
+
+One residual, recorded rather than papered over: the gate's acknowledgement forms
+are PR-wide, so a carried block clears every finding on the refresh that carried
+it. A bump of a package NO skill watches can still put a watched
+`primitives:`/`routes:`/`paths:` surface into the regenerated maps or inventory
+and produce a finding the carried judgment never considered. Keying the carry on
+the gate's whole finding set would mean keying it on the entire diff, which
+changes on every refresh — nothing would ever carry, and the carry-forward the
+ruling asks for would be gone. Review a carried block like any other recorded
+judgment.
 
 ## Failure modes
 
