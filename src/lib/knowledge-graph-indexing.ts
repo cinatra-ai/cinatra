@@ -225,9 +225,33 @@ function readStoredAnthropicKey(): string | null {
 export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution {
   let storedReadError: string | null = null;
   let bound: BoundExtractionProvider = "unbound";
+  // Did we actually learn the binding, or merely fail to ask? The two must not
+  // look alike to the environment path below: "no vendor bound" may use the
+  // legacy key, "could not tell" may not.
+  //
+  // TRUE when the binding read threw but the database ANSWERED an independent
+  // probe — so the install is initialized and the binding is genuinely unknown,
+  // rather than absent because there is no database yet.
+  let bindingUnknown = false;
 
   try {
     bound = readBoundExtractionProvider();
+  } catch {
+    // Which failure is this? A first bring-up has no database at all, and the
+    // legacy env path exists precisely to serve it. A reachable database that
+    // would not answer this question is a different animal: the operator may
+    // well have bound Anthropic, and we simply cannot see it. Probe a DIFFERENT
+    // row to tell them apart — the answer decides whether the env key below is
+    // a reasonable default or a guess about someone else's data.
+    try {
+      readRawOpenAIConnectionRow();
+      bindingUnknown = true;
+    } catch {
+      // No database. `unbound` stands, and the legacy path stays open.
+    }
+  }
+
+  try {
 
     // A BOUND vendor is BINDING — the indexer never silently substitutes the
     // other one, from ANY source, including the legacy environment path below.
@@ -300,6 +324,9 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
   } catch (err) {
     // Error CLASS only — a decrypt/DB error must never carry key material.
     storedReadError = err instanceof Error ? err.constructor.name : "unknown error";
+    // A throw from `storedKeyPresentButUnreadable`'s own catch cannot reach here,
+    // so anything landing here means a read genuinely failed. Whether the
+    // DATABASE is reachable was already decided by the binding read above.
   }
 
   // THE LEGACY ENV PATH IS BOUND TOO. `OPENAI_API_KEY` is, by its name, an
@@ -309,7 +336,16 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
   // It stays available exactly where it was always meant to be: an install with
   // no vendor bound (a first bring-up, before any database exists), or one
   // already bound to OpenAI.
-  const fromEnv = bound === "anthropic" ? null : trimmed(process.env.OPENAI_API_KEY);
+  //
+  // AND IT DOES NOT FAIL OPEN. If the binding read THREW, "unbound" is not a
+  // fact, it is the absence of one — so an Anthropic install whose metadata read
+  // flaked must not silently fall through to an OpenAI key. The two failure
+  // shapes are told apart by whether the database answered at all: no database
+  // is the first-bring-up signature the legacy path exists to serve, while a
+  // reachable database that would not answer this question means the binding is
+  // genuinely UNKNOWN, and an unknown binding is not a licence to guess.
+  const envRefused = bound === "anthropic" || bindingUnknown;
+  const fromEnv = envRefused ? null : trimmed(process.env.OPENAI_API_KEY);
   if (fromEnv) {
     return {
       key: fromEnv,
@@ -338,7 +374,11 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
         (envIgnoredForAnthropic
           ? ", and OPENAI_API_KEY is set but NOT substituted for the selected vendor"
           : " and OPENAI_API_KEY is unset")
-      : bound === "anthropic" || bound === "openai"
+      : bindingUnknown
+        ? "the configured extraction provider could not be determined, so no key was " +
+          "resolved. OPENAI_API_KEY is deliberately NOT used as a guess — extraction " +
+          "sends row content, so it runs only on a vendor this install actually names."
+        : bound === "anthropic" || bound === "openai"
         ? `the selected extraction provider (${bound}) has no key configured in the app` +
           (envIgnoredForAnthropic
             ? ", and OPENAI_API_KEY is set but belongs to the OTHER vendor"

@@ -52,6 +52,13 @@ beforeEach(() => {
   __resetKnowledgeGraphIndexingCacheForTests();
   readUnsealedOpenAIConnectionRow.mockReset().mockReturnValue(null);
   readRawOpenAIConnectionRow.mockReset().mockReturnValue(null);
+  // Reset this one too: the read-failure tests below install a THROWING
+  // implementation, and without a reset it would leak into every later test.
+  readMetadataValueInternal
+    .mockReset()
+    .mockImplementation((key: string, fallback: unknown) =>
+      metadata.has(key) ? metadata.get(key) : fallback,
+    );
   metadata.clear();
   delete process.env.OPENAI_API_KEY;
 });
@@ -164,6 +171,40 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.provider).toBeNull();
     expect(resolved.key).toBeNull();
     expect(resolved.reason).toContain("belongs to the OTHER vendor");
+  });
+
+  it("refuses the legacy env key when the binding could not be DETERMINED", () => {
+    // A reachable database that will not answer "which vendor?" leaves the
+    // binding UNKNOWN — which is not the same as unbound. Guessing OpenAI here
+    // is precisely how an Anthropic install would leak row content on a
+    // transient read error, so the resolver fails closed instead.
+    readMetadataValueInternal.mockImplementationOnce(() => {
+      throw new Error("metadata read flaked");
+    });
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.reason).toContain("could not be determined");
+  });
+
+  it("but a first bring-up with NO DATABASE still reaches the legacy env path", () => {
+    // Both reads throw because there is nothing to read yet. That is the case
+    // the legacy path was built for, and it must keep working — otherwise a
+    // fresh checkout cannot bring the indexer up at all.
+    readMetadataValueInternal.mockImplementation(() => {
+      throw new Error("no database yet");
+    });
+    readRawOpenAIConnectionRow.mockImplementation(() => {
+      throw new Error("no database yet");
+    });
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(ENV_KEY);
+    expect(resolved.source).toBe("environment");
   });
 
   it("still honours the legacy env path when NOTHING is bound", () => {
