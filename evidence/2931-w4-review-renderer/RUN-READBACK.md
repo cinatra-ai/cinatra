@@ -1,88 +1,130 @@
 # The rows behind the pictures — cinatra#2931 (W4), 2026-08-26
 
 Read back from the instance's own database with `SELECT`s after the pictures were
-taken. Values only; nothing here was written by hand.
+taken. Values only; **nothing here was written by hand** — the only direct SQL
+this round issued was these reads.
 
-## The runs
+## The run
 
 ```
 cinatra.agent_runs
- id                                    template_id                           status     created_at                     completed_at
- 06474965-644f-4ffa-9c6a-c6c1ebde492b  3ac23e05-c031-43a8-8596-e502ea21bdd2  completed  2026-08-26 07:05:52.300826+00  2026-08-26 07:22:02.333+00
- f98093d7-c16d-4f8f-aeea-244ddbc34c04  3ac23e05-c031-43a8-8596-e502ea21bdd2  completed  2026-08-26 07:42:38.934840+00  2026-08-26 07:43:14.199+00
- run_by = 2660f48b-6a11-423a-afdd-a148139bf86d   org_id = 5063c707-54c8-436b-8519-2d30d5765ca8
+ id            55c141ee-42b0-4ccb-b3ce-98568a8293b9
+ template_id   3ac23e05-c031-43a8-8596-e502ea21bdd2
+ status        completed
+ created_at    2026-08-26 11:01:21.652782+00
+ completed_at  2026-08-26 11:05:46.591+00
+ run_by        2660f48b-6a11-423a-afdd-a148139bf86d
+ org_id        5063c707-54c8-436b-8519-2d30d5765ca8
 ```
 
-Both runs were created by the app's own dispatch from a turn typed into the chat.
-Their setup, schedule and context steps were answered through the app's own
-controls in the browser.
+Created by the app's own dispatch from **one** turn typed into the chat (no
+`@`-mention). Its setup and schedule steps were answered through the app's own
+controls in the browser, both before the run began working.
 
-## The artifacts
+## The artifact it produced
 
 ```
 cinatra.objects
- id                                    type                                 owner_level   created_at
- 4c0cada5-04e4-4d55-a7d5-9df172d5da77  @cinatra-ai/blog-post-artifact:post  organization  2026-08-26 07:22:02.026571+00
- 1b5b641c-fe39-49cf-9b3f-52fe55c14c7d  @cinatra-ai/blog-post-artifact:post  organization  2026-08-26 07:43:14.107187+00
+ id           ac090f07-8c76-46ad-9d07-8612216c6ce7
+ type         @cinatra-ai/blog-post-artifact:post
+ owner_level  organization
+ created_at   2026-08-26 11:05:46.401039+00
 
 cinatra.representation
- id (revision)                         artifact_id                           revision  form  declared_mime   size_bytes  created_by_run_id
- 34d8be8d-09f2-45ff-ad2e-bccf7237a130  4c0cada5-04e4-4d55-a7d5-9df172d5da77  1         file  text/markdown   5789        06474965-644f-4ffa-9c6a-c6c1ebde492b
- 5681691d-be0c-4323-a1ee-655a3b72429b  1b5b641c-fe39-49cf-9b3f-52fe55c14c7d  1         file  text/markdown   3666        f98093d7-c16d-4f8f-aeea-244ddbc34c04
+ id (revision)      8c011e7e-903e-446e-84df-b415d8b7a194
+ artifact_id        ac090f07-8c76-46ad-9d07-8612216c6ce7
+ revision           1
+ form               file
+ created_by_run_id  55c141ee-42b0-4ccb-b3ce-98568a8293b9
+ created_at         2026-08-26 11:05:46.401039+00
+
+cinatra.resource   (the blob the representation points at)
+ kind         blob
+ mime         text/markdown
+ size_bytes   19799
 
 cinatra.artifact_materializations
- run_id 06474965-…  extension @cinatra-ai/blog-post-artifact  phase finalized  2026-08-26 07:22:01.153063+00
+ run_id 55c141ee-…  extension @cinatra-ai/blog-post-artifact  phase finalized  2026-08-26 11:05:45.582265+00
 ```
 
-`declared_mime = text/markdown` is what makes this the acceptance's *markdown
-draft*, and what the card's text rung resolves on.
+`mime = text/markdown` is what makes this the acceptance's *markdown draft*, and
+what the card's text rung resolves on. Unlike the previous round's producer, this
+one wrote **prose** into the representation, so the rendered pane holds the
+article rather than a JSON envelope.
 
-## The review gates — and the timing defect they record
+## The review gate — and the minting order it still records
 
 ```
 cinatra.artifact_review_gates
- id                                    run_id      status    disposition  created_at                     resolved_at
- 28ebc08b-45a2-4210-818e-0f01a6d7e9ef  06474965-…  resolved  approve      2026-08-26 07:22:10.830417+00  2026-08-26 07:58:20.84878+00
- 08986b6f-efce-4e4c-bf4d-cdd3d8cb89d5  f98093d7-…  pending                2026-08-26 07:43:19.182733+00
- pinned_targets[0] of 28ebc08b… = {"artifactId":"4c0cada5-…","representationRevisionId":"34d8be8d-…"}
+ id              07e89419-6da7-412b-9b8f-63a6e9da5d1a
+ run_id          55c141ee-42b0-4ccb-b3ce-98568a8293b9
+ status          resolved
+ disposition     approve
+ created_at      2026-08-26 11:06:11.412469+00
+ resolved_at     2026-08-26 11:14:31.552523+00
+ review_task_id  lifecycle-review:bb5da60c281bebd276728f58c80a2cdd786cd43f5954fb1954cb55128addca4c
+ pinned_targets[0] = {"artifactId":"ac090f07-…","representationRevisionId":"8c011e7e-…"}
 ```
 
-**Each gate is minted after its run has already terminated** —
-`07:22:02.333` → `07:22:10.830` (8.5 s) and `07:43:14.199` → `07:43:19.183`
-(5.0 s). That is why no run parks at a review moment and why the conversation's
-slot flips from the progress card to `Run complete` rather than to the review
-card. Graded as W0's DEVIATION in `README.md`.
+**The gate is minted after the run has terminated** — `11:05:46.591` →
+`11:06:11.412`, **24.8 s**. That ordering is unchanged and is not this slice's to
+fix. What the merged head changes is what the reader sees during those 24.8 s:
+the slot holds the placeholder, and then becomes the review.
+
+## The swap, from the pages themselves
+
+A `MutationObserver` on `data-run-review-slot`, one per page, neither page
+reloaded after the turn was typed:
+
+```
+chat page      null → working 11:05:47.173Z → review 11:06:19.399Z → card mounted 11:06:20.770Z
+run page       null → working 11:05:47.174Z → review 11:06:19.409Z → card mounted 11:06:22.273Z
+```
+
+* placeholder held for **32.2 s**, spanning the run's termination and the gate's
+  minting;
+* the slot flipped **8.0 s** after the gate existed, **32.8 s** after the run
+  ended;
+* **no third reading** appears between `working` and `review` — a completion
+  notice removes the attribute entirely, so it would have been recorded.
+
+Turns typed into the conversation: **1**, at `11:01:02.977Z`. Presses on the
+run's own gates: 4 (`11:01:27.355`, `11:01:54.028` and `11:02:37.900` on the
+setup card, `11:02:11.250` on the run page's schedule step) — all before the
+working window, none after. The pages' own slot reader issued **295** GETs to
+`/api/agents/runs/<runId>` across the session: that is the sidecar looking, not
+the reader asking.
 
 ## The decision
 
 ```
 cinatra.artifact_review_audit
- gate_id                     28ebc08b-45a2-4210-818e-0f01a6d7e9ef
- run_id                      06474965-644f-4ffa-9c6a-c6c1ebde492b
- review_task_id              lifecycle-review:657226db9df0c8fd3517292eb3cae5fdd6eb527d8b1c5d0d8c223785c36ed031
- artifact_id                 4c0cada5-04e4-4d55-a7d5-9df172d5da77
- representation_revision_id  34d8be8d-09f2-45ff-ad2e-bccf7237a130
+ gate_id                     07e89419-6da7-412b-9b8f-63a6e9da5d1a
+ run_id                      55c141ee-42b0-4ccb-b3ce-98568a8293b9
+ review_task_id              lifecycle-review:bb5da60c281bebd276728f58c80a2cdd786cd43f5954fb1954cb55128addca4c
+ artifact_id                 ac090f07-8c76-46ad-9d07-8612216c6ce7
+ representation_revision_id  8c011e7e-903e-446e-84df-b415d8b7a194
  disposition                 approve
  renderer_kind               first-party
  renderer_package            (null)
  renderer_digest             (null)
- created_at                  2026-08-26 07:58:20.84878+00
+ created_at                  2026-08-26 11:14:31.552523+00
 ```
 
-One audit row, written by the real Approve press. `renderer_kind = first-party`
-is the acceptance's *recorded as rendered*, and it only commits because
-`core__0097` widened the column's CHECK.
+One audit row, written by the real Approve press at `11:14:30.782Z`.
+`renderer_kind = first-party` is the acceptance's *recorded as rendered*, and it
+only commits because `core__0097` widened the column's CHECK.
 
 ## The usage ledger — the model was real
 
 ```
-cinatra.usage_events  (created_at > 2026-08-26 07:00Z)
+cinatra.usage_events  (created_at > 2026-08-26 10:55Z)
  provider  model               calls  first_at                       last_at
- openai    gpt-5.5-2026-04-23  22     2026-08-26 07:21:59.999096+00  2026-08-26 07:44:06.712852+00
- openai    gpt-5.5             4      2026-08-26 07:06:07.324464+00  2026-08-26 07:49:52.550769+00
+ openai    gpt-5.5-2026-04-23  11     2026-08-26 11:05:44.686462+00  2026-08-26 11:06:59.093986+00
+ openai    gpt-5.5             2      2026-08-26 11:01:42.251254+00  2026-08-26 11:11:45.644760+00
 ```
 
-`CINATRA_TEST_LLM_PROVIDER` was never set on this instance, and the instance
+`CINATRA_TEST_LLM_PROVIDER` was never set on this instance, and the lane
 environment carries no provider key: the connection is sealed in the database,
 configured through the app's own provider form.
 
@@ -91,10 +133,10 @@ configured through the app's own provider form.
 Recorded by the driver from the browser, present/absent only — never by value.
 
 ```
- label              method  path                            cookie   x-cinatra-widget-user-token  x-cinatra-widget-origin
- island-document    GET     /lifecycle/review-island        absent   absent                       (none)
- lifecycle-resolve  POST    /api/lifecycle-views/resolve    absent   present (cwu_)               http://127.0.0.1:8088
- counts: island-document ×2, lifecycle-resolve ×4
+ label              method  path                          cookie   x-cinatra-widget-user-token  x-cinatra-widget-origin
+ island-document    GET     /lifecycle/review-island      absent   absent                       (none)
+ lifecycle-resolve  POST    /api/lifecycle-views/resolve  absent   present (cwu_)               http://127.0.0.1:8088
+ counts: island-document ×6, lifecycle-resolve ×12
 ```
 
 The browser's cookie jar at the moment the pictures were taken held exactly one
@@ -105,20 +147,10 @@ because the top-level document is on `127.0.0.1:8088` and that is a different
 site. The island is authenticated by the server-minted credential in its own
 address.
 
-The widget instance row and its connect-site were written by the two shipped
-writers (`writeConnectorConfigToDatabase`,
-`upsertConnectSiteAndMintCredential`), and `deriveFrameBinding` was asserted to
-close before anything was driven:
-
-```
-deriveFrameBinding -> ok: true, client wordpress, instanceId w2931-local-site,
-                      agentSlug wordpress-content-editor, siteOrigin http://127.0.0.1:8088
-```
-
 ## The floor gate
 
 ```
-$ pnpm gate:artifact-review-floor        # exit 0
+$ pnpm gate:artifact-review-floor
 [artifact-review-floor] 2 of 28 artifact types would land on the metadata floor under review (25 packs scanned; defensive states excluded).
     floor: @cinatra-ai/dashboard-artifact:dashboard [@cinatra-ai/dashboard-artifact] form application/vnd.cinatra.dashboard+json
     floor: @cinatra-ai/drupal:node [@cinatra-ai/drupal-artifacts] form text/html

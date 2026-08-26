@@ -1,9 +1,17 @@
 {
-  "head": "f7e9565975d6c80fe160a3ee0605b7d4d435829a",
-  "run": "06474965-644f-4ffa-9c6a-c6c1ebde492b",
-  "artifact": "4c0cada5-04e4-4d55-a7d5-9df172d5da77",
-  "representationRevision": "34d8be8d-09f2-45ff-ad2e-bccf7237a130",
-  "gate": "28ebc08b-45a2-4210-818e-0f01a6d7e9ef",
+  "head": "29c5a866c028557e3a03fd846f8e4143a0fd4f0e",
+  "run": "55c141ee-42b0-4ccb-b3ce-98568a8293b9",
+  "artifact": "ac090f07-8c76-46ad-9d07-8612216c6ce7",
+  "representationRevision": "8c011e7e-903e-446e-84df-b415d8b7a194",
+  "gate": "07e89419-6da7-412b-9b8f-63a6e9da5d1a",
+  "runCreatedAt": "2026-08-26T11:01:21.652782Z",
+  "runCompletedAt": "2026-08-26T11:05:46.591Z",
+  "gateCreatedAt": "2026-08-26T11:06:11.412469Z",
+  "gateResolvedAt": "2026-08-26T11:14:31.552523Z",
+  "slotWorkingObservedAt": "2026-08-26T11:05:47.173Z",
+  "slotReviewObservedAt": "2026-08-26T11:06:19.399Z",
+  "cardMountedObservedAt": "2026-08-26T11:06:20.770Z",
+  "turnsTyped": 1,
   "records": [
     {
       "cell": "W0__placeholder__chat_thread__working__light",
@@ -21,12 +29,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "ea71caae8eca86c01f8c8e1e93cc328b001f5525f29a975a1238991751ca9c1c",
+      "sha256": "48e5ba5c867bb90e858fa2a8ebd20a1f729ba8bdc645dff3b68191619fec967c",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The slot the review card will fill, while a run is working. Graded DEVIATION against app-lifecycle-cards \u00a7II."
+      "note": "The slot the review card will fill, while the run works: the card frame and a spinning icon over the empty review screen. Verified data-run-review-slot=\"working\", 1 placeholder root, 0 card roots, 0 decision controls, immediately before and immediately after the shutter."
     },
     {
       "cell": "W0__placeholder__chat_thread__working__dark",
@@ -44,12 +52,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "f967f0a0a4b0cee0e5bdf7a72ec9139d63eee7b7f9c3891b489626aa4d66bde4",
+      "sha256": "9044de1524ee13cca67965e3627ce89bd8fe467db06fa78ab6c4ee4a5b42f3f5",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The slot the review card will fill, while a run is working. Graded DEVIATION against app-lifecycle-cards \u00a7II."
+      "note": "The slot the review card will fill, while the run works: the card frame and a spinning icon over the empty review screen. Verified data-run-review-slot=\"working\", 1 placeholder root, 0 card roots, 0 decision controls, immediately before and immediately after the shutter."
     },
     {
       "cell": "W1__review-card__chat_thread__pending__light",
@@ -67,12 +75,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "73075469f2e453ecc417f81eb0d9fd6278c0daf2c7d550b7ea0c431327f29c9d",
+      "sha256": "d9e750a0e29f3e5bcfb77c9a00d1b107545b9000a147b94b75148aafa67a9b8b",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The review card in the assistant's turn, the target rendered through the host's text rung."
+      "note": "The SAME slot after the output, swapped in place with nothing asked of the reader. Verified data-run-review-slot=\"review\", 1 card root, 1 target island rendering the draft through its text rung, Comment/Reject/Approve, one composer, no prompt window, no run-page link."
     },
     {
       "cell": "W1__review-card__chat_thread__pending__dark",
@@ -90,16 +98,62 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "e97b5dfb416a38c469665b751f47dddd95500ac09bff0bde4afeb69da944c826",
+      "sha256": "96c06c4e63bac0ecc293e29f1b1f9fd8334ee0dd3c9fcd0398e10603c7de8be5",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The review card in the assistant's turn, the target rendered through the host's text rung."
+      "note": "The SAME slot after the output, swapped in place with nothing asked of the reader. Verified data-run-review-slot=\"review\", 1 card root, 1 target island rendering the draft through its text rung, Comment/Reject/Approve, one composer, no prompt window, no run-page link."
+    },
+    {
+      "cell": "W2__placeholder__run_page__working__light",
+      "declaredHost": "run_card",
+      "declaredKind": "run_progress_placeholder",
+      "declaredState": "working",
+      "theme": "light",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W2__placeholder__run_page__working__light.png",
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "deviceScaleFactor": 2
+      },
+      "sha256": "910ffb268366d3d8608dba2ac18ecf5fb4d7219c77cc6f746d5100f39b88a5c1",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-26",
+      "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
+      "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
+      "note": "The run detail carrying the same placeholder, in the same window of the same run as W0."
+    },
+    {
+      "cell": "W2__placeholder__run_page__working__dark",
+      "declaredHost": "run_card",
+      "declaredKind": "run_progress_placeholder",
+      "declaredState": "working",
+      "theme": "dark",
+      "screenshot": "evidence/2931-w4-review-renderer/captures/W2__placeholder__run_page__working__dark.png",
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900,
+        "deviceScaleFactor": 2
+      },
+      "sha256": "71af72c27b4301801bfbc1447cadd1d54292c6157832967b6ed7f12db71b0a3d",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-26",
+      "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
+      "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
+      "note": "The run detail carrying the same placeholder, in the same window of the same run as W0."
     },
     {
       "cell": "W3__review-card__run_page__pending__light",
-      "declaredHost": "run_page",
+      "declaredHost": "run_card",
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "theme": "light",
@@ -113,16 +167,16 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "51ef37b3737568ab08f3329b6beb8cbd1143459ca300df4a718f0d4202bd8ce9",
+      "sha256": "65be1d84e8cd3b983277087aaa68a9241141354fb1f86e8d26ece04217e90b3e",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The gate opened in the run detail with its rail entry selected, per app-artifact-review \u00a7I."
+      "note": "The run detail after the output: the gate drawn in place under the rail, target rendered."
     },
     {
       "cell": "W3__review-card__run_page__pending__dark",
-      "declaredHost": "run_page",
+      "declaredHost": "run_card",
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "theme": "dark",
@@ -136,12 +190,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "b9a9e05312b482b3c14111ce9b098df96c60d6565a8dacab7acad08da95efbea",
+      "sha256": "6afa0028e4cc6b368f2cf8c45743edcedc5a0eb83c877db62714da1d0fa82b00",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The gate opened in the run detail with its rail entry selected, per app-artifact-review \u00a7I."
+      "note": "The run detail after the output: the gate drawn in place under the rail, target rendered."
     },
     {
       "cell": "W5__review-card__review_page__pending__light",
@@ -159,12 +213,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "9f2cc4633b8df9ff68db16f758f3ef87e8c32019edf7738c6f8da41c4d821634",
+      "sha256": "46a7115eaa8995a8284270c38e7dda3a82ae60602104f6f0a342ac69b8af657a",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The gate's own route for this review, rendering the run surface with the Review step selected."
+      "note": "The review route: the same run surface with the Review step selected, RENDERED beside RAW SOURCE."
     },
     {
       "cell": "W5__review-card__review_page__pending__dark",
@@ -182,12 +236,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "ea16952e5e6b2e89e27cbaaf6ea9183de2ba5a85556e938bdd1cb7fc4e8e16b8",
+      "sha256": "b6917b81c7680c643592d3b83be1c3c98442472d95335d3fa024972ec5b616b6",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The gate's own route for this review, rendering the run surface with the Review step selected."
+      "note": "The review route: the same run surface with the Review step selected, RENDERED beside RAW SOURCE."
     },
     {
       "cell": "W7__review-card__site_widget__pending__light",
@@ -205,12 +259,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "84de5ed01af17dd3c3ac504cdc6e0bf40c89608e1d763791c459ae4be2e21dee",
+      "sha256": "72a42c2c4efde8ee26625b5040ea631ea25744a699d360893cd0e23de24b32fe",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The review card inside the embed on a genuinely cross-site third-party page; no sign-in control in the frame."
+      "note": "The same review inside a third-party application, in a frame on another site, with no sign-in control and no login prompt."
     },
     {
       "cell": "W7__review-card__site_widget__pending__dark",
@@ -228,18 +282,18 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "f13ae666a50f70f39fa17292ec24d6f96c838c5d08470efd0a6492a9a7cb9a69",
+      "sha256": "6b110280b5f93065073b3b24fbce8d292f5ea0fdcf79a7c5ada2571d44d03459",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The review card inside the embed on a genuinely cross-site third-party page; no sign-in control in the frame."
+      "note": "The same review inside a third-party application, in a frame on another site, with no sign-in control and no login prompt."
     },
     {
       "cell": "W9__review-card__review_page__decided__light",
       "declaredHost": "page_gate_region",
       "declaredKind": "artifact_review_gate",
-      "declaredState": "resolved",
+      "declaredState": "decided",
       "theme": "light",
       "screenshot": "evidence/2931-w4-review-renderer/captures/W9__review-card__review_page__decided__light.png",
       "pixels": {
@@ -251,18 +305,18 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "f7baad542433708791d2778c1fb85c55087bfbcadb9c7417be4f9312bc78bdd9",
+      "sha256": "6acbe6afc3b7e9286ef5534d1bd41167bd577457c243a72d7aeae3517a45b814",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The same gate after a real Approve press; the audit row records renderer_kind=first-party."
+      "note": "The same gate after a real Approve press: decided summary, 0 Approve / 0 Reject / 0 Comment."
     },
     {
       "cell": "W9__review-card__review_page__decided__dark",
       "declaredHost": "page_gate_region",
       "declaredKind": "artifact_review_gate",
-      "declaredState": "resolved",
+      "declaredState": "decided",
       "theme": "dark",
       "screenshot": "evidence/2931-w4-review-renderer/captures/W9__review-card__review_page__decided__dark.png",
       "pixels": {
@@ -274,12 +328,12 @@
         "height": 900,
         "deviceScaleFactor": 2
       },
-      "sha256": "25460f0451383c4e627a729cf7b3a60739900187e47c11ba59ff20cd21888ef8",
+      "sha256": "c3f0e211c872d764822654ae499ac225a1cf139bf4eefcfda04df39df97f2e2a",
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-26",
       "runtime": "live dev instance, real provider, CINATRA_TEST_LLM_PROVIDER unset",
       "gradedAgainst": "design commit 458fb7ffce6c \u2014 app-lifecycle-cards.html \u00a7II; app-artifact-review.html \u00a7I, \u00a7IV, \u00a7V, \u00a7VI",
-      "note": "The same gate after a real Approve press; the audit row records renderer_kind=first-party."
+      "note": "The same gate after a real Approve press: decided summary, 0 Approve / 0 Reject / 0 Comment."
     }
   ]
 }
