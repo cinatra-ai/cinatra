@@ -7,9 +7,17 @@ import { readRunTriggerPmState } from "@/lib/pm-integration-providers";
 import {
   readRunTriggerByRunId,
   createOrUpdateRunTrigger,
+  markTriggerFiredInDb,
   deleteRunTriggerByRunId,
   type TriggerRecord,
 } from "./trigger-store";
+// cinatra#2981 — the ONE serialization stop, save and this job share. See the
+// module header for what a claim guarantees and where the BullMQ/Redis boundary
+// puts a limit on it.
+import {
+  withTriggerClaim,
+  TriggerClaimUnavailableError,
+} from "./trigger-claim";
 import { deletePmLinkByRunId } from "./pm-link-store";
 import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
 import { markTriggerReleased } from "./trigger-gate";
@@ -185,6 +193,26 @@ export async function runAgentRunTriggerReleaseJob(
   // `queued` if it has yet to start, or terminal). Recurring ticks DO NOT
   // re-release the schedule-defining run — gates are monotonic per-run.
   if (trigger.triggerType === "recurring") {
+    // THE FIRE DECISION IS TAKEN UNDER THE CLAIM (cinatra#2981).
+    //
+    // This branch used to re-read the row HERE, immediately before the clone, to
+    // catch a **Cancel schedule** that landed while the tick worked through its
+    // pre-flight (the PM check, the archived-org read, the configuration-needs
+    // gate — all awaits). That read closed the ordinary case and said so in as
+    // many words: "a stop landing between this read and the launch below is
+    // still a tick that fires. Closing that needs a row lock or a conditional
+    // write."
+    //
+    // This is that write. The re-read now happens INSIDE the trigger claim, and
+    // the launch happens inside it too, so the two are ONE decision: a stop
+    // either commits before this tick takes the claim — and the tick reads the
+    // stamp and refuses — or it waits for the claim and commits after this
+    // tick's copy, stopping everything from there on. There is no longer an
+    // interval in which a stop commits and a copy is launched anyway.
+    //
+    // Everything the claim does not need is hoisted ABOVE it, so the section
+    // held is only the decision and the act: the source-run checks and the
+    // authority mint below take no locks and read nothing a stop can change.
     const sourceRun = runForFire;
     if (!sourceRun) {
       console.warn(
@@ -229,71 +257,216 @@ export async function runAgentRunTriggerReleaseJob(
     // the transition below). The clone shares sourceRun.orgId (non-null,
     // checked above == newRun.orgId).
     const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
-    // A RECURRING TICK IS A LAUNCH, not a release (cinatra#2928): each tick is a
-    // FRESH copy of the run, so it goes through the coordinator's launch entry
-    // like every other way of starting an agent. It stays headless — nobody is
-    // present for a schedule firing, so no moment applies and the schedule the
-    // run was given is what applies. The dispatch stays here because this branch
-    // arms the copy's own immediate trigger and opens its gate first.
-    const launched = await launchAgentRun({
-      producer: "recurring_trigger_tick",
-      frame: null,
-      authority: releaseAuthority,
-      create: {
-        kind: "pre_dispatch",
-        input: {
-          templateId: sourceRun.templateId,
-          runBy: sourceRun.runBy,
-          orgId: sourceRun.orgId,
-          inputParams: sourceRun.inputParams ?? {},
-          projectId: sourceRun.projectId,
-        },
-      },
-      dispatch: {
-        kind: "await_trigger",
-        why: "the copy is armed as immediate and its gate opened below before it is enqueued",
-      },
-    });
-    if (launched.carrier.kind !== "run") {
-      throw new Error("the recurring tick's launch answered with a carrier that is not a run");
+    try {
+      await withTriggerClaim(data.runId, async (stillLive) => {
+        // THE CLAIMED ROW DECIDES, INCLUDING ITS KIND (cinatra#2981). This
+        // tick chose the recurring branch from the row
+        // it read at the top of the job; a save can have replaced that schedule
+        // with a one-off while this tick waited for the claim, and firing a
+        // recurring COPY from a row that is now a one-off would start a run
+        // nobody's schedule asks for. A tick whose kind no longer matches is
+        // stale, and a stale tick does nothing.
+        if (
+          !stillLive ||
+          stillLive.stoppedAt ||
+          !stillLive.enabled ||
+          stillLive.triggerType !== "recurring"
+        ) {
+          console.log(
+            `[trigger-release] recurring schedule for run ${data.runId} was stopped or replaced while this tick was preparing — not firing`,
+          );
+          // AND THE ORPHAN REMOVES ITSELF. Two ways a scheduler outlives its
+          // stop: its cancel failed inside `stopRecurringTriggerForActor`
+          // (which stamps the row first and treats the cancel as best-effort),
+          // or a Save changes held the claim and installed a fresh one before
+          // the stop could take it. Either way THIS tick is the first thing to
+          // notice, so it tears the scheduler down rather than leaving it to
+          // tick forever into a skip. Best-effort and never fatal: the refusal
+          // above is the safety property, and this is only tidying.
+          if (stillLive?.stoppedAt && stillLive.jobSchedulerId) {
+            try {
+              const runtime = await ensureBackgroundJobRuntime();
+              await runtime.queue.removeJobScheduler(stillLive.jobSchedulerId);
+            } catch (err) {
+              console.warn(
+                "[trigger-release] could not unschedule the orphan of a stopped schedule for run",
+                data.runId,
+                err,
+              );
+            }
+          }
+          return;
+        }
+        // A RECURRING TICK IS A LAUNCH, not a release (cinatra#2928): each tick is a
+        // FRESH copy of the run, so it goes through the coordinator's launch entry
+        // like every other way of starting an agent. It stays headless — nobody is
+        // present for a schedule firing, so no moment applies and the schedule the
+        // run was given is what applies. The dispatch stays here because this branch
+        // arms the copy's own immediate trigger and opens its gate first.
+        const launched = await launchAgentRun({
+          producer: "recurring_trigger_tick",
+          frame: null,
+          authority: releaseAuthority,
+          create: {
+            kind: "pre_dispatch",
+            input: {
+              templateId: sourceRun.templateId,
+              runBy: sourceRun.runBy,
+              orgId: sourceRun.orgId,
+              inputParams: sourceRun.inputParams ?? {},
+              projectId: sourceRun.projectId,
+            },
+          },
+          dispatch: {
+            kind: "await_trigger",
+            why: "the copy is armed as immediate and its gate opened below before it is enqueued",
+          },
+        });
+        if (launched.carrier.kind !== "run") {
+          throw new Error("the recurring tick's launch answered with a carrier that is not a run");
+        }
+        const newRun = launched.carrier.run;
+        // Arm the new run as immediate so the gate opens at run-start.
+        // We call createOrUpdateRunTrigger directly here (we are inside the worker
+        // — no actor context). The setRunTriggerForActor service is for
+        // user-initiated changes; recurring ticks are system-initiated.
+        await createOrUpdateRunTrigger({
+          runId: newRun.id,
+          triggerType: "immediate",
+          timezone: trigger.timezone,
+          enabled: true,
+          jobSchedulerId: null,
+        });
+        await markTriggerReleased(newRun.id);
+        // …and the copy is RELEASED through advance, so a tick's two halves — the
+        // fresh run and letting it go — are the same two entries every other surface
+        // uses. The coordinator clears the moment before the run moves, so a copy
+        // cannot start while still stating one.
+        await advanceAgentRun({
+          run: newRun,
+          release: {
+            reason: "trigger_fired",
+            from: "pending_input",
+            to: "queued",
+            dispatch: { kind: "enqueue", options: { jobId: `agent-builder-${newRun.id}` } },
+          },
+          authority: releaseAuthority,
+        });
+        // THE SCHEDULE HAS NOW FIRED (cinatra#2972). Stamped AFTER the copy is
+        // launched, so the stamp means what it says: this schedule has produced at
+        // least one run. Plan (A) §7.2 as amended 2026-08-25 keys two readings to
+        // it — the scheduler stays editable for a recurring schedule that has fired
+        // once, and **Cancel schedule** is shown "only for a recurring schedule
+        // that has fired once".
+        //
+        // NOT `markTriggerReleased`. That stamp opens the schedule-defining run's
+        // OWN side-effect gate, and this branch's whole contract is that it does not
+        // ("Recurring ticks DO NOT re-release the schedule-defining run — gates are
+        // monotonic per-run", above). A separate column is what lets the card read
+        // "has fired" without the gate moving.
+        //
+        // Best-effort: the copy is already running, so a failed stamp must not
+        // poison the cron queue or double-fire the tick on a BullMQ retry. The cost
+        // of a missed stamp is a Cancel schedule control that appears one tick late.
+        try {
+          await markTriggerFiredInDb(data.runId);
+        } catch (err) {
+          // LOUD. A lost stamp leaves a schedule that HAS fired reading as one
+          // that has not, which withholds **Cancel schedule** until the next tick —
+          // a long time on a monthly or yearly schedule. Nothing downstream repairs
+          // it, so it is an error rather than a note. It is still swallowed: the
+          // copy is already running, and rethrowing would have BullMQ retry the
+          // whole tick and fire a second run.
+          console.error(
+            "[trigger-release] recurring fire stamp FAILED — the schedule fired but will read as unfired until the next tick, for run",
+            data.runId,
+            err,
+          );
+        }
+        console.log(
+          `[trigger-release] recurring tick — created new run ${newRun.id} from ${data.runId}`,
+        );
+      });
+    } catch (err) {
+      if (err instanceof TriggerClaimUnavailableError) {
+        // Somebody else is deciding about this schedule right now. SKIPPING is
+        // the safe answer for a tick: nothing is written, the scheduler stays,
+        // and the next tick asks again against whatever that writer left. A
+        // throw would have BullMQ retry the whole tick, which is the one thing
+        // a fire path must not do on an ambiguous outcome.
+        console.warn(
+          "[trigger-release] recurring tick for run",
+          data.runId,
+          "could not take the trigger claim — skipping this tick",
+        );
+        return;
+      }
+      throw err;
     }
-    const newRun = launched.carrier.run;
-    // Arm the new run as immediate so the gate opens at run-start.
-    // We call createOrUpdateRunTrigger directly here (we are inside the worker
-    // — no actor context). The setRunTriggerForActor service is for
-    // user-initiated changes; recurring ticks are system-initiated.
-    await createOrUpdateRunTrigger({
-      runId: newRun.id,
-      triggerType: "immediate",
-      timezone: trigger.timezone,
-      enabled: true,
-      jobSchedulerId: null,
-    });
-    await markTriggerReleased(newRun.id);
-    // …and the copy is RELEASED through advance, so a tick's two halves — the
-    // fresh run and letting it go — are the same two entries every other surface
-    // uses. The coordinator clears the moment before the run moves, so a copy
-    // cannot start while still stating one.
-    await advanceAgentRun({
-      run: newRun,
-      release: {
-        reason: "trigger_fired",
-        from: "pending_input",
-        to: "queued",
-        dispatch: { kind: "enqueue", options: { jobId: `agent-builder-${newRun.id}` } },
-      },
-      authority: releaseAuthority,
-    });
-    console.log(
-      `[trigger-release] recurring tick — created new run ${newRun.id} from ${data.runId}`,
-    );
     // The JobScheduler refires automatically on next cron tick.
     return;
   }
 
   // ---------- Scheduled / immediate branch ----------
   // Open the gate, transition armed → queued, enqueue execution.
-  await markTriggerReleased(data.runId);
+  //
+  // THE GATE OPENS UNDER THE CLAIM (cinatra#2981), AND THAT IS THE FIX FOR THE
+  // ONE WINDOW THAT COULD ACTUALLY FIRE A STOPPED SCHEDULE. This branch had no
+  // `stopped_at` check at all — the stop re-read lived entirely inside the
+  // recurring branch above — so a row a racing save had switched from recurring
+  // to one-off carried the stop stamp, read `enabled: true`, and was released
+  // and dispatched anyway. That is a run the person never stopped, started from
+  // a schedule they did. The claim makes the check and the release ONE decision,
+  // and it reads the SAME two columns the recurring branch reads, so "stopped"
+  // means one thing on both paths.
+  //
+  // THE DISPATCH STAYS OUTSIDE THE CLAIM, deliberately. Opening the gate IS the
+  // commit of this fire: a stop arriving after it is, by definition, after the
+  // schedule fired, and holding the claim across the armed→queued transition and
+  // the BullMQ enqueue would stretch it over a network round-trip without buying
+  // a guarantee — the claim serializes decisions, not the queue (see
+  // trigger-claim.ts on that boundary).
+  let gateOpened: boolean;
+  try {
+    gateOpened = await withTriggerClaim(data.runId, async (live) => {
+      // Same three questions the recurring branch asks of the CLAIMED row, plus
+      // the same kind check: a one-off job that was
+      // dequeued before a save turned this schedule recurring is stale, and
+      // opening the gate for it would release a run the recurring schedule
+      // never meant to release.
+      if (
+        !live ||
+        live.stoppedAt ||
+        !live.enabled ||
+        live.triggerType === "recurring"
+      ) {
+        console.log(
+          `[trigger-release] one-off schedule for run ${data.runId} reads stopped, disabled or replaced — not releasing`,
+        );
+        return false;
+      }
+      await markTriggerReleased(data.runId);
+      return true;
+    });
+  } catch (err) {
+    if (err instanceof TriggerClaimUnavailableError) {
+      // A ONE-OFF MUST NOT SWALLOW THIS (cinatra#2981). Returning
+      // normally would COMPLETE the single delayed job that is this schedule's
+      // only chance to fire, leaving the run armed forever with nothing left to
+      // release it. Rethrowing fails the attempt instead, which is what the
+      // `attempts`/`backoff` this schedule is now enqueued with are for — and
+      // if every attempt loses the claim, the job lands in the failed set where
+      // it is visible and re-armable, rather than reading as a fire that
+      // happened. Nothing was written either way.
+      console.warn(
+        "[trigger-release] one-off fire for run",
+        data.runId,
+        "could not take the trigger claim — failing this attempt so the delayed job retries",
+      );
+    }
+    throw err;
+  }
+  if (!gateOpened) return;
   console.log(`[trigger-release] released gate for run ${data.runId}`);
 
   // A vanished run row (the old CAS tolerated this as a 0-row stale) means there
@@ -528,10 +701,30 @@ async function agentRunConfigBlockForTrigger(run: {
 // we log and return "fire" so a transient local error never strands the run; the
 // reconcile loop (#318) repairs the residual state.
 // ---------------------------------------------------------------------------
+/**
+ * The trigger row's own revision stamp (cinatra#2981).
+ *
+ * Every writer of this row moves `updated_at` — the save's upserts, the stop,
+ * the released and fired stamps — so an UNCHANGED stamp is the cheapest true
+ * answer to "did anybody change this schedule while we were away?", and it
+ * needs no new column. `null` when the row is absent or carries no stamp; two
+ * unknowns compare equal, because an unknown revision on both sides is not
+ * evidence that anything changed.
+ */
+function triggerRevision(row: TriggerRecord | null): number | null {
+  return row?.updatedAt instanceof Date ? row.updatedAt.getTime() : null;
+}
+
 async function checkPmStateBeforeFire(
   trigger: TriggerRecord,
   runId: string,
 ): Promise<"fire" | "skip"> {
+  // THE REVISION THIS DECISION IS ABOUT. Captured before the remote PM read,
+  // which is the asynchronous gap a concurrent save can land in: every local
+  // mutation below is derived from THIS schedule, so applying one to a row that
+  // has since been rewritten would delete or overwrite the schedule somebody
+  // just saved. Each claim below re-reads and refuses on a moved stamp.
+  const decisionRevision = triggerRevision(trigger);
   const pm = await readRunTriggerPmState({
     runId,
     triggerType: trigger.triggerType,
@@ -560,21 +753,33 @@ async function checkPmStateBeforeFire(
         `[trigger-release] PM task for run ${runId} was DELETED upstream — tearing down local schedule + skipping`,
       );
       try {
-        // Tear down the FUTURE schedule. For recurring this removes the
-        // JobScheduler (distinct from this active tick — safe). For a scheduled
-        // ONE-SHOT we must NOT cancel here: the delayed job has ALREADY fired
-        // (it is THIS active, locked job) — `getJob(id).remove()` on an active
-        // job throws, which the catch below would turn into a spurious FIRE,
-        // defeating the delete (codex#319). The one-shot self-completes when we
-        // return "skip"; only the local rows need cleanup.
-        if (trigger.triggerType === "recurring") {
-          await cancelTriggerSchedule({
-            jobSchedulerId: trigger.jobSchedulerId,
-            triggerType: "recurring",
-          });
-        }
-        await deleteRunTriggerByRunId(runId);
-        await deletePmLinkByRunId(runId);
+        // THE LOCAL TEARDOWN TAKES THE SAME CLAIM (cinatra#2981). This
+        // handler is the FOURTH writer of the trigger row, and
+        // it runs BEFORE the fire decision — so without the claim a stop landing
+        // between its own reads and these writes was the same race again, with
+        // the same forbidden outcome. Under the claim the live row decides, and
+        // a schedule somebody has already stopped is left exactly as they left
+        // it: a stop is not a delete, and a PM-side delete must not take away
+        // the stopped schedule they are owed a reading of.
+        const tornDown = await withTriggerClaim(runId, async (live) => {
+          if (!live) return "gone" as const;
+          if (live.stoppedAt) return "stopped" as const;
+          if (triggerRevision(live) !== decisionRevision) return "changed" as const;
+          // Tear down the FUTURE schedule. For recurring this removes the
+          // JobScheduler (distinct from this active tick — safe). For a scheduled
+          // ONE-SHOT we must NOT cancel here: the delayed job has ALREADY fired
+          // (it is THIS active, locked job) — `getJob(id).remove()` on an active
+          // job throws, which the catch below would turn into a spurious FIRE,
+          // defeating the delete (#319). The one-shot self-completes when we
+          // return "skip"; only the local rows need cleanup.
+          if (live.triggerType === "recurring") {
+            await cancelTriggerSchedule({
+              jobSchedulerId: live.jobSchedulerId,
+              triggerType: "recurring",
+            });
+          }
+          await deleteRunTriggerByRunId(runId);
+          await deletePmLinkByRunId(runId);
         // Mirror the local-delete path (deleteRunTriggerForActor): a deleted
         // schedule must not leave the run stuck in `armed` with no trigger row
         // or job to ever release it (codex#319). Transition armed → stopped;
@@ -583,21 +788,31 @@ async function checkPmStateBeforeFire(
         // vanished run row (null) means nothing to stop — skip (the old CAS
         // tolerated this as a 0-row stale-swallow). cinatra#1939: mint the
         // per-fire system authority scoped to this run's org.
-        const runRow = await readAgentRunById(runId);
-        if (runRow) {
-          const teardownAuthority = mintTriggerReleaseAuthority(runRow.orgId);
-          try {
-            await transitionRunStatus(runId, "armed", "stopped", undefined, teardownAuthority);
-          } catch (err) {
-            if (
-              !(err instanceof RunTransitionError && err.code === "stale_from_status")
-            ) {
-              throw err;
+          const runRow = await readAgentRunById(runId);
+          if (runRow) {
+            const teardownAuthority = mintTriggerReleaseAuthority(runRow.orgId);
+            try {
+              await transitionRunStatus(runId, "armed", "stopped", undefined, teardownAuthority);
+            } catch (err) {
+              if (
+                !(err instanceof RunTransitionError && err.code === "stale_from_status")
+              ) {
+                throw err;
+              }
+              console.log(
+                `[trigger-release] run ${runId} not armed on PM-delete — leaving status as-is`,
+              );
             }
-            console.log(
-              `[trigger-release] run ${runId} not armed on PM-delete — leaving status as-is`,
-            );
           }
+          return "done" as const;
+        });
+        if (tornDown !== "done") {
+          console.log(
+            `[trigger-release] PM delete for run ${runId} found the local schedule already`,
+            tornDown,
+            "— leaving it as it stands and skipping this fire (a stop, a delete or a save got there first)",
+          );
+          return "skip";
         }
       } catch (err) {
         // A local teardown glitch must not strand the run — fall through to FIRE.
@@ -633,20 +848,35 @@ async function checkPmStateBeforeFire(
             );
             return "fire";
           }
-          const result = await scheduleTrigger({
-            runId,
-            triggerType: "recurring",
-            cronExpression: pm.cronExpression,
-            timezone: trigger.timezone,
+          // UNDER THE CLAIM (cinatra#2981): this
+          // upsert writes `enabled: true`, and the store deliberately leaves
+          // `stopped_at` alone — so a stop landing beside it produced exactly
+          // the stopped-AND-enabled row this issue exists to make impossible.
+          const refreshed = await withTriggerClaim(runId, async (live) => {
+            if (!live || live.stoppedAt) return false;
+            if (triggerRevision(live) !== decisionRevision) return false;
+            const result = await scheduleTrigger({
+              runId,
+              triggerType: "recurring",
+              cronExpression: pm.cronExpression!,
+              timezone: trigger.timezone,
+            });
+            await createOrUpdateRunTrigger({
+              runId,
+              triggerType: "recurring",
+              cronExpression: pm.cronExpression!,
+              timezone: trigger.timezone,
+              enabled: true,
+              jobSchedulerId: result.jobSchedulerId,
+            });
+            return true;
           });
-          await createOrUpdateRunTrigger({
-            runId,
-            triggerType: "recurring",
-            cronExpression: pm.cronExpression,
-            timezone: trigger.timezone,
-            enabled: true,
-            jobSchedulerId: result.jobSchedulerId,
-          });
+          if (!refreshed) {
+            console.log(
+              `[trigger-release] PM rescheduled recurring run ${runId}, but the local schedule was stopped, removed or changed meanwhile — leaving it as it stands and skipping this tick`,
+            );
+            return "skip";
+          }
           console.log(
             `[trigger-release] PM rescheduled recurring run ${runId} to cron "${pm.cronExpression}" — refreshed + skipping this tick`,
           );
@@ -684,18 +914,30 @@ async function checkPmStateBeforeFire(
         // the corrected time, and the reconcile loop (#318) re-arms the delayed
         // job once this one-shot has completed and its id is free. This honors
         // the reschedule (never fires the OLD tick) without any id hazard.
-        await createOrUpdateRunTrigger({
-          runId,
-          triggerType: "scheduled",
-          scheduledAt: new Date(newAtMs),
-          timezone: trigger.timezone,
-          enabled: true,
-          // Keep the prior jobSchedulerId untouched; the in-flight one-shot is
-          // completing and #318 owns the deterministic re-arm. Clear releasedAt
-          // so the re-armed instant can open the gate.
-          jobSchedulerId: trigger.jobSchedulerId,
-          releasedAt: null,
+        // UNDER THE CLAIM, for the same reason as the recurring refresh above.
+        const persisted = await withTriggerClaim(runId, async (live) => {
+          if (!live || live.stoppedAt) return false;
+          if (triggerRevision(live) !== decisionRevision) return false;
+          await createOrUpdateRunTrigger({
+            runId,
+            triggerType: "scheduled",
+            scheduledAt: new Date(newAtMs),
+            timezone: trigger.timezone,
+            enabled: true,
+            // Keep the prior jobSchedulerId untouched; the in-flight one-shot is
+            // completing and #318 owns the deterministic re-arm. Clear releasedAt
+            // so the re-armed instant can open the gate.
+            jobSchedulerId: live.jobSchedulerId,
+            releasedAt: null,
+          });
+          return true;
         });
+        if (!persisted) {
+          console.log(
+            `[trigger-release] PM rescheduled scheduled run ${runId}, but the local schedule was stopped, removed or changed meanwhile — leaving it as it stands and skipping this tick`,
+          );
+          return "skip";
+        }
         console.log(
           `[trigger-release] PM rescheduled scheduled run ${runId} to ${pm.scheduledAt} — persisted new instant + skipping this tick (reconcile #318 re-arms the delayed job)`,
         );

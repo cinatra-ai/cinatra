@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
-import { deleteRunTrigger, releaseTriggerNow } from "./run-actions";
+import { deleteRunTrigger } from "./run-actions";
 import type { GatedStep } from "./trigger-infer-side-effects";
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,6 @@ export type TriggerTabClientProps = {
   agentId: string;
   runId: string;
   templateId: string;
-  isAdmin: boolean;
   trigger: {
     triggerType: "scheduled" | "recurring";
     scheduledAt: string | null; // ISO
@@ -267,9 +266,11 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
           </AlertDialogContent>
         </AlertDialog>
 
-        {props.isAdmin && !isReleased ? (
-          <ReleaseNowButton runId={props.runId} />
-        ) : null}
+        {/* THERE IS NO RUN NOW (cinatra#2972). Plan (A) §7.2 as amended
+            2026-08-25: the schedule step's "one control is **Cancel
+            schedule** … there is no Run now." The administrator override that
+            stood here forced a schedule's gate open early; it is withdrawn from
+            every surface, and `isAdmin` is now read by nothing on this tab. */}
       </div>
 
       {/* Always-visible bottom overlay — no toggle.
@@ -283,51 +284,5 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
         onSubmit={handlePromptSubmit}
       />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ReleaseNowButton — admin-only override
-// ---------------------------------------------------------------------------
-
-function ReleaseNowButton({ runId }: { runId: string }) {
-  const router = useRouter();
-  const [isReleasing, startReleaseTransition] = useTransition();
-
-  const onRelease = () => {
-    startReleaseTransition(async () => {
-      const result = await releaseTriggerNow({ runId });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
-      router.refresh();
-    });
-  };
-
-  return (
-    <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button variant="secondary" disabled={isReleasing}>
-            {isReleasing ? "Releasing…" : "Release now"}
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Release trigger now?</AlertDialogTitle>
-            <AlertDialogDescription>
-              All side-effect steps will become eligible immediately,
-              including any irreversible sends or publishes. This cannot be
-              undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={onRelease}>
-              Release now
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-    </AlertDialog>
   );
 }

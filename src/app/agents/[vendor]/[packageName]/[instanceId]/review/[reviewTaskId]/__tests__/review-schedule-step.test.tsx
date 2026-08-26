@@ -60,7 +60,6 @@ const SETTLED = {
   arming: false,
   canSave: true,
   canCancel: true,
-  canRelease: false,
 };
 
 function mockResolve() {

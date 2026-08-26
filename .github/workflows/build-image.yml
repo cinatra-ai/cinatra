@@ -3031,6 +3031,301 @@ jobs:
           fi
           echo "RBAC e2e passed"
 
+  chat-hitl-held-turn-e2e:
+    name: Chat-HITL held-turn dev-runtime e2e
+    needs: detect
+    if: ${{ always() }}
+    # Same opt-in larger-runner lever the sibling e2e jobs use. Unset keeps
+    # `ubuntu-latest`. This job runs the DEV runtime rather than a production
+    # build, so it never pays `pnpm build`'s memory peak — but Turbopack compiles
+    # each route cold on first hit, which is why the budgets below are generous.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # The flow drives two full held turns. The FIRST `POST /api/chat` compiles the
+    # chat route graph cold before the pre-router dispatches at all — minutes on a
+    # contended runner, with nothing in `agent_runs` while it happens. 50 minutes
+    # leaves headroom over the suite's own 40-minute globalTimeout (which bounds
+    # the whole run, webServer boot included) and the 45-minute shell timeout below.
+    timeout-minutes: 50
+    services:
+      # Conditional images, the required-check idiom this workflow already uses:
+      # a docs-only run must reach its green stub without provisioning sidecars.
+      postgres:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # EXACTLY the environment the suite's own README names as required
+      # (`SUPABASE_DB_URL`, `REDIS_URL`, `BULLMQ_QUEUE_NAME`, `BETTER_AUTH_SECRET`,
+      # `CINATRA_ENCRYPTION_KEY`, a `BETTER_AUTH_URL` matching the port), plus the
+      # sibling e2e job's dev-instance switches. `probes.ts` REFUSES to default the
+      # first three: this suite counts runs and queue jobs and will not measure a
+      # database or a queue it does not own.
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      # A queue of this job's own, so "exactly one job names this run" is measured
+      # on a queue nothing else writes to.
+      BULLMQ_QUEUE_NAME: cinatra-chat-hitl-s9k-jobs
+      BETTER_AUTH_SECRET: chat-hitl-s9k-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3126
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3126
+      NEXT_PUBLIC_APP_URL: http://localhost:3126
+      NEXT_PUBLIC_SITE_URL: http://localhost:3126
+      # A PRESENCE placeholder, and nothing more. Generation is served by the
+      # scripted provider, which the suite's own webServer command sets
+      # (`CINATRA_TEST_LLM_PROVIDER=scripted`) rather than this job: no live key,
+      # no network, no real credential anywhere here.
+      OPENAI_API_KEY: sk-test-placeholder
+      # Sealing key for the at-rest codec the fixtures' shipped writers use.
+      # Throwaway, and secret from nobody: this database dies with the runner.
+      CINATRA_ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+      # These three are ALSO set on the webServer command by the config; they are
+      # repeated at job level because the setup project shells out to
+      # `fixtures.mts` and `account-state.ts`, which inherit the JOB's environment
+      # and not the dev server's.
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      CINATRA_E2E_SETUP_BYPASS: "true"
+      # `pnpm dev`'s launcher opens with a Docker preflight and, finding no Nango
+      # connector service, tries `docker compose up -d nango-server` before it
+      # starts Next at all — 29 seconds of the first run (07:33:59Z-07:34:28Z)
+      # spent failing at it. This suite needs no connector service: it points
+      # WayFlow at an unreachable port ON PURPOSE and the pre-router dispatch it
+      # measures touches neither. Skipping the preflight is not only faster — had
+      # Docker cooperated it would have added a whole extra container to a job
+      # whose failure below is a memory-headroom failure.
+      CINATRA_SKIP_DEV_PREFLIGHT: "1"
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting the chat-HITL held-turn e2e as a green stub (the real flow runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      # REQUIRED, not optional: the agent this flow dispatches
+      # (`@cinatra-ai/lint-policy-agent`) and the skill it assigns are materialized
+      # at boot from the companion extension repos. Without them the app does not
+      # boot at all, the recommendation scorer offers no candidate, and the run
+      # dispatches UNHELD — a red with a misleading cause.
+      - name: Clone companion extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The `cinatra` schema is owned by `ensurePostgresSchema` (first server
+        # query); Better Auth's `public.*` tables are not, and without them the
+        # instrumentation hook fails with `relation "public.user" does not exist`
+        # and the suite's sign-up has nowhere to write. The committed idempotent
+        # snapshot is used rather than the better-auth migrate CLI for the reason
+        # the sibling `e2e-rbac` job documents: the CLI bundles auth.ts's whole
+        # import graph and statically refuses the transitive `import "server-only"`.
+        run: node scripts/apply-public-schema.mjs
+
+      # ---- RUNNER HEADROOM ----
+      #
+      # This job's FIRST real run (32625788704) did not time out and did not fail
+      # a test. It ran out of the box. Boot was never the problem: the webServer
+      # answered `/api/health` 85s after the step began and Playwright printed
+      # "Running 3 tests using 1 worker" at 07:35:22Z, against a 600s webServer
+      # budget. Then, at 07:39:40Z, EVERY producer of output on the machine went
+      # quiet at once — the dev server, the perpetual system loops, the BullMQ
+      # heartbeats and Playwright — for six minutes. The one line that came back
+      # out at 07:45:39Z dates the stall precisely: a 90s `Atomics.wait` ceiling
+      # (`POSTGRES_SYNC_TIMEOUT_MS=90000`, set by the suite's own webServer
+      # command) returned "timed-out" only after ~6 minutes of wall clock, and the
+      # request holding it logged `GET /api/assistants/threads 500 in 6.0min`. A
+      # ceiling that overshoots itself four-fold is a scheduling report, not a
+      # database report. At 07:47:52Z the step was CANCELLED mid-command with
+      # every later step skipped — the uploads and even the `Post` steps — which
+      # is a reclaimed runner, not a timeout: the job's 50-minute cap and the
+      # 45-minute shell `timeout` were both still minutes away.
+      #
+      # None of that is particular to this suite, and both siblings already say
+      # so in their own comments. `e2e-rbac` above adds a swapfile because
+      # "the postgres/redis sidecars OOM/swap-thrash and the runner gets
+      # RECLAIMED mid-build". `wp-drupal-uat.yml`'s gate — the job THIS suite's
+      # config is modelled on — records the same finding in almost the same
+      # words: "when it runs out of headroom the box stops making progress
+      # ENTIRELY: the suite emits nothing further, no Playwright per-test timeout
+      # can fire (its own process is wedged), and the job is torn down with no
+      # diagnosis." This job co-hosts a Turbopack DEV server, a Playwright
+      # Chromium and the postgres/redis sidecars on one 4-vCPU / 16-GB
+      # `ubuntu-latest` and shipped with NEITHER mitigation — it had the image's
+      # stock 3G swap while `e2e-rbac`, on an identical runner in the same run,
+      # gave itself 20G more.
+      #
+      # The obvious other lever is not available from here: the `dev` script
+      # hard-sets `NODE_OPTIONS='… --max-old-space-size=8192'` itself, so job env
+      # cannot lower the dev server's heap ceiling without editing product code.
+      # Headroom is what this job can give, so it gives it — the wp-drupal-uat
+      # recipe, unchanged in intent. Nothing here touches what the flow asserts.
+      - name: Reclaim runner disk (so the swapfile below has room)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Same reclaim the UAT gate does before enlarging swap. Disk was never
+        # this job's constraint; this exists only so the 16G file below fits with
+        # room to spare.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Enlarge swap + record the memory baseline
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Turns the cliff into a slowdown the suite can still finish and REPORT
+        # THROUGH, which is the part that matters for a required gate: a slow red
+        # names a failing test, a reclaimed runner names nothing. The baseline is
+        # printed so the next investigation starts from a measurement.
+        run: |
+          set -euo pipefail
+          # ADDITIVE — a dedicated swapfile alongside whatever the image ships.
+          # Deliberately no `swapoff -a`: dropping the existing device first would
+          # leave the box with LESS headroom for the window it takes to build the
+          # new one.
+          if swapon --show=NAME --noheadings | grep -qx /mnt/cinatra-s9k-swap; then
+            sudo swapoff /mnt/cinatra-s9k-swap
+          fi
+          sudo rm -f /mnt/cinatra-s9k-swap
+          sudo fallocate -l 16G /mnt/cinatra-s9k-swap
+          sudo chmod 600 /mnt/cinatra-s9k-swap
+          sudo mkswap /mnt/cinatra-s9k-swap
+          sudo swapon /mnt/cinatra-s9k-swap
+          # Prefer reclaiming page cache over swapping; swap here is the cliff
+          # guard of last resort, not a routine tier.
+          sudo sysctl -w vm.swappiness=10
+          swapon --show
+          free -m
+          nproc
+
+      # NO PRODUCTION BUILD, AND NO SERVER STARTED HERE — that is the point of the
+      # job rather than an omission. #2824 asks for a DEV-RUNTIME proof, because
+      # that is the runtime the 2026-08-13 capture ruling labels and the runtime the
+      # hard pre-router path ships under. The suite's own `webServer` boots
+      # `pnpm dev` with the scripted provider and waits on `/api/health` (never the
+      # root, which redirects into a 404 wizard hop on a bypassed fresh instance),
+      # so there is nothing to build, start or poll in this job.
+      - name: Run the chat-HITL held-turn Playwright flow
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        id: e2e
+        env:
+          E2E_CHAT_HITL_PORT: "3126"
+          E2E_CHAT_HITL_BASE_URL: http://localhost:3126
+        # SIGTERM at 45m, SIGKILL 60s later, and the step ALWAYS exits 0 so the
+        # artifact uploads below run as ordinary steps — a job-level cancellation
+        # skips even `always()` cleanup, which is how earlier rounds lost their
+        # diagnostics. The captured code is asserted at the end.
+        #
+        # The ticker below writes one memory line every 30s into THIS STEP'S LOG
+        # rather than into a file — on purpose. The failure this job has already
+        # hit destroys the runner, and a reclaimed runner never reaches an upload
+        # step, so anything staged for an artifact is exactly the evidence that
+        # goes missing. The job log is streamed as it is written, so every line
+        # printed before the teardown survives it. It emits numbers and a clock
+        # and nothing else, and it can neither fail the step nor outlive it.
+        run: |
+          set +e
+          (
+            while true; do
+              printf '[resource] %s ' "$(date -u +%H:%M:%SZ)"
+              free -m | awk 'NR==2 {printf "mem_used=%sMi mem_avail=%sMi ", $3, $7} NR==3 {printf "swap_used=%sMi of %sMi\n", $3, $2}'
+              sleep 30
+            done
+          ) &
+          ticker=$!
+          timeout --kill-after=60 2700 pnpm test:e2e:chat-hitl-held-turn
+          code=$?
+          kill "${ticker}" 2>/dev/null
+          wait "${ticker}" 2>/dev/null
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chat-hitl-held-turn-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      # The run's OWN capture records and screenshots, from the run-scratch path the
+      # merged flow mints into (`evidence/2824-s9k/.run/`, gitignored) — never the
+      # committed reference set beside it, which is frozen and refreshed only
+      # deliberately. They are PROVISIONAL: S9g alone adopts and canonicalizes AC-15
+      # records; this job produces runtime evidence and hands it over.
+      - name: Upload provisional dev-runtime capture evidence
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chat-hitl-held-turn-provisional-captures
+          path: evidence/2824-s9k/.run
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+
+      - name: Assert the chat-HITL held-turn flow passed
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::chat-HITL held-turn e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "chat-HITL held-turn e2e passed"
+
   image:
     # The container build itself, UN-SERIALIZED from the unit tier (critical-path
     # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +
@@ -3166,7 +3461,7 @@ jobs:
           fi
           exit 0
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
       # the local docker daemon, then booted by the prod-boot e2e below. This
@@ -3249,24 +3544,31 @@ jobs:
   # "merge gate WITHOUT a branch-protection context" coupling for skills-unit /
   # a2a-unit / execution-plane-unit / package-unit-suites / hosted-mcp-wire-gate
   # (each the ONLY CI runner for its packages) — see cinatra#2226/#2316/#2439.
+  # `chat-hitl-held-turn-e2e` (cinatra#2824) is coupled from HERE on that same
+  # footing: it is the only CI runner for the deterministic dev-runtime
+  # held-turn flow, and the only job in this workflow that exercises the chat
+  # runtime's hold-and-decide path in a browser against the DEV runtime.
+  # Gating it from this fan-in rather than from `image` keeps the
+  # un-serialized image build off its critical path while still making the
+  # flow a merge gate WITHOUT adding a branch-protection context.
   # Runs on always() so a failed prerequisite produces a definitive RED, never a
   # skip GitHub would count as satisfied; docs-only/draft PRs (detect skip) skip
   # it exactly as the old `build` did.
   build:
-    needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
+    needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 5
     steps:
-      - name: Gate — image + unit tier must all have succeeded
+      - name: Gate — image + unit tier + held-turn e2e must all have succeeded
         run: |
           fail=0
-          for pair in "detect=${{ needs.detect.result }}" "image=${{ needs.image.result }}" "test=${{ needs.test.result }}" "skills-unit=${{ needs['skills-unit'].result }}" "a2a-unit=${{ needs['a2a-unit'].result }}" "execution-plane-unit=${{ needs['execution-plane-unit'].result }}" "package-unit-suites=${{ needs['package-unit-suites'].result }}" "hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}"; do
+          for pair in "detect=${{ needs.detect.result }}" "image=${{ needs.image.result }}" "test=${{ needs.test.result }}" "skills-unit=${{ needs['skills-unit'].result }}" "a2a-unit=${{ needs['a2a-unit'].result }}" "execution-plane-unit=${{ needs['execution-plane-unit'].result }}" "package-unit-suites=${{ needs['package-unit-suites'].result }}" "hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}" "chat-hitl-held-turn-e2e=${{ needs['chat-hitl-held-turn-e2e'].result }}"; do
             case "$pair" in *"=success") ;; *) echo "::error::prerequisite not green: $pair"; fail=1;; esac
           done
-          [ "$fail" = 0 ] && echo "image + unit tier all green"
+          [ "$fail" = 0 ] && echo "image + unit tier + held-turn e2e all green"
           exit "$fail"
 
   publish-nonrelease-image:
@@ -3283,7 +3585,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -3392,7 +3694,7 @@ jobs:
             echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, upgrade proof not applicable."
           fi
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         if: ${{ steps.guard.outputs.release == 'true' }}
 
       - name: Login to GHCR
@@ -3518,7 +3820,7 @@ jobs:
           echo "::notice::Release clearance confirmed for '$TAG'."
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

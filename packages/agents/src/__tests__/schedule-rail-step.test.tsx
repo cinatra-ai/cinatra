@@ -64,7 +64,6 @@ const SETTLED: TriggerScheduleProposalViewBody = {
   arming: false,
   canSave: true,
   canCancel: true,
-  canRelease: false,
 };
 
 /** The resolve answer the card parses, in the per-kind envelope (S9c). */

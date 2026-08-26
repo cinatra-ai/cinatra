@@ -69,6 +69,24 @@ const pm = vi.hoisted(() => ({
   deleteRunTriggerPmTask: vi.fn(async () => undefined),
 }));
 
+// cinatra#2981 — the trigger claim reaches Postgres for its advisory lock, and
+// this tier has no database. The pass-through preserves the CONTRACT the claim
+// gives its callers — the body decides on the row as read at claim time — while
+// the row itself keeps coming from this file's own mocked store.
+vi.mock("../trigger-claim", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../trigger-claim")>();
+  const { readRunTriggerByRunId } = await import("../trigger-store");
+  return {
+    ...actual,
+    withTriggerClaim: async (
+      runId: string,
+      body: (
+        live: Awaited<ReturnType<typeof readRunTriggerByRunId>>,
+      ) => Promise<unknown>,
+    ) => body(await readRunTriggerByRunId(runId)),
+  };
+});
+
 vi.mock("../store", () => store);
 vi.mock("../trigger-store", () => triggerStore);
 vi.mock("../trigger-schedule", () => schedule);
@@ -117,6 +135,8 @@ function armedRecurring(over: Record<string, unknown> = {}) {
     cronExpression: "0 9 * * 1-5",
     timezone: "Europe/Berlin",
     releasedAt: null,
+    lastFiredAt: null,
+    stoppedAt: null,
     jobSchedulerId: "sched-OLD",
     ...over,
   };
@@ -130,6 +150,8 @@ function armedOneOff(over: Record<string, unknown> = {}) {
     cronExpression: null,
     timezone: "Europe/Berlin",
     releasedAt: null,
+    lastFiredAt: null,
+    stoppedAt: null,
     jobSchedulerId: "sched-OLD",
     ...over,
   };
@@ -230,15 +252,45 @@ describe("the refusals, all of them before any write", () => {
     );
   });
 
-  it("REFUSES a released trigger — its held steps are already eligible", async () => {
+  // THE FIXTURE MOVED FROM RECURRING TO ONE-OFF (cinatra#2972), and that is the
+  // finding rather than a convenience: `releasedAt` is the ONE-OFF's and the
+  // IMMEDIATE's firing. A recurring tick opens the COPY's gate, never this
+  // run's, so a recurring row's stamp says nothing about whether the schedule
+  // is still live — and plan (A) §7.2 as amended 2026-08-25 requires a fired
+  // recurring schedule to stay changeable. Refusing it here would have made the
+  // server contradict the card's own `canSave`.
+  it("REFUSES a released ONE-OFF — its held steps are already eligible", async () => {
     triggerStore.readRunTriggerByRunId.mockResolvedValue(
-      armedRecurring({ releasedAt: new Date() }),
+      armedOneOff({ releasedAt: new Date() }),
     );
     const result = await updateRunTriggerScheduleForActor(owner, {
       runId: RUN_ID,
       schedule: WEEKDAYS_AT_8,
     });
     expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.released });
+    expectNoWrites();
+  });
+
+  it("ALLOWS a recurring schedule carrying a releasedAt — a tick is not its firing", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(
+      armedRecurring({ releasedAt: new Date(), lastFiredAt: new Date() }),
+    );
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("REFUSES a STOPPED schedule — Cancel schedule made the scheduler non-editable", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(
+      armedRecurring({ stoppedAt: new Date(), lastFiredAt: new Date() }),
+    );
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+    expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.stopped });
     expectNoWrites();
   });
 
@@ -326,6 +378,8 @@ describe("the replacement is atomic or it does not happen (cinatra#2788, converg
   });
 
   it("REFUSES when the trigger is RELEASED between the guard's read and the write", async () => {
+    // A ONE-OFF, since cinatra#2972: `releasedAt` on a recurring row is not its
+    // firing and no longer refuses. The RACE this pins is unchanged.
     // The race: the refusals at the top of the save read ONE snapshot, and the
     // setter re-reads later. A release that lands in that gap used to pass the
     // guard and then be overwritten by the replacement — re-arming a trigger
@@ -336,7 +390,7 @@ describe("the replacement is atomic or it does not happen (cinatra#2788, converg
       // Read 1 is the guard's snapshot: still armed, so the save proceeds.
       // Every later read — including the setter's own pre-cancel read, the one
       // the cancel and the upsert act on — sees it released meanwhile.
-      return reads === 1 ? armedRecurring() : armedRecurring({ releasedAt: new Date() });
+      return reads === 1 ? armedOneOff() : armedOneOff({ releasedAt: new Date() });
     });
 
     const result = await updateRunTriggerScheduleForActor(owner, {
@@ -344,7 +398,19 @@ describe("the replacement is atomic or it does not happen (cinatra#2788, converg
       schedule: WEEKDAYS_AT_8,
     });
 
-    expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.released });
+    // EITHER REFUSAL IS THE RIGHT ANSWER, and which one wins is not the
+    // property (cinatra#2972). The fixture moved to a one-off, and a released
+    // one-off meets TWO truthful guards on the setter's own later read — the
+    // fired-one-off refusal `setRunTriggerForActor` has carried since #2928,
+    // and the save guard's re-ask. What this test pins is that a release
+    // landing in the gap is REFUSED on a re-read rather than overwritten, and
+    // that nothing was written on the way there.
+    expect(result.ok).toBe(false);
+    expect([
+      SAVE_SCHEDULE_REFUSALS.released,
+      SAVE_SCHEDULE_REFUSALS.firedOneOff,
+      "This run's schedule has already fired, so it can't be changed. Start a new run to schedule it again.",
+    ]).toContain((result as { error: string }).error);
     // The re-ask happens BEFORE the cancel, so the released trigger is not even
     // cancelled on the way to the refusal.
     expectNoWrites();
@@ -365,5 +431,81 @@ describe("the replacement is atomic or it does not happen (cinatra#2788, converg
       triggerType: "recurring",
     });
     expect(schedule.scheduleTrigger).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2972 — A STOP LANDING MID-SAVE IS REFUSED BY THE SAME RE-ASK
+//
+// The shape that makes this necessary: the config upsert writes `enabled` back
+// to true, so a Save that got past the snapshot would re-arm a schedule the
+// person had just stopped. The stop's own stamp is what the re-ask reads, and
+// the stamp is the one thing the upsert cannot write.
+// ---------------------------------------------------------------------------
+
+describe("a stop landing between the guard's read and the write", () => {
+  it("REFUSES, and cancels nothing on the way to the refusal", async () => {
+    let reads = 0;
+    triggerStore.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1
+        ? armedRecurring({ lastFiredAt: new Date() })
+        : armedRecurring({ lastFiredAt: new Date(), stoppedAt: new Date() });
+    });
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.stopped });
+    expectNoWrites();
+    expect(reads).toBeGreaterThan(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2972 (codex round 3) — THE COMPENSATION MUST NOT DELETE A STOPPED ROW
+//
+// The interleaving: a Save gets past the re-ask, a Cancel schedule lands, and
+// then the Save's own `scheduleTrigger` fails. The cleanup that follows a failed
+// schedule DELETES the trigger row — which would take away the schedule the
+// person stopped, contradicting "it never deletes the schedule".
+// ---------------------------------------------------------------------------
+
+describe("a stop landing between the re-ask and a failed schedule install", () => {
+  it("leaves the stopped row intact instead of deleting it", async () => {
+    let reads = 0;
+    triggerStore.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      // Reads 1 and 2 are the pre-check and the setter's own pre-cancel read:
+      // still live, so the save proceeds. The stop lands after them, and the
+      // compensation's own read is what sees it.
+      return reads <= 2
+        ? armedRecurring({ lastFiredAt: new Date() })
+        : armedRecurring({ lastFiredAt: new Date(), stoppedAt: new Date() });
+    });
+    schedule.scheduleTrigger.mockRejectedValueOnce(new Error("redis is down"));
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(triggerStore.deleteRunTriggerByRunId).not.toHaveBeenCalled();
+  });
+
+  it("an ORDINARY failed schedule still cleans up — the guard is narrow", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(armedRecurring());
+    schedule.scheduleTrigger.mockRejectedValueOnce(new Error("redis is down"));
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(triggerStore.deleteRunTriggerByRunId).toHaveBeenCalledWith(RUN_ID);
   });
 });

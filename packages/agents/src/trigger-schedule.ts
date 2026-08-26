@@ -69,10 +69,26 @@ export async function scheduleTrigger(
     }
     const delay = rawDelay;
     const id = jobSchedulerIdFor(args.runId);
+    // ATTEMPTS + BACKOFF, MATCHING THE RECURRING SCHEDULER BELOW (cinatra#2981).
+    // This delayed job is a one-off schedule's ONLY
+    // chance to fire, and BullMQ's default is a single attempt — so any failure
+    // inside the release job ended the schedule silently, with the run left
+    // armed and nothing remaining to release it. The release job already
+    // reasoned as though retries existed ("A TRANSIENT ENQUEUE FAILURE IS THE
+    // JOB'S RETRY … BullMQ re-runs this job"); this is what makes that true, and
+    // it is what lets the fire path FAIL an attempt it could not serialize
+    // rather than report a fire that never happened. Retries are safe on this
+    // path: the release re-reads under the claim, the armed→queued CAS
+    // tolerates a loser, and the execution job id collapses a duplicate.
     await enqueueBackgroundJob(
       BACKGROUND_JOB_NAMES.AGENT_RUN_TRIGGER_RELEASE,
       { runId: args.runId },
-      { jobId: id, delay },
+      {
+        jobId: id,
+        delay,
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5_000 },
+      },
     );
     return { jobSchedulerId: id };
   }
