@@ -158,13 +158,43 @@ wa_info "local embedder ready: $(docker exec "$EMB" curl -fsS http://localhost:8
 # tier=keyed   : the lane-supplied OPENAI_API_KEY drives extraction; the local
 #                embedder still serves vectors, so the tier also proves the two
 #                halves can come from different places.
+# tier=anthropic: the MULTI-PROVIDER arm (cinatra#2591 deliverable 2). The server
+#                runs with llm.provider=anthropic and the local embedder floor —
+#                the shape `scripts/gen-graphiti-env.mjs` materializes for an
+#                install whose committed provider is Anthropic. It proves the
+#                claim the floor exists for: an Anthropic install BOOTS and RANKS
+#                with exactly ONE vendor, because Anthropic publishes no
+#                embeddings API and the vectors come from the local service.
+#                The openai provider block is left at its config.yaml defaults
+#                (named sentinel + no-egress URL) ON PURPOSE: CrossEncoderFactory
+#                may still construct a reranker from it, and the sentinel is what
+#                keeps that construction from raising — see the keyless tier.
+#                Extraction itself is only exercised when ANTHROPIC_API_KEY is
+#                supplied; without it this tier asserts boot + ranking, and says
+#                so rather than implying a proof it did not run.
 # ---------------------------------------------------------------------------
 start_graphiti() {
   local tier="$1"
   docker rm -fv "$GR" >/dev/null 2>&1 || true
+  # A REAL key is handed over by NAME (`-e VAR`), never as `-e VAR=value`.
+  # `-e VAR=value` puts the credential in the docker CLI's ARGV, where any local
+  # process can read it out of `ps` for the lifetime of the call; `-e VAR` tells
+  # docker to copy it from THIS shell's environment instead, so it never becomes
+  # a command-line argument. The non-secret sentinels are literals and stay
+  # inline — naming them would only obscure that they are not credentials.
   local -a key_env
+  local llm_provider="openai"
   if [ "$tier" = "keyed" ]; then
-    key_env=(-e "LLM__PROVIDERS__OPENAI__API_KEY=${OPENAI_API_KEY}" -e "OPENAI_API_KEY=${OPENAI_API_KEY}")
+    export LLM__PROVIDERS__OPENAI__API_KEY="$OPENAI_API_KEY"
+    key_env=(-e LLM__PROVIDERS__OPENAI__API_KEY -e OPENAI_API_KEY)
+  elif [ "$tier" = "anthropic" ]; then
+    llm_provider="anthropic"
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+      export LLM__PROVIDERS__ANTHROPIC__API_KEY="$ANTHROPIC_API_KEY"
+      key_env=(-e LLM__PROVIDERS__ANTHROPIC__API_KEY)
+    else
+      key_env=(-e "LLM__PROVIDERS__ANTHROPIC__API_KEY=cinatra-no-extraction-provider-configured")
+    fi
   else
     key_env=(-e "LLM__PROVIDERS__OPENAI__API_KEY=cinatra-no-extraction-provider-configured")
   fi
@@ -175,7 +205,7 @@ start_graphiti() {
     -e DATABASE__PROVIDERS__NEO4J__URI="bolt://${NEO}:7687" \
     -e DATABASE__PROVIDERS__NEO4J__USERNAME=neo4j \
     -e DATABASE__PROVIDERS__NEO4J__PASSWORD="$NEO4J_PASSWORD" \
-    -e LLM__PROVIDER=openai \
+    -e "LLM__PROVIDER=${llm_provider}" \
     "${key_env[@]}" \
     -e EMBEDDER__PROVIDER=openai \
     -e EMBEDDER__MODEL=bge-small-en-v1.5 \
@@ -223,6 +253,34 @@ GRAPHITI_URL="$GRAPHITI_URL" WORKS_AFTER_MARKER="$MARKER" WORKS_AFTER_TIER="keyl
   WORKS_AFTER_DEADLINE_MS="${WORKS_AFTER_DEADLINE_MS:-120000}" \
   wa_node --conditions=react-server --import tsx "${REPO_ROOT}/scripts/ci/works-after/rt/graphiti-roundtrip.ts" \
   || fail "graphiti tier 1 (deterministic recovery on the local embedder) failed."
+wa_group_end
+
+# ---------------------------------------------------------------------------
+# TIER 1b — ANTHROPIC PROVIDER SELECTION (cinatra#2591 deliverable 2).
+#
+# The claim under test is the one the embedder floor exists to make: an install
+# whose committed provider is Anthropic runs the substrate with exactly ONE
+# vendor. Anthropic has no embeddings API, so the vectors come from the local
+# service, and the SAME deterministic-recovery round-trip that tier 1 runs must
+# still pass with `llm.provider=anthropic`.
+#
+# This tier needs NO secret: it asserts that the server boots on the Anthropic
+# provider block and that seeding + ranking (embedder-only work) still resolve
+# rows deterministically. Anthropic EXTRACTION is only exercised when
+# ANTHROPIC_API_KEY is set, and the arm never claims otherwise.
+# ---------------------------------------------------------------------------
+wa_group_start "works-after graphiti tier 1b — anthropic provider selection on the local embedder floor"
+start_graphiti anthropic
+MARKER="WorksAfterMarker$(wa_throwaway_hexkey 6)"
+GRAPHITI_URL="$GRAPHITI_URL" WORKS_AFTER_MARKER="$MARKER" WORKS_AFTER_TIER="keyless" \
+  WORKS_AFTER_DEADLINE_MS="${WORKS_AFTER_DEADLINE_MS:-120000}" \
+  wa_node --conditions=react-server --import tsx "${REPO_ROOT}/scripts/ci/works-after/rt/graphiti-roundtrip.ts" \
+  || fail "graphiti tier 1b (anthropic provider selection + deterministic recovery on the local embedder) failed."
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  wa_info "tier 1b ran with a real ANTHROPIC_API_KEY — anthropic extraction exercised"
+else
+  wa_info "tier 1b ran WITHOUT an anthropic key — boot + local-embedder ranking proven; anthropic extraction NOT exercised"
+fi
 wa_group_end
 
 # ---------------------------------------------------------------------------
