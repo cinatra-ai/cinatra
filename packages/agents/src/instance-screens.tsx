@@ -75,6 +75,9 @@ import {
   type RunSurfaceRailStep,
 } from "./run-surface-rail";
 import { readRunTriggerByRunId } from "./trigger-store";
+// Did a confirmed conversation proposal create this run? The one fact the
+// schedule-step picker below cannot read off the trigger row itself.
+import { readProposalConsumeByRunId } from "./trigger-schedule-proposal-store";
 
 // ---------------------------------------------------------------------------
 // Schedule tab visibility helper.
@@ -100,27 +103,43 @@ export function shouldShowPersistentTab(
  * WHICH of the two `run_card` schedule adapters a screen draws (cinatra#3004).
  *
  * One renderer, two adapters: the run detail opens the schedule as a step in its
- * rail (`ScheduleRailStep`), and the run's own schedule tab is the form on its
- * own (`RunScheduleTab`). They are exclusive because they are different ROUTES —
- * one run is never both screens at once — and this is the picker that says so in
- * code rather than leaving it to be inferred from two mounts in one file.
+ * rail (`ScheduleStepSurface`), and the run's own schedule tab is the form on
+ * its own (`RunScheduleTab`). They are exclusive because they are different
+ * ROUTES — one run is never both screens at once — and this is the picker that
+ * says so in code rather than leaving it to be inferred from two mounts in one
+ * file.
  *
- * `"none"` where there is nothing to draw: a run with no trigger row has no
- * schedule for either adapter to open onto, and the tab is not the surface for
- * an `immediate` row (that run keeps the first-step form, which is the same
- * reading `shouldShowPersistentTab` has always had).
+ * `"none"` where there is nothing to draw, and that is the WHOLE reading on both
+ * screens: a step or a tab that opens onto an empty column is the defect this
+ * answers. A run with no trigger row has no schedule for either adapter to open
+ * onto; a row of a kind the card resolver refuses draws nothing either, so no
+ * step is offered for it. The two SCHEDULED kinds are named — the same
+ * allow-list `shouldShowPersistentTab` and the resolver read — so a kind added
+ * later is absent by default rather than drawn as an empty step.
+ *
+ * `fromProposal` is the one widening, and only on the RUN DETAIL: a run created
+ * by confirming a schedule stated in a conversation keeps drawing whatever it
+ * settled into, `immediate` included, because that card has always been the
+ * answer to a schedule the reader stated and the resolver still draws it. The
+ * TAB is not widened by it — a proposal in a conversation is not what puts a
+ * schedule tab on a run's page, and `shouldShowPersistentTab` has always been
+ * the whole rule there.
  */
 export type RunScheduleAdapter = "rail_step" | "schedule_tab" | "none";
 
 export function runScheduleAdapterFor(input: {
   screen: "run_detail" | "schedule_tab";
   trigger: { triggerType: string } | null;
+  /** Did a confirmed conversation proposal create this run? */
+  fromProposal?: boolean;
 }): RunScheduleAdapter {
   if (input.trigger === null) return "none";
   if (input.screen === "schedule_tab") {
     return shouldShowPersistentTab(input.trigger) ? "schedule_tab" : "none";
   }
-  return "rail_step";
+  return shouldShowPersistentTab(input.trigger) || input.fromProposal === true
+    ? "rail_step"
+    : "none";
 }
 
 /** Terminal run statuses — no dispatch left (cinatra#2482). */
@@ -737,8 +756,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // decides; WHAT the step may show is re-resolved against the live reader on
   // the endpoint, which answers `absent` for a run this reader did not confirm a
   // proposal for. A run that cannot mint a ref (no app secret) draws none either.
+  //
+  // AND ONLY WHERE THE STEP OPENS ONTO SOMETHING (cinatra#3004). The card the
+  // step mounts draws no DOM at all for a row its resolver answers `absent`
+  // for, so a step offered for such a row is a rail row that opens an empty
+  // column. The picker reads the resolver's own allow-list; the one row it
+  // cannot decide from the trigger type alone is a run created by confirming a
+  // schedule stated in a CONVERSATION, whose card is drawn whatever kind it
+  // settled into — so that one fact is read, and only when it can change the
+  // answer.
+  const scheduleFromProposal =
+    run && trigger && !shouldShowPersistentTab(trigger)
+      ? (await readProposalConsumeByRunId(run.id)) !== null
+      : false;
   const scheduleRailRef =
-    run && runScheduleAdapterFor({ screen: "run_detail", trigger }) === "rail_step"
+    run &&
+    runScheduleAdapterFor({
+      screen: "run_detail",
+      trigger,
+      fromProposal: scheduleFromProposal,
+    }) === "rail_step"
       ? encodeScheduleRunRef({ runId: run.id })
       : null;
   // cinatra#2487: ONE predicate for the strip on every route (was an inline

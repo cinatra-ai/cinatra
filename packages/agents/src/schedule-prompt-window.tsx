@@ -49,10 +49,30 @@ const SCHEDULE_ASSIST_RENDERER = "trigger-tab";
 
 export function SchedulePromptWindow({
   templateId,
+  readOnly = false,
 }: {
   /** The template the assist call is scoped to. The schedule itself is never
    *  named here: this window answers, it does not act. */
   templateId: string;
+  /**
+   * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004)
+   *
+   * The window's own invitation is "Ask Cinatra to suggest edits to the fields
+   * above", and a schedule that is over has no fields anybody can edit — so the
+   * invitation would be one the surface cannot keep. The composer follows the
+   * form: present and live while the schedule can still be changed, gone once
+   * the run is over.
+   *
+   * ABSENT RATHER THAN DISABLED, because that is what the shipped panel offers:
+   * `HitlConversationPanel` takes one `visible` boolean and has no read-only
+   * reading of its own, and `visible={!readOnly && …}` is the pattern this
+   * product already uses for exactly this state. A dead composer would be the
+   * same "control that exists only to refuse" the card itself removed.
+   *
+   * The surfaces that mount this window MEASURE the state off the card's own
+   * DOM rather than predicting it (`useScheduleSurfaceReading`).
+   */
+  readOnly?: boolean;
 }): ReactElement {
   const [mount, setMount] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
@@ -61,6 +81,18 @@ export function SchedulePromptWindow({
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // A QUESTION IN FLIGHT WHEN THE SCHEDULE ENDS IS DROPPED (cinatra#3004).
+  // Withdrawing the window hides the panel; it does not stop the request the
+  // reader had already sent. Without this, a Cancel schedule landing mid-answer
+  // would leave a live call whose reply is appended to a conversation nobody
+  // can see any more. The abort's own path appends nothing and clears the
+  // pending flag in its `finally`, so nothing else has to be undone here.
+  useEffect(() => {
+    if (!readOnly) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, [readOnly]);
 
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
@@ -133,7 +165,7 @@ export function SchedulePromptWindow({
     >
       <HitlConversationPanel
         portalTarget={mount}
-        visible={!!templateId && !!mount}
+        visible={!readOnly && !!templateId && !!mount}
         conversation={conversation}
         promptPending={promptPending}
         storageKey={`cinatra_schedule_assist_${templateId}_step`}

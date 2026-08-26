@@ -131,71 +131,75 @@ export function ScheduleRailStepRow({
 }
 
 /**
- * HAS THE SCHEDULER ACTUALLY BEEN DRAWN in this step (cinatra#2972)?
+ * WHAT THE CARD ACTUALLY DREW in this step — the two facts the surface around it
+ * composes on (cinatra#2972, cinatra#3004).
  *
- * `ScheduleProposalCard` renders NO DOM AT ALL for a run its resolver answers
- * `absent` for — a run whose schedule was set on the run's own scheduling step
- * rather than stated in a conversation, which is most of them today. That empty
- * step is a pre-existing gap this slice does not close.
+ * `drawn` — IS THERE A SCHEDULER AT ALL? `ScheduleProposalCard` renders NO DOM
+ * at all for a run its resolver answers `absent` for. Plan (A) §7.2 as amended
+ * 2026-08-25 puts the prompt window "below the scheduler", so where there is no
+ * scheduler there is no window; without this gate the window would stand alone
+ * in an otherwise-empty column, a prompt about a form that is not there.
  *
- * What this slice must not do is WIDEN it, and without this gate it would: the
- * prompt window would stand alone in the otherwise-empty column, a prompt about
- * a scheduler that is not there. Plan (A) §7.2 as amended 2026-08-25 puts the
- * window "below the scheduler", so where there is no scheduler there is no
- * window.
+ * `changeable` — CAN THE SCHEDULE IT DREW STILL BE CHANGED? The card draws its
+ * controls floor exactly while there is something to press: a proposal, an
+ * expired proposal, a live schedule. A schedule that is over — a fired one-off,
+ * a recurring schedule cancelled after a fire — draws the option rows and no
+ * floor at all. That floor IS the answer, so this reads it rather than
+ * re-deriving a rule the card already applied.
  *
- * IT IS MEASURED, NOT PREDICTED. The card resolves after mount and the surface
- * around it cannot ask it what it decided, so the honest reading is the DOM it
- * produced. `MutationObserver` is what makes that reading LIVE — a card that
- * resolves late, or re-resolves into `absent`, moves the window with it.
+ * IT IS MEASURED, NOT PREDICTED, and that is the point. The card resolves after
+ * mount and the surface around it cannot ask it what it decided, so the honest
+ * reading is the DOM it produced. `MutationObserver` is what makes both readings
+ * LIVE — a card that resolves late, re-resolves into `absent`, or loses its
+ * floor when a Cancel schedule lands, moves the window with it.
  *
- * EXPORTED because the agent page's schedule surface (cinatra#3004) draws the
- * same card with the same window under it and owes the reader the same honesty.
- * One reading, so the two surfaces cannot disagree about whether there is a
- * scheduler on the page.
+ * ONE READING FOR BOTH SURFACES, so the run page's schedule step and the run's
+ * own schedule surface cannot disagree about what is on the page. Exported for
+ * the second of them (`run-schedule-tab.tsx`, cinatra#3004).
  */
-export function useSchedulerDrawn(host: HTMLElement | null): boolean {
-  const [drawn, setDrawn] = useState(false);
+export type ScheduleSurfaceReading = {
+  /** The card produced DOM: there IS a scheduler on this surface. */
+  drawn: boolean;
+  /** The card drew its controls floor: the schedule can still be changed. */
+  changeable: boolean;
+};
+
+/** The card's controls floor, by the conformance id the renderer gives it. */
+const SCHEDULE_FLOOR_SELECTOR = '[data-conformance-id="schedule-proposal-floor"]';
+
+export function useScheduleSurfaceReading(
+  host: HTMLElement | null,
+): ScheduleSurfaceReading {
+  const [reading, setReading] = useState<ScheduleSurfaceReading>({
+    drawn: false,
+    changeable: false,
+  });
   useEffect(() => {
     if (!host) {
-      setDrawn(false);
+      setReading({ drawn: false, changeable: false });
       return;
     }
-    const read = () => setDrawn(host.childElementCount > 0);
+    const read = () => {
+      const drawn = host.childElementCount > 0;
+      const changeable = drawn && host.querySelector(SCHEDULE_FLOOR_SELECTOR) !== null;
+      // Same object identity while nothing moved: this runs on every mutation
+      // inside the card, and a fresh object each time would re-render the
+      // surface on every keystroke in the form below it.
+      setReading((prev) =>
+        prev.drawn === drawn && prev.changeable === changeable
+          ? prev
+          : { drawn, changeable },
+      );
+    };
     read();
     if (typeof MutationObserver === "undefined") return;
     const observer = new MutationObserver(read);
     observer.observe(host, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [host]);
-  return drawn;
+  return reading;
 }
 
-/**
- * THE SCHEDULE STEP'S SURFACE — the configuration, and nothing else.
- *
- * The same component the chat thread, the widget and the other page mount — the
- * option rows, the estimated duration, Save changes, and (because this IS the
- * page's schedule step) the two operations Cancel schedule and Run now. There is
- * no summary box and no status label above the form: plan (A) §7.2 — "The
- * schedule step on the run page and the review page shows the same form and
- * nothing else — no summary box, no status label; its two controls are **Cancel
- * schedule** and **Run now**". The card draws NO DOM at all for a run no
- * proposal produced, so an ordinary run shows the row and an empty column rather
- * than an invented one.
- *
- * AND, WHERE THE PAGE ASKS FOR ONE, THE PROMPT WINDOW UNDER IT (cinatra#2972) —
- * see `promptWindowTemplateId`.
- *
- * THE HOST IS DECLARED BY NAME, ONCE PER PAGE, rather than threaded through as
- * `host={host}`. Two readers depend on a LITERAL declaration and neither can
- * follow a prop: the one-card gate's R3 check that a module mounting a card
- * carries a provider, and the host-parity ratchet's composition scan, which
- * reads `<LifecycleCardSurfaceProvider host="…">` blocks out of production
- * sources to see which host really draws which owner. A prop would read to both
- * of them as "no host declared", and the card's own runtime would then draw
- * nothing at all.
- */
 export function ScheduleStepSurface({
   host,
   cardRef,
@@ -220,7 +224,7 @@ export function ScheduleStepSurface({
   promptWindowTemplateId?: string | null;
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
-  const schedulerDrawn = useSchedulerDrawn(cardHost);
+  const scheduler = useScheduleSurfaceReading(cardHost);
   const cardView = {
     viewType: "trigger_schedule_proposal" as const,
     schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -249,9 +253,18 @@ export function ScheduleStepSurface({
 
           AND ONLY WHERE THERE IS A SCHEDULER TO BE BELOW. The card draws
           nothing for a run its resolver answers `absent` for; a window alone in
-          that empty column would be a prompt about a form that is not there. */}
-      {promptWindowTemplateId && schedulerDrawn ? (
-        <SchedulePromptWindow templateId={promptWindowTemplateId} />
+          that empty column would be a prompt about a form that is not there.
+
+          AND IT FOLLOWS THAT FORM'S STATE (cinatra#3004). The window invites
+          the reader to ask for edits to the fields above it, so once those
+          fields are a reading nobody can change — a fired one-off, a recurring
+          schedule cancelled after a fire — the invitation is one this surface
+          cannot keep, and it is withdrawn rather than drawn dead. */}
+      {promptWindowTemplateId && scheduler.drawn ? (
+        <SchedulePromptWindow
+          templateId={promptWindowTemplateId}
+          readOnly={!scheduler.changeable}
+        />
       ) : null}
     </div>
   );

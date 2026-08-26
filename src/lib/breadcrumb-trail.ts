@@ -185,6 +185,24 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
 //   3. id-like segments: an obvious short-id placeholder — NEVER title-cased
 //      hex;
 //   4. `humanizePathSegment` for genuinely wordy segments.
+// THE AGENT INSTANCE'S SUB-ROUTE LABELS (cinatra#3004).
+//
+// A sub-route crumb is normally the path segment made readable, and that is
+// right wherever the path word is the reader's word. It is not here: the run's
+// schedule surface answers at `/…/<run>/trigger`, and what it shows — since the
+// "Trigger configuration" summary was retired — is the schedule form itself,
+// under a tab that says Schedule. So the crumb says Schedule too.
+//
+// THE PATH IS deliberately UNCHANGED. A bookmark still opens the same surface;
+// only the word a reader sees moves, which is why this is a label map here
+// rather than a redirect.
+//
+// It is read at the SUB-ROUTE position and nowhere else, so an instance whose
+// own id happens to be one of these words keeps its own name.
+const AGENT_INSTANCE_SUBROUTE_LABELS: Readonly<Record<string, string>> = {
+  trigger: "Schedule",
+};
+
 export function buildBreadcrumbTrail(
   pathname: string,
   opts: {
@@ -242,7 +260,13 @@ export function buildBreadcrumbTrail(
       },
     ];
     if (segments.length >= 5) {
-      crumbs.push({ label: humanizePathSegment(segments[4]), href: pathname });
+      const subRoute = safelyDecodePathSegment(segments[4]);
+      crumbs.push({
+        label:
+          AGENT_INSTANCE_SUBROUTE_LABELS[subRoute] ??
+          humanizePathSegment(segments[4]),
+        href: pathname,
+      });
     }
     return crumbs;
   }

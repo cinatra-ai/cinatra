@@ -32,7 +32,10 @@
 // AND THE PROMPT WINDOW UNDER IT, on the same terms as the run page's step
 // (cinatra#2972): "the prompt window shows below the scheduler", so it is drawn
 // after the card and only where there IS a scheduler to be below — the card
-// renders no DOM at all for a run its resolver answers `absent` for.
+// renders no DOM at all for a run its resolver answers `absent` for. It also
+// follows that scheduler's STATE: the window asks for edits to the fields above
+// it, so it is withdrawn once those fields are a reading nobody can change —
+// a fired one-off, or a recurring schedule cancelled after a fire.
 // ---------------------------------------------------------------------------
 
 import { useState, type ReactElement } from "react";
@@ -40,7 +43,7 @@ import { useState, type ReactElement } from "react";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { ScheduleProposalCard } from "./schedule-proposal-card";
 import { SchedulePromptWindow } from "./schedule-prompt-window";
-import { useSchedulerDrawn } from "./schedule-rail-step";
+import { useScheduleSurfaceReading } from "./schedule-rail-step";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
 
 export function RunScheduleTab({
@@ -57,7 +60,7 @@ export function RunScheduleTab({
   promptWindowTemplateId?: string | null;
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
-  const schedulerDrawn = useSchedulerDrawn(cardHost);
+  const scheduler = useScheduleSurfaceReading(cardHost);
 
   return (
     <div
@@ -76,8 +79,11 @@ export function RunScheduleTab({
           />
         </LifecycleCardSurfaceProvider>
       </div>
-      {promptWindowTemplateId && schedulerDrawn ? (
-        <SchedulePromptWindow templateId={promptWindowTemplateId} />
+      {promptWindowTemplateId && scheduler.drawn ? (
+        <SchedulePromptWindow
+          templateId={promptWindowTemplateId}
+          readOnly={!scheduler.changeable}
+        />
       ) : null}
     </div>
   );

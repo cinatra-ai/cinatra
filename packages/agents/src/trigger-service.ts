@@ -1180,7 +1180,15 @@ export async function deleteRunTriggerForActor(
   try {
     outcome = await withTriggerClaim(args.runId, async (trigger) => {
       if (!trigger) return { deleted: null };
-      if (scheduleIsOver(trigger, run.status)) {
+      // THE RUN'S STATUS IS READ AT THE SERIALIZATION POINT, not before it.
+      // Half of `scheduleIsOver` is the RUN's own outcome, and the read above
+      // happened before this call queued for the claim: a released one-off that
+      // was still running then can have finished while this delete waited, and
+      // deciding on that stale status would remove the very ending this refusal
+      // exists to keep. A run that has vanished under us keeps the status the
+      // authorization was taken on.
+      const live = await readAgentRunById(args.runId);
+      if (scheduleIsOver(trigger, live?.status ?? run.status)) {
         return { refusal: SAVE_SCHEDULE_REFUSALS.overCannotRemove };
       }
       try {

@@ -224,8 +224,11 @@ describe("the four mounts exist and are host-declared", () => {
     // each falls back to the two columns it composed before the step existed.
     // Since cinatra#3004 the run screen asks the picker for that answer, so the
     // run detail and the run's schedule tab read one rule instead of two.
+    // The run detail's call carries the one fact the trigger row cannot answer
+    // — whether a confirmed conversation proposal created this run — so it is
+    // matched on its parts rather than on one line of source.
     expect(screens).toMatch(
-      /runScheduleAdapterFor\(\{ screen: "run_detail", trigger \}\) === "rail_step"[\s\S]{0,60}encodeScheduleRunRef/,
+      /runScheduleAdapterFor\(\{[\s\S]{0,200}screen: "run_detail",[\s\S]{0,200}\}\) === "rail_step"[\s\S]{0,60}encodeScheduleRunRef/,
     );
     expect(screens).toMatch(
       /runScheduleAdapterFor\(\{ screen: "schedule_tab", trigger \}\) === "schedule_tab"[\s\S]{0,60}encodeScheduleRunRef/,

@@ -941,10 +941,19 @@ export async function resolveProposalForReader(
  *     reader's own organization. A caller that cannot present the reader's
  *     standing cannot be granted the standing's answer.
  *
+ * AND THE RUN IS THE BINDING ON THIS PATH WHETHER OR NOT A PROPOSAL MADE IT.
+ * This call is only ever reached through a RUN-scoped ref, which the run's own
+ * pages mint for a reader they have already authorized for that run; the
+ * proposal's (user, org) pair binds the TOKEN path, where the token IS the
+ * subject. Asking the token's binding here refused a co-owner of a shared run
+ * and an organization administrator on a run a conversation had created — the
+ * readers the retired surface drew that schedule for, off the run's own row.
+ * So the run's access control decides on every road in, and the consume row is
+ * read for what it actually records: which schedule kind this run settled into.
+ *
  * THE REFUSALS THAT STAY, all `absent`, and each is deliberate:
  *
- *   · the reader is not the person the schedule is bound to — the proposal's
- *     (user, org) pair, or the run's own access control.
+ *   · the run's own access control refuses the reader.
  *   · the organization does not match the reader's active one.
  *   · the run or its template has vanished.
  *   · an `immediate` row on a run with no proposal — **Run right after setup**
@@ -971,34 +980,30 @@ export async function resolveProposalForRun(
   access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints },
 ): Promise<ProposalResolution> {
   const consumed = await readProposalConsumeByRunId(runId);
-  // The proposal's own binding, re-checked against the LIVE reader. Neither
-  // half comes from the caller: both are read off the row the confirm
-  // transaction wrote.
-  if (consumed) {
-    if (consumed.consumedBy !== actor.userId) return { phase: "absent" };
-    if (consumed.orgId !== actor.orgId) return { phase: "absent" };
-  }
-  // No proposal: the RUN is the binding (cinatra#3004), and the run's OWN access
-  // control is what says so — the same probe the run's pages take, so this card
-  // is neither narrower nor wider than the run it belongs to.
+  // THE RUN IS THE BINDING (cinatra#3004), and the run's OWN access control is
+  // what says so — the same probe the run's pages take, so this card is neither
+  // narrower nor wider than the run it belongs to. It is asked on EVERY road
+  // in: a schedule a conversation created is still that run's schedule, and the
+  // proposal token's (user, org) pair binds the token path, not this one.
   let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
-  if (!consumed) {
-    try {
-      run = access
-        ? await readAgentRunById(runId, access.actor, access.roles)
-        : await readAgentRunById(runId);
-    } catch (err) {
-      // A denial is an ABSENCE here, like every other refusal on this call: the
-      // reader learns nothing about a run they may not see.
-      if (err instanceof AuthzError) return { phase: "absent" };
-      throw err;
-    }
-    if (!run) return { phase: "absent" };
-    if (run.orgId !== actor.orgId) return { phase: "absent" };
-    // Fail closed where no standing was presented: the owner, and only them.
-    if (!access && run.runBy !== actor.userId) return { phase: "absent" };
+  try {
+    run = access
+      ? await readAgentRunById(runId, access.actor, access.roles)
+      : await readAgentRunById(runId);
+  } catch (err) {
+    // A denial is an ABSENCE here, like every other refusal on this call: the
+    // reader learns nothing about a run they may not see.
+    if (err instanceof AuthzError) return { phase: "absent" };
+    throw err;
   }
-  const templateId = consumed ? consumed.templateId : run!.templateId;
+  if (!run) return { phase: "absent" };
+  if (run.orgId !== actor.orgId) return { phase: "absent" };
+  // Fail closed where no standing was presented: the owner, and only them.
+  if (!access && run.runBy !== actor.userId) return { phase: "absent" };
+  // The consume row is read for the one thing it records that the trigger row
+  // does not: that a CONFIRMED PROPOSAL created this run, which is what lets an
+  // `immediate` card keep being drawn below.
+  const templateId = consumed ? consumed.templateId : run.templateId;
 
   const [template, trigger, intent] = await Promise.all([
     readAgentTemplateById(templateId),

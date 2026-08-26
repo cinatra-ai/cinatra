@@ -495,3 +495,98 @@ describe("resolveProposalForRun for a run whose schedule came from its own sched
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 4 — the two readings the convergence round found (cinatra#3004)
+// ---------------------------------------------------------------------------
+
+describe("resolveProposalForRun for a run a CONVERSATION created", () => {
+  const CONSUME = {
+    consumeKey: "ck-3004",
+    runId: RUN_ID,
+    orgId: ORG_ID,
+    templateId: TEMPLATE_ID,
+    consumedBy: OWNER_ID,
+    consumedAt: new Date("2026-08-20T09:00:00Z"),
+  };
+
+  beforeEach(() => {
+    proposalStore.readProposalConsumeByRunId.mockResolvedValue(CONSUME);
+  });
+
+  it("draws it for a reader the RUN's access control admits, not only for the person who confirmed it", async () => {
+    // The token's (user, org) pair binds the TOKEN path. This path is reached
+    // through a run-scoped ref, and asking the token's binding here refused a
+    // co-owner and an organization administrator on a run they read everywhere
+    // else — including on the surface this issue retired.
+    const access = {
+      actor: { userId: "org-admin" } as never,
+      roles: { orgRole: "admin", actorOrganizationId: ORG_ID } as never,
+    };
+
+    const resolution = await resolveProposalForRun(
+      RUN_ID,
+      { userId: "org-admin", orgId: ORG_ID },
+      access,
+    );
+
+    expect(store.readAgentRunById).toHaveBeenCalledWith(RUN_ID, access.actor, access.roles);
+    expect(resolution.phase).toBe("settled");
+  });
+
+  it("still refuses a reader the run's access control does not admit", async () => {
+    await expect(
+      resolveProposalForRun(RUN_ID, { userId: "somebody-else", orgId: ORG_ID }),
+    ).resolves.toEqual({ phase: "absent" });
+    await expect(
+      resolveProposalForRun(RUN_ID, { userId: OWNER_ID, orgId: "org-other" }),
+    ).resolves.toEqual({ phase: "absent" });
+  });
+
+  it("keeps drawing an IMMEDIATE row, which is the one thing the consume row decides", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue({
+      ...CANCELLED_AFTER_A_FIRE,
+      triggerType: "immediate",
+      cronExpression: null,
+      releasedAt: new Date("2026-08-24T09:00:00Z"),
+      lastFiredAt: null,
+      stoppedAt: null,
+    });
+
+    const resolution = await resolveProposalForRun(RUN_ID, { userId: OWNER_ID, orgId: ORG_ID });
+    expect(resolution.phase).toBe("settled");
+    if (resolution.phase !== "settled") return;
+    expect(resolution.triggerType).toBe("immediate");
+  });
+});
+
+describe("deleteRunTriggerForActor decides on the run status the CLAIM hands it", () => {
+  beforeEach(() => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(FIRED_ONE_OFF);
+  });
+
+  it("refuses a one-off whose run reached its ending while the delete waited for the claim", async () => {
+    // The authorization read happens before this call queues for the claim. A
+    // released one-off that was still running then can be over by the time the
+    // claim is granted, and deciding on the older status would remove the very
+    // ending the refusal exists to keep.
+    store.readAgentRunById.mockReset();
+    store.readAgentRunById.mockResolvedValueOnce({ ...RUN, status: "running" });
+    store.readAgentRunById.mockResolvedValue({ ...RUN, status: "completed" });
+
+    const result = await deleteRunTriggerForActor(owner, { runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect(triggerStore.deleteRunTriggerByRunId).not.toHaveBeenCalled();
+  });
+
+  it("still removes a one-off whose run is still going when the claim is granted", async () => {
+    store.readAgentRunById.mockReset();
+    store.readAgentRunById.mockResolvedValue({ ...RUN, status: "running" });
+
+    const result = await deleteRunTriggerForActor(owner, { runId: RUN_ID });
+
+    expect(result.ok).toBe(true);
+    expect(triggerStore.deleteRunTriggerByRunId).toHaveBeenCalledWith(RUN_ID);
+  });
+});
