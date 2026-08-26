@@ -9,7 +9,7 @@
  * This test pins the prefix list so any future refactor that drops these
  * entries breaks the test, not silently breaks WayFlow -> Cinatra calls.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { guardAppRoute } from "../auth-route-guard";
@@ -1138,11 +1138,18 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       "/api/lifecycle-views",
       "/api/lifecycle-views/",
       "/api/lifecycle-views/anything-else",
-      // The three exemptions are EXACT: no descendant inherits them.
+      // The five exemptions are EXACT: no descendant inherits them. The
+      // recommendation hold is the case that makes this concrete — its own
+      // `/decide` IS a descendant and is public only by its own entry
+      // (cinatra#2790), so everything else under that subtree stays guarded.
       "/api/lifecycle-views/resolve/",
       "/api/lifecycle-views/resolve/anything",
       "/api/lifecycle-views/decide/",
       "/api/lifecycle-views/decide/anything",
+      "/api/lifecycle-views/recommendation-hold/",
+      "/api/lifecycle-views/recommendation-hold/anything",
+      "/api/lifecycle-views/recommendation-hold/decide/",
+      "/api/lifecycle-views/recommendation-hold/decide/anything",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
@@ -1164,16 +1171,21 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
   });
 
   it("the exemptions are never broadened to an /api/lifecycle-views prefix", () => {
-    // A bare namespace prefix would unguard capture, resolve AND decide in one
-    // edit, and would also unguard every future sibling. Three paths are exempt
-    // (capture; resolve since cinatra#2577; decide since #2575's correction) and
-    // all three must be EXACT entries.
+    // A bare namespace prefix would unguard every exempted path in one edit,
+    // and would also unguard every future sibling. FIVE paths are exempt
+    // (capture; resolve since cinatra#2577; decide since #2575's correction;
+    // the recommendation hold's read and its decision since cinatra#2790) and
+    // all five must be EXACT entries.
     expect(guardSource).not.toMatch(/"\/api\/lifecycle-views"\s*,/);
     const exactBlock = guardSource.match(
       /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
     )?.[1];
     expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/resolve"/);
     expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/decide"/);
+    expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/recommendation-hold"/);
+    expect(exactBlock ?? "").toMatch(
+      /"\/api\/lifecycle-views\/recommendation-hold\/decide"/,
+    );
     const prefixBlock = guardSource.match(
       /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
     )?.[1];
@@ -1202,6 +1214,279 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     expect((line ?? "").trimStart().startsWith('"')).toBe(true);
     expect((line ?? "").toLowerCase()).toMatch(/lifecycle\.read/);
     expect((line ?? "").toLowerCase()).toMatch(/401/);
+  });
+});
+
+describe("auth-route-guard - cinatra#2790 (S9f) the recommendation hold's two BROKER routes", () => {
+  // WHAT THIS BLOCK EXISTS FOR, stated as the measured defect it closes.
+  //
+  // S9f gave the run-start skills question a broker read and a broker decision
+  // so the card could finally be drawn on the site widget. Both handlers were
+  // correct — they authenticate by the presented `cwu_` and 401 without one, on
+  // purpose, with no session fallback. Neither PATH was added to
+  // PUBLIC_EXACT_PATHS, so guardAppRoute 307'd every cookieless request to
+  // /sign-in BEFORE either handler ran. The widget always calls cookieless
+  // (`credentials:"omit"`, its own headers), so the card could never resolve on
+  // a running app: `fetch` follows the redirect with the method and body intact
+  // (a 307 preserves both), /sign-in serves GET only and refuses the POST, the
+  // transport bails on the non-OK answer, the card renders nothing, and the
+  // bounded retry ends. The run is genuinely blocked on an answer the person is
+  // never shown — a hung assistant, with no error anywhere naming the proxy
+  // that ate the request. That is the SAME invisible class the
+  // resolve entry above was written for, which is why the rows below assert
+  // more than "not a 307": they assert the guard ADMITS the request and that
+  // the answer the caller then gets is the HANDLER'S OWN refusal.
+  const READ_PATH = "/api/lifecycle-views/recommendation-hold";
+  const DECIDE_PATH = "/api/lifecycle-views/recommendation-hold/decide";
+
+  // STRICT admission, exactly as the S8c block defines it: NextResponse.next()
+  // is a 200 carrying `x-middleware-next: 1` and no Location. Asserting that
+  // signal (rather than merely "not a 307") means a future guard answering
+  // 401/403/500 here — the handler still never running — fails this suite.
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    return (
+      (res.status ?? 200) === 200 &&
+      res.headers?.get?.("x-middleware-next") === "1" &&
+      (res.headers?.get?.("location") ?? null) === null
+    );
+  }
+
+  // The real request shape: a cross-origin-embedded frame POSTing JSON with no
+  // cookie. The guard keys on the pathname alone, so the method and headers are
+  // here to model the caller honestly rather than because the guard reads them.
+  function widgetPost(pathname: string, cookie?: string): NextRequest {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (cookie) headers.set("cookie", cookie);
+    return {
+      nextUrl: { pathname, search: "" },
+      url: `http://localhost${pathname}`,
+      method: "POST",
+      cookies: { get: () => undefined },
+      headers,
+    } as unknown as NextRequest;
+  }
+
+  // The same POST as a plain Request, for driving the REAL handler.
+  function handlerPost(pathname: string, cookie?: string): Request {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (cookie) headers.cookie = cookie;
+    return new Request(`https://app.example.com${pathname}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ runId: "run-2790", decision: "skip" }),
+    });
+  }
+
+  // A Better-Auth-shaped session cookie. Its VALUE is immaterial and that is
+  // the contract being pinned: these two routes never read a cookie at all.
+  const SESSION_COOKIE = "better-auth.session_token=abc123";
+
+  // The two REAL handlers, loaded with only the agents-package graph stubbed —
+  // that graph reaches Drizzle and is not what is under test here. Everything
+  // that DECIDES the 401 is loaded for real: the route module, the widget
+  // branch resolver, the actor door and the audit sink. `vi.doMock` is used
+  // (not `vi.mock`) so the stubs are scoped to these dynamic imports instead of
+  // being hoisted over this whole shared file.
+  let READ: (request: Request) => Promise<Response>;
+  let DECIDE: (request: Request) => Promise<Response>;
+
+  beforeAll(async () => {
+    vi.doMock("@cinatra-ai/agents/store", () => ({
+      readAgentRunById: async () => null,
+    }));
+    vi.doMock("@cinatra-ai/agents/run-recommendation-core", () => ({
+      resolveRecommendationHoldStateForActor: async () => ({ state: "none" }),
+      confirmRecommendationForActor: async () => ({ ok: false }),
+      skipRecommendationForActor: async () => ({ ok: false }),
+      writeRunSkillSelectionForActor: async () => ({ ok: false }),
+    }));
+    vi.doMock("@cinatra-ai/agents/recommendation-hold", () => ({
+      RECOMMENDATION_DECISION_REFUSAL: "unused-in-this-suite",
+    }));
+    vi.doMock("@cinatra-ai/agents/run-actions", () => ({
+      triggerAgentRun: async () => undefined,
+    }));
+    READ = (await import("../../app/api/lifecycle-views/recommendation-hold/route"))
+      .POST as typeof READ;
+    DECIDE = (
+      await import("../../app/api/lifecycle-views/recommendation-hold/decide/route")
+    ).POST as typeof DECIDE;
+  });
+
+  it("a COOKIELESS POST to the recommendation-hold READ passes the guard (no 307)", async () => {
+    const res = await guardAppRoute(widgetPost(READ_PATH));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("a COOKIELESS POST to the recommendation-hold DECIDE passes the guard (no 307)", async () => {
+    const res = await guardAppRoute(widgetPost(DECIDE_PATH));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("REACHES THE HANDLER: the cookieless READ is answered by the ROUTE's own 401, not a redirect", async () => {
+    // The composition is the point. The guard admits the request, and what the
+    // caller then receives is the handler's own refusal for a missing
+    // credential — a JSON 401 with its reason — which is only producible by
+    // code that actually ran. A 307 (the measured defect) or a followed
+    // redirect's sign-in HTML would both fail here.
+    expect(isNext(await guardAppRoute(widgetPost(READ_PATH)))).toBe(true);
+    const res = await READ(handlerPost(READ_PATH));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+    await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("REACHES THE HANDLER: the cookieless DECIDE is answered by the ROUTE's own 401, not a redirect", async () => {
+    // Costlier than an unanswered read if it 307s: `fetch` follows the redirect
+    // with the method and body intact (a 307 preserves both), /sign-in serves
+    // GET only and refuses the POST, and the transport turns that into the
+    // row's own refusal — so the run stays blocked and no decision ever reached
+    // the core. The handler's 401 is the proof that the decision was refused by
+    // the ROUTE rather than swallowed by the proxy.
+    expect(isNext(await guardAppRoute(widgetPost(DECIDE_PATH)))).toBe(true);
+    const res = await DECIDE(handlerPost(DECIDE_PATH));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+    await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("NO SESSION FALLBACK: a COOKIE-BEARING POST is still 401 on both routes", async () => {
+    // The contract these two routes were built to: the `cwu_` is the only way
+    // in. The embed frame is same-origin to the app, so an ambient cookie
+    // belonging to whoever else uses that browser must never answer for the
+    // widget's reader. Reachability is unchanged by the cookie (the paths are
+    // public), and the handler refuses identically with one present.
+    expect(isNext(await guardAppRoute(widgetPost(READ_PATH, SESSION_COOKIE)))).toBe(true);
+    expect(isNext(await guardAppRoute(widgetPost(DECIDE_PATH, SESSION_COOKIE)))).toBe(true);
+    const read = await READ(handlerPost(READ_PATH, SESSION_COOKIE));
+    expect(read.status).toBe(401);
+    await expect(read.json()).resolves.toEqual({ error: "Unauthorized" });
+    const decide = await DECIDE(handlerPost(DECIDE_PATH, SESSION_COOKIE));
+    expect(decide.status).toBe(401);
+    await expect(decide.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("EXACTNESS: descendants and near-miss siblings of BOTH paths stay guarded (307)", async () => {
+    // The load-bearing consequence of an exact list. `/decide` is a DESCENDANT
+    // of the read path and is admitted ONLY by its own entry — so nothing else
+    // under that subtree inherits an exemption, and a later parent catch-all or
+    // rewrite could not make one routable and public in the same edit.
+    for (const p of [
+      `${READ_PATH}/`,
+      `${READ_PATH}/anything`,
+      `${READ_PATH}/decide/`,
+      `${READ_PATH}/decide/anything`,
+      `${READ_PATH}/state`,
+      `${READ_PATH}-foo`,
+      `${READ_PATH}s`,
+      "/api/lifecycle-views/recommendation",
+      "/api/lifecycle-views/recommendation-holds",
+    ]) {
+      const res = await guardAppRoute(widgetPost(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SOURCE PIN: both are LIVE exact entries naming their grant, their refusal and their exactness", () => {
+    const exactBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(exactBlock).toBeDefined();
+    const expectations: ReadonlyArray<[string, RegExp]> = [
+      [`"${READ_PATH}",`, /lifecycle\.read/],
+      [`"${DECIDE_PATH}",`, /lifecycle\.decide/],
+    ];
+    for (const [needle, grant] of expectations) {
+      const line = guardSource.split("\n").find((l) => l.includes(needle));
+      expect(line, `${needle} must have an entry`).toBeDefined();
+      // A LIVE array entry, not a commented-out corpse.
+      expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+      expect(line ?? "", `${needle} must name its grant`).toMatch(grant);
+      expect(line ?? "", `${needle} must name its refusal`).toMatch(/401/);
+      expect(
+        (line ?? "").toLowerCase(),
+        `${needle} must state it is reachability only`,
+      ).toMatch(/reachability only/);
+      expect(
+        (line ?? "").toLowerCase(),
+        `${needle} must state the entry is exact`,
+      ).toMatch(/exact path, never a prefix/);
+      // The second gate is what stops a run this conversation does not own from
+      // being projected into a widget thread; an entry that omitted it would
+      // describe a weaker route than the one being admitted.
+      expect(line ?? "", `${needle} must name the run-to-session binding`).toMatch(
+        /widgetSessionOwnsRun/,
+      );
+      // Reachability is not authentication, and neither entry may imply it is.
+      expect(
+        (line ?? "").toLowerCase(),
+        `${needle} must state there is no session fallback`,
+      ).toMatch(/no session fallback|takes no session/);
+    }
+    // Exact list only. A move onto the prefix list would silently pick up every
+    // descendant, so it must be a visible, failing edit.
+    expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/recommendation-hold"/);
+    expect(exactBlock ?? "").toMatch(
+      /"\/api\/lifecycle-views\/recommendation-hold\/decide"/,
+    );
+    const prefixBlock = guardSource.match(
+      /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(prefixBlock ?? "").not.toMatch(/recommendation-hold/);
+  });
+
+  it("SOURCE PIN: the exempted paths are byte-equal to the CLIENT's paths and the TOKEN AUDIENCES", () => {
+    // Three sources must agree byte-for-byte or the fix is silently undone by a
+    // rename: the guard's literals, the paths the card actually POSTs to, and
+    // the audiences the `cwu_` is consumed at. The guard carries literals (it
+    // runs in the proxy bundle and cannot import `server-only` modules), so
+    // this reads the other two as TEXT, exactly as the capture entry's pin does.
+    const runtimeSource = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "packages",
+        "agents",
+        "src",
+        "lifecycle-card-runtime.tsx",
+      ),
+      "utf-8",
+    );
+    const clientRead = runtimeSource.match(
+      /LIFECYCLE_RECOMMENDATION_HOLD_PATH\s*=\s*"([^"]+)"/,
+    )?.[1];
+    const clientDecide = runtimeSource.match(
+      /LIFECYCLE_RECOMMENDATION_DECIDE_PATH\s*=\s*"([^"]+)"/,
+    )?.[1];
+    expect(clientRead).toBe(READ_PATH);
+    expect(clientDecide).toBe(DECIDE_PATH);
+
+    const scopeSource = fs.readFileSync(
+      path.resolve(__dirname, "..", "widget-lifecycle-scope.ts"),
+      "utf-8",
+    );
+    const audienceRead = scopeSource.match(
+      /WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH\s*=\s*"([^"]+)"/,
+    )?.[1];
+    const audienceDecide = scopeSource.match(
+      /WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH\s*=\s*"([^"]+)"/,
+    )?.[1];
+    expect(audienceRead).toBe(READ_PATH);
+    expect(audienceDecide).toBe(DECIDE_PATH);
+
+    expect(guardSource).toContain(`"${clientRead}",`);
+    expect(guardSource).toContain(`"${clientDecide}",`);
+  });
+
+  it("CONTROL: an unrelated protected path is unaffected by these two entries", async () => {
+    for (const p of ["/dashboards", "/agents", "/api/agents/runs/run-2790"]) {
+      const res = await guardAppRoute(widgetPost(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
   });
 });
 

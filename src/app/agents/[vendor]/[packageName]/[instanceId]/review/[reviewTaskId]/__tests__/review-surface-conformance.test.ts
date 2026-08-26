@@ -123,6 +123,18 @@ const HOST_STANDARD_IDS = new Set([
   "suggestion-chips",
   "suggestion-accepted",
   "suggestion-dismissed",
+  // cinatra#2997 — the RUN CARD'S placeholder for the review screen. It is not a
+  // review-page anchor at all: this route never draws it, and the module it
+  // lives in is scanned here only because that module owns the review screen's
+  // OTHER states (loading / blocked / settled), which this route does draw. The
+  // anchor belongs to the run card's own reading, ruled by the maintainer's
+  // request for changes on pull request 2890 and by PLAN: Agents Lifecycle (A)
+  // section 4.2 — "While the agent works, the conversation shows basically just
+  // a card (maybe even an empty review screen) with a spinning icon" — and its
+  // own conformance is pinned where it is drawn
+  // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
+  // photographed (evidence/2790-s9f-host-parity, the S5a / R7a cells).
+  "review-gate-placeholder",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer
@@ -476,12 +488,17 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     // the left column instead of being written inline on the mount: the plan's
     // §7.2 step 5 puts the SCHEDULE step above "1 Review", so the column may
     // have to draw when the run's own rail does not, and the two conditions
-    // could no longer share one expression. The invariant is unchanged — the
-    // same two conjuncts, wrapped by the formatter — so the pin follows the
-    // wrapping rather than the old single line, and is re-anchored to the mount
-    // the predicate now gates so it still measures the rail and not a comment.
+    // could no longer share one expression.
+    //
+    // Since S9f (#2790) the expression itself is an EXPORTED predicate
+    // (`screenDrawsPageRail`), because the suppression acquired a condition: a
+    // run HELD at its skills question is `pending_input` too, and plan (A) §6.2
+    // puts that gate row "ahead of the work steps it would authorize" — a rail
+    // holding the gate row alone shows nothing for it to be ahead of. So the
+    // pin follows the predicate, and the behavioural table it answers is pinned
+    // in packages/agents/src/__tests__/instance-screens-recommendation-step.test.ts.
     expect(RUN_SURFACE).toMatch(
-      /run\.status !== "pending_input"\s*&&\s*rail\.entries\.length > 0/,
+      /const railDraws = screenDrawsPageRail\(\{[\s\S]*?railEntryCount: rail\.entries\.length,/,
     );
     expect(RUN_SURFACE).toMatch(/railDraws \?\s*\(?\s*<RunStepRailPanel/);
   });

@@ -56,6 +56,7 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import {
   encodeLifecycleGateRef,
@@ -302,6 +303,27 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
           configuration fault to fix, not a reason to fork the surface. */
           const detailNode = (
             <LifecycleCardSurfaceProvider host="page_gate_region">
+              {/* THE RUN-START SKILLS QUESTION, at its plan-designated position
+                  (cinatra#2790, epic #2784 S9f; plan §6.4 "the same row appears on
+                  the run page, ahead of the steps it would authorize, and on the
+                  review page, where it is mostly seen in its decided form", and §9
+                  "review page — keyed by the run").
+
+                  ABOVE the gate card, and that ordering is the design's, not a
+                  layout choice: the recommendation is the decision taken BEFORE
+                  the run produced anything, and the review is the decision taken
+                  after. Reading down the gate region is reading the run in order.
+
+                  ONE RENDERER, NO FORK. This is the same `RecommendationHoldCard`
+                  the run panel and the widget mount — the card owns whether it
+                  draws, which state it is in, and when it re-reads — so it is
+                  keyed by the run and nothing else, and it renders NOTHING when
+                  the run never held or the reader may not see it. On this page
+                  that is usually its settled reading, which is exactly what §9
+                  says is mostly seen here. The host declaration is the one on the
+                  root of this region: a card is a `page_gate_region` mount because
+                  THIS provider says so, per the anchor contract. */}
+              <RecommendationHoldCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard
                   view={{

@@ -1,0 +1,39 @@
+2026-08-23T23:37:56.444Z # cinatra#2790 S9f — the chat + run-page sequence — 2026-08-23T23:37:56.444Z
+2026-08-23T23:38:03.560Z after sign-in: /chat/cinatra-ai/cinatra-assistant
+2026-08-23T23:38:16.527Z TURN typed into the composer: Please run cinatra_blog-draft-writer-agent for me with inputParams: {"idea":{"title":"Connector rollout note","summary":"The connector ships this week and replaces the manual export step.","outline":["Summary","Rollout"]}}
+2026-08-23T23:38:18.591Z TURN attempt 1: in transcript = true
+2026-08-23T23:38:18.591Z TURN sent
+2026-08-23T23:38:23.904Z RUN 8ff25a9b-2e54-4daf-acd1-9688a1e196b1 in thread /chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8 (@cinatra-ai/blog-draft-writer-agent)
+2026-08-23T23:38:37.627Z TIMELINE T1 held at the recommendation hold; the run has produced NOTHING {"runStatus":"pending_input","humanPresent":true,"parkCheckpoint":"recommendation","parkStatus":"parked","parkCreatedAt":"2026-08-23T23:38:21.032Z","representationRows":0,"producedOutboxRows":0,"reviewGateRows":0,"selectionRows":0}
+2026-08-23T23:38:38.696Z CAP S1__recommendation-card__chat_thread__held 2880x3400 chips=4 turns=2 chipRowInDetail=- progress=-
+2026-08-23T23:38:39.757Z CAP S1__recommendation-card__chat_thread__held__dark 2880x3400 chips=4 turns=2 chipRowInDetail=- progress=-
+2026-08-23T23:38:56.088Z TIMELINE T1b the run page is opened while the SAME hold is still parked {"runStatus":"pending_input","parkStatus":"parked","selectionRows":0,"representationRows":0,"url":"/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"}
+2026-08-23T23:38:56.218Z CAP R5__recommendation-card__run_card__held 2880x3400 chips=4 turns=- chipRowInDetail=true progress=0
+2026-08-23T23:38:57.256Z CAP R5__recommendation-card__run_card__held__dark 2880x3400 chips=4 turns=- chipRowInDetail=true progress=0
+2026-08-23T23:38:59.845Z TIMELINE T1c the REAL provider connection is removed so the agent's own model call resolves the scripted runtime — this machine has no public MCP ingress for the real provider to load the toolbox from {"shippedWriter":"clearOpenAIConnection","readBack":"S9FCHAT PROVIDER_CLEAR {\"storeResolvesAKey\":false,\"revalidateThrewOutsideRequestScope\":\"Invariant: static generation store missing in revalidatePath /agents\"}"}
+2026-08-23T23:39:15.468Z PRESS confirm on @cinatra-ai/blog-writing-skill:blog-writing -> card state held
+2026-08-23T23:39:18.252Z PRESS adjust on @cinatra-ai/blog-post-matcher-skill:blog-post-matcher -> card state held
+2026-08-23T23:39:19.488Z PRESS skip on @cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher -> card state held
+2026-08-23T23:39:20.713Z PRESS confirm on @cinatra-ai/web-research-skill:web-research -> card state held
+2026-08-23T23:39:46.505Z TIMELINE T2 the decisions are written and the hold is RELEASED {"runStatus":"pending_approval","parkStatus":"released","parkResolvedAt":"2026-08-23T23:39:20.358Z","selections":[{"skill_id":"@cinatra-ai/blog-post-matcher-skill:blog-post-matcher","selection_source":"user_adjusted","selected_at":"2026-08-23T23:39:20.352Z"},{"skill_id":"@cinatra-ai/blog-writing-skill:blog-writing","selection_source":"recommended_confirmed","selected_at":"2026-08-23T23:39:20.352Z"},{"skill_id":"@cinatra-ai/web-research-skill:web-research","selection_source":"recommended_confirmed","selected_at":"2026-08-23T23:39:20.352Z"}],"representationRows":0,"reviewGateRows":0}
+2026-08-23T23:39:46.674Z CAP S2__recommendation-card__chat_thread__decided 2880x3400 chips=3 turns=2 chipRowInDetail=- progress=-
+2026-08-23T23:39:47.760Z CAP S2__recommendation-card__chat_thread__decided__dark 2880x3400 chips=3 turns=2 chipRowInDetail=- progress=-
+2026-08-23T23:39:48.696Z GATE Continue pressed (#1)
+2026-08-23T23:39:54.703Z RUN FAILED: artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cinatra-ai/blog-post-artifact]: titleFrom output "title" did not resolve to a non-empty string
+2026-08-23T23:39:54.706Z TIMELINE T3 the step executed against the real model and the run reached its state {"runStatus":"failed","runCompletedAt":"2026-08-23T23:39:50.537Z","runError":"artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cinatra-ai/blog-post-artifact]: titleFrom output \"title\" did not resolve to a non-empty string","representations":[],"outbox":[],"gates":[]}
+2026-08-23T23:40:10.185Z TIMELINE T4 the run page is photographed with the question decided {"runStatus":"failed","parkStatus":"released","parkResolvedAt":"2026-08-23T23:39:20.358Z","selections":[{"skill_id":"@cinatra-ai/blog-post-matcher-skill:blog-post-matcher","selection_source":"user_adjusted","selected_at":"2026-08-23T23:39:20.352Z"},{"skill_id":"@cinatra-ai/blog-writing-skill:blog-writing","selection_source":"recommended_confirmed","selected_at":"2026-08-23T23:39:20.352Z"},{"skill_id":"@cinatra-ai/web-research-skill:web-research","selection_source":"recommended_confirmed","selected_at":"2026-08-23T23:39:20.352Z"}],"url":"/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"}
+2026-08-23T23:40:10.326Z CAP R6__recommendation-card__run_card__decided 2880x3400 chips=3 turns=- chipRowInDetail=false progress=1
+2026-08-23T23:40:11.412Z CAP R6__recommendation-card__run_card__decided__dark 2880x3400 chips=3 turns=- chipRowInDetail=false progress=1
+2026-08-23T23:40:12.315Z SEQUENCE OK
+
+# ---------------------------------------------------------------------------
+# CORRECTION, appended after the run. The log ABOVE is verbatim and unedited.
+#
+# The TIMELINE T3 line above reads "the step executed against the real model".
+# That is wrong. The real provider connection was removed at T1c, one row
+# earlier and on this same log, and POST /api/llm-bridge was then served by the
+# SCRIPTED runtime -- see logs/rework-bridge-readback.txt:
+#   [llm-bridge] preferredProvider openai unavailable, falling back to configured default
+# The run was CREATED with a real sealed provider row configured; the model
+# behind that one call was not real. The driver's label is fixed for any re-run.
+# ---------------------------------------------------------------------------

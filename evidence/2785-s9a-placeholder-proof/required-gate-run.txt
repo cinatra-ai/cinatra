@@ -1,9 +1,7 @@
 $ node scripts/audit/chat-hitl-one-card-gate.mjs
-[chat-hitl-one-card] 3 violation(s):
+[chat-hitl-one-card] 1 violation(s):
 
   scripts/audit/chat-hitl-one-card-gate.mjs:1  [R5]  'agent_hitl_screen' has no card of its own (the HITL screen the run page already shows — fields with a Continue button. It carries no card identity of its own today, which is exactly what the plan's section 3 gives it.) — The card is not drawn. W2a registers the kind so a run can state the moment it is paused at, and changes no screen; the run page keeps the HITL screen it already renders, unchanged and outside this vocabulary. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.
-  packages/agents/src/run-recommendation-chip-row.tsx:1  [R8]  'recommendation_hold' has no production mount on host 'site_widget' — Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.
-  packages/agents/src/run-recommendation-chip-row.tsx:1  [R8]  'recommendation_hold' has no production mount on host 'page_gate_region' — Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.
 
 The epic's structural rule is ONE card per interaction, rendered on every host —
 only the frame adapts. A second renderer is not a smaller feature; it is a second

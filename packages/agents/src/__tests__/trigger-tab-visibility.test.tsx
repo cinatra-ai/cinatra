@@ -124,12 +124,13 @@ describe("shouldShowFinishedRunNotice", () => {
     expect(shouldShowFinishedRunNotice(null, "running")).toBe(false);
   });
 
-  // Codex round-B finding: the predicate must gate the NOTICE only. The
-  // standalone form is the ONLY route to a scheduled/recurring trigger for a
-  // run whose row is `immediate` — shouldShowPersistentTab sends only
-  // scheduled/recurring rows to the persistent tab — and a recurring trigger
-  // clones a fresh run, so arming one on a finished run is legitimate. A
-  // finished immediate run must therefore still be able to reach the form.
+  // The predicate gates the NOTICE only, and it still does: a finished
+  // immediate run lands on the standalone branch either way, because
+  // `shouldShowPersistentTab` sends only scheduled/recurring rows to the
+  // persistent tab. What that branch OFFERS is a separate decision, taken by
+  // `shouldFreezeFiredOneOffSchedule` once the one-off has fired (cinatra#2980,
+  // plan (A) §7.2 item 4) and locked in
+  // `trigger-tab-finished-immediate-2980.test.ts`.
   it("does not imply the persistent tab — a finished immediate run keeps the form route", () => {
     expect(shouldShowFinishedRunNotice(immediate, "completed")).toBe(true);
     expect(shouldShowPersistentTab(immediate)).toBe(false);
