@@ -175,6 +175,13 @@ async function seedResponse(
     agUiEnabled: run.agUiEnabled ?? null,
     taskId: run.a2aTaskId ?? null,
     traceId: run.traceId ?? null,
+    // THE RUN'S OWN STATED MOMENT (cinatra#2930, epic #2926 W3). The plan:
+    // "No screen re-derives a moment from a task id or from the shape of a
+    // pause." A screen can only read the row if the row reaches it, and this is
+    // the endpoint every chat-inline run panel reads a run through — so the
+    // moment rides with the status it belongs to rather than being inferred
+    // from `hitlContext` beside it.
+    lifecycleMoment: run.lifecycleMoment ?? null,
     messages: messages.map((m) => ({
       id: m.id,
       runId: m.runId,
