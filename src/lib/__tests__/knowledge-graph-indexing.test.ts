@@ -42,6 +42,9 @@ const STORED_ANTHROPIC_KEY = "sk-ant-fake-stored-2591";
 
 const DEFAULT_PROVIDER_KEY = "connector_config:llm_default_provider";
 const ANTHROPIC_CONNECTION_KEY = "connector_config:anthropic_connection";
+// The wizard's own selection row, written at click time — BEFORE the saga
+// commits `llm_default_provider`.
+const SELECTION_KEY = "connector_config:setup_provider_selection";
 
 const originalEnvKey = process.env.OPENAI_API_KEY;
 
@@ -116,9 +119,9 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.reason).toContain("openai");
   });
 
-  it("tries BOTH vendors only while nothing is committed yet", () => {
-    // A fresh install before the setup saga's commit step. There is no operator
-    // choice to violate, so a configured vendor should still index.
+  it("tries BOTH vendors only while NOTHING is bound anywhere", () => {
+    // No commitment and no wizard selection: no operator choice exists to
+    // violate, so a configured vendor should still index.
     metadata.delete(DEFAULT_PROVIDER_KEY);
     metadata.set(ANTHROPIC_CONNECTION_KEY, { apiKey: STORED_ANTHROPIC_KEY });
 
@@ -126,6 +129,59 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.provider).toBe("anthropic");
     expect(resolved.key).toBe(STORED_ANTHROPIC_KEY);
     expect(resolved.reason).toContain("no default provider is committed yet");
+  });
+
+  it("the WIZARD SELECTION binds before the commitment exists", () => {
+    // The wizard writes `setup_provider_selection` at click time; the saga
+    // writes `llm_default_provider` only at commit. Between them — and after a
+    // readiness failure that never reached commit — the operator HAS chosen.
+    // Treating them as undecided would route their row content to OpenAI.
+    metadata.set(SELECTION_KEY, "anthropic");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+  });
+
+  it("the COMMITMENT outranks a stale wizard selection", () => {
+    metadata.set(SELECTION_KEY, "anthropic");
+    metadata.set(DEFAULT_PROVIDER_KEY, "openai");
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(STORED_KEY);
+  });
+
+  it("does NOT substitute the legacy OPENAI_API_KEY env for a bound Anthropic install", () => {
+    // An env var can be inherited from a shell the operator never edited, so
+    // this is the quietest possible route to the wrong vendor.
+    metadata.set(DEFAULT_PROVIDER_KEY, "anthropic");
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.reason).toContain("belongs to the OTHER vendor");
+  });
+
+  it("still honours the legacy env path when NOTHING is bound", () => {
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(ENV_KEY);
+    expect(resolved.source).toBe("environment");
+  });
+
+  it("still honours the legacy env path for a bound OPENAI install", () => {
+    metadata.set(DEFAULT_PROVIDER_KEY, "openai");
+    process.env.OPENAI_API_KEY = ENV_KEY;
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.key).toBe(ENV_KEY);
   });
 
   it("coerces an unsupported committed provider back to OpenAI", () => {
