@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { createMcpRuntimeServer } from "../runtime-server";
-import { delegatedChatAllowedToolNames } from "../delegated-chat-tool-policy";
+import {
+  coreDelegatedChatAdmissionSnapshot,
+  coreDelegatedChatAdmittedNames,
+} from "../core-delegated-chat-surface";
+import { HOST_PRIMITIVE_DECLARATIONS } from "../capability-plan";
 
 // The registration CHOKE POINT, exercised through the real runtime server
 // (cinatra#2771).
@@ -19,7 +23,7 @@ import { delegatedChatAllowedToolNames } from "../delegated-chat-tool-policy";
 // ACCEPTED one returns the SDK's registered-tool handle. That is a direct read
 // of the decision, not a proxy for it.
 
-const ADMITTED = delegatedChatAllowedToolNames()[0]!;
+const ADMITTED = coreDelegatedChatAdmittedNames()[0]!;
 const DENIED_FAMILY = "permissions_grant_list";
 const DENIED_VERB = "objects_delete";
 const UNLISTED = "acme_widget_catalog_list";
@@ -41,6 +45,10 @@ async function registers(name: string, config: Record<string, unknown>): Promise
     name: "test",
     version: "0.0.0",
     toolPolicyMode: "delegated-chat",
+    // The request's admission snapshot (cinatra#2817). The CORE one, so the
+    // ADMITTED name below is genuinely admitted and the declaration's NARROWING
+    // effect is observable rather than masked by a closed perimeter.
+    delegatedChatAdmissionSnapshot: coreDelegatedChatAdmissionSnapshot(),
     registerCapabilities: (server) => {
       const handle = (
         server.registerTool as unknown as (
@@ -88,9 +96,22 @@ describe("the declaration choke point: a declaration NARROWS", () => {
     await expect(registers(ADMITTED, { delegatedChat: {} })).resolves.toBe(false);
   });
 
-  it("keeps an admitted primitive that declares a chat-eligible class", async () => {
-    for (const cls of ["read", "discovery", "dispatch"]) {
-      await expect(registers(ADMITTED, { delegatedChat: cls })).resolves.toBe(true);
+  it("keeps an admitted primitive that RE-DECLARES its reviewed class", async () => {
+    // Re-declaring the class the host declared is a no-op — same digest, same
+    // reviewed record.
+    await expect(
+      registers(ADMITTED, { delegatedChat: HOST_PRIMITIVE_DECLARATIONS[ADMITTED] }),
+    ).resolves.toBe(true);
+  });
+
+  it("WITHDRAWS an admitted primitive that declares a DIFFERENT chat-eligible class", async () => {
+    // cinatra#2817: a class is not a preference, it is what was reviewed. A
+    // registration that declares something else produces a different digest and
+    // misses the record — so a primitive cannot quietly re-classify itself from
+    // `read` to `dispatch` after review.
+    const reviewed = HOST_PRIMITIVE_DECLARATIONS[ADMITTED];
+    for (const cls of ["read", "discovery", "dispatch"].filter((c) => c !== reviewed)) {
+      await expect(registers(ADMITTED, { delegatedChat: cls })).resolves.toBe(false);
     }
   });
 

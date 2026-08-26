@@ -224,10 +224,10 @@ export type ServableChatPrimitive = {
    *
    * ABSENT MEANS UNEXPOSED, not neutral (owner ruling, cinatra#2771): a
    * primitive with no class in force is dropped from the catalog. The host
-   * resolves this with the policy's `resolveDelegatedChatClass` before seeding,
-   * so an undeclared-but-legacy-admitted name arrives here already carrying its
-   * interim class. A caller that seeds nothing here gets an EMPTY catalog, by
-   * design.
+   * seeds this from the delegated-chat capability PLAN (cinatra#2817): every
+   * servable entry carries the class its registration put in force, already
+   * decided by `evaluateDelegatedChatAdmission`. A caller that seeds nothing
+   * here gets an EMPTY catalog, by design.
    */
   declaredClass?: string | null;
   /**

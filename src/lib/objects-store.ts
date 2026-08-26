@@ -21,7 +21,7 @@ import { assertProjectWritableSync } from "@/lib/project-writable";
 // `projectContext` frame via mcpRequestContextStorage; the canonical objects
 // writers read it here and, subject to substrate exclusion, propagate the
 // projectId to the new objects row at INSERT time.
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { resolveProjectInheritanceForType } from "@/lib/project-inheritance";
 
 /**
