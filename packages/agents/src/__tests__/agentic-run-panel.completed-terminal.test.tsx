@@ -22,7 +22,7 @@
  *     src/__tests__/agentic-run-panel.completed-terminal.test.tsx
  */
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("lucide-react", () => {
@@ -108,8 +108,28 @@ vi.mock("../run-actions", () => ({
   readRunOutputEvidence: (args: { runId: string }) => readRunOutputEvidenceMock(args),
 }));
 
+// cinatra#2997 — the run card holds its placeholder for ONE look before drawing
+// a terminal rendering, so that a completion notice is never painted in front of
+// a review that is about to open. These cases are about a run with NO review, so
+// the look is answered with exactly that: the run's own seed route, saying the
+// slot is empty. Without it the answer arrives as a transport failure instead,
+// which is the same drawing by a slower route and makes the timing of these
+// assertions depend on how loaded the machine is.
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      new Response(JSON.stringify({ reviewGate: { ref: null, awaiting: false } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -132,11 +152,16 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps()} />);
 
+    // WAIT FOR THE CARD'S OWN COPY, not just its root. The card mounts with its
+    // output evidence still in flight and names the outcome once it lands, and
+    // since cinatra#2997 the card itself mounts one look later — so asserting
+    // the copy the instant the root appears is a race this test used to win by
+    // accident.
     await waitFor(() =>
-      expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
+      expect(screen.queryByText(/run finished without output/i)).not.toBeNull(),
     );
+    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
     expect(screen.queryByText(/no messages yet/i)).toBeNull();
-    expect(screen.queryByText(/run finished without output/i)).not.toBeNull();
     expect(screen.queryByRole("button", { name: /start new run/i })).not.toBeNull();
   });
 
@@ -158,21 +183,34 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     ).toBe("/artifacts/obj-draft");
   });
 
-  it("leaves a queued run's live empty state exactly as it was", async () => {
+  // A LIVE RUN IS NOT THIS CARD'S SUBJECT ANY MORE (cinatra#2997). These two
+  // pins used to read the panel's live empty states — "Waiting to start..." for
+  // `queued`, "No messages yet." for `running`. The maintainer's request for
+  // changes on pull request 2890 replaced that whole reading: "The 'Agentic Run
+  // Progress' card should basically just be a card (maybe even an empty review
+  // screen) with a spinning icon which is a temporary placeholder for the review
+  // screen." So a working run draws the placeholder and says nothing, and what
+  // survives here is what these pins were really guarding for #2482 — that a
+  // live run shows NO completion card and asks for no output evidence. The
+  // placeholder itself is pinned in agentic-run-panel.review-slot.test.tsx.
+  it("shows no completion card for a queued run, and asks for no output", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps({ initialStatus: "queued" })} />);
 
-    expect(screen.queryByText(/waiting to start/i)).not.toBeNull();
+    expect(screen.queryByText(/waiting to start/i)).toBeNull();
     expect(document.querySelector("[data-run-completion]")).toBeNull();
     expect(readRunOutputEvidenceMock).not.toHaveBeenCalled();
   });
 
-  it("leaves a running run alone", async () => {
+  it("shows no completion card for a running run", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps({ initialStatus: "running" })} />);
 
     expect(document.querySelector("[data-run-completion]")).toBeNull();
-    expect(screen.queryByText(/no messages yet/i)).not.toBeNull();
+    expect(screen.queryByText(/no messages yet/i)).toBeNull();
+    expect(
+      document.querySelector('[data-conformance-id="review-gate-placeholder"]'),
+    ).not.toBeNull();
   });
 
   // cinatra#2729: the chat mount shows the card too. A run that finishes in a

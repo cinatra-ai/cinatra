@@ -527,9 +527,15 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         // The note field the composer binding mirrors is part of the offer.
         expect(card.querySelector('[data-testid="review-rationale"]')).not.toBeNull();
       } else {
-        // The slot the recommendation card mounts at. Its OWN mount is owed
-        // (S9h) — what must survive here is the anchored container.
-        const slots = root.querySelectorAll(`[data-inline-run-card="${RUN_ID}"]`);
+        // The slot the recommendation card mounts at — the `agent_run` part's
+        // own container, named by its run.
+        //
+        // RE-ANCHORED (cinatra#2790, epic #2784 S9f). This used to look for the
+        // inline run panel, which was the only thing that container held. Since
+        // the run progress card waits for the skills decision, a held turn draws
+        // no panel — so the anchor moved to the container itself, which is the
+        // thing this class is actually about and cannot be emptied by a state.
+        const slots = root.querySelectorAll(`[data-agent-run-slot="${RUN_ID}"]`);
         expect(
           slots,
           `${cellName(cell)}: the agent_run slot is not in the transcript`,
@@ -682,9 +688,9 @@ describe("the slot that survives is one the real held card can be operated in", 
         });
         installResolveStub();
         const root = await mountTranscript(driven, layout);
-        const stand = root.querySelector<HTMLElement>(`[data-inline-run-card="${RUN_ID}"]`);
-        expect(stand).not.toBeNull();
-        const slot = stand!.parentElement!;
+        const slot = root.querySelector<HTMLElement>(`[data-agent-run-slot="${RUN_ID}"]`);
+        expect(slot, "the agent_run producing container is not in the transcript").not.toBeNull();
+        if (!slot) throw new Error("unreachable — the expectation above throws first");
 
         render(
           <LifecycleCardSurfaceProvider host="chat_thread">

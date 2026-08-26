@@ -12,7 +12,7 @@ import { AuthzError } from "@/lib/authz";
 import { verifySessionAuthority } from "@/lib/org-write/authority";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
-import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
+import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
 import { assertAgentPackageRunnable } from "./runtime-install-gate";
@@ -20,11 +20,9 @@ import {
   readAgentRunById,
   readAgentRunMessages,
   readAgentTemplateBySlug,
-  readAgentTemplateById,
   transitionRunStatus,
   RunTransitionError,
   clearAgentRunFailureMetadata,
-  slugifyAgentTemplateName,
   readAllHitlPromptsForRun,
 } from "./store";
 import {
@@ -42,28 +40,40 @@ import {
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
 import {
-  maybeHoldRunForRecommendation,
-  readRecommendationParkForRun,
-} from "./recommendation-hold";
-import {
-  advanceAgentRun,
-  clearRunLifecycleMoment,
   launchAgentRun,
   runIdFromFailedLaunch,
 } from "./lifecycle-coordinator";
+import {
+  dispatchRunStartForPrincipal,
+  type RunStartDispatchArgs,
+  type RunStartDispatchResult,
+} from "./run-dispatch-core";
 
-export type TriggerAgentRunArgs = {
-  runId: string;
-  templateSlug: string; // used for run/template consistency check
-};
+/**
+ * The run-start dispatch's public shape, unchanged. The names are the ones every
+ * caller and the package barrel already import; the shapes now live beside the
+ * dispatch itself (`run-dispatch-core.ts`), so the session entry below and the
+ * broker entry cannot drift apart on them.
+ */
+export type TriggerAgentRunArgs = RunStartDispatchArgs;
+export type TriggerAgentRunResult = RunStartDispatchResult;
 
-export type TriggerAgentRunResult =
-  | { ok: true }
-  // `code`/`settingsHref` carry an actionable run-preflight failure
-  // (a missing/unconfigured connector or LLM provider) so the UI can
-  // deep-link the fix instead of showing a generic "enqueue failed".
-  | { ok: false; error: string; code?: string; settingsHref?: string };
-
+/**
+ * THE COOKIE HOST'S RUN-START DISPATCH (the Run button, the run dialog, and the
+ * chip-row's release on a signed-in surface).
+ *
+ * WHAT THIS FUNCTION IS NOW: step 1 — resolve who is calling — and nothing else.
+ * The ladder it used to contain (the run load, the ownership check, the
+ * pre-dispatch state ladder, the template consistency check, the recommendation
+ * hold evaluation, the member-authority mint, the `→queued` CAS and the enqueue
+ * with its compensation) did not change; it moved to
+ * `dispatchRunStartForPrincipal`, so the site widget's decision reaches exactly
+ * the same code with the principal its OWN credential proved instead of an
+ * ambient cookie (cinatra#2790, epic #2784 S9f).
+ *
+ * The session is resolved HERE and can never be supplied by a caller: this is a
+ * `"use server"` export, which is to say a client-callable endpoint.
+ */
 export async function triggerAgentRun(
   args: TriggerAgentRunArgs,
 ): Promise<TriggerAgentRunResult> {
@@ -72,207 +82,8 @@ export async function triggerAgentRun(
   const userId = session?.user?.id ?? null;
   if (!userId) return { ok: false, error: "unauthorized" };
 
-  // 2. Load run
-  const run = await readAgentRunById(args.runId);
-  if (!run) return { ok: false, error: "run not found" };
-
-  // 3. Ownership check
-  if (run.runBy && run.runBy !== userId) {
-    return { ok: false, error: "forbidden" };
-  }
-
-  // 4. State check (also enforced atomically in step 6, but we short-circuit
-  //    here to give the client a clean error before any DB write).
-  //
-  // cinatra#2523: `pending_trigger` is the second pre-dispatch waiting state —
-  // setup finished, the user is answering "When should this run?". A run parked
-  // at the run-start recommendation interception from THERE is released through
-  // this same canonical dispatcher, so refusing it outright would leave the
-  // chip-row decision with nothing to do and no way to say so.
-  //
-  // But this is a PUBLIC server action, so "the owner asked" is not enough to
-  // admit that state: it would let a run be dispatched straight past the trigger
-  // step the state exists to wait for. Admit it only on the evidence that put it
-  // here — a run-start recommendation park that has been DECIDED.
-  //
-  // "Decided" is checked HERE, not left to the live-park short-circuit below:
-  // that read and the hold evaluation after it are both fail-OPEN, so a
-  // truthiness test on the park row would let an undecided run through whenever
-  // those reads failed (codex round-3 finding). A missing park, an unreadable
-  // park, and a park still `parked` all refuse.
-  if (run.status !== "pending_input") {
-    const park =
-      run.status === "pending_trigger"
-        ? await readRecommendationParkForRun(args.runId).catch(() => null)
-        : null;
-    if (!park || park.status === "parked") {
-      return { ok: false, error: "run is not in pending_input state" };
-    }
-  }
-
-  // 5. templateSlug consistency check — verify the run actually belongs to
-  //    the template the client thinks it does. Prevents a malicious or
-  //    confused client from triggering a run under the wrong template URL.
-  const template = await readAgentTemplateById(run.templateId);
-  // Accept: UUID, name-derived slug, or vendor/packageName (new package-name
-  // routing — packageName stored with "@" prefix, agentId passed without it).
-  const normalizedPkg = template?.packageName?.replace(/^@/, "") ?? "";
-  if (
-    !template ||
-    (template.id !== args.templateSlug &&
-      slugifyAgentTemplateName(template.name) !== args.templateSlug &&
-      normalizedPkg !== args.templateSlug)
-  ) {
-    return { ok: false, error: "template mismatch" };
-  }
-
-  // 5b. Run-start recommendation HOLD (cinatra#2067, epic #2037 C3). A
-  //     human-present run parks at the recommendation interception until the
-  //     chip-row confirm/adjust/skip decision releases it. If a live park
-  //     already exists, the run is awaiting that decision — the Run button must
-  //     not re-dispatch (the run view shows the chip-row instead). If no
-  //     decision yet AND the checkpoint fires with candidates, park now and
-  //     return ok WITHOUT dispatching (the run stays pending_input; the run
-  //     view renders the chip-row). Best-effort: any failure fails OPEN to a
-  //     normal dispatch — a recommendation hold must never block a run.
-  const livePark = await readRecommendationParkForRun(args.runId).catch(() => null);
-  if (livePark?.status === "parked") {
-    return { ok: true };
-  }
-  try {
-    const hold = await maybeHoldRunForRecommendation({
-      run,
-      template: {
-        packageName: template.packageName,
-        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
-      },
-    });
-    if (hold.held) {
-      // Parked — the chip-row (via confirm/skipRunRecommendationAction) releases
-      // it and dispatches. Do NOT transition or enqueue here.
-      return { ok: true };
-    }
-  } catch (err) {
-    // The run id is a request-controlled value; keep it OUT of the console
-    // format-string position (pass it as a discrete argument) so a `%`-bearing
-    // id can never be interpreted as a util.format specifier (CodeQL
-    // js/tainted-format-string).
-    console.warn(
-      "[triggerAgentRun] recommendation hold evaluation failed for run",
-      args.runId,
-      "— dispatching normally:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-  // Owner's member session grounds both the dispatch and its compensation.
-  const authority = await verifySessionAuthority(userId, run.orgId);
-
-  // 6. Atomic compare-and-swap onto `queued`. Returns false if a concurrent
-  //    request already won the race.
-  //
-  // cinatra#2523 made this a two-rung ladder for the same reason as the state
-  // check above: both pre-dispatch waiting states are legal dispatch sources,
-  // and the rung that WINS is remembered so the compensation below reverts the
-  // run to where it actually was rather than rewriting its state.
-  //
-  // CONTINUE IS ADVANCE (cinatra#2928). Both rungs go through the coordinator's
-  // release entry. The rung ladder is unchanged, and the release is asked to
-  // THROW on a lost race precisely so the losing rung stays distinguishable
-  // from the winning one.
-  //
-  // THE MOMENT IS CLEARED AFTER THE ENQUEUE BELOW, not inside the release: this
-  // frame owns the dispatch (`caller_dispatches`), so the release cannot see
-  // whether the run really got a job, and a clear made before that answer is
-  // lost the moment the compensation puts the run back at its wait — leaving a
-  // parked run with nothing to say what it is waiting for.
-  let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
-  for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
-    try {
-      await advanceAgentRun({
-        run,
-        release: {
-          reason: "continue",
-          from,
-          to: "queued",
-          onLostRace: "throw",
-          dispatch: {
-            kind: "caller_dispatches",
-            why: "the compensation below reverts to the rung that actually won, so this frame owns the enqueue",
-          },
-        },
-        authority,
-      });
-      dispatchedFrom = from;
-      break;
-    } catch (err) {
-      if (err instanceof RunTransitionError && err.code === "stale_from_status") continue;
-      throw err;
-    }
-  }
-  if (dispatchedFrom === null) {
-    return { ok: false, error: "run is not in pending_input state" };
-  }
-
-  // 7. Enqueue with jobId=runId for BullMQ-level dedup. If this throws,
-  //    compensate by reverting to pending_input so the run does not get
-  //    stuck in 'queued' forever.
-  try {
-    await enqueueAgentRun(
-      { runId: args.runId },
-      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity,
-      // projected so the run-start connector + LLM-provider preflights both fire.
-      { jobId: args.runId, ...enqueueDepsForTemplate(template) },
-    );
-  } catch (err) {
-    // Compensation: undo the queued transition. We use the conditional
-    // helper again (queued → pending_input) so we never accidentally
-    // revert a run that has already been picked up by a worker.
-    // Revert to the state the run was ACTUALLY in (cinatra#2523) — reverting a
-    // `pending_trigger` run to `pending_input` would silently undo its finished
-    // setup step and send the user back through the form.
-    await transitionRunStatus(
-      args.runId,
-      "queued",
-      dispatchedFrom,
-      undefined,
-      authority,
-    ).catch(() => {
-      // Best-effort: log but do not mask the original error.
-      console.error(
-        "[triggerAgentRun] compensation revert failed for run",
-        args.runId,
-        err,
-      );
-    });
-    // Surface an actionable connector/LLM-provider preflight failure to the
-    // user (cinatra#1056/#1062) instead of a generic "enqueue failed".
-    const actionable = asActionablePreflightError(err);
-    if (actionable) return { ok: false, ...actionable };
-    return { ok: false, error: "enqueue failed" };
-  }
-
-  // DISPATCHED — the moment is over (cinatra#2928). The clear is COMPARE-AND-
-  // CLEAR ON THE MOMENT, not on a status: it takes off the moment it read, so a
-  // run that has parked again in the meantime keeps whatever its new park
-  // stated. A status guard would be the wrong shape here — the status this frame
-  // dispatched into is left almost at once, as soon as a worker picks the run
-  // up, and a clear pinned to it would miss the ordinary case.
-  await clearRunLifecycleMoment(args.runId, authority);
-
-  return { ok: true };
+  return dispatchRunStartForPrincipal(args, { via: "session", userId });
 }
-
-/**
- * The run statuses the canonical run-START dispatcher accepts (cinatra#2523).
- * Both are PRE-DISPATCH waiting states with a legal `→queued` edge:
- *   - `pending_input`   — created, never dispatched (or returned from `armed`);
- *   - `pending_trigger` — setup finished, awaiting the user's trigger choice.
- *
- * Declared next to `triggerAgentRun` because the run-start recommendation
- * chip-row releases its park through it: a run parked from `pending_trigger`
- * must dispatch on the decision, not be misread as "already advanced".
- */
-const RUN_START_DISPATCH_FROM_STATUSES = ["pending_input", "pending_trigger"] as const;
 
 export type CreatePendingRunArgs = {
   templateSlug: string;

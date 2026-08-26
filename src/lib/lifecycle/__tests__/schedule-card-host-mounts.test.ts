@@ -82,6 +82,19 @@ const RAIL_PLACEMENTS = {
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
 } as const;
 
+/**
+ * HOW each page places it. The review page has ONE gate step and places the
+ * one-step component; the run page has TWO since cinatra#2790 (S9f) — plan (A)
+ * §6.2 puts the recommendation at the trigger position, above the schedule — so
+ * it composes the shared frame with the schedule's own row and surface in it.
+ * Either way the schedule step is placed ONCE, by the module that owns both
+ * columns, and neither page mounts the card itself.
+ */
+const RAIL_STEP_TAGS = {
+  run_card: [/<\s*ScheduleRailStepRow\b/, /<\s*ScheduleStepSurface\b/],
+  page_gate_region: [/<\s*ScheduleRailStep\b/],
+} as const;
+
 const REVIEW_PAGE =
   "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx";
 
@@ -121,18 +134,18 @@ describe("the four mounts exist and are host-declared", () => {
     expect(source).toMatch(/host:\s*"run_card"\s*\|\s*"page_gate_region"/);
   });
 
-  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the review
-  // page's gate region holds the review card alone.
-  it("both pages place the rail STEP and neither mounts the card — the gate region is the review card's alone", () => {
+  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the
+  // review page's gate region draws no schedule card at all.
+  it("both pages place the rail STEP and neither mounts the card — the gate region draws no schedule card", () => {
     for (const [host, rel] of Object.entries(RAIL_PLACEMENTS)) {
       const source = read(rel);
-      expect(source, `${host}: ${rel} places the rail step`).toMatch(
-        /<\s*ScheduleRailStep\b/,
-      );
-      expect(
-        source.match(/<\s*ScheduleRailStep\b/g),
-        `${host}: ${rel} places it ONCE`,
-      ).toHaveLength(1);
+      for (const tag of RAIL_STEP_TAGS[host as keyof typeof RAIL_STEP_TAGS]) {
+        expect(source, `${host}: ${rel} places the rail step (${tag})`).toMatch(tag);
+        expect(
+          source.match(new RegExp(tag.source, "g")),
+          `${host}: ${rel} places it ONCE (${tag})`,
+        ).toHaveLength(1);
+      }
       expect(source).toContain(`host="${host}"`);
       // THE TWO COLUMNS TRAVEL WITH IT. A placement that passed no rail and no
       // detail would be drawing the step somewhere it does not own the frame —
@@ -148,10 +161,11 @@ describe("the four mounts exist and are host-declared", () => {
         /<\s*ScheduleProposalCard\b/,
       );
     }
-    // THE GATE REGION. The review page's `page_gate_region` provider now wraps
-    // the review card and nothing else — the composition the plan requires. The
-    // schedule step opens IN that region, in place of the card, which is what
-    // makes "the two can never appear together" structural.
+    // THE GATE REGION. The review page's `page_gate_region` provider wraps the
+    // recommendation hold card above the review gate card (S9f, cinatra#2790)
+    // and no schedule drawing of any kind — the composition the plan requires.
+    // The schedule step opens IN that region, in place of a schedule card, which
+    // is what makes "the two can never appear together" structural.
     const reviewPage = read(REVIEW_PAGE);
     expect(reviewPage).not.toMatch(/<\s*ScheduleProposalCard\b/);
     expect(reviewPage).toMatch(/<LifecycleCardSurfaceProvider host="page_gate_region">/);

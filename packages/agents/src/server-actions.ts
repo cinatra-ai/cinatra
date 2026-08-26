@@ -11,9 +11,7 @@ import "@/lib/register-host-connector-services";
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import {
   buildSkillResourceRef,
-  enforceRunAccess,
   requireResourceAccess,
-  resolveEffectivePolicy,
 } from "./auth-policy";
 import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
@@ -22,20 +20,13 @@ import {
   readSkillsCatalog,
   resolveEffectiveSkillAccessPolicy,
 } from "@cinatra-ai/skills";
-import {
-  readAgentRunById,
-  readAgentTemplateById,
-  readRunCoOwners,
-} from "./store";
-import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
+import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
 // re-homed into core off the now-retired recommender agent binding.
-import {
-  getRunRecommendations,
-  confirmRunSkillSelection,
-} from "./recommendation-interception";
+import { getRunRecommendations } from "./recommendation-interception";
+import { writeRunSkillSelectionForActor } from "./run-recommendation-core";
 import type {
   RankedRecommendation,
   RecommendationEfficacy,
@@ -301,106 +292,58 @@ export async function confirmRunSkillSelectionAction(input: {
   forcedRevisions?: Record<string, string>;
   /**
    * The kept skills the reader settled through ADJUST (cinatra#2841). Bounded by
-   * the SAME assigned-set filter as `forcedRevisions` below — it only ever
-   * relabels a row this caller could already write, never admits one.
+   * the SAME assigned-set filter as `forcedRevisions` — it only ever relabels a
+   * row this caller could already write, never admits one.
    */
   adjustedSkillIds?: string[];
   restrictToSkillIds?: string[];
 }): Promise<ConfirmRunSkillSelectionActionResult> {
+  // THE SESSION ENTRY TO THE ONE SELECTION WRITE (cinatra#2790, epic #2784 S9f).
+  //
+  // The gate this action used to spell out here — load the bare run, build the
+  // write-tier enforcement context (co-owners + concrete effective policy),
+  // enforce EXECUTE, derive the agent package from the RUN'S template rather than
+  // the caller-supplied name, and bound the written set to the agent's assigned
+  // deliverable skills resolved with this caller's scope — now lives in
+  // `writeRunSkillSelectionForActor`, and this action supplies the actor.
+  //
+  // Nothing was relaxed in the move: the same checks run in the same order. What
+  // changed is that the SITE WIDGET's confirm reaches the identical write with an
+  // actor built from its own broker credential, instead of there being a second
+  // implementation for it to drift from.
+  //
+  // `agentPackageName` and `restrictToSkillIds` stay in the input for call-site
+  // compatibility and are deliberately IGNORED, exactly as before: the package is
+  // re-derived from the run's template, and the restriction is the assigned set.
   const empty: ConfirmRunSkillSelectionActionResult = {
     ok: false,
     written: 0,
     efficacy: { accepted: [], rejected: [] },
   };
   const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return empty;
-  try {
-    if (!input.runId) return empty;
-
-    // AUTHORIZE the caller against THIS run before writing its authoritative
-    // selection set (cinatra#2041 S3). The set the bridge/snapshot later trust
-    // is keyed by the server-vetted run id, so an un-authorized write would
-    // poison another run's delivery. Writing the set MUTATES what the run
-    // delivers, so it requires EXECUTE-tier authority — not merely read (a
-    // workspace-READ / owner-EXECUTE run must deny a non-owner reader). Mirror
-    // the run_resume execute gate: load the bare run, build the write-tier
-    // enforcement context (co-owners + effective policy), and enforce "execute".
-    // Deny (empty) on any failure.
-    const kernel = await requireActorContext().catch(() => null);
-    if (!kernel) return empty;
-    const roleHints: ActorRoleHints = {
-      ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
-      ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
-      ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
-      ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
-      ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
-      actorOrganizationId: kernel.organizationId ?? null,
-    };
-    const run = await readAgentRunById(input.runId).catch(() => null);
-    if (!run) return empty;
-    const runTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
-    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map((r) => r.userId);
-    // Resolve the CONCRETE effective policy — `resolveEffectivePolicy` always
-    // installs the owner-only `DEFAULT_AGENT_AUTH_POLICY` when neither the run
-    // nor the template declares one. A bare `?? null` would leave the policy
-    // undefined, and `enforceRunAccess` then SKIPS the policy gate — an ordinary
-    // same-org member (kernel `run.resume`) would pass the execute check and be
-    // able to write another user's default (owner-only) run's selection set.
-    const runWithCoOwners = {
-      ...run,
-      effectivePolicy: resolveEffectivePolicy(run, runTemplate),
-      coOwnerUserIds,
-    };
-    try {
-      await enforceRunAccess(runWithCoOwners, actorFromSession(session), "execute", roleHints);
-    } catch {
-      return empty;
-    }
-
-    // Derive the agent package from the RUN'S template — NEVER the caller-
-    // supplied `agentPackageName` (a caller with execute on their OWN run A
-    // could otherwise confirm agent B's skill under run A, bypassing A's agent's
-    // assigned-set restriction, and the bridge would deliver it unverified).
-    const agentPackageName = runTemplate?.packageName;
-    if (!agentPackageName) return empty;
-
-    // Bound the write to the agent's already-assigned, runtime-deliverable
-    // skills (resolved with the caller's actor scope). The confirmed set — and
-    // any FORCED (non-recommended) skill the human added — is therefore always a
-    // subset of what the agent could already deliver; a caller cannot force an
-    // archived / excluded / unassigned skill into the run's authoritative set.
-    const assignedIds = await getAssignedSkillIdsForAgent(agentPackageName, {
-      principalId: kernel.principalId,
-      teamIds: kernel.teamIds,
-      projectIds: kernel.projectIds,
-      organizationId: kernel.organizationId ?? undefined,
-    }).catch(() => [] as string[]);
-    const allowed = new Set(assignedIds);
-    const forcedRevisions = input.forcedRevisions
-      ? Object.fromEntries(
-          Object.entries(input.forcedRevisions).filter(([skillId]) => allowed.has(skillId)),
-        )
-      : undefined;
-    // Same bound, same reason: an id outside the agent's assigned deliverable
-    // set cannot influence what the run records, not even its label.
-    const adjustedSkillIds = input.adjustedSkillIds?.filter((skillId) => allowed.has(skillId));
-
-    const result = await confirmRunSkillSelection({
-      runId: input.runId,
-      agentId: agentPackageName,
-      intent: {
-        promptText: input.promptText,
-        declaredProducedTypes: input.declaredProducedTypes,
-        targetArtifactKind: input.targetArtifactKind,
-      },
-      confirmedSkillIds: input.confirmedSkillIds,
-      forcedRevisions,
-      adjustedSkillIds,
-      // A true restriction (candidates ⊆ the assigned deliverable set).
-      restrictToSkillIds: assignedIds,
-    });
-    return { ok: true, written: result.written, efficacy: result.efficacy };
-  } catch {
-    return empty;
-  }
+  const userId = session?.user?.id ?? null;
+  if (!userId) return empty;
+  const kernel = await requireActorContext().catch(() => null);
+  if (!kernel) return empty;
+  const roleHints: ActorRoleHints = {
+    ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
+    ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
+    ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
+    ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
+    ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
+    actorOrganizationId: kernel.organizationId ?? null,
+  };
+  return writeRunSkillSelectionForActor({
+    runId: input.runId,
+    confirmedSkillIds: input.confirmedSkillIds,
+    who: {
+      actor: { actorType: "human", source: "ui", userId },
+      roleHints,
+    },
+    ...(input.promptText !== undefined ? { promptText: input.promptText } : {}),
+    ...(input.declaredProducedTypes ? { declaredProducedTypes: input.declaredProducedTypes } : {}),
+    ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
+    ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
+    ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+  });
 }

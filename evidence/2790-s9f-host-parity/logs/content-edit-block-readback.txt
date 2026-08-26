@@ -1,0 +1,18 @@
+# cinatra#2790 S9f round 2 — content-edit block readback, 2026-08-25T18:10:44.931Z
+
+## every agent_run in the lane, with its MOMENT columns
+id=7203a181-233e-4e9f-8aa4-57d27a5607b0 | status=running | source_type=agent_builder | human_present=true | lifecycle_moment=NULL | lifecycle_card_kind=NULL | lifecycle_card_ref=NULL | created_at=2026-08-20T05:25:20.552Z
+id=f9733961-10a6-444e-8275-eb61c4e96efb | status=running | source_type=agent_builder | human_present=true | lifecycle_moment=NULL | lifecycle_card_kind=NULL | lifecycle_card_ref=NULL | created_at=2026-08-20T05:25:38.660Z
+
+## carrier runs of the widget's kind — the run this chain would have created
+carrier_runs=0
+
+## recommendation parks — the moment it would have opened
+recommendation_parks=0
+
+## widget sessions minted — each row, so the count is BOUND rather than asserted
+jti=da67a4d9-0ae6-42aa-95ec-e586eaed620f | client=wordpress | agent_slug=wordpress-content-editor | instance_id=s9f-r2-local-site | site_origin=http://127.0.0.1:5591 | scope=wordpress-content-editor.user conversation.read conversation.write lifecycle.decide lifecycle.read tools.confirm | created_at=2026-08-25T18:04:12.109Z
+
+## the provider that answered, and when — the platform's own metering row
+provider=openai | model=gpt-5.5 | operation=stream | source=llm | occurred_at=2026-08-25T17:25:03.438Z | created_at=2026-08-25T17:25:03.446Z
+provider=openai | model=gpt-5.5 | operation=stream | source=llm | occurred_at=2026-08-25T18:04:30.898Z | created_at=2026-08-25T18:04:30.902Z

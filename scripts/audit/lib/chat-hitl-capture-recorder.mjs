@@ -174,7 +174,20 @@ export function classifyUrl(finalUrl) {
  */
 export const HOST_URL_CLASSES = Object.freeze({
   chat_thread: Object.freeze(["chat"]),
-  run_card: Object.freeze(["run_detail"]),
+  // TWO CLASSES, AND THE SECOND IS THE CONVERSATION (cinatra#2997). The
+  // `run_card` host is the RUN'S OWN CARD, and that card is drawn on two
+  // surfaces: the run page, and inside a conversation, where it is the inline
+  // run panel. It has always been drawn in both — what changed is that it now
+  // draws a LIFECYCLE CARD in the conversation too, because the maintainer ruled
+  // the run card IS the review screen once the work opens one: "Once the agent
+  // is done and the output generated, that 'Agentic Run Progress' card is being
+  // automatically replaced with the 'Review requested' screen. On the run page,
+  // the same is true." (the request for changes on pull request 2890; PLAN:
+  // Agents Lifecycle (A) section 4.2 carries the same sentence). The canonical
+  // half of this contract (`scripts/ci/lib/capture-record-contract.mjs`,
+  // `HOST_URL_CLASS`) carries the identical pair, so the two halves still
+  // classify identically.
+  run_card: Object.freeze(["run_detail", "chat"]),
   page_gate_region: Object.freeze(["review_page"]),
   site_widget: null,
 });

@@ -1,0 +1,50 @@
+ POST /api/mcp 200 in 298ms (next.js: 4ms, proxy.ts: 5ms, application-code: 289ms)
+ POST /api/mcp 200 in 35ms (next.js: 3ms, proxy.ts: 2ms, application-code: 29ms)
+ POST /api/mcp 200 in 1196ms (next.js: 7ms, proxy.ts: 4ms, application-code: 1185ms)
+[llm-bridge-run-select] served-by=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 136ms (next.js: 7ms, proxy.ts: 2ms, application-code: 128ms)
+ POST /api/mcp 200 in 57ms (next.js: 2ms, proxy.ts: 1890µs, application-code: 53ms)
+ POST /api/mcp 200 in 103ms (next.js: 3ms, proxy.ts: 19ms, application-code: 81ms)
+ POST /api/mcp 200 in 84ms (next.js: 2ms, proxy.ts: 1964µs, application-code: 80ms)
+ POST /api/mcp 200 in 35ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 31ms)
+ POST /api/mcp 200 in 40ms (next.js: 6ms, proxy.ts: 6ms, application-code: 27ms)
+ POST /api/mcp 200 in 935ms (next.js: 2ms, proxy.ts: 1613µs, application-code: 931ms)
+[llm-bridge-run-select] served-by=run_token run=63ba0918-5b74-442e-808b-97dc282cdcbe org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 109ms (next.js: 4ms, proxy.ts: 1554µs, application-code: 103ms)
+ POST /api/mcp 200 in 46ms (next.js: 2ms, proxy.ts: 1437µs, application-code: 42ms)
+ POST /api/mcp 200 in 118ms (next.js: 3ms, proxy.ts: 46ms, application-code: 70ms)
+ POST /api/mcp 200 in 33ms (next.js: 2ms, proxy.ts: 1239µs, application-code: 29ms)
+ POST /api/mcp 200 in 831ms (next.js: 2ms, proxy.ts: 1274µs, application-code: 827ms)
+[llm-bridge-run-select] served-by=run_token run=06c64824-9899-4c2b-9e25-159fc8a60c2a org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 89ms (next.js: 5ms, proxy.ts: 1682µs, application-code: 82ms)
+ POST /api/mcp 200 in 54ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 50ms)
+ POST /api/mcp 200 in 121ms (next.js: 3ms, proxy.ts: 44ms, application-code: 75ms)
+ POST /api/mcp 200 in 29ms (next.js: 2ms, proxy.ts: 1507µs, application-code: 25ms)
+ POST /api/mcp 200 in 32ms (next.js: 2ms, proxy.ts: 1548µs, application-code: 28ms)
+ POST /api/mcp 200 in 69ms (next.js: 3ms, proxy.ts: 1810µs, application-code: 64ms)
+ POST /api/mcp 200 in 35ms (next.js: 2ms, proxy.ts: 1580µs, application-code: 31ms)
+ POST /api/mcp 200 in 886ms (next.js: 2ms, proxy.ts: 1515µs, application-code: 882ms)
+[llm-bridge-run-select] served-by=run_token run=fee52d80-a808-4ca8-b9b8-26f19866d571 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 97ms (next.js: 4ms, proxy.ts: 1390µs, application-code: 91ms)
+ POST /api/mcp 200 in 53ms (next.js: 2ms, proxy.ts: 1730µs, application-code: 49ms)
+ POST /api/mcp 200 in 89ms (next.js: 3ms, proxy.ts: 4ms, application-code: 82ms)
+ POST /api/mcp 200 in 30ms (next.js: 2ms, proxy.ts: 1462µs, application-code: 26ms)
+ POST /api/mcp 200 in 1012ms (next.js: 3ms, proxy.ts: 1636µs, application-code: 1008ms)
+[llm-bridge-run-select] served-by=run_token run=b63db643-5a60-4e67-956f-a06184b82035 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 112ms (next.js: 5ms, proxy.ts: 1492µs, application-code: 106ms)
+ POST /api/mcp 200 in 55ms (next.js: 3ms, proxy.ts: 4ms, application-code: 48ms)
+ POST /api/mcp 200 in 118ms (next.js: 3ms, proxy.ts: 40ms, application-code: 74ms)
+ POST /api/mcp 200 in 42ms (next.js: 2ms, proxy.ts: 1622µs, application-code: 38ms)
+ POST /api/mcp 200 in 973ms (next.js: 8ms, proxy.ts: 4ms, application-code: 962ms)
+[llm-bridge-run-select] served-by=run_token run=52f8b620-b4c4-4ecd-9635-93acdd0e7485 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 89ms (next.js: 6ms, proxy.ts: 1503µs, application-code: 82ms)
+ POST /api/mcp 200 in 57ms (next.js: 3ms, proxy.ts: 1596µs, application-code: 52ms)
+ POST /api/mcp 200 in 248ms (next.js: 9ms, proxy.ts: 122ms, application-code: 117ms)
+ POST /api/mcp 200 in 46ms (next.js: 3ms, proxy.ts: 12ms, application-code: 31ms)
+ POST /api/mcp 200 in 958ms (next.js: 3ms, proxy.ts: 2ms, application-code: 953ms)
+[wayflow] run=aef0f05a-94c9-41ed-a497-798603ecd6bc task=25bfe287-525b-43e1-89dc-0102c21d5fe6 state=input-required status={"state":"input-required","timestamp":"2026-08-24T23:52:40.637850"} artifacts=null
+[human-gate-park] run=aef0f05a-94c9-41ed-a497-798603ecd6bc parked on WayFlow gate wayflow-25bfe287-525b-43e1-89dc-0102c21d5fe6
+[llm-bridge-run-select] served-by=run_token run=aef0f05a-94c9-41ed-a497-798603ecd6bc org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 162ms (next.js: 5ms, proxy.ts: 61ms, application-code: 96ms)
+ POST /api/mcp 200 in 61ms (next.js: 3ms, proxy.ts: 2ms, application-code: 55ms)
+[wayflow] run=aef0f05a-94c9-41ed-a497-798603ecd6bc task=cc0c13fa-2eb5-45fc-9f0d-2e398472cd45 state=completed status={"state":"completed","timestamp":"2026-08-24T23:53:30.525688"} artifacts=null

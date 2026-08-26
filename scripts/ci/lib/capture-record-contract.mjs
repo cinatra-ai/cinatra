@@ -122,10 +122,30 @@ export const URL_CLASSES = {
   embed_assistant: /^\/embed\/assistant(?:[/?#]|$)/,
 };
 
-/** Which URL class each host is photographed on. */
+/**
+ * Which URL class each host is photographed on.
+ *
+ * A HOST CAN LEGITIMATELY APPEAR ON TWO CLASSES, and exactly one does
+ * (cinatra#2997). The `run_card` host is the RUN'S OWN CARD, and that card is
+ * drawn on two surfaces: the run page, and inside a conversation, where it is
+ * the inline run panel. It has always been drawn in both — what changed is that
+ * it now draws a LIFECYCLE CARD in the conversation too, because the maintainer
+ * ruled the run card IS the review screen once the work opens one:
+ *
+ *   "Once the agent is done and the output generated, that 'Agentic Run
+ *    Progress' card is being automatically replaced with the 'Review requested'
+ *    screen. On the run page, the same is true."
+ *   — the request for changes on pull request 2890; PLAN: Agents Lifecycle (A)
+ *     section 4.2 carries the same sentence.
+ *
+ * So a `run_card` record taken on a `/chat` path is not a mislabelled cell any
+ * more; it is the conversation's own reading of that host. Every other host
+ * keeps exactly one class, and the list is still closed — a host may only be
+ * photographed on a class named here.
+ */
 export const HOST_URL_CLASS = {
   chat_thread: "chat",
-  run_card: "run_detail",
+  run_card: ["run_detail", "chat"],
   page_gate_region: "review_page",
   site_widget: "embed_assistant",
 };
@@ -349,16 +369,16 @@ export function validateCaptureRecord(record, io = {}) {
 
   // --- the URL class -------------------------------------------------------
   const host = record.declaredHost ?? claim.host;
-  const wantedClass = HOST_URL_CLASS[host];
+  const wantedClasses = [HOST_URL_CLASS[host] ?? []].flat();
   const urlForClass =
     host === "site_widget" ? record.frameUrl ?? record.finalUrl : record.finalUrl;
   const p = pathOf(urlForClass);
   if (!p) {
     push("record/no-final-url", `no usable URL recorded for host "${host}"`);
-  } else if (!URL_CLASSES[wantedClass]?.test(p)) {
+  } else if (!wantedClasses.some((c) => URL_CLASSES[c]?.test(p))) {
     push(
       "record/url-class-mismatch",
-      `host "${host}" is photographed on the ${wantedClass} URL class; this record was taken on "${p}"`,
+      `host "${host}" is photographed on the ${wantedClasses.join(" or ")} URL class; this record was taken on "${p}"`,
     );
   }
 

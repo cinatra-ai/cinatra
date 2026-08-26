@@ -1,0 +1,110 @@
+[
+  {
+    "step": "T1",
+    "what": "held at the recommendation hold; the run has produced NOTHING",
+    "at": "2026-08-23T23:38:37.626Z",
+    "db": {
+      "runStatus": "pending_input",
+      "humanPresent": true,
+      "parkCheckpoint": "recommendation",
+      "parkStatus": "parked",
+      "parkCreatedAt": "2026-08-23T23:38:21.032Z",
+      "representationRows": 0,
+      "producedOutboxRows": 0,
+      "reviewGateRows": 0,
+      "selectionRows": 0
+    }
+  },
+  {
+    "step": "T1b",
+    "what": "the run page is opened while the SAME hold is still parked",
+    "at": "2026-08-23T23:38:56.088Z",
+    "db": {
+      "runStatus": "pending_input",
+      "parkStatus": "parked",
+      "selectionRows": 0,
+      "representationRows": 0,
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+    }
+  },
+  {
+    "step": "T1c",
+    "what": "the REAL provider connection is removed so the agent's own model call resolves the scripted runtime \u2014 this machine has no public MCP ingress for the real provider to load the toolbox from",
+    "at": "2026-08-23T23:38:59.845Z",
+    "db": {
+      "shippedWriter": "clearOpenAIConnection",
+      "readBack": "S9FCHAT PROVIDER_CLEAR {\"storeResolvesAKey\":false,\"revalidateThrewOutsideRequestScope\":\"Invariant: static generation store missing in revalidatePath /agents\"}"
+    }
+  },
+  {
+    "step": "T2",
+    "what": "the decisions are written and the hold is RELEASED",
+    "at": "2026-08-23T23:39:46.505Z",
+    "db": {
+      "runStatus": "pending_approval",
+      "parkStatus": "released",
+      "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+      "selections": [
+        {
+          "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "selection_source": "user_adjusted",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/web-research-skill:web-research",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        }
+      ],
+      "representationRows": 0,
+      "reviewGateRows": 0
+    }
+  },
+  {
+    "step": "T3",
+    "what": "the step executed against the real model and the run reached its state",
+    "at": "2026-08-23T23:39:54.706Z",
+    "db": {
+      "runStatus": "failed",
+      "runCompletedAt": "2026-08-23T23:39:50.537Z",
+      "runError": "artifact materialization failed \u2014 the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cinatra-ai/blog-post-artifact]: titleFrom output \"title\" did not resolve to a non-empty string",
+      "representations": [],
+      "outbox": [],
+      "gates": []
+    },
+    "whatCorrection": "The label above is WRONG and is left standing because this file is the driver's own output. The step did NOT execute against the real model: the real provider connection was removed at row T1c, and `POST /api/llm-bridge` was served by the scripted runtime (`preferredProvider openai unavailable, falling back to configured default` in logs/rework-bridge-readback.txt). The driver's label is corrected to 'the step ran in the runtime and the run reached its state' for any re-run."
+  },
+  {
+    "step": "T4",
+    "what": "the run page is photographed with the question decided",
+    "at": "2026-08-23T23:40:10.185Z",
+    "db": {
+      "runStatus": "failed",
+      "parkStatus": "released",
+      "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+      "selections": [
+        {
+          "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "selection_source": "user_adjusted",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/web-research-skill:web-research",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-23T23:39:20.352Z"
+        }
+      ],
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+    }
+  }
+]
