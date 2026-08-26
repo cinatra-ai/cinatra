@@ -42,6 +42,10 @@ export function HitlSkillChips({ skills }: HitlSkillChipsProps) {
             <Button
               variant="ghost"
               size="sm"
+              // Names the row so its ABSENCE can be counted: the run card of a
+              // run whose skills were decided on the recommendation card draws
+              // no skill picker at all (cinatra#2790, epic #2784 S9f). Passive.
+              data-hitl-skill-picker=""
               className="gap-1 text-muted-foreground hover:text-foreground rounded-chip"
             >
               <span className="text-xs font-medium">Skills ({skills.length})</span>

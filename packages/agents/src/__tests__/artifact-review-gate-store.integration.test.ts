@@ -735,4 +735,161 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect(gate?.status).toBe("pending");
     expect(gate?.resolvedBy).toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // SLOT — what the run card draws where the review screen goes (cinatra#2997).
+  //
+  // The run card is a placeholder for the review screen while the agent works
+  // and becomes that screen when the work opens one, so it asks the run's own
+  // rows: which gate is this run's, and might one still be opened for what it
+  // produced. Read here against the REAL DDL, because both answers are index
+  // shapes as much as they are values.
+  // -------------------------------------------------------------------------
+  it("SLOT: a run with no gate and nothing produced has no review, now or later", async () => {
+    const { runId } = freshGateIds();
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId: null,
+      awaiting: false,
+    });
+  });
+
+  it("SLOT: an unanswered produced output says a review may still open", async () => {
+    const { runId } = freshGateIds();
+    // `emitter` and `origin_kind` are CLOSED SETS on this table (the DDL's own
+    // checks); the produced-artifact path this slot read is about is the first
+    // member of each.
+    await client!.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
+         (event_id, org_id, artifact_id, representation_revision_id, emitter,
+          producer_run_id, origin_kind, destination_class, continuation_mode, status)
+       VALUES ($1, $2, $3, $4, 'createSemanticArtifact', $5, 'agent_produced', 'none', 'async_effects_gated', 'pending')`,
+      [`ev-${randomUUID()}`, ORG, `art-${randomUUID()}`, `rev-${randomUUID()}`, runId],
+    );
+
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId: null,
+      awaiting: true,
+    });
+  });
+
+  it("SLOT: the run's own gate is the answer, and it survives being decided", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
+    });
+
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId,
+      awaiting: false,
+    });
+
+    // A RESOLVED gate is still the answer. The reader who decided in place must
+    // keep seeing what they decided — the card's own settled state draws it —
+    // so the slot does not drop the gate the moment it stops being pending.
+    await client!.query(
+      // A RESOLVED gate must carry its terminal disposition, fingerprint and
+      // resolution time — the DDL's own `..._resolved_chk`. This is a slot read
+      // being exercised against a gate that has been decided, so the row is put
+      // in the shape the CAS leaves it in.
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve',
+              fingerprint = 'fp-slot-test', resolved_at = now(), resolved_by = 'user-slot-test'
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId,
+      awaiting: false,
+    });
+  });
+
+  // A RUN CAN OWE A SECOND REVIEW. The first gate is decided, the run produces
+  // again, and the new outbox row is pending — so the slot must say BOTH: here is
+  // the gate you can still see, AND another review question is open. A reader
+  // that stopped at the first gate would sit on the settled card while the next
+  // review opened behind it.
+  it("SLOT: a decided gate and a NEW unanswered output are reported together", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
+    });
+    await client!.query(
+      // A RESOLVED gate must carry its terminal disposition, fingerprint and
+      // resolution time — the DDL's own `..._resolved_chk`. This is a slot read
+      // being exercised against a gate that has been decided, so the row is put
+      // in the shape the CAS leaves it in.
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve',
+              fingerprint = 'fp-slot-test', resolved_at = now(), resolved_by = 'user-slot-test'
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    // `emitter` and `origin_kind` are CLOSED SETS on this table (the DDL's own
+    // checks); the produced-artifact path this slot read is about is the first
+    // member of each.
+    await client!.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
+         (event_id, org_id, artifact_id, representation_revision_id, emitter,
+          producer_run_id, origin_kind, destination_class, continuation_mode, status)
+       VALUES ($1, $2, $3, $4, 'createSemanticArtifact', $5, 'agent_produced', 'none', 'async_effects_gated', 'pending')`,
+      [`ev-${randomUUID()}`, ORG, `art-${randomUUID()}`, `rev-${randomUUID()}`, runId],
+    );
+
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId,
+      awaiting: true,
+    });
+  });
+
+  it("SLOT: the NEWEST gate is the run's answer when it has more than one", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
+    });
+    // Age the first one so "newest" is decidable without depending on clock
+    // resolution between two inserts.
+    await client!.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET created_at = now() - interval '1 hour'
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    const second = `${reviewTaskId}-second`;
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId: second,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }],
+    });
+
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId: second,
+      awaiting: false,
+    });
+  });
+
+  it("SLOT: another run's gate is never this run's answer", async () => {
+    const mine = freshGateIds();
+    const theirs = freshGateIds();
+    await gateStore.emitArtifactReviewGate({
+      runId: theirs.runId,
+      orgId: ORG,
+      reviewTaskId: theirs.reviewTaskId,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
+    });
+
+    await expect(gateStore.readRunReviewSlot(mine.runId)).resolves.toEqual({
+      reviewTaskId: null,
+      awaiting: false,
+    });
+  });
 });

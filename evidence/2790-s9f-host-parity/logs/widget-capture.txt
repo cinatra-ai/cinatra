@@ -1,0 +1,35 @@
+# cinatra#2790 S9f widget capture — 2026-08-21T21:36:33.606Z
+# top-level page (NOT the Cinatra app): /host-page.html
+embed frame appeared after ~2s
+embed frame url path: /embed/assistant
+embed frame drew after ~0s
+frame is anonymous — running the frame's own hosted PKCE sign-in
+popup opened on path: /widget-auth
+popup closed: true
+frame left the anonymous state after ~2s
+COOKIE JAR after sign-in: [{"name":"better-auth.session_token","domain":"localhost","sameSite":"Lax","httpOnly":true,"secure":false}]
+turn sent through the widget's OWN composer (scripted provider, no LLM call)
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+card root appeared after ~6s
+CHIPS [{"skillId":"@cinatra-ai/blog-post-matcher-skill:blog-post-matcher","mark":"undecided","forced":false,"label":"Blog Post Matcher Skill","text":"Blog Post Matcher SkillConfirmAdjustSkip","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/blog-writing-skill:blog-writing","mark":"undecided","forced":false,"label":"Blog Writing Skill","text":"Blog Writing SkillConfirmAdjustSkip","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher","mark":"undecided","forced":false,"label":"Brand Voice Matcher Skill","text":"Brand Voice Matcher SkillConfirmAdjustSkip","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/web-research-skill:web-research","mark":"undecided","forced":true,"label":"Web Research Skill","text":"Web Research SkillConfirmAdjustSkip","actions":["confirm","adjust","skip"]}]
+CAP W1__recommendation-card__site_widget__held__column 1244x2364 framing=column state=held chips=4
+CAP H1__recommendation-card__site_widget__held 1176x290 framing=card state=held chips=4
+CAP W2__recommendation-card__site_widget__held__column__dark 1244x2364 framing=column state=held chips=4
+CAP H2__recommendation-card__site_widget__held__dark 1176x290 framing=card state=held chips=4
+agent_runs.status BEFORE the decision: pending_input
+pressed confirm on chip 0 (@cinatra-ai/blog-post-matcher-skill:blog-post-matcher)
+CAP H3__recommendation-card__site_widget__held__mid-decision 1176x290 framing=card state=held chips=4
+pressed adjust on chip 1 (@cinatra-ai/blog-writing-skill:blog-writing)
+adjust panel: pressed 'Keep it in this run'
+pressed skip on chip 2 (@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher)
+WIRE {"label":"recommendation-decide","method":"POST","path":"/api/lifecycle-views/recommendation-hold/decide","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+pressed confirm on chip 3 (@cinatra-ai/web-research-skill:web-research)
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+card settled IN PLACE after ~2s
+DECIDE OUTCOMES [{"path":"/api/lifecycle-views/recommendation-hold/decide","status":200,"outcomeOk":true,"outcomeError":null,"outcomeDispatched":true}]
+settled in place: true
+agent_runs.status AFTER the decision: pending_approval (advanced out of pending_input: true)
+CAP W3__recommendation-card__site_widget__settled__column 1244x2364 framing=column state=decided chips=4
+CAP H4__recommendation-card__site_widget__settled 1176x122 framing=card state=decided chips=4
+CAPTURE OK (settled in place)

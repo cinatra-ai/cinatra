@@ -333,6 +333,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/orchestrator-actions.ts",
       "packages/agents/src/orchestrator-execution.ts",
       "packages/agents/src/run-actions.ts",
+      // cinatra#2790 (epic #2784 S9f) — the run-START dispatcher itself. The
+      // dispatch was extracted OUT of `run-actions.ts` (still allowlisted above
+      // for its other transitions) into this non-`"use server"` module so the
+      // widget recommendation-hold API branch, which cannot import a
+      // server-action module, reaches the SAME dispatch as the run page's
+      // server action. The extraction carried the `pending_input |
+      // pending_trigger -> queued` CAS and its `queued -> from` compensation
+      // across unchanged: the same guarded caller under a new file name,
+      // grounding both transitions on the acting member's live standing
+      // (`verifySessionAuthority(userId, run.orgId)`) exactly as
+      // `run-actions.ts` did. It resolves no identity of its own — both entries
+      // hand it an already-verified principal — so it adds no client-reachable
+      // surface.
+      "packages/agents/src/run-dispatch-core.ts",
       "packages/agents/src/trigger-release-job.ts",
       // cinatra#2569 (epic #2564 S5) — the conversational schedule proposal's
       // install DRAIN. It arms a confirmed proposal's run (`pending_input →

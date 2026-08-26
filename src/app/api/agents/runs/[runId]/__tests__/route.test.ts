@@ -17,6 +17,12 @@ const readAgentRunById = vi.fn();
 const readAgentRunMessages = vi.fn();
 const readAgentTemplateById = vi.fn();
 const deriveRunHitlContext = vi.fn();
+const readRunReviewSlot = vi.fn(
+  async (runId: string): Promise<{ reviewTaskId: string | null; awaiting: boolean }> => {
+    void runId;
+    return { reviewTaskId: null, awaiting: false };
+  },
+);
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -27,6 +33,19 @@ vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunMessages: (...a: unknown[]) => readAgentRunMessages(...a),
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
   deriveRunHitlContext: (...a: unknown[]) => deriveRunHitlContext(...a),
+}));
+
+// cinatra#2997 — the run's own review slot travels on this seed. The reader is
+// a plain run-scoped DB read behind this route's door; these suites are about
+// the route's answer, so it is stubbed to "no review" unless a case says
+// otherwise, and the ref minting is stubbed with it (a ref needs the instance
+// secret, which no unit tree holds).
+vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
+  readRunReviewSlot: (runId: string) => readRunReviewSlot(runId),
+}));
+vi.mock("@/lib/lifecycle/lifecycle-card-ref", () => ({
+  encodeLifecycleGateRef: (p: { runId: string; reviewTaskId: string }) =>
+    `ref:${p.runId}:${p.reviewTaskId}`,
 }));
 
 import { GET } from "../route";
@@ -167,6 +186,61 @@ describe("GET /api/agents/runs/[runId]", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ status: "completed", inputParams: { a: 1 } });
     expect(readAgentRunMessages).toHaveBeenCalledWith("run-1");
+  });
+
+  // cinatra#2997 — the run card is the review screen's placeholder while the
+  // agent works and becomes that screen when the work opens one, so THE SEED
+  // carries the answer. The card must not have to ask a model for it, and a
+  // person must not have to ask for it in a new turn.
+  it("carries the run's own review slot — the minted ref and the awaiting flag", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue({
+      id: "run-1",
+      templateId: "tpl-1",
+      status: "completed",
+      error: null,
+      inputParams: {},
+    });
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockResolvedValueOnce({
+      reviewTaskId: "review-task-1",
+      awaiting: false,
+    });
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      reviewGate: { ref: "ref:run-1:review-task-1", awaiting: false },
+    });
+    expect(readRunReviewSlot).toHaveBeenCalledWith("run-1");
+  });
+
+  it("says a review may still open when the run's output is unanswered", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tpl-1", status: "completed" });
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockResolvedValueOnce({ reviewTaskId: null, awaiting: true });
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    await expect(res.json()).resolves.toMatchObject({
+      reviewGate: { ref: null, awaiting: true },
+    });
+  });
+
+  // A slot read that throws costs the reader the placeholder's precision, never
+  // the panel: the seed still serves, with the answer this route gave before the
+  // field existed.
+  it("still serves the seed when the slot read fails", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tpl-1", status: "completed" });
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockRejectedValueOnce(new Error("db down"));
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      reviewGate: { ref: null, awaiting: false },
+    });
   });
 
   it("marks a platform admin caller with the admin role hint", async () => {

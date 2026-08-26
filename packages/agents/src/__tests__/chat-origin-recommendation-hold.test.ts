@@ -403,11 +403,16 @@ describe("a chat-pre-router dispatch parks on a recommendation hold", () => {
     // an already-`queued` row could never be let go. The handler's held result
     // is exactly one of the two admitted states.
     const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
-    const runActions = readFileSync(
-      join(import.meta.dirname, "..", "run-actions.ts"),
+    // READ FROM WHERE THE CONSTANT LIVES, which is the dispatch core since
+    // cinatra#2790 (S9f) lifted the run-start dispatch out of `run-actions.ts`
+    // so the widget's API branch could reach it. The assertion is unchanged —
+    // it still reads the release path's own admitted set out of the source
+    // rather than restating it — and it now reads the file that defines it.
+    const dispatchCore = readFileSync(
+      join(import.meta.dirname, "..", "run-dispatch-core.ts"),
       "utf8",
     );
-    const admitted = runActions.match(
+    const admitted = dispatchCore.match(
       /RUN_START_DISPATCH_FROM_STATUSES = \[([^\]]+)\]/,
     );
     expect(admitted).not.toBeNull();

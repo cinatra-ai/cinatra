@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -21,8 +22,11 @@ import {
 } from "@/components/ui/sheet";
 
 import {
+  LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
+  LIFECYCLE_RECOMMENDATION_HOLD_PATH,
   useLifecycleCardAuth,
   useLifecycleCardHost,
+  type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import type { RecommendedSkillForChip } from "./server-actions";
 import { getRunRecommendedSkillsAction } from "./server-actions";
@@ -30,6 +34,7 @@ import {
   confirmRunRecommendationAction,
   getRunRecommendationHoldStateAction,
   skipRunRecommendationAction,
+  type RunRecommendationDecisionResult,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
@@ -150,6 +155,96 @@ export type RunRecommendationDecision =
 /** One chip's live (pre-release) state: what was pressed, and what it means. */
 type ChipDecision = { mark: RunRecommendationChipMark; keep: boolean };
 
+/**
+ * The row's decision transport (cinatra#2790, epic #2784 S9f) — the two terminal
+ * acts, with the SAME answer shape the shipped server actions return, so the
+ * row's error handling is one code path whichever host it is drawn on.
+ */
+export type RunRecommendationSubmit = {
+  confirm: (input: {
+    runId: string;
+    agentPackageName: string;
+    confirmedSkillIds: string[];
+    promptText?: string;
+    forcedRevisions?: Record<string, string>;
+    adjustedSkillIds?: string[];
+    holdRef?: string;
+  }) => Promise<RunRecommendationDecisionResult>;
+  skip: (input: { runId: string; holdRef?: string }) => Promise<RunRecommendationDecisionResult>;
+};
+
+/**
+ * THE BROKER TRANSPORT for a host that declares a credential (the site widget).
+ *
+ * Built at the moment of the call from the host's own declaration, exactly like
+ * the review card's decision POST: the token never enters React state, a prop, a
+ * log or the DOM — only the request being built. `credentials` comes from the
+ * declaration too, and the provider refuses to mount a non-cookie host that does
+ * not say `omit`, so this can never send an ambient cookie.
+ *
+ * A transport failure answers with the row's own fixed refusal rather than
+ * throwing: an unreachable endpoint must read as "nothing was decided", never as
+ * a decided run.
+ */
+export function brokerRecommendationSubmit(auth: LifecycleCardAuth): RunRecommendationSubmit {
+  const post = async (path: string, body: unknown): Promise<unknown | null> => {
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...auth.headers() },
+        body: JSON.stringify(body),
+        credentials: auth.credentials,
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as unknown;
+    } catch {
+      return null;
+    }
+  };
+  const readOutcome = (payload: unknown): RunRecommendationDecisionResult => {
+    const outcome = (payload as { outcome?: unknown } | null)?.outcome;
+    if (outcome && typeof outcome === "object" && "ok" in outcome) {
+      return outcome as RunRecommendationDecisionResult;
+    }
+    return { ok: false, error: RECOMMENDATION_ROW_REFUSAL };
+  };
+  return {
+    confirm: async (input) =>
+      readOutcome(
+        await post(LIFECYCLE_RECOMMENDATION_DECIDE_PATH, {
+          runId: input.runId,
+          decision: "confirm",
+          confirmedSkillIds: input.confirmedSkillIds,
+          ...(input.promptText !== undefined ? { promptText: input.promptText } : {}),
+          ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
+          ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+          ...(input.holdRef ? { holdRef: input.holdRef } : {}),
+        }),
+      ),
+    skip: async (input) =>
+      readOutcome(
+        await post(LIFECYCLE_RECOMMENDATION_DECIDE_PATH, {
+          runId: input.runId,
+          decision: "skip",
+          ...(input.holdRef ? { holdRef: input.holdRef } : {}),
+        }),
+      ),
+  };
+}
+
+/** The row's own fixed refusal — one string, whichever transport failed. */
+const RECOMMENDATION_ROW_REFUSAL = "Could not record that decision.";
+
+/**
+ * The SESSION transport: the shipped cookie-bound server actions, unchanged.
+ * The default, so a cookie host that passes nothing behaves byte-for-byte as it
+ * did before this slice.
+ */
+const SESSION_SUBMIT: RunRecommendationSubmit = {
+  confirm: (input) => confirmRunRecommendationAction(input),
+  skip: (input) => skipRunRecommendationAction(input),
+};
+
 type Props = {
   runId: string;
   agentPackageName: string;
@@ -177,6 +272,20 @@ type Props = {
   canDecide?: boolean;
   /** Compact styling for the inline chat mount. */
   variant?: "panel" | "inline";
+  /**
+   * HOW THIS ROW SUBMITS ITS DECISION (cinatra#2790, epic #2784 S9f).
+   *
+   * The row draws §V and decides §V; WHO the decision is recorded as is the
+   * host's question, not the drawing's. A cookie host passes nothing and the row
+   * keeps its shipped server actions. A credential-declaring host — the site
+   * widget — passes a submitter that posts to the broker endpoint with the
+   * host's own proof and cookies OMITTED, because a server action cannot carry a
+   * credential and would ride the ambient cookie of a same-origin frame.
+   *
+   * ONE ROW, TWO TRANSPORTS, NEVER TWO ROWS: the affordances, the marks, the
+   * whole-row release and the refusal line below are identical on both.
+   */
+  submit?: RunRecommendationSubmit;
   /**
    * Fired after a confirm/skip SUCCEEDS (cinatra#2568 AC-1). The card host
    * re-reads the authoritative hold state so the row settles into its decided
@@ -336,6 +445,7 @@ export function RunRecommendationChipRow({
   decision,
   canDecide = true,
   variant = "panel",
+  submit = SESSION_SUBMIT,
   onDecided,
 }: Props) {
   const router = useRouter();
@@ -461,7 +571,7 @@ export function RunRecommendationChipRow({
     const kept = recs.filter((r) => next[r.skillId]?.keep === true);
     if (kept.length === 0) {
       startTransition(async () => {
-        const res = await skipRunRecommendationAction({
+        const res = await submit.skip({
           runId,
           ...(holdRef ? { holdRef } : {}),
         });
@@ -490,7 +600,7 @@ export function RunRecommendationChipRow({
       .filter((r) => next[r.skillId]?.mark === "adjusted")
       .map((r) => r.skillId);
     startTransition(async () => {
-      const res = await confirmRunRecommendationAction({
+      const res = await submit.confirm({
         runId,
         agentPackageName,
         confirmedSkillIds: kept.map((r) => r.skillId),
@@ -744,11 +854,14 @@ export function RunRecommendationChipRow({
 //     reader is the same person with the same rights as inside Cinatra, so the
 //     "a widget visitor never shapes a run's skills" row is gone).
 //
-//  2. NOTHING WITHOUT AN AUTHORIZED RESOLVE. `getRunRecommendationHoldStateAction`
-//     is the authority, not the wire. It runs the run-access door and intersects
-//     the candidate set against the VIEWER (cinatra#2148). Until it answers,
-//     this renders nothing — not a skeleton. The wire only ever says "something
-//     changed"; it never says what this reader may see.
+//  2. NOTHING WITHOUT AN AUTHORIZED RESOLVE. The RESOLVE is the authority, not
+//     the wire: it runs the run-access door and intersects the candidate set
+//     against the VIEWER (cinatra#2148). Until it answers, this renders nothing
+//     — not a skeleton. The wire only ever says "something changed"; it never
+//     says what this reader may see. Since cinatra#2790 the resolve has two
+//     transports and ONE authority: a cookie host calls the server action, a
+//     credential-declaring host posts to the broker endpoint with its own proof,
+//     and both land in `resolveRecommendationHoldStateForActor`.
 //
 //  3. NO TIMER, AT ALL. The card re-resolves on exactly the events that can
 //     change the answer: mount, a change in the typed hold interrupt on the wire
@@ -774,6 +887,141 @@ export function RunRecommendationChipRow({
  * wire says something new.
  */
 const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
+
+/**
+ * THE DEADLINE ON THE WHOLE READ (cinatra#2790, epic #2784 S9f).
+ *
+ * The retry budget above only advances when an attempt FINISHES — a request that
+ * never settles never fails, so it never spends the budget. That was harmless
+ * while nothing depended on the answer arriving; it stopped being harmless when
+ * the conversation began WITHHOLDING the run progress card until this read says
+ * whether the skills question is open. A hung endpoint would then hide the run
+ * card for as long as the tab is open, with nothing on screen to say why.
+ *
+ * So the read carries a wall-clock deadline. When it passes with no answer, the
+ * question is reported unreadable and every host that was waiting on it goes back
+ * to what it drew before this rule existed. It is a floor, not a cancellation: a
+ * late answer still lands and still replaces the unreadable reading, and the
+ * retry budget keeps running underneath it.
+ *
+ * Longer than the retry budget it backstops (400 + 1500 + 4000 ms plus the
+ * attempts themselves), so an endpoint that is merely slow is answered by a retry
+ * rather than written off.
+ */
+const RESOLVE_DEADLINE_MS = 8_000;
+
+/**
+ * WHAT THIS RUN'S RECOMMENDATION IS, INCLUDING "NOT KNOWN YET".
+ *
+ *   `resolving`  — the authoritative read is in flight, or is being retried. The
+ *                  answer may still be "held", so a host that must not draw a
+ *                  run progress card over an open question WAITS here.
+ *   `answered`   — `state` is the authority's own answer for this run.
+ *   `unreadable` — the read cannot be completed: the failure budget is spent, or
+ *                  the surface declares no lifecycle host to read on. A host
+ *                  fails OPEN on this and draws what it drew before the rule
+ *                  existed, because a dead read must not be able to empty every
+ *                  conversation of its run cards.
+ */
+export type RunRecommendationHoldResolution = {
+  phase: "resolving" | "answered" | "unreadable";
+  state: RunRecommendationHoldState | null;
+};
+
+/**
+ * MUST THE AGENTIC RUN PROGRESS CARD WAIT? (cinatra#2790, epic #2784 S9f.)
+ *
+ * The plan decides the turn's shape by THIS, not by the presence of a run:
+ * "An agentic run progress card is not visible while the recommended skills can
+ * be selected, because they are being chosen before the agent actually runs."
+ *
+ * So the card waits on a live hold AND on a question that has not been answered
+ * yet. Waiting on the unanswered case is the whole point: mounting on "not yet"
+ * and unmounting on the answer would make the forbidden card VISIBLE — briefly,
+ * and every time — which is what the sentence rules out. The cost is that the run
+ * progress card of an ordinary, never-held run appears one authoritative read
+ * later than it used to.
+ *
+ * IT FAILS OPEN ON `unreadable`, and that is the balance: a read that cannot be
+ * completed leaves the conversation drawing exactly what it drew before this rule
+ * existed, rather than emptying every turn of its run card.
+ */
+export function runCardWaitsForRecommendation(
+  resolution: RunRecommendationHoldResolution,
+): boolean {
+  if (resolution.phase === "resolving") return true;
+  return resolution.phase === "answered" && resolution.state?.state === "held";
+}
+
+/**
+ * WERE THIS RUN'S SKILLS DECIDED ON THE RECOMMENDATION CARD?
+ *
+ * The other half of the same ruling: "The agentic run progress card appears once
+ * the skills are decided; no skill inside it can be selected." A run that was
+ * never held answers `none` and is NOT decided — its own affordances are
+ * untouched by this slice — and an unanswered or unreadable question is not a
+ * decision either.
+ */
+export function recommendationWasDecided(
+  resolution: RunRecommendationHoldResolution,
+): boolean {
+  if (resolution.phase !== "answered") return false;
+  const state = resolution.state?.state;
+  return state === "confirmed" || state === "skipped";
+}
+
+/** The reading a host starts with, before the card has said anything. */
+export const RECOMMENDATION_UNRESOLVED: RunRecommendationHoldResolution = Object.freeze({
+  phase: "resolving",
+  state: null,
+});
+
+/** The reading of a run whose recommendation cannot be read at all. */
+export const RECOMMENDATION_UNREADABLE: RunRecommendationHoldResolution = Object.freeze({
+  phase: "unreadable",
+  state: null,
+});
+
+/**
+ * The BROKER READ of one run's hold state (cinatra#2790, epic #2784 S9f).
+ *
+ * `null` means the read did not complete — a transport failure, a refused
+ * credential, or an answer that does not parse as a state. It is deliberately
+ * distinguishable from `{ state: "none" }`, which is a real answer meaning "this
+ * reader gets no row here": the first arms the card's bounded retry, the second
+ * settles it silently. Collapsing the two would either hide a dead endpoint
+ * behind an empty card or retry forever against an honest refusal.
+ *
+ * The answer is validated to a known `state` before it is believed, so a
+ * mis-routed or truncated response can never paint a card.
+ */
+async function readHoldStateThroughBroker(
+  runId: string,
+  auth: LifecycleCardAuth,
+): Promise<RunRecommendationHoldState | null> {
+  try {
+    const response = await fetch(LIFECYCLE_RECOMMENDATION_HOLD_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...auth.headers() },
+      body: JSON.stringify({ runId }),
+      credentials: auth.credentials,
+    });
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    const state = (payload as { state?: unknown } | null)?.state;
+    if (
+      state === "none" ||
+      state === "held" ||
+      state === "confirmed" ||
+      state === "skipped"
+    ) {
+      return payload as RunRecommendationHoldState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve the authoritative hold state for one run.
@@ -810,12 +1058,30 @@ function useRecommendationHoldState(params: {
   runId: string;
   wireRef: string | null;
   reloadToken: number;
-}): RunRecommendationHoldState | null {
-  const { runId, wireRef, reloadToken } = params;
+  /**
+   * THE HOST'S CREDENTIAL, or `null` on a cookie surface (cinatra#2790).
+   *
+   * It selects the READ transport and nothing else. A cookie host keeps the
+   * server action, which resolves the ambient session — correct there, and the
+   * only thing available to a server action. A credential-declaring host posts
+   * to the broker endpoint with its own proof and cookies OMITTED, so the
+   * authority answering is the widget's own reader rather than whoever else is
+   * signed in on that browser.
+   *
+   * Both transports answer the SAME `RunRecommendationHoldState`, resolved by
+   * the SAME core, so nothing below this line knows which one ran.
+   */
+  auth: LifecycleCardAuth | null;
+}): RunRecommendationHoldResolution {
+  const { runId, wireRef, reloadToken, auth } = params;
   const [resolved, setResolved] = useState<{
     runId: string;
     state: RunRecommendationHoldState;
   } | null>(null);
+  // THE RUN WHOSE READ GAVE UP — every attempt in the failure budget below was
+  // spent without an answer. Filed under the run id, so a later run on the same
+  // card starts asking again rather than inheriting a verdict about another run.
+  const [unreadableRunId, setUnreadableRunId] = useState<string | null>(null);
   // Monotonic request id — mount, a wire change and a focus can overlap, and a
   // slow earlier answer must never overwrite a fresher one. Same guard shape as
   // `useLifecycleCardResolve`; the reason is identical (a superseded answer is
@@ -835,7 +1101,12 @@ function useRecommendationHoldState(params: {
     // time it lands.
     const requestRunId = runId;
     try {
-      const state = await getRunRecommendationHoldStateAction({ runId: requestRunId });
+      const state = auth
+        ? await readHoldStateThroughBroker(requestRunId, auth)
+        : await getRunRecommendationHoldStateAction({ runId: requestRunId });
+      // A broker read that could not be completed is a FAILURE, not a state: it
+      // arms the bounded retry below rather than settling the card on silence.
+      if (state === null) return false;
       // Superseded: a newer trigger owns the answer now. Not a failure — and it
       // must NOT arm a retry, or a burst of wire changes would fan out into a
       // pile of competing retry chains.
@@ -849,12 +1120,18 @@ function useRecommendationHoldState(params: {
       // optimistic.
       return false;
     }
-  }, [runId]);
+  }, [runId, auth]);
 
   useEffect(() => {
     if (!runId) return;
+    const requestRunIdForBudget = runId;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // The backstop for a read that never finishes at all — see
+    // `RESOLVE_DEADLINE_MS`. Armed once per trigger and cleared with it.
+    const deadlineTimer = setTimeout(() => {
+      if (!cancelled) setUnreadableRunId(requestRunIdForBudget);
+    }, RESOLVE_DEADLINE_MS);
     let attempt = 0;
     const clearRetry = () => {
       if (retryTimer !== null) {
@@ -890,7 +1167,15 @@ function useRecommendationHoldState(params: {
         if (settled) attempt = 0;
         return;
       }
-      if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) return;
+      if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) {
+        // The budget is spent and nothing more is scheduled. Say so, rather than
+        // leaving the caller waiting for an answer that will not arrive: a host
+        // that withholds a card until this read lands must be able to stop
+        // withholding it when the read is simply unavailable. A wake resets the
+        // budget and asks again, and a successful answer replaces this reading.
+        setUnreadableRunId(requestRunIdForBudget);
+        return;
+      }
       const delay = RESOLVE_RETRY_DELAYS_MS[attempt];
       attempt += 1;
       retryTimer = setTimeout(() => {
@@ -923,6 +1208,7 @@ function useRecommendationHoldState(params: {
     document.addEventListener("visibilitychange", onWake);
     return () => {
       cancelled = true;
+      clearTimeout(deadlineTimer);
       clearRetry();
       window.removeEventListener("focus", onWake);
       window.removeEventListener("online", onWake);
@@ -934,17 +1220,74 @@ function useRecommendationHoldState(params: {
   }, [runId, wireRef, reloadToken, resolve]);
 
   // Read the answer back only while it still belongs to the run on screen.
-  return resolved !== null && resolved.runId === runId ? resolved.state : null;
+  //
+  // THREE READINGS, NOT TWO. "No answer yet" and "no answer is coming" used to
+  // be the same `null`, which is exactly the distinction a caller needs when the
+  // ANSWER decides what it may draw: a host that treats "not yet" as "not held"
+  // draws the run progress card for a frame and then takes it away, which is the
+  // very thing the plan forbids. So the hook says which of the two it is, and
+  // the caller waits on one and fails open on the other.
+  //
+  // ONE OBJECT PER ANSWER, not one per render. The reading is published to the
+  // host through an effect keyed on it, and a fresh object every render would
+  // publish on every render — which, with a host that files it in state, is a
+  // loop rather than a notification.
+  //
+  // AN ANSWER OUTRANKS A LATER FAILURE, and that is deliberate rather than an
+  // oversight of the ordering. Once this run's authority has said "held", a
+  // refresh that fails changes nothing about the run: it is still parked, and
+  // drawing its progress card on the strength of a failed request would show a
+  // person a running run that is not running. The fail-open reading exists for
+  // the case where NOTHING was ever learned about this run, which is the only
+  // case where the pre-rule drawing is the honest one.
+  const answered = resolved !== null && resolved.runId === runId ? resolved.state : null;
+  const unreadable = unreadableRunId === runId;
+  return useMemo<RunRecommendationHoldResolution>(
+    () =>
+      answered !== null
+        ? { phase: "answered", state: answered }
+        : unreadable
+          ? RECOMMENDATION_UNREADABLE
+          : RECOMMENDATION_UNRESOLVED,
+    [answered, unreadable],
+  );
 }
+
+/**
+ * The resolved hold state, re-exported so a HOST can name it. The card publishes
+ * it inside a resolution through `onStateChange`, and the two conversation
+ * surfaces hold that — they reach the card by its own subpath and must not have
+ * to know which module inside the agents package declares the shape.
+ */
+export type { RunRecommendationHoldState };
+
 
 export function RecommendationHoldCard({
   runId,
   agentPackageName,
   wireRef,
+  onStateChange,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
   agentPackageName?: string;
+  /**
+   * THE RESOLVED STATE, PUBLISHED TO THE HOST THAT MOUNTED THIS CARD
+   * (cinatra#2790, epic #2784 S9f).
+   *
+   * The turn around this card has to draw differently depending on the answer —
+   * the run progress card waits while the row is open and arrives when it is
+   * decided — and the authoritative answer is resolved HERE, once. Publishing it
+   * is what keeps that ONE resolve the only one: a host that asked the same
+   * action itself would be a second reader of the same authority, free to
+   * disagree with this card by a round trip.
+   *
+   * "No answer yet" is published as such: the host needs to tell it apart from
+   * "no hold", because it withholds the run progress card on the first and draws
+   * it on the second. Nothing is invented — an unresolved read says it is
+   * unresolved, and a read that gave up says that instead.
+   */
+  onStateChange?: (resolution: RunRecommendationHoldResolution) => void;
   /**
    * The typed `recommendation_hold` interrupt's ref off the run wire, or `null`
    * when no hold is live. A pure change signal — see `useRecommendationHoldState`.
@@ -955,23 +1298,24 @@ export function RecommendationHoldCard({
   // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
   // it — the per-surface matrix that withheld this card from the widget is gone.
   const host = useLifecycleCardHost();
-  // …with ONE credential-keyed exception, and it is not a surface rule (codex
-  // round 0, finding 4). This card does not resolve or decide through the
-  // lifecycle endpoints: it calls COOKIE-BOUND server actions
-  // (`getRunRecommendationHoldStateAction`, and Confirm/Skip), which resolve
-  // their identity from the ambient session and cannot carry a host credential.
-  // On a host that declares one — a broker surface, same-origin to the app — a
-  // drawn card would therefore read, and act, as whoever else is signed in on
-  // that browser. That is exactly the ambient-session fallback the contract
-  // forbids, so the card draws NOTHING until its actions are broker-aware.
+  // …and so is the credential-keyed exception that stood here (cinatra#2790,
+  // epic #2784 S9f). Until this slice the card refused to draw under a host that
+  // declared a credential, because it resolved and decided through COOKIE-BOUND
+  // server actions: on a broker surface that is same-origin to the app, a drawn
+  // card would have read, and acted, as whoever else was signed in on that
+  // browser. Its own comment called that "a shortfall, not a design", and named
+  // the condition for deleting it — "when the broker-aware entry lands, this
+  // guard is what gets deleted". It has landed: the host's declaration now
+  // selects the transport (`readHoldStateThroughBroker` for the read,
+  // `brokerRecommendationSubmit` for the two decisions), the authority behind
+  // both is built fresh from that host's own credential at the moment of the
+  // call, and neither one can fall back to an ambient session.
   //
-  // Stated plainly because it is a shortfall, not a design: this is the one
-  // lifecycle card whose widget parity is not yet complete end to end. It is
-  // ALSO unreachable there today — a lifecycle interrupt is dropped by the chat
-  // reducer and the embed mounts no run panel — so nothing regresses; when the
-  // broker-aware entry lands, this guard is what gets deleted.
+  // WHAT DID NOT CHANGE, and must not: the host DECLARATION is still the only
+  // gate. A surface that has not opted in has no host, and no host is still no
+  // DOM at all.
   const auth = useLifecycleCardAuth();
-  const present = host !== null && auth === null;
+  const present = host !== null;
 
   // A decision taken IN the row is the one state change the wire cannot be
   // relied on to announce first (the RESUME is published after the action
@@ -983,11 +1327,37 @@ export function RecommendationHoldCard({
   // Hooks run unconditionally (rules of hooks); the resolve itself is cheap and
   // the ABSENT host is enforced on the render below, so a surface that has not
   // declared itself still draws nothing.
-  const state = useRecommendationHoldState({
+  const resolution = useRecommendationHoldState({
     runId: present ? runId : "",
     wireRef: wireRef ?? null,
     reloadToken,
+    auth,
   });
+  const state = resolution.state;
+
+  // A surface with NO declared host never asks, so its reading is not "waiting"
+  // — nothing is coming. Saying so is what stops a host that withholds on
+  // `resolving` from withholding for ever on a surface this card never reads on.
+  const published: RunRecommendationHoldResolution = present
+    ? resolution
+    : RECOMMENDATION_UNREADABLE;
+
+  // Published on every change, and only on a change. `onStateChange` is in the
+  // dependency list, so a caller passing a fresh closure every render is told
+  // again rather than silently ignored; callers hold theirs stable (a state
+  // setter) and see exactly one call per answer.
+  useEffect(() => {
+    onStateChange?.(published);
+  }, [published, onStateChange]);
+
+  // The row's decision transport, keyed by the SAME declaration the read is —
+  // "a surface that proves itself one way to read and another way to decide is a
+  // surface where the two can disagree". Memoized on the declaration so a
+  // re-render does not hand the row a new submitter every frame.
+  const submit = useMemo(
+    () => (auth ? brokerRecommendationSubmit(auth) : SESSION_SUBMIT),
+    [auth],
+  );
 
   if (!present) return null;
   if (state === null || state.state === "none") return null;
@@ -1023,6 +1393,7 @@ export function RecommendationHoldCard({
             : { kind: "skipped", decided: state.decided }
       }
       variant="inline"
+      submit={submit}
       onDecided={onDecided}
     />
   );
