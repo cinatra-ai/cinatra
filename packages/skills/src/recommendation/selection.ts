@@ -241,10 +241,19 @@ export type OfferedSetSelection =
  * is a pure function of its inputs, so a retry against the same offered set
  * produces byte-identical rows.
  *
- * The SOURCE stamp keeps the shipped meanings: a skill the scorer did NOT
- * recommend at draw time is `user_forced` (forcing it on IS its adjustment), a
- * recommended one settled through ADJUST is `user_adjusted`, and a recommended
- * one taken as scored is `recommended_confirmed`.
+ * THE SOURCE STAMP IS DECIDED BY THE OFFER, NOT BY THE `recommended` FLAG.
+ * `deriveConfirmedSelection` stamps `user_forced` for a kept id its scored set
+ * does not CONTAIN — a skill put onto the run that was never scored for it,
+ * which is why that path needs a separately supplied pin. Every id THIS path can
+ * keep is in the offer, because one that is not refuses above, so `user_forced`
+ * is unreachable here by construction: a recommended chip and a below-threshold
+ * chip alike are `recommended_confirmed` when taken as offered and
+ * `user_adjusted` when settled through ADJUST.
+ *
+ * Reading the stamp off the flag instead would record a chip the reader pressed
+ * CONFIRM on as a human edit, and the settled row prints every human-edit source
+ * as the drawing's `Adjusted` mark — so the card would report a decision the
+ * reader did not take.
  */
 export function deriveSelectionFromOfferedSet(input: {
   offered: ReadonlyArray<OfferedSkill>;
@@ -276,11 +285,11 @@ export function deriveSelectionFromOfferedSet(input: {
       skillId,
       // THE OFFERED PIN. Not a re-resolved one, not a client-supplied one.
       skillRevisionId: offer.skillRevisionId,
-      selectionSource: !offer.recommended
-        ? SELECTION_SOURCES.userForced
-        : adjusted.has(skillId)
-          ? SELECTION_SOURCES.userAdjusted
-          : SELECTION_SOURCES.recommendedConfirmed,
+      // Membership in the offer is already proven above; what remains is only
+      // HOW the reader settled the chip. See the note on the doc comment.
+      selectionSource: adjusted.has(skillId)
+        ? SELECTION_SOURCES.userAdjusted
+        : SELECTION_SOURCES.recommendedConfirmed,
     });
   }
   if (stale.length > 0) return { ok: false, staleSkillIds: stale };

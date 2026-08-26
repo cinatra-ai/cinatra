@@ -295,6 +295,62 @@ describe("AC-4 — efficacy is scored against the OFFERED set", () => {
   });
 });
 
+describe("the settled mark records the PRESS, not the score (cinatra#2824 §V)", () => {
+  it("writes recommended_confirmed for a kept chip the scorer scored below the threshold", async () => {
+    // The row draws every candidate and marks which of them it recommends, so a
+    // chip scored below `recommendThreshold` is still offered and still has its
+    // own Confirm. Stamping that press `user_forced` makes the settled row read
+    // back the drawing's `Adjusted` mark, because the settled reading treats
+    // every human-edit source that way — a decision the reader did not take.
+    readRunRecommendationOfferedSet.mockResolvedValue([
+      offered({ skillId: "a", skillRevisionId: "a@1", recommended: false, rank: 1 }),
+    ]);
+    stillThere(["a"]);
+
+    const out = await confirmRunSkillSelection({
+      runId: "run1",
+      agentId: "@x/a",
+      holdId: HOLD,
+      intent: {},
+      confirmedSkillIds: ["a"],
+      restrictToSkillIds: ["a"],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(writeRunSelectedSkillRevisions).toHaveBeenCalledWith({
+      runId: "run1",
+      selections: [
+        { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },
+      ],
+    });
+  });
+
+  it("NEGATIVE CONTROL: ADJUST on that same below-threshold chip still records user_adjusted", async () => {
+    // The mark that DOES mean a human edit stays reachable, so the case above
+    // cannot be satisfied by flattening every press to one source.
+    readRunRecommendationOfferedSet.mockResolvedValue([
+      offered({ skillId: "a", skillRevisionId: "a@1", recommended: false, rank: 1 }),
+    ]);
+    stillThere(["a"]);
+
+    const out = await confirmRunSkillSelection({
+      runId: "run1",
+      agentId: "@x/a",
+      holdId: HOLD,
+      intent: {},
+      confirmedSkillIds: ["a"],
+      adjustedSkillIds: ["a"],
+      restrictToSkillIds: ["a"],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(writeRunSelectedSkillRevisions).toHaveBeenCalledWith({
+      runId: "run1",
+      selections: [{ skillId: "a", skillRevisionId: "a@1", selectionSource: "user_adjusted" }],
+    });
+  });
+});
+
 describe("AC-6 — a retry cannot assemble a mixed set", () => {
   it("records the offered set on BOTH presses, across a live-state change", async () => {
     readRunRecommendationOfferedSet.mockResolvedValue([
