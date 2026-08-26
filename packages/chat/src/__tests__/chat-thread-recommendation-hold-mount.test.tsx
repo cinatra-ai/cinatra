@@ -105,6 +105,7 @@ vi.mock("../../../agents/src/hitl-actions", () => ({
 // The chip row prefetches the agent's assignable skills while a hold is live.
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: async () => [],
+  getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({})),
 }));
 
 // The run panel is the OTHER host, and it is the one that used to draw a SECOND
