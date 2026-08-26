@@ -472,9 +472,14 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     kind: "artifact_review_gate",
     carriage: LIFECYCLE_CARD_CARRIAGE.artifact_review_gate.represent,
     canonical: LIFECYCLE_CARD_CARRIAGE.artifact_review_gate.canonical,
-    // BOTH. The run injects the gate when the review moment opens, and
-    // `artifact_review_gate_render` / `artifact_review_gates_list` bring it back
-    // into view — re-presentation, recorded as such.
+    // BOTH, and the injected half has TWO mounts that never overlap
+    // (cinatra#2997 × cinatra#2930). In a turn that draws the run card, the card
+    // IS the gate's mount — it reads the run's review slot itself and shows the
+    // gate in place of its placeholder; the outbox writes the part only into a
+    // turn that draws no run card for the run, so the reader gets exactly one
+    // card either way. `artifact_review_gate_render` /
+    // `artifact_review_gates_list` bring it back into view — re-presentation,
+    // recorded as such.
     deliveries: Object.freeze(["platform_injected", "tool_represented"] as const),
     triggeringPart: "the artifact_review_gate DATA_PART renderable view",
     triggerToolName: null,

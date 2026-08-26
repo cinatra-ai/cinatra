@@ -28,6 +28,14 @@
 // this module writes has passed the same length, shape and producer checks a
 // tool result passes.
 //
+// ONE REVIEW CARD PER GATE PER TURN (cinatra#2997). The inline run card is the
+// review screen's own placeholder now: it reads the run's review slot itself and
+// shows the gate IN PLACE where the spinner was. So a turn that draws the run
+// card for a run ALREADY draws that run's gate, and this writer does not inject
+// an `artifact_review_gate` part into such a turn — see the rule at
+// `injectionForTurn` and both its halves in
+// `__tests__/one-review-card-per-run-per-turn.test.ts`.
+//
 // IDEMPOTENT BY THE CARD'S IDENTITY. A moment can be stated more than once — a
 // re-park, a retry, a compare-and-set that re-reads and writes the same value —
 // and a person must not collect a column of identical cards. A part with the
@@ -71,6 +79,7 @@ import {
 import {
   RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX,
   findAssistantTurnForAgentRun,
+  isDurableAssistantTurnContent,
   updateAssistantTurn,
   type AssistantTurn,
 } from "@/lib/assistant-thread-store";
@@ -90,6 +99,13 @@ const INJECTABLE_VIEW_TYPES: ReadonlyArray<LifecycleViewType> = [
   "verification_summary",
   "trigger_schedule_proposal",
 ];
+
+/**
+ * The one kind the run card itself now carries (cinatra#2997). Named rather than
+ * spelled inline, because the rule below and the note above are about THIS kind
+ * and nothing else.
+ */
+const RUN_CARD_CARRIED_VIEW_TYPE = "artifact_review_gate";
 
 function isInjectableViewType(kind: string): kind is LifecycleViewType {
   return (INJECTABLE_VIEW_TYPES as readonly string[]).includes(kind);
@@ -127,6 +143,108 @@ export function restoredTurnSlotForRun(
     if (typeof slot === "string" && slot.length > 0) return slot;
   }
   return null;
+}
+
+/**
+ * PURE. DOES THIS TURN DRAW THE RUN CARD FOR THIS RUN?
+ *
+ * THE QUESTION MATTERS BECAUSE OF cinatra#2997. The inline run card is the
+ * review screen's own placeholder now: while the run works it shows a spinner
+ * over the empty review frame, and when the output opens a review gate the SAME
+ * slot shows the gate in place. The card asks for that slot itself, from run
+ * state, on every surface it is mounted on. So a turn that draws the run card
+ * for a run already draws that run's gate, and an injected `artifact_review_gate`
+ * part beside it would be the same question twice in one turn.
+ *
+ * IT REPLAYS THE PROJECTION AND THEN ASKS THE RENDERER'S OWN CONDITION, rather
+ * than approximating either, because a FALSE POSITIVE here suppresses a card
+ * that nothing else draws — the exact defect this wave exists to close — while a
+ * false negative only risks a duplicate, which is visible. So the answer is
+ * built the long way:
+ *
+ *   1. the ordered `tool_call` parts, DEDUPED BY ID KEEPING THE FIRST, which is
+ *      what `projectDurableAssistantTurn` does ("Deduped by id, as the live
+ *      applier dedupes: a retried call is one call") — a later duplicate the
+ *      projection discarded must not answer for the call it kept;
+ *   2. every `agent_run` pointer applied IN ORDER, so a later pointer naming the
+ *      same call OVERWRITES an earlier one, because `target.runId = runId` does;
+ *   3. and finally the renderer's own test, verbatim from
+ *      `chat-messages-view.tsx`: `part.kind === "tool_call" && part.name ===
+ *      "agent_run" && part.runId`. A pointer that lands on a call with another
+ *      name pins a run id nothing mounts, so it is NOT this run's card.
+ *
+ * BOTH WRITERS' SHAPES, because both are matched by the lookup that found this
+ * turn (`readAgentRunTurnRow`): the SINK's durable pointer (steps 1-3), and the
+ * CLIENT transcript's own shape, where the run id is already ON the call part
+ * and the renderer reads it directly.
+ *
+ * THE ONE PLACE STRUCTURE AND PIXELS CAN STILL DIVERGE, named rather than
+ * papered over: the transcript withholds the run card while this run's
+ * recommendation hold is unresolved (`runCardWaitsForRecommendation`). It cannot
+ * arise for the review moment — a review gate opens on a PRODUCED OUTPUT, which
+ * is downstream of the hold being decided — and the ordering, not this function,
+ * is what makes that true. A card whose own seed fails renders its error state
+ * instead of the slot; that is the card's availability, the same availability an
+ * injected part would depend on, and not something a placement rule can repair.
+ */
+export function turnCarriesRunCardFor(
+  content: Record<string, unknown> | null,
+  runId: string,
+): boolean {
+  if (!isRecord(content)) return false;
+  // THE RENDERER'S OWN TRUTHINESS TEST, at the boundary: `&& part.runId` does
+  // not mount an empty run id, so an empty one is never "this run's card".
+  if (typeof runId !== "string" || runId.length === 0) return false;
+  const parts = Array.isArray(content.parts) ? content.parts : [];
+
+  // THE TWO SHAPES ARE MUTUALLY EXCLUSIVE, and that is load-bearing rather than
+  // tidy. `projectDurableAssistantTurn` admits ONLY the sink's
+  // `assistant-turn-v1` object, and inside one it reads `raw.type` and ignores a
+  // `kind`-shaped entry entirely. So a durable row that happens to carry a
+  // client-shaped call draws NO card from it, and answering `true` off that
+  // entry would suppress the one card the reader has. A row is read as durable
+  // or as the client's transcript, never as both.
+  if (!isDurableAssistantTurnContent(content)) {
+    // THE CLIENT TRANSCRIPT'S OWN SHAPE — the renderer's condition, verbatim.
+    return parts.some(
+      (raw) =>
+        isRecord(raw) &&
+        raw.kind === "tool_call" &&
+        raw.name === "agent_run" &&
+        raw.runId === runId,
+    );
+  }
+
+  // THE SINK'S DURABLE SHAPE — the projection, replayed.
+  const calls = new Map<string, { name: string; pinned: string | null }>();
+  for (const raw of parts) {
+    if (!isRecord(raw) || raw.type !== "tool_call") continue;
+    const id = typeof raw.id === "string" ? raw.id : null;
+    const name = typeof raw.name === "string" ? raw.name : null;
+    if (id === null || name === null) continue;
+    if (calls.has(id)) continue;
+    calls.set(id, { name, pinned: null });
+  }
+  const dataParts = Array.isArray(content.dataParts) ? content.dataParts : [];
+  for (const raw of dataParts) {
+    if (!isRecord(raw)) continue;
+    // A renderable view is classified by `viewType` and that classification WINS
+    // over any structural `kind` beside it — the projection's own rule.
+    if (typeof raw.viewType === "string" && raw.viewType.length > 0) continue;
+    if (raw.kind !== "agent_run") continue;
+    const toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : null;
+    const pinned = typeof raw.runId === "string" ? raw.runId : null;
+    if (toolCallId === null || pinned === null) continue;
+    const target = calls.get(toolCallId);
+    // Unknown call — the projection no-ops, so nothing is pinned and nothing is
+    // drawn. This is the run-started-elsewhere case the injection still serves.
+    if (!target) continue;
+    target.pinned = pinned;
+  }
+  for (const call of calls.values()) {
+    if (call.name === "agent_run" && call.pinned === runId) return true;
+  }
+  return false;
 }
 
 /**
@@ -269,6 +387,24 @@ export function injectionForTurn(
   // is restored at, so the check and the placement are the same fact.
   const slot = restoredTurnSlotForRun(content, entry.runId);
   if (slot === null) return null;
+  // ONE REVIEW CARD PER GATE PER TURN (cinatra#2997 × this wave). The
+  // placeholder change made the run card the review screen: the card reads the
+  // run's review slot itself and shows the gate IN PLACE where the spinner was.
+  // A turn that draws the run card for this run is therefore already showing
+  // this run's gate, and injecting the part beside it would put the same
+  // question in the same turn twice, with two sets of decision controls.
+  //
+  // KEYED ON THE CARD, NOT ON THE KIND, and that is the whole of the rule: a
+  // turn that draws NO run card for the run draws nothing else either, so the
+  // injected part is still the only thing that puts the question in front of the
+  // reader and is still written. The gate keeps both of its deliveries; what it
+  // does not keep is a second copy of itself.
+  if (
+    part.viewType === RUN_CARD_CARRIED_VIEW_TYPE &&
+    turnCarriesRunCardFor(content, entry.runId)
+  ) {
+    return null;
+  }
   const next = contentWithInjectedPart(content, part, slot);
   if (next === null) return null;
   return { turnId: turn.id, content: next };

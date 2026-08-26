@@ -46,13 +46,22 @@ function runTurn(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+/**
+ * The kinds whose card is INJECTED into the turn that dispatched the run.
+ *
+ * THE REVIEW MOMENT IS NOT HERE, and its absence is the rule rather than a gap.
+ * cinatra#2997 made the inline run card the review screen's own placeholder — it
+ * reads the run's review slot itself and shows the gate IN PLACE — so a turn that
+ * draws the run card for a run already draws that run's gate, and injecting the
+ * part beside it would be the same question twice in one turn. The gate KEEPS its
+ * injected delivery for a turn that draws no run card for the run; both halves of
+ * that rule are pinned in `one-review-card-per-run-per-turn.test.ts`.
+ */
 const KINDS: Array<{
   moment: string;
   cardKind: LifecycleCardKind;
   cardRef: string;
 }> = [
-  // The run parked for its review.
-  { moment: "review", cardKind: "artifact_review_gate", cardRef: "gate-ref-1" },
   // The schedule, once Confirm created the run that carries it.
   { moment: "schedule", cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
   // The audit — the one moment that does not park the run, and still a card.
@@ -164,28 +173,34 @@ describe("a run a person starts from a conversation reaches the schedule moment 
   });
 });
 
+// Driven by the SCHEDULE kind rather than the review gate: identity is what is
+// under test, and the run-card turn refuses the gate for its own reason
+// (cinatra#2997), which would make either assertion pass without proving
+// anything.
 describe("writing the same card twice", () => {
   it("is refused — a moment stated again does not give the person a second card", () => {
     const first = injectionForTurn(
-      { runId: RUN_ID, cardKind: "artifact_review_gate", cardRef: "gate-ref-1" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
       { id: "turn-1", content: runTurn() },
     )!;
     expect(
       injectionForTurn(
-        { runId: RUN_ID, cardKind: "artifact_review_gate", cardRef: "gate-ref-1" },
+        { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
         { id: "turn-1", content: first.content },
       ),
     ).toBeNull();
-    expect(turnAlreadyCarriesCard(first.content, "artifact_review_gate", "gate-ref-1")).toBe(true);
+    expect(
+      turnAlreadyCarriesCard(first.content, "trigger_schedule_proposal", "sched-ref-1"),
+    ).toBe(true);
   });
 
   it("still writes the SAME KIND at a different moment", () => {
     const first = injectionForTurn(
-      { runId: RUN_ID, cardKind: "artifact_review_gate", cardRef: "gate-ref-1" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
       { id: "turn-1", content: runTurn() },
     )!;
     const second = injectionForTurn(
-      { runId: RUN_ID, cardKind: "artifact_review_gate", cardRef: "gate-ref-2" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-2" },
       { id: "turn-1", content: first.content },
     );
     expect(second).not.toBeNull();
@@ -247,10 +262,12 @@ describe("alignment with what is already in the turn", () => {
 
   it("REFUSES the client transcript's mirror row", () => {
     // The mirror is a COPY of the conversation written from the browser. A card
-    // belongs in the record the server wrote.
+    // belongs in the record the server wrote. Driven by the SCHEDULE kind so the
+    // mirror check is the only thing that can refuse — the run-card turn refuses
+    // the review gate for its own reason (cinatra#2997).
     expect(
       injectionForTurn(
-        { runId: RUN_ID, cardKind: "artifact_review_gate", cardRef: "g" },
+        { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "g" },
         { id: "legacy:turn-1", content: runTurn() },
       ),
     ).toBeNull();
