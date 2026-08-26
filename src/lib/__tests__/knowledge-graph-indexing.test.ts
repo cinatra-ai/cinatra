@@ -189,6 +189,21 @@ describe("multi-provider extraction (cinatra#2591)", () => {
     expect(resolved.reason).toContain("could not be determined");
   });
 
+  it("an UNKNOWN binding resolves nothing from a STORED connection either", () => {
+    // The readable OpenAI connection is not evidence that OpenAI was chosen —
+    // the row that would say so is exactly the one that failed to read. Picking
+    // it because it happens to be there is the same guess as using the env key.
+    readMetadataValueInternal.mockImplementationOnce(() => {
+      throw new Error("metadata read flaked");
+    });
+    readUnsealedOpenAIConnectionRow.mockReturnValue({ apiKey: STORED_KEY });
+
+    const resolved = resolveKnowledgeGraphProviderKey();
+    expect(resolved.provider).toBeNull();
+    expect(resolved.key).toBeNull();
+    expect(resolved.reason).toContain("could not be determined");
+  });
+
   it("but a first bring-up with NO DATABASE still reaches the legacy env path", () => {
     // Both reads throw because there is nothing to read yet. That is the case
     // the legacy path was built for, and it must keep working — otherwise a

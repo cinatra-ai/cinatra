@@ -269,8 +269,16 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
     // `unbound` is the one case that legitimately tries both: no choice exists
     // anywhere, so there is nothing to violate, and an install that configured
     // a vendor before reaching setup should still index.
-    const order: KnowledgeGraphExtractionProvider[] =
-      bound === "anthropic"
+    //
+    // An UNKNOWN binding resolves NOTHING — not from the environment, and not
+    // from a stored connection either. The two are the same mistake: a
+    // reachable database whose binding row will not read may well say Anthropic,
+    // and picking the OpenAI connection just because it happens to be readable
+    // is the guess this whole rule exists to refuse. Extraction stays off until
+    // the install can say who it chose.
+    const order: KnowledgeGraphExtractionProvider[] = bindingUnknown
+      ? []
+      : bound === "anthropic"
         ? ["anthropic"]
         : bound === "openai" || bound === "unsupported"
           ? ["openai"]
