@@ -288,3 +288,107 @@ node /tmp/test-graphiti-crud.mjs
 - **Sealed-room re-filter** — `listObjectsByFilter` accepts `projectId?: string|null` and adds `AND project_id = $projectId` at the data layer. Non-bypassable from any handler — including the `ids = ANY(...)` semantic-search candidate path (Graphiti returns from P+Q+ambient → re-filtered to P only).
 - **Write-block** — both writers call `assertProjectWritableSync(projectIdForRow)` when the resolved inheritance projectId is non-NULL → archived targets reject at the writer layer.
 - **Move** — `objects_update` accepts optional `project_id` change with source+target authz + transactional cascade via `runResourceProjectMove`.
+- **Explicit binding (external callers)** — `objects_save` accepts optional `projectId` for a caller with no ambient frame. See the section below.
+
+## External memory writers — the `objects_save` actor contract (cinatra#1377, epic #1373)
+
+The agent-memory sync path writes from **outside** any agent run: a coding agent's
+`memory` CLI holds no `mcpRequestContextStorage.projectContext` frame, because that
+frame only exists inside a run/chat execution on this host. Such a caller reaches
+`objects_save` over the **authenticated MCP transport** — not the in-process
+deterministic client, which is a same-process convenience for host code.
+
+**Identity is transport-derived, never caller-supplied.**
+
+| Axis | Source | Caller-supplied? |
+|---|---|---|
+| `orgId` | actor / request frame (`getActorExt`) | **never** — no primitive accepts it |
+| user / agent identity | the authenticated actor | **never** |
+| `runId`, `agentId`, package versions | actor provenance (`actorExt`) | **never** |
+| `ownerLevel` / `ownerId` / `visibility` | `deriveSaveDefaults` (user ⇒ `user`/`private`; system ⇒ `organization`/`organization`; an `agent_run` delegation derives from its OBO ceiling) | optional override, re-authorized by the `object.create` probe |
+| `projectId` | ambient frame, or the explicit input below | optional, authorized against the caller's own `projectGrants` |
+
+**Ownership defaults are unchanged.** A write defaults to user/private. An explicit
+wider tuple is only ever accepted **within the caller's own authorization** — the
+`object.create` probe runs against the projected row, so the scope ceiling denies
+anything the actor cannot satisfy. Widening beyond that is promotion, not a save.
+
+**`projectId` precedence** (keyed on presence — JSON carries all three states):
+
+| Input | Behavior |
+|---|---|
+| omitted | ambient inheritance, unchanged (frame `projectId`, substrate exclusion applied) |
+| `null` | no project (substrate write); the ambient frame is **ignored, not consulted** |
+| `"<id>"` | bind the row to that project; the ambient frame is **ignored, not consulted** |
+
+The explicit path never reads the frame, so it works from outside a run **and** a
+stray ambient frame cannot bleed into an explicitly-scoped write.
+
+**A supplied id is a request, never a grant.** The handler runs, in order:
+`assertProjectReadAccess` (404-hides a project the caller holds no grant on, so the
+gate is not an existence oracle), then `assertProjectWritable(…, "write")`
+(existence + the archive gate + the write role tier). An unresolved `projectGrants`
+axis counts as no grants in both helpers — the gate fails closed. Postgres row
+authorization is unchanged and remains the data-access boundary.
+
+**Collision semantics.** Identity resolution can steer a save onto an existing row
+(the upsert's `ON CONFLICT` arm). Then:
+
+- the row is additionally probed for `object.update` against its **stored** scope —
+  the create probe alone would authorize a write to a row the caller cannot touch;
+- ownership/visibility are **preserved** (the `ON CONFLICT` arm does not list
+  `owner_level` / `owner_id` / `visibility`), so a default-scoped user/private save
+  can never narrow a wider row. A request for a *different* tuple is **refused**
+  rather than accepted-and-silently-dropped;
+- an explicit `projectId` that differs from the row's current project is
+  **refused** with a pointer to `objects_update`'s move path, which carries the
+  move authorization and the `resource_project_moves` audit row. An *omitted*
+  `projectId` requests nothing and the writer preserves the tag as before;
+- a collision onto a **soft-deleted** row is **refused**. `upsertObjectAndEnqueue`'s
+  `ON CONFLICT` arm never clears `deleted_at` (only the canonical twin writer
+  does), so the write would rewrite the row, bump its version and emit the outbox
+  and change events while every ordinary read still could not see it — a success
+  reported over a write that lands nowhere visible. `objects_save` does not
+  undelete.
+
+### Refusal codes
+
+All five are `PrimitiveInvocationError`s, same contract as
+`OBJECTS_TYPE_NOT_REGISTERED` above (`retryable: false`; `code`/`details` preserved
+onto the run's tool result by `normalizePrimitiveError`).
+
+| Code | Raised when |
+|---|---|
+| `OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED` | an explicit binding names a pan-project substrate type (CRM / catalog); dropping it silently would misreport where the row landed |
+| `OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED` | the save resolves to an existing row whose project differs from the requested `projectId` |
+| `OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED` | the save resolves to an existing row and requests a different `ownerLevel` / `ownerId` / `visibility` |
+| `OBJECTS_COLLISION_ROW_DELETED` | the save resolves to a soft-deleted row, which this writer would rewrite without undeleting |
+| `OBJECTS_WRITE_PRECONDITION_FAILED` | the writer's armed `collisionGuard` blocked the `DO UPDATE` arm and nothing was written |
+
+`OBJECTS_WRITE_PRECONDITION_FAILED` is what makes the collision probe **binding
+rather than advisory**. The probe and the write are separate statements, so the
+handler arms `upsertObjectAndEnqueue`'s `collisionGuard` with the exact row state it
+authorized (`expectedVersion` + `expectedProjectId`; a `null` version means "the
+probe saw no row", which blocks the `DO UPDATE` arm outright).
+
+The code and its message are **cause-neutral on purpose**. Two predicates block that
+arm — the collision guard and the cross-tenant `org_id` guard — and they produce the
+same empty result. Nothing outside the failed statement can tell them apart: a later
+re-read answers about a newer snapshot than the one that blocked the write. So neither
+the code nor its message names a cause; both state only what is certain, that the
+precondition did not hold and nothing was written.
+
+It is **terminal** for the same reason. Neither cause permits replaying the invocation
+under the authorization it already carries. A caller that wants to try again re-reads
+the row and re-authorizes against what is actually there, which is a fresh save rather
+than a retry. Auto-retrying a write whose authorization could not be confirmed is the
+thing the guard exists to prevent.
+
+An unauthorized binding is **not** in this table: it throws the canonical
+`AuthzError` (404-hidden / 403) from the project gates, so the refusal envelope is
+the same one every other project-scoped surface produces.
+
+**Deterministic-client parity.** `createDeterministicObjectsClient().save()` accepts
+`ownerLevel` / `ownerId` / `visibility` / `projectId` and passes them through
+unchanged. The in-process client is **not** a privileged path: it invokes the same
+handler and therefore the same gates.

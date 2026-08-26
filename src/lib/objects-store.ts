@@ -845,6 +845,53 @@ export type UpsertAndEnqueueInput = {
   upsertInput: UpsertObjectInput;
   operation: "upsert" | "delete";
   payloadHash?: string;
+  /**
+   * Explicit project binding (cinatra#1377, epic #1373) — the escape hatch for
+   * a caller that has NO ambient `projectContext` frame (an external CLI writer
+   * over the authenticated MCP transport).
+   *
+   * Keyed on PRESENCE, matching the `objects_save` schema's three-state
+   * precedence:
+   *   - key absent (`undefined`) → ambient frame inheritance, unchanged.
+   *   - `null`                   → explicit substrate write; the ambient frame
+   *                                is IGNORED, not consulted.
+   *   - `string`                 → bind to that project; ambient frame IGNORED.
+   *
+   * This writer is NOT an authorization boundary for the binding: the caller's
+   * write grant on the target project is enforced upstream (the `objects_save`
+   * handler's `assertProjectWritable`). The archive gate below still runs on
+   * the resolved id, and the substrate-exclusion list is still applied through
+   * the SAME `resolveProjectInheritanceForType` helper the ambient path uses,
+   * so an explicit binding can never project a substrate type.
+   */
+  explicitProjectBinding?: string | null;
+  /**
+   * Optimistic-concurrency guard for a caller that AUTHORIZED against a row it
+   * read first (cinatra#1377). `objects_save` probes `object.update` against the
+   * existing row before writing; without this guard the probe is advisory —
+   * between the read and this write another transaction can insert or change the
+   * row, and the `ON CONFLICT DO UPDATE` arm would then write (and, with an
+   * explicit binding, RE-TAG) a row nobody authorized.
+   *
+   * When present, the DO UPDATE arm additionally requires the row to be exactly
+   * what the caller authorized:
+   *   - `expectedVersion: null` — the caller saw NO row, so ANY conflict is a
+   *     race: the update arm is blocked outright and the write is refused.
+   *   - `expectedVersion: n` — the row must still be at version `n` AND still
+   *     carry `expectedProjectId`.
+   *
+   * A blocked guard returns no row from RETURNING, which the `if (!row)` branch
+   * below turns into a TERMINAL refusal — the same fail-closed shape the
+   * cross-tenant `org_id` guard already uses, and deliberately not a retryable
+   * one: the two predicates that can block the arm are indistinguishable from
+   * outside the failed statement, and a write whose authorization could not be
+   * confirmed must not be auto-retried. The INSERT arm is untouched: a genuine
+   * first write still lands.
+   */
+  collisionGuard?: {
+    expectedVersion: number | null;
+    expectedProjectId: string | null;
+  };
 };
 
 export function upsertObjectAndEnqueue(
@@ -858,13 +905,24 @@ export function upsertObjectAndEnqueue(
   const schema = postgresSchema.replaceAll('"', '""');
   const id = input.upsertInput.id ?? randomUUID();
 
-  // Read the active projectContext frame and resolve the projectId to tag:
-  // NULL when no frame, NULL when type is substrate, and the frame's projectId
-  // otherwise. On non-run paths (chat synchronous tool calls outside an agent
-  // run), the frame is whatever the transport boundary set or NULL.
-  const frame = mcpRequestContextStorage.getStore()?.projectContext;
+  // Resolve the projectId to tag. An EXPLICIT binding (cinatra#1377) wins and
+  // the ambient frame is not consulted at all — that is the whole point for an
+  // external caller with no frame, and it also means a stray frame cannot bleed
+  // into an explicitly-bound (or explicitly-substrate) write. Otherwise: read
+  // the active projectContext frame — NULL when no frame, NULL when the type is
+  // substrate, and the frame's projectId otherwise. On non-run paths (chat
+  // synchronous tool calls outside an agent run), the frame is whatever the
+  // transport boundary set or NULL.
+  //
+  // Both branches funnel through the SAME pure helper, so the
+  // substrate-exclusion list applies identically to explicit and ambient
+  // bindings.
+  const hasExplicitBinding = input.explicitProjectBinding !== undefined;
+  const frame = hasExplicitBinding
+    ? undefined
+    : mcpRequestContextStorage.getStore()?.projectContext;
   const projectIdForRow = resolveProjectInheritanceForType(
-    frame?.projectId,
+    hasExplicitBinding ? input.explicitProjectBinding : frame?.projectId,
     input.upsertInput.type,
   );
 
@@ -939,6 +997,17 @@ export function upsertObjectAndEnqueue(
                  WHERE ("${schema}"."objects".org_id = EXCLUDED.org_id
                         OR "${schema}"."objects".org_id IS NULL
                         OR EXCLUDED.org_id IS NULL)
+                   -- Optimistic-concurrency guard (cinatra#1377). Inert unless
+                   -- the caller armed it. Armed with a NULL expectedVersion the
+                   -- arm is blocked outright: the caller authorized a CREATE, so
+                   -- any conflicting row appeared after its probe and was never
+                   -- authorized. Armed with a version it must still be that
+                   -- version AND still carry the same project tag.
+                   AND ($25::boolean IS NOT TRUE
+                        OR ($26::int IS NOT NULL
+                            AND "${schema}"."objects".version = $26::int
+                            AND "${schema}"."objects".project_id
+                                IS NOT DISTINCT FROM $27::text))
                  RETURNING id, type, parent_id, parent_type, data, created_at, updated_at,
                    created_by, org_id, source, run_id, agent_id, package_version,
                    agent_spec_version, version, deleted_at,
@@ -1052,6 +1121,9 @@ export function upsertObjectAndEnqueue(
           legacyEventId,                        // $22 — event id
           legacyIdempotencyKey,                 // $23 — event idempotency_key
           legacyChecksum,                       // $24 — event checksum
+          input.collisionGuard !== undefined,             // $25 — guard armed?
+          input.collisionGuard?.expectedVersion ?? null,  // $26 — expected version
+          input.collisionGuard?.expectedProjectId ?? null, // $27 — expected project
         ],
       },
     ],
@@ -1059,6 +1131,25 @@ export function upsertObjectAndEnqueue(
 
   const row = upsertResult?.rows[0];
   if (!row) {
+    // TWO predicates can block the DO UPDATE arm: the cross-tenant `org_id`
+    // guard and, when the caller armed it, the collision guard. An empty
+    // RETURNING cannot tell them apart, and nothing outside the failed statement
+    // can either — a later re-read sees a newer snapshot, so it would answer
+    // about a different moment than the one that blocked the write.
+    //
+    // So do not guess. Both causes mean the same thing to the caller — the
+    // precondition this write required did not hold and NOTHING was written —
+    // and both are reported TERMINALLY. A caller that wants to try again re-reads
+    // the row and re-authorizes against what is actually there, which is a fresh
+    // save, not a retry of this one. Auto-retrying a write whose authorization
+    // could not be confirmed is exactly what this guard exists to prevent.
+    if (input.collisionGuard) {
+      const err = new Error(
+        `upsertObjectAndEnqueue: refused for id=${id} — the write precondition did not hold: the row changed between the caller's authorization probe and this write, or a cross-tenant collision blocked it`,
+      );
+      (err as Error & { code: string }).code = "OBJECTS_WRITE_PRECONDITION_FAILED";
+      throw err;
+    }
     throw new Error(
       `upsertObjectAndEnqueue: no row returned for id=${id} — possible cross-tenant collision (org_id mismatch on ON CONFLICT DO UPDATE)`,
     );
