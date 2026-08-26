@@ -1,0 +1,140 @@
+{
+  "run": {
+    "id": "f27bbbf0-08b4-4352-9609-2d115df414ad",
+    "status": "armed",
+    "created_at": "2026-08-25T09:34:43.212Z",
+    "started_at": null,
+    "human_present": true,
+    "source_type": "agent_builder",
+    "template_id": "6ec284f5-ce0f-45c9-a32f-ce6c2af0030d",
+    "package_name": "@cinatra-ai/blog-draft-writer-agent",
+    "name": "Blog Draft Writer Agent"
+  },
+  "trigger": {
+    "run_id": "f27bbbf0-08b4-4352-9609-2d115df414ad",
+    "trigger_type": "scheduled",
+    "scheduled_at": "2026-08-25T10:34:00.000Z",
+    "cron_expression": null,
+    "timezone": "Europe/Berlin",
+    "enabled": true,
+    "released_at": null,
+    "job_scheduler_id": "trigger-release-f27bbbf0-08b4-4352-9609-2d115df414ad",
+    "created_at": "2026-08-25T09:34:43.241Z",
+    "updated_at": "2026-08-25T09:34:43.297Z"
+  },
+  "runUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f27bbbf0-08b4-4352-9609-2d115df414ad",
+  "threadUrl": "http://127.0.0.1:3000/chat/cinatra-ai/cinatra-assistant/d8aacd1b-0bde-4d6d-ba05-2b2efb2fa4d6",
+  "sentence": "Schedule the Blog Draft Writer Agent to run once today at 12:34 Europe/Berlin.",
+  "timeline": [
+    {
+      "at": "2026-08-25T09:34:03.670Z",
+      "what": "the chat is open",
+      "source": "driver clock"
+    },
+    {
+      "at": "2026-08-25T09:34:21.523Z",
+      "what": "a warm-up turn was sent and answered before the measured sequence",
+      "warmedUp": true,
+      "source": "driver clock"
+    },
+    {
+      "at": "2026-08-25T09:34:22.439Z",
+      "what": "the person asked for the schedule in their own words",
+      "sentence": "Schedule the Blog Draft Writer Agent to run once today at 12:34 Europe/Berlin.",
+      "source": "driver clock"
+    },
+    {
+      "at": "2026-08-25T09:34:42.842Z",
+      "what": "the schedule proposal card appeared in the assistant's reply",
+      "source": "driver clock"
+    },
+    {
+      "at": "2026-08-25T09:34:42.894Z",
+      "what": "the person confirmed the schedule ON THE CARD",
+      "source": "driver clock"
+    },
+    {
+      "at": "2026-08-25T09:36:42.921Z",
+      "what": "the card was read back after the confirmation",
+      "settled": false,
+      "cardStateAfterConfirm": "settled",
+      "source": "driver clock"
+    }
+  ],
+  "cardStateAfterConfirm": "settled",
+  "providerEvidence": {
+    "before": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T09:34:21.525Z",
+      "logOffset": 198417,
+      "countedFromOffset": 198417,
+      "session": {
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 16,
+        "publicMcpCallbacks": 188,
+        "bridgeRunSelects": 0
+      },
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 0,
+      "bridgeRunSelects": 0,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "33097",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 79
+    },
+    "after": {
+      "serverLog": "<the app server's own log>",
+      "at": "2026-08-25T09:36:42.935Z",
+      "logOffset": 212177,
+      "countedFromOffset": 198417,
+      "session": {
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 16,
+        "publicMcpCallbacks": 207,
+        "bridgeRunSelects": 0
+      },
+      "preRouterShortCircuits": 0,
+      "preRouterAttempts": 0,
+      "scriptedRuntimeLines": 0,
+      "noProviderRefusals": 0,
+      "mcpDependencyFailures": 0,
+      "publicMcpCallbacks": 19,
+      "bridgeRunSelects": 0,
+      "driverScriptedProviderEnv": null,
+      "serverScriptedProviderEnv": null,
+      "serverEnvReadFrom": "process-table",
+      "serverEnvReadOfPid": "33097",
+      "serverEnvHopsFromListener": 1,
+      "serverEnvTokensSeen": 79,
+      "inThisSequence": {
+        "publicMcpCallbacks": 19,
+        "bridgeRunSelects": 0
+      }
+    }
+  },
+  "usage": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "source": "llm",
+      "operation": "stream",
+      "calls": "12",
+      "input_tokens": "254493",
+      "output_tokens": "3659",
+      "first_at": "2026-08-25T08:39:27.430Z",
+      "last_at": "2026-08-25T09:34:42.224Z"
+    }
+  ]
+}

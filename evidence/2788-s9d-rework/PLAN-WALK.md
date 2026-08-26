@@ -1,5 +1,282 @@
 # PLAN-WALK — the current page, quoted verbatim
 
+## ROUND 7 (2026-08-26) — every round 6 cell re-graded on the fixed head, and the three readings the fix defines
+
+Round 6's four cells were shot BEFORE the change under review, and two of them had
+to be graded FAIL. All four are re-shot here and re-graded, and three cells are
+added. Every `shows` and every `verdict` below was written after looking at the
+pixels of the named file.
+
+### C7 — `captures/C7__run-setup-scheduling-step__{light,dark}.png`
+
+`REQUIRES>` cinatra#2970 acceptance 1, verbatim: *"The first-time run page (setup
+flow) renders the two-column layout: the rail on the left with the setup steps, the
+selected step's surface on the right — measured on the real surface (rail count 1,
+detail column 1)."* And the run-surface drawing's own clause: *"a step rail down the
+left **names** the run's ordered steps, and the run detail on the right shows the
+selected step … Selecting a step opens it on the right … never as a standalone
+document."* Plus plan (A) §7.2 step 5: *"no agentic run progress card is shown with
+it."*
+
+`SHOWS>` One rail column and one detail column (`run-step-rail-column` **1**,
+`run-detail-column` **1**, counted off the live page). Three rows on the rail,
+numbered 1-2-3 in order and **named** — **1 Schedule**, **2 Recommendation**,
+**3 Review** — with the schedule row's numeral the filled chip and the other two
+muted. The scheduling form — "When should this run?", *Run right after setup* /
+*Schedule for later* / *Recurring*, "Estimated run duration", **Continue** — is
+drawn in the **right** column, never under a row
+(`data-run-surface-selected-step="schedule"`, `detailColumnTextLength` **13137**).
+No agentic run progress panel anywhere in the window
+(`agentic-run-progress` **0**) and no lifecycle card at all
+(`lifecycle-card-host` **0**). The run reads `pending_approval` / `started_at` NULL
+/ `review_gates` **0** in the record's own `dbAt` block.
+
+`VERDICT>` **PASS**, in both themes. The open / muted distinction survives the
+theme, which is the thing a dark cell is shot to check. One blemish is visible and
+is pre-existing, not this issue's: "Estimated run duration — Unavailable."
+
+### C9 — `captures/C9__run-setup-continue-armed__{light,dark}.png`
+
+`REQUIRES>` cinatra#2970 acceptance 2, second half, verbatim: *"Continue arms it
+exactly as today."*
+
+`SHOWS>` The **same run** as C7, after **Continue** was pressed on the form in the
+detail column with *Schedule for later* and `2026-08-26 21:30` typed into the step's
+own field. The page draws **Trigger configuration** — Type `scheduled`, Schedule
+`Aug 26, 2026, 9:30:00 PM`, Timezone `Europe/Berlin` — "Steps held until trigger
+fires", and **Cancel trigger**. The database agrees independently: one
+`agent_run_triggers` row, `scheduled`, `2026-08-26 19:30:00+00`, `Europe/Berlin`,
+enabled, `released_at` NULL.
+
+`VERDICT>` **PASS.** C7 and C9 are one run with one press between them, so this is a
+before-and-after of the press itself rather than two pictures of two runs. Two
+consequences are stated rather than smoothed over: `pending_approval → armed` is not
+a legal transition, so the trigger row was created while the STATUS stayed
+`pending_approval`; and once a one-off is armed the run's page draws the **Trigger**
+tab instead of the setup rail (`run-step-rail-column` **0** / `run-detail-column`
+**0**), so the setup surface this issue is about is the one a run is on *before* its
+schedule is armed.
+
+### C10 — `captures/C10__run-setup-recommendation-step-opened__{light,dark}.png`
+
+`REQUIRES>` cinatra#2970 acceptance 3, first half, verbatim: *"The
+skills-recommendation step … open[s] the same way, to the right of the steps, never
+under a row."* And this head's fix: *"the recommendation row opens exactly when the
+run has a live hold (the hold card) … and is closed+muted otherwise"*, with the
+ruling's *"the right column never shows an empty step surface."*
+
+`SHOWS>` The **2 Recommendation** row reads `data-run-surface-rail-reached="true"`
+and `data-action="open-recommendation-step"`; pressed, it takes the selection
+(`data-run-surface-selected-step` goes `schedule` → `recommendation`, the numeral 2
+becomes the filled chip) and the **right-hand column draws the shipped hold card** —
+`[data-lifecycle-card="recommendation_hold"]` **1**, `data-lifecycle-card-host`
+`run_card` **1**, the chip **Blog Content Skill** with **Confirm**, **Adjust** and
+**Skip** beside it. `detailColumnTextLength` **35**, counted off the live page —
+**not zero**. No agentic run progress panel (`agentic-run-progress` **0**). The run
+holds a live `recommendation` park (`parked`) in its own rows at the shutter.
+
+`VERDICT>` **PASS — on the clause round 6 had to fail.** Round 6's C10 read
+`detailColumnTextLength` **0** and showed an empty right half of the screen; the
+same anchor reads **35** here with the card in it, on the same screen through the
+same reader. Both themes.
+
+### C10b — `captures/C10b__run-setup-recommendation-row-closed__{light,dark}.png`
+
+`REQUIRES>` the fix's other half — *"closed+muted otherwise"* — and the ruling on
+this issue: *"A step the run has not reached cannot be selected. Its row stays on the
+rail, muted; clicking it does nothing; the scheduler stays open; the right column
+never shows an empty step surface."*
+
+`SHOWS>` On a run with **no recommendation park at all**, row 2 reads
+`data-run-surface-rail-reached="false"`, `aria-disabled="true"` and
+`data-action="recommendation-step-unavailable"`, keeps its place and its numeral,
+and is drawn muted. The press was delivered as a real mouse click (forced, because
+`aria-disabled` makes Playwright's own actionability treat the row as not-enabled —
+a row that is never pressed proves nothing). After it the selected step is still
+`schedule`, the scheduling form is still in the detail column, and **the detail
+column's DOM is byte-identical before and after** the press (`a83b8cd1f79e…` light,
+`5320894b1fee…` dark, on both sides).
+
+`VERDICT>` **PASS.** The row is legible and inert, and the column never goes blank.
+
+### C10c — `captures/C10c__run-setup-recommendation-step-settled__{light,dark}.png`
+
+`REQUIRES>` the fix's middle clause: *"the recommendation row opens exactly when the
+run has a live hold (the hold card) **or a decided one (the settled row)**."*
+
+`SHOWS>` The same run as C10, after **Confirm** was pressed on the card and the app
+released the park itself (`lifecycle_continuation_park` `recommendation` /
+`released`). Row 2 still opens, and the right column draws the settled reading of
+the **same one renderer** — `Blog Content Skill ✓ CONFIRMED`, read-only, no
+Confirm / Adjust / Skip. `[data-lifecycle-card="recommendation_hold"]` **1**,
+`detailColumnTextLength` **27**.
+
+`VERDICT>` **PASS.** A decided hold keeps its place and records how it was settled,
+which is what §6.4 asks of the row.
+
+### C11 — `captures/C11__run-setup-review-step-opened__{light,dark}.png`
+
+`REQUIRES>` cinatra#2970 acceptance 3, second half, verbatim: *"the review step
+open[s] the same way, to the right of the steps, never under a row."* And this head's
+fix: *"the review row draws the run's review slot — … the review card once a gate is
+on file."* Plan (A) §4.2.
+
+`SHOWS>` On a run that ran to completion and whose artifact opened a gate, row 3
+reads `data-run-surface-rail-reached="true"` and `data-action="open-review-step"`.
+Pressed, it takes the selection and the right column draws
+`[data-run-review-slot="review"]` with `[data-conformance-id="review-gate-card"]`
+**1** inside it: **Review requested**, *Awaiting your decision*, the artifact
+**Connector Rollout Note: What Changed This Week** tagged **Blog Post Artifact**
+(`@cinatra-ai/blog-post-artifact:post`, revision `19fed4ea-13b…`, `text/markdown`),
+a **Decision rationale** field and **Comment / Reject / Approve**.
+`detailColumnTextLength` **124**, `review-gate-placeholder` **0**.
+
+`VERDICT>` **PASS — the FAIL round 6 reported is gone.** Round 6's C11 could not be
+opened at all: the step was composed `surface: null` for every run. Here it opens,
+to the right of the steps, never under a row. One reading INSIDE the card is a lane
+observation and is named rather than hidden: the card's content rung says *"review
+target unavailable — slot 'detail', reason 'no-semantic-renderer'"* and falls back
+to the generic read-only view of the artifact. That is the artifact type's renderer,
+not the review step, and nothing here changes it.
+
+### C11b — `captures/C11b__run-setup-review-step-working__{light,dark}.png`
+
+`REQUIRES>` this head's fix: *"the placeholder with the spinning icon while the run
+works."* Plan (A) §4.2, the maintainer's own words: *"a card (maybe even an empty
+review screen) with a spinning icon which is a temporary placeholder for the review
+screen."*
+
+`SHOWS>` Pressed while the run's artifact has a PENDING `artifact_produced_outbox`
+row and no gate yet, row 3 opens `[data-run-review-slot="working"]` with
+`[data-conformance-id="review-gate-placeholder"]` **1** inside it and
+`review-gate-card` **0**: the review screen's own frame, empty, with the spinning
+icon at its head and the skeleton rows beneath. **Wordless by design**
+(`detailColumnTextLength` **0**), so it is graded on its anchor and its spinner,
+never on a text length.
+
+`VERDICT>` **PASS.** The two themes come from two runs, and the reason is measured
+rather than assumed: the window between the outbox row and the gate ran **25 s** on
+one run and about **5 s** on another, which is shorter than two shutters. Each record
+carries its own run id and shutter time.
+
+
+## ROUND 6 (2026-08-26) — C7 re-graded, and the three cells cinatra#2970 adds
+
+Round 5 had to grade C7 a FAIL. cinatra#2970 (PR #2975) rebuilt the screen it
+photographs, so C7 was re-shot on this head and re-graded, and three cells were
+added for the acceptance items C7 alone cannot answer. Every `shows` and every
+`verdict` below was written after looking at the pixels of the named file.
+
+### C7 — `captures/C7__run-setup-scheduling-step__{light,dark}.png`
+
+`DRAWING> images/lifecycle-screens/design-run-surface-rail-and-gate.png` —
+*"The surface is a two-column frame: a step rail down the left **names** the run's
+ordered steps, and the run detail on the right shows the selected step … Selecting
+a step opens it on the right … right here in the run detail, under the same rail,
+never as a standalone document."*
+
+`PLAN> §7.2 step 5` — *"open that step to see the configuration or change it — it
+opens to the right of the steps, never directly under a step, and no agentic run
+progress card is shown with it."*
+
+`DRAWING-CHECK> requires` — two columns; the rail on the LEFT naming the run's
+ordered steps; the selected step's surface on the RIGHT; nothing drawn under a
+row; no agentic run progress card.
+
+`DRAWING-CHECK> shows` — one rail column and one detail column
+(`run-step-rail-column` 1, `run-detail-column` 1, counted off the live page
+through the recorder's own reader). The rail carries three rows, numbered 1-2-3 in
+order and NAMED: **1 Schedule**, **2 Recommendation**, **3 Review**. The schedule
+step is the open one (`data-run-surface-selected-step="schedule"`; its numeral is
+the filled chip, the other two muted) and the unchanged scheduling form — "When
+should this run?", *Run right after setup* / *Schedule for later* / *Recurring*,
+"Estimated run duration", **Continue** — is drawn in the RIGHT column, never under
+a row. No agentic run progress panel anywhere in the window
+(`agentic-run-progress` 0) and no lifecycle card at all (`lifecycle-card-host` 0).
+The run reads `pending_approval` / `started_at: null` in each record's own `dbAt`
+block, read at the shutter.
+
+`DRAWING-CHECK> verdict` — **PASS, and it is the clause round 5 had to fail.**
+The same anchors read 0 / 0 in round 5's record of this cell and read 1 / 1 here.
+The rail also NAMES its steps, which no earlier picture of this screen has shown.
+Dark carries the same reading: the same frame, the same three named rows, the same
+open schedule step, and the muted/open distinction survives the theme.
+
+### C9 — `captures/C9__run-setup-continue-armed__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 2` — *"The scheduler step inside it is the
+unchanged scheduler form in its first-shown state; **Continue arms it exactly as
+today**."*
+
+`CHECK> requires` — that pressing Continue on the scheduler step, where it now sits
+inside the run detail column, arms the trigger the way it did before the screen
+changed.
+
+`CHECK> shows` — the SAME run as C7, after Continue was pressed on the form in the
+detail column with *Schedule for later* and `2026-08-26 21:30` typed into the
+step's own field. The page draws **Trigger configuration** — Type `scheduled`,
+Schedule `Aug 26, 2026, 9:30:00 PM`, Timezone `Europe/Berlin` — "Steps held until
+trigger fires", and **Cancel trigger**. The database agrees and was read
+independently: one `agent_run_triggers` row, `scheduled`, `2026-08-26 19:30:00+00`,
+`Europe/Berlin`, enabled, `released_at` NULL, delayed job
+`trigger-release-2b9859f8-…`, created `05:49:58.710`.
+
+`CHECK> verdict` — **PASS.** C7 and C9 are one run with one press between them, so
+this is a before/after of the press itself rather than two pictures of two runs.
+One consequence is recorded rather than smoothed over: the run was at
+`pending_approval`, and `pending_approval -> armed` is not a legal transition, so
+the trigger row was created while the STATUS stayed `pending_approval`. That is
+the same on this head as before it and nothing in cinatra#2970 touches it.
+
+### C10 — `captures/C10__run-setup-recommendation-step-opened__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 3` — *"The skills-recommendation step and the review
+step open the same way, to the right of the steps, never under a row."*
+
+`RULING>` — *"…the right column never shows an empty step surface."*
+
+`CHECK> requires` — pressing the recommendation row opens the skills-recommendation
+step's own surface in the run detail, to the right of the rail.
+
+`CHECK> shows` — the row takes the selection
+(`data-run-surface-selected-step="recommendation"`, the numeral 2 becomes the
+filled chip) and the right-hand column is **BLANK**: no card, no heading, no
+control. `detailColumnTextLength` reads **0** off the live page and the picture
+shows an empty right half of the screen. The step's surface is the one shipped
+`RecommendationHoldCard`; with no live hold on this run it resolves to nothing and
+renders no DOM.
+
+`CHECK> verdict` — **FAIL, reported rather than softened.** The step is selected to
+the right of the steps and never under a row, so the LAYOUT clause holds — but
+"opens" is not met: there is nothing in the column. It is also the ruling's last
+clause broken in one press. PR #2975's own text pins this residual in words ("a
+started run with no live hold can therefore still open a step whose card resolves
+to nothing"); this is that residual photographed. Not a regression this round
+introduces, and not fixed here.
+
+### C11 — `captures/C11__run-setup-review-row-pressed__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 3` — the review step's half of the same sentence.
+
+`CHECK> requires` — pressing the review row opens the review step to the right of
+the steps.
+
+`CHECK> shows` — nothing happens. The press was delivered as a real mouse click
+(forced, because the row carries `aria-disabled="true"` and Playwright's own
+actionability would otherwise never deliver it — a row that is never pressed
+proves nothing). After the press the selected step is still `schedule`, the
+scheduling form is still in the detail column, and the row still reads
+`data-run-surface-rail-reached="false"`,
+`data-action="review-step-unavailable"`, no native `disabled`.
+
+`CHECK> verdict` — **the RULING passes and the ACCEPTANCE ITEM fails, at the same
+time.** The rail closes the row for every run on this screen, because the setup
+page composes the review step with `surface: null` unconditionally, so the step
+can never be opened here whatever the run has reached. Which of the two sentences
+the screen should obey is a maintainer's call, and it is put on the pull request
+as one.
+
+
 Every `PLAN>` line below is a verbatim sentence of
 `PLAN:-Agents-Lifecycle-(A).md` **as the page stands today** — wiki head
 `ba8a97b`, whose own last change to this page is `87a287c` — and each was

@@ -75,10 +75,13 @@ import {
   runSurfaceRailTitleClass,
   useRunStepSelection,
 } from "./run-surface-rail";
+import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 
-/** The label the rail row carries. One word, in the plan's own vocabulary —
- *  "the schedule is a dedicated step in the step rail". */
-export const SCHEDULE_RAIL_STEP_LABEL = "Schedule";
+/** The label the rail row carries. One word, in the plan’s own vocabulary —
+ *  "the schedule is a dedicated step in the step rail". Read from the run
+ *  surface’s own label set (cinatra#2970) so the setup page’s schedule row and
+ *  this one cannot drift into two words for the same step. */
+export const SCHEDULE_RAIL_STEP_LABEL = RUN_SURFACE_RAIL_LABELS.schedule;
 
 // The selection type and its reader are the FRAME's, re-exported here because
 // this module's subpath is the one the review page's rail already imports them

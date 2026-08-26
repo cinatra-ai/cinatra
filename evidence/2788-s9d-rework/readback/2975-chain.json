@@ -1,0 +1,449 @@
+{
+  "note": "The chain the 2026-08-26 re-shoot stands on, as its drivers wrote it. `parkedRun` is evidence/2970-setup-rail/drivers/08-chat-run-parked.mjs; `continuePress` is evidence/2970-setup-rail/drivers/12-scheduler-continue.mjs; `railPressProofs` is what the capture driver measured either side of each rail press.",
+  "parkedRun": {
+    "run": {
+      "id": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "human_present": true
+    },
+    "packageName": "@cinatra-ai/blog-draft-writer-agent",
+    "trigger": null,
+    "runUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "threadUrl": "http://127.0.0.1:3000/chat/cinatra-ai/cinatra-assistant/780b4eed-efed-4e00-b7a4-81c36c958e37",
+    "sentence": "Please run the Blog Draft Writer Agent for me now.",
+    "timeline": [
+      {
+        "at": "2026-08-26T05:41:17.251Z",
+        "what": "a warm-up turn was sent and answered before the measured turn"
+      },
+      {
+        "at": "2026-08-26T05:41:17.903Z",
+        "what": "the person asked for the run in their own words",
+        "sentence": "Please run the Blog Draft Writer Agent for me now."
+      },
+      {
+        "at": "2026-08-26T05:41:31.937Z",
+        "what": "the app's own dispatch created the run",
+        "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+        "status": "pending_input"
+      }
+    ]
+  },
+  "continuePress": {
+    "before": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "triggers": "0",
+      "read_at": "2026-08-26T05:49:50.176Z"
+    },
+    "pressedAt": "2026-08-26T05:49:57.946Z",
+    "after": {
+      "id": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+      "status": "pending_approval",
+      "started_at": null
+    },
+    "trigger": {
+      "run_id": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+      "trigger_type": "scheduled",
+      "scheduled_at": "2026-08-26T19:30:00.000Z",
+      "cron_expression": null,
+      "timezone": "Europe/Berlin",
+      "enabled": true,
+      "released_at": null,
+      "last_fired_at": null,
+      "stopped_at": null,
+      "job_scheduler_id": "trigger-release-2b9859f8-3efc-448e-8659-e8246713b5e2",
+      "created_at": "2026-08-26T05:49:58.710Z",
+      "updated_at": "2026-08-26T05:49:58.736Z"
+    },
+    "landedOn": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "typed": "2026-08-26 21:30"
+  },
+  "railPressProofs": [
+    {
+      "control": "C10",
+      "theme": "light",
+      "what": "the skills-recommendation row pressed on a run whose rail leaves the step UNSTATED",
+      "detailBeforeDigest": "5320894b1fee2e0b2dc308ac84d5278e47733a034bcdeeeab8d33613ff72b6ab",
+      "detailAfterDigest": "01c79ed6d6c0ecb7c09c1b0981bfd050d3406232a05c7c714caff8f14bb6a861",
+      "detailIdentical": false,
+      "selectedBefore": "schedule",
+      "selectedAfter": "recommendation",
+      "rowsBefore": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "rowsAfter": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "detailHeadingsBefore": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailHeadingsAfter": []
+    },
+    {
+      "control": "C10",
+      "theme": "dark",
+      "what": "the skills-recommendation row pressed on a run whose rail leaves the step UNSTATED",
+      "detailBeforeDigest": "a83b8cd1f79e7598ee8195c6166a1eecfbd2b1cff87a0097edbac08abf95d753",
+      "detailAfterDigest": "01c79ed6d6c0ecb7c09c1b0981bfd050d3406232a05c7c714caff8f14bb6a861",
+      "detailIdentical": false,
+      "selectedBefore": "schedule",
+      "selectedAfter": "recommendation",
+      "rowsBefore": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "rowsAfter": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "detailHeadingsBefore": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailHeadingsAfter": []
+    },
+    {
+      "control": "C11",
+      "theme": "light",
+      "what": "the review row pressed — forced, because the row carries aria-disabled",
+      "detailBeforeDigest": "5320894b1fee2e0b2dc308ac84d5278e47733a034bcdeeeab8d33613ff72b6ab",
+      "detailAfterDigest": "5320894b1fee2e0b2dc308ac84d5278e47733a034bcdeeeab8d33613ff72b6ab",
+      "detailIdentical": true,
+      "selectedBefore": "schedule",
+      "selectedAfter": "schedule",
+      "rowsBefore": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "rowsAfter": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "detailHeadingsBefore": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailHeadingsAfter": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ]
+    },
+    {
+      "control": "C11",
+      "theme": "dark",
+      "what": "the review row pressed — forced, because the row carries aria-disabled",
+      "detailBeforeDigest": "a83b8cd1f79e7598ee8195c6166a1eecfbd2b1cff87a0097edbac08abf95d753",
+      "detailAfterDigest": "a83b8cd1f79e7598ee8195c6166a1eecfbd2b1cff87a0097edbac08abf95d753",
+      "detailIdentical": true,
+      "selectedBefore": "schedule",
+      "selectedAfter": "schedule",
+      "rowsBefore": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "rowsAfter": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "detailHeadingsBefore": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailHeadingsAfter": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ]
+    }
+  ]
+}
