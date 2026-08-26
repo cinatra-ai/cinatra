@@ -354,8 +354,15 @@ export async function decideTriggerScheduleProposal(params: {
   userId: string;
   orgId: string;
   role: string | null;
+  /**
+   * The reader's STANDING on the run, for a run-addressed ref (cinatra#3004).
+   * The same value the read took, so a control a reader can see is a control
+   * they can press. It authorizes nothing by itself — every op below re-checks
+   * the actor against the run it reaches.
+   */
+  access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints };
 }): Promise<ScheduleDecisionOutcome> {
-  const { ref, op, userId, orgId, role } = params;
+  const { ref, op, userId, orgId, role, access } = params;
   if (!userId || !orgId) return NOT_PERMITTED;
 
   try {
@@ -438,7 +445,7 @@ export async function decideTriggerScheduleProposal(params: {
 
     // Save and Cancel both act on the RUN the card settled into — resolved
     // here, never named by the caller.
-    const settled = await resolveSettledRunForReader(ref, { userId, orgId });
+    const settled = await resolveSettledRunForReader(ref, { userId, orgId }, access);
     if (!settled) return NOT_PERMITTED;
 
     if (op === "save") {
@@ -500,17 +507,24 @@ export async function decideTriggerScheduleProposal(params: {
  * the run page's and the review page's hold the run-scoped ref. Either way the
  * run is the resolver's answer, taken against the live reader, so the two hosts
  * cannot reach different runs from the same press.
+ *
+ * THE SAME STANDING THE READ TOOK (cinatra#3004). A run that came from no
+ * proposal is resolved under the RUN's own access control, so this call has to
+ * present what the read presented — otherwise a control a reader can SEE would
+ * answer "not permitted" when they press it. It grants nothing on its own: the
+ * service behind each op re-checks the actor against the run it reaches.
  */
 async function resolveSettledRunForReader(
   ref: string,
   actor: { userId: string; orgId: string },
+  access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints },
 ): Promise<string | null> {
   const { resolveProposalForReader, resolveProposalForRun } = await import(
     "@cinatra-ai/agents/trigger-schedule-proposal-service"
   );
   const runRef = decodeScheduleRunRef(ref);
   const resolved = runRef
-    ? await resolveProposalForRun(runRef.runId, actor)
+    ? await resolveProposalForRun(runRef.runId, actor, access)
     : await resolveProposalForReader(ref, actor);
   return resolved.phase === "settled" ? resolved.runId : null;
 }
