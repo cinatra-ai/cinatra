@@ -123,6 +123,18 @@ const HOST_STANDARD_IDS = new Set([
   "suggestion-chips",
   "suggestion-accepted",
   "suggestion-dismissed",
+  // cinatra#2997 — the RUN CARD'S placeholder for the review screen. It is not a
+  // review-page anchor at all: this route never draws it, and the module it
+  // lives in is scanned here only because that module owns the review screen's
+  // OTHER states (loading / blocked / settled), which this route does draw. The
+  // anchor belongs to the run card's own reading, ruled by the maintainer's
+  // request for changes on pull request 2890 and by PLAN: Agents Lifecycle (A)
+  // section 4.2 — "While the agent works, the conversation shows basically just
+  // a card (maybe even an empty review screen) with a spinning icon" — and its
+  // own conformance is pinned where it is drawn
+  // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
+  // photographed (evidence/2790-s9f-host-parity, the S5a / R7a cells).
+  "review-gate-placeholder",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer

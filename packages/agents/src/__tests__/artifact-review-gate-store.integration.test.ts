@@ -715,11 +715,14 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
 
   it("SLOT: an unanswered produced output says a review may still open", async () => {
     const { runId } = freshGateIds();
+    // `emitter` and `origin_kind` are CLOSED SETS on this table (the DDL's own
+    // checks); the produced-artifact path this slot read is about is the first
+    // member of each.
     await client!.query(
       `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
          (event_id, org_id, artifact_id, representation_revision_id, emitter,
           producer_run_id, origin_kind, destination_class, continuation_mode, status)
-       VALUES ($1, $2, $3, $4, 'test', $5, 'agent_run', 'none', 'async_effects_gated', 'pending')`,
+       VALUES ($1, $2, $3, $4, 'createSemanticArtifact', $5, 'agent_produced', 'none', 'async_effects_gated', 'pending')`,
       [`ev-${randomUUID()}`, ORG, `art-${randomUUID()}`, `rev-${randomUUID()}`, runId],
     );
 
@@ -747,8 +750,13 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     // keep seeing what they decided — the card's own settled state draws it —
     // so the slot does not drop the gate the moment it stops being pending.
     await client!.query(
+      // A RESOLVED gate must carry its terminal disposition, fingerprint and
+      // resolution time — the DDL's own `..._resolved_chk`. This is a slot read
+      // being exercised against a gate that has been decided, so the row is put
+      // in the shape the CAS leaves it in.
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
-          SET status = 'resolved', disposition = 'approved'
+          SET status = 'resolved', disposition = 'approve',
+              fingerprint = 'fp-slot-test', resolved_at = now(), resolved_by = 'user-slot-test'
         WHERE run_id = $1 AND review_task_id = $2`,
       [runId, reviewTaskId],
     );
@@ -772,16 +780,24 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
     });
     await client!.query(
+      // A RESOLVED gate must carry its terminal disposition, fingerprint and
+      // resolution time — the DDL's own `..._resolved_chk`. This is a slot read
+      // being exercised against a gate that has been decided, so the row is put
+      // in the shape the CAS leaves it in.
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
-          SET status = 'resolved', disposition = 'approved'
+          SET status = 'resolved', disposition = 'approve',
+              fingerprint = 'fp-slot-test', resolved_at = now(), resolved_by = 'user-slot-test'
         WHERE run_id = $1 AND review_task_id = $2`,
       [runId, reviewTaskId],
     );
+    // `emitter` and `origin_kind` are CLOSED SETS on this table (the DDL's own
+    // checks); the produced-artifact path this slot read is about is the first
+    // member of each.
     await client!.query(
       `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
          (event_id, org_id, artifact_id, representation_revision_id, emitter,
           producer_run_id, origin_kind, destination_class, continuation_mode, status)
-       VALUES ($1, $2, $3, $4, 'test', $5, 'agent_run', 'none', 'async_effects_gated', 'pending')`,
+       VALUES ($1, $2, $3, $4, 'createSemanticArtifact', $5, 'agent_produced', 'none', 'async_effects_gated', 'pending')`,
       [`ev-${randomUUID()}`, ORG, `art-${randomUUID()}`, `rev-${randomUUID()}`, runId],
     );
 
