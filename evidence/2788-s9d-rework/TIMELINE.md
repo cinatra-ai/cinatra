@@ -1,6 +1,48 @@
 # TIMELINE — the real runs behind every capture
 
-**Round 5 re-shot all fourteen pictures**, and its rows are the first table
+**Round 6 (2026-08-26) re-shot ONE picture — C7 — and added three cells (C9, C10,
+C11).** Its rows are the first table below. Round 5's rows follow unchanged, and
+the other twelve of its pictures are still the committed ones.
+
+## Round 6 — the run behind C7, C9, C10 and C11
+
+Every row is read out of the lane database or is the `capturedAt` of the record
+the picture is filed with, so a reader can line every picture up against the row
+it belongs to. ONE run carries all four cells: it was asked for in the app's own
+chat with a real model provider and created by the app's own dispatch, and it has
+never executed (`started_at` NULL at every shutter).
+
+Run `2b9859f8-3efc-448e-8659-e8246713b5e2`, thread
+`780b4eed-efed-4e00-b7a4-81c36c958e37`.
+
+| UTC (2026-08-26) | what | where it is recorded |
+|---|---|---|
+| 05:41:17.251 | a warm-up turn sent in the app's own chat and answered (the ingress had to be warm before the runtime's 2.5 s public-MCP probe would pass — README.md, "the two limits this round hit") | `cinatra.assistant_turns` |
+| 05:41:17.903 | the person asks, in their own words: *"Please run the Blog Draft Writer Agent for me now."* | `cinatra.assistant_turns` (user turn) |
+| 05:41:13.727 / 05:41:39.279 | the two model calls of the session: `openai` / `gpt-5.5`, 43324 in / 303 out | `cinatra.usage_events` |
+| 05:41:31.729 | **the app's own dispatch created the run**, `pending_input`, human-present, `source_type agent_builder` | `cinatra.agent_runs.created_at` |
+| ~05:41:3x | the run parks at its setup interruption, `pending_approval`; no trigger row | `cinatra.agent_runs.status` |
+| 05:48:01.493 / 05:48:09.229 | **C7** shot, light and dark: the two-column setup surface — rail 1 / detail 1, the three steps NAMED, `1 Schedule` open with the scheduling form on the right, no run progress | the two C7 records |
+| 05:48:25.110 / 05:48:41.140 | **C10** shot, light and dark, after the **2 Recommendation** row was pressed: the step takes the selection and the run detail draws NOTHING (`detailColumnTextLength` 0) | the two C10 records |
+| 05:48:55.337 / 05:49:09.838 | **C11** shot, light and dark, after the **3 Review** row was pressed (forced — the row carries `aria-disabled`): nothing happened, the scheduler is still open | the two C11 records |
+| 05:49:57.946 | **Continue pressed** on the scheduler step, inside the run detail column, with *Schedule for later* and `2026-08-26 21:30` typed into the step's own field | `readback/2975-chain.json` |
+| 05:49:58.710 | **the trigger armed by the app itself**: `scheduled`, `2026-08-26 19:30:00+00`, `Europe/Berlin`, enabled, delayed job `trigger-release-2b9859f8-…`, `released_at` NULL | `cinatra.agent_run_triggers` |
+| 05:52:39.654 / 05:52:48.549 | **C9** shot, light and dark: the same run's page now drawing `Trigger configuration` — type `scheduled`, `Aug 26, 2026, 9:30:00 PM`, `Europe/Berlin` — with `Cancel trigger` | the two C9 records |
+
+**The run never ran.** `started_at` is NULL in every record's own `dbAt` block, no
+`artifact_review_gates` row exists for it (0 on the whole lane), and the server log
+carries zero `[llm-bridge-run-select]` lines — which is what a round of
+pre-execution screens should read.
+
+**A consequence worth recording rather than smoothing over:** the run was at
+`pending_approval` when Continue was pressed, and `pending_approval -> armed` is not
+a legal transition, so the trigger row was created while the run's STATUS stayed
+`pending_approval`. The arming is the trigger row and the scheduled job, and both
+are there; the status flip belongs to the `pending_input` path. Nothing in
+cinatra#2970 touches that, and it is the same on this head as before it.
+
+
+**Round 5 re-shot all fourteen pictures**, and its rows are the second table
 below. Rounds 4 and 3 follow unchanged, as the record of what they walked; no
 committed picture stands on them any more.
 

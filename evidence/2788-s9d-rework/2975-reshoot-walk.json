@@ -1,0 +1,125 @@
+{
+  "slice": "2788-s9d-rework — cinatra#2970 / PR #2975 re-shoot",
+  "note": [
+    "THE 2026-08-26 RE-SHOOT, EXECUTABLE (cinatra#2970, PR #2975).",
+    "",
+    "It is walked in TWO passes because one of its cells CHANGES the run. Pass 1 (C7,",
+    "C10, C11) only opens the page and presses rail rows; pass 2 (C9) is shot after",
+    "Continue was pressed on the scheduler step by",
+    "evidence/2970-setup-rail/drivers/12-scheduler-continue.mjs, which is what arms the",
+    "trigger. So C7 and C9 are a genuine BEFORE and AFTER of one press on one run,",
+    "rather than two pictures of two runs.",
+    "",
+    "The run is the app's own: asked for in the app's own chat with a real model",
+    "provider and created by the app's own dispatch",
+    "(evidence/2970-setup-rail/drivers/08-chat-run-parked.mjs). Nothing here inserts a",
+    "run, a trigger, a gate or a record.",
+    "",
+    "  export WALK_BASE=http://127.0.0.1:<port>",
+    "  export SUPABASE_DB_URL=<the lane database>",
+    "  node evidence/2788-s9d-rework/drivers/2975-reshoot-page-controls.mjs <pass 1>",
+    "  node evidence/2970-setup-rail/drivers/12-scheduler-continue.mjs",
+    "  node evidence/2788-s9d-rework/drivers/2975-reshoot-page-controls.mjs <pass 2>"
+  ],
+  "order": [
+    "C7",
+    "C8",
+    "C9",
+    "C10",
+    "C11"
+  ],
+  "passes": [
+    {
+      "pass": 1,
+      "cells": [
+        {
+          "control": "C7",
+          "name": "run-setup-scheduling-step",
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+          "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+          "themes": [
+            "light",
+            "dark"
+          ],
+          "waitFor": "[data-conformance-id=\"run-surface\"]",
+          "settleMs": 6000,
+          "requires": "the run-surface drawing's two-column clause — 'a step rail down the left NAMES the run's ordered steps, and the run detail on the right shows the selected step' — on the first-time run page, with the unchanged scheduling form ('When should this run?', the option rows, Estimated run duration, Continue) open in the RIGHT column and no agentic run progress card beside it (plan (A) 7.2 step 5)"
+        },
+        {
+          "control": "C10",
+          "name": "run-setup-recommendation-step-opened",
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+          "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+          "themes": [
+            "light",
+            "dark"
+          ],
+          "waitFor": "[data-conformance-id=\"run-surface\"]",
+          "settleMs": 6000,
+          "proofNote": "the skills-recommendation row pressed on a run whose rail leaves the step UNSTATED",
+          "actions": [
+            {
+              "action": "click",
+              "selector": "[data-run-surface-rail-step-key=\"recommendation\"]"
+            },
+            {
+              "action": "waitForTimeout",
+              "ms": 8000
+            }
+          ],
+          "requires": "cinatra#2970 acceptance 3: 'the skills-recommendation step ... opens the same way, to the right of the steps, never under a row'"
+        },
+        {
+          "control": "C11",
+          "name": "run-setup-review-row-pressed",
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+          "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+          "themes": [
+            "light",
+            "dark"
+          ],
+          "waitFor": "[data-conformance-id=\"run-surface\"]",
+          "settleMs": 6000,
+          "proofNote": "the review row pressed — forced, because the row carries aria-disabled",
+          "actions": [
+            {
+              "action": "click",
+              "selector": "[data-run-surface-rail-step-key=\"review\"]",
+              "force": true
+            },
+            {
+              "action": "waitForTimeout",
+              "ms": 6000
+            }
+          ],
+          "requires": "cinatra#2970 acceptance 3: 'the review step opens the same way, to the right of the steps, never under a row'"
+        }
+      ]
+    },
+    {
+      "pass": 2,
+      "cells": [
+        {
+          "control": "C9",
+          "name": "run-setup-continue-armed",
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+          "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+          "themes": [
+            "light",
+            "dark"
+          ],
+          "settleMs": 8000,
+          "anchors": [
+            "[data-conformance-id=\"run-step-rail-column\"]",
+            "[data-run-detail-column]",
+            "form button[type=\"submit\"]",
+            "[data-lifecycle-card-host]",
+            "[data-conformance-id=\"agentic-run-progress\"]",
+            "[data-conformance-id=\"schedule-rail-step\"]"
+          ],
+          "requires": "cinatra#2970 acceptance 2, second half: 'Continue arms it exactly as today' — the same run's page after Continue was pressed on the scheduler step inside the run detail column"
+        }
+      ]
+    }
+  ]
+}

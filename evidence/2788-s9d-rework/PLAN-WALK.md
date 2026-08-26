@@ -1,5 +1,122 @@
 # PLAN-WALK — the current page, quoted verbatim
 
+## ROUND 6 (2026-08-26) — C7 re-graded, and the three cells cinatra#2970 adds
+
+Round 5 had to grade C7 a FAIL. cinatra#2970 (PR #2975) rebuilt the screen it
+photographs, so C7 was re-shot on this head and re-graded, and three cells were
+added for the acceptance items C7 alone cannot answer. Every `shows` and every
+`verdict` below was written after looking at the pixels of the named file.
+
+### C7 — `captures/C7__run-setup-scheduling-step__{light,dark}.png`
+
+`DRAWING> images/lifecycle-screens/design-run-surface-rail-and-gate.png` —
+*"The surface is a two-column frame: a step rail down the left **names** the run's
+ordered steps, and the run detail on the right shows the selected step … Selecting
+a step opens it on the right … right here in the run detail, under the same rail,
+never as a standalone document."*
+
+`PLAN> §7.2 step 5` — *"open that step to see the configuration or change it — it
+opens to the right of the steps, never directly under a step, and no agentic run
+progress card is shown with it."*
+
+`DRAWING-CHECK> requires` — two columns; the rail on the LEFT naming the run's
+ordered steps; the selected step's surface on the RIGHT; nothing drawn under a
+row; no agentic run progress card.
+
+`DRAWING-CHECK> shows` — one rail column and one detail column
+(`run-step-rail-column` 1, `run-detail-column` 1, counted off the live page
+through the recorder's own reader). The rail carries three rows, numbered 1-2-3 in
+order and NAMED: **1 Schedule**, **2 Recommendation**, **3 Review**. The schedule
+step is the open one (`data-run-surface-selected-step="schedule"`; its numeral is
+the filled chip, the other two muted) and the unchanged scheduling form — "When
+should this run?", *Run right after setup* / *Schedule for later* / *Recurring*,
+"Estimated run duration", **Continue** — is drawn in the RIGHT column, never under
+a row. No agentic run progress panel anywhere in the window
+(`agentic-run-progress` 0) and no lifecycle card at all (`lifecycle-card-host` 0).
+The run reads `pending_approval` / `started_at: null` in each record's own `dbAt`
+block, read at the shutter.
+
+`DRAWING-CHECK> verdict` — **PASS, and it is the clause round 5 had to fail.**
+The same anchors read 0 / 0 in round 5's record of this cell and read 1 / 1 here.
+The rail also NAMES its steps, which no earlier picture of this screen has shown.
+Dark carries the same reading: the same frame, the same three named rows, the same
+open schedule step, and the muted/open distinction survives the theme.
+
+### C9 — `captures/C9__run-setup-continue-armed__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 2` — *"The scheduler step inside it is the
+unchanged scheduler form in its first-shown state; **Continue arms it exactly as
+today**."*
+
+`CHECK> requires` — that pressing Continue on the scheduler step, where it now sits
+inside the run detail column, arms the trigger the way it did before the screen
+changed.
+
+`CHECK> shows` — the SAME run as C7, after Continue was pressed on the form in the
+detail column with *Schedule for later* and `2026-08-26 21:30` typed into the
+step's own field. The page draws **Trigger configuration** — Type `scheduled`,
+Schedule `Aug 26, 2026, 9:30:00 PM`, Timezone `Europe/Berlin` — "Steps held until
+trigger fires", and **Cancel trigger**. The database agrees and was read
+independently: one `agent_run_triggers` row, `scheduled`, `2026-08-26 19:30:00+00`,
+`Europe/Berlin`, enabled, `released_at` NULL, delayed job
+`trigger-release-2b9859f8-…`, created `05:49:58.710`.
+
+`CHECK> verdict` — **PASS.** C7 and C9 are one run with one press between them, so
+this is a before/after of the press itself rather than two pictures of two runs.
+One consequence is recorded rather than smoothed over: the run was at
+`pending_approval`, and `pending_approval -> armed` is not a legal transition, so
+the trigger row was created while the STATUS stayed `pending_approval`. That is
+the same on this head as before it and nothing in cinatra#2970 touches it.
+
+### C10 — `captures/C10__run-setup-recommendation-step-opened__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 3` — *"The skills-recommendation step and the review
+step open the same way, to the right of the steps, never under a row."*
+
+`RULING>` — *"…the right column never shows an empty step surface."*
+
+`CHECK> requires` — pressing the recommendation row opens the skills-recommendation
+step's own surface in the run detail, to the right of the rail.
+
+`CHECK> shows` — the row takes the selection
+(`data-run-surface-selected-step="recommendation"`, the numeral 2 becomes the
+filled chip) and the right-hand column is **BLANK**: no card, no heading, no
+control. `detailColumnTextLength` reads **0** off the live page and the picture
+shows an empty right half of the screen. The step's surface is the one shipped
+`RecommendationHoldCard`; with no live hold on this run it resolves to nothing and
+renders no DOM.
+
+`CHECK> verdict` — **FAIL, reported rather than softened.** The step is selected to
+the right of the steps and never under a row, so the LAYOUT clause holds — but
+"opens" is not met: there is nothing in the column. It is also the ruling's last
+clause broken in one press. PR #2975's own text pins this residual in words ("a
+started run with no live hold can therefore still open a step whose card resolves
+to nothing"); this is that residual photographed. Not a regression this round
+introduces, and not fixed here.
+
+### C11 — `captures/C11__run-setup-review-row-pressed__{light,dark}.png`
+
+`ISSUE> cinatra#2970 acceptance 3` — the review step's half of the same sentence.
+
+`CHECK> requires` — pressing the review row opens the review step to the right of
+the steps.
+
+`CHECK> shows` — nothing happens. The press was delivered as a real mouse click
+(forced, because the row carries `aria-disabled="true"` and Playwright's own
+actionability would otherwise never deliver it — a row that is never pressed
+proves nothing). After the press the selected step is still `schedule`, the
+scheduling form is still in the detail column, and the row still reads
+`data-run-surface-rail-reached="false"`,
+`data-action="review-step-unavailable"`, no native `disabled`.
+
+`CHECK> verdict` — **the RULING passes and the ACCEPTANCE ITEM fails, at the same
+time.** The rail closes the row for every run on this screen, because the setup
+page composes the review step with `surface: null` unconditionally, so the step
+can never be opened here whatever the run has reached. Which of the two sentences
+the screen should obey is a maintainer's call, and it is put on the pull request
+as one.
+
+
 Every `PLAN>` line below is a verbatim sentence of
 `PLAN:-Agents-Lifecycle-(A).md` **as the page stands today** — wiki head
 `ba8a97b`, whose own last change to this page is `87a287c` — and each was

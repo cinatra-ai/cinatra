@@ -5,19 +5,109 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__light.png",
-    "sha256": "411fc70e6ca118e5be252299bbb9128540cc2617e6375699343f7fceafe33296",
+    "sha256": "45989355236faada4a82e848c71db3fcdb5e8684e8ded28d46d9806d604b1a44",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/d8e1de27-dc8f-4559-853a-0829a991065b/trigger",
-    "resolvedTheme": "normal",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "light",
     "visible": {
-      "[data-conformance-id=\"run-step-rail-column\"]": 0,
-      "[data-run-detail-column]": 0,
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
       "form button[type=\"submit\"]": 1,
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"agentic-run-progress\"]": 0
     },
-    "capturedAt": "2026-08-24T17:43:40.901Z",
-    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+    "capturedAt": "2026-08-26T05:48:01.493Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "the run-surface drawing's two-column clause — 'a step rail down the left NAMES the run's ordered steps, and the run detail on the right shows the selected step' — on the first-time run page, with the unchanged scheduling form ('When should this run?', the option rows, Estimated run duration, Continue) open in the RIGHT column and no agentic run progress card beside it (plan (A) 7.2 step 5)",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "schedule",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [
+        "Run right after setup",
+        "Europe/Berlin",
+        "1",
+        "week(s)",
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "09",
+        "00",
+        "Europe/Berlin"
+      ],
+      "detailColumnHeadings": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailColumnTextLength": 13137,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 1723
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:48:01.494Z"
+    },
+    "runtime": "dev-runtime"
   },
   {
     "control": "C7",
@@ -25,19 +115,109 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__dark.png",
-    "sha256": "3082afe8621e456965c40b1eacfa30fccdc64a8dd49ff8670e35d97f6a6a8cc0",
+    "sha256": "298f594c0e5fe6e2faceaa92cb6f7f6e287b50f6f30fda4d57ba09d716b3ae87",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/d8e1de27-dc8f-4559-853a-0829a991065b/trigger",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
     "resolvedTheme": "dark",
     "visible": {
-      "[data-conformance-id=\"run-step-rail-column\"]": 0,
-      "[data-run-detail-column]": 0,
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
       "form button[type=\"submit\"]": 1,
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"agentic-run-progress\"]": 0
     },
-    "capturedAt": "2026-08-24T17:43:44.494Z",
-    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+    "capturedAt": "2026-08-26T05:48:09.229Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "the run-surface drawing's two-column clause — 'a step rail down the left NAMES the run's ordered steps, and the run detail on the right shows the selected step' — on the first-time run page, with the unchanged scheduling form ('When should this run?', the option rows, Estimated run duration, Continue) open in the RIGHT column and no agentic run progress card beside it (plan (A) 7.2 step 5)",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "schedule",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [
+        "Run right after setup",
+        "Europe/Berlin",
+        "1",
+        "week(s)",
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "09",
+        "00",
+        "Europe/Berlin"
+      ],
+      "detailColumnHeadings": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailColumnTextLength": 13137,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 1723
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:48:09.228Z"
+    },
+    "runtime": "dev-runtime"
   },
   {
     "control": "C8",
@@ -78,5 +258,493 @@
     },
     "capturedAt": "2026-08-24T17:43:51.633Z",
     "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+  },
+  {
+    "control": "C9",
+    "theme": "light",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C9__run-setup-continue-armed__light.png",
+    "sha256": "6d1a709ec62f5b18731a79520eee954a2086b1d261a192b40e95fc480f209cb0",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "light",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 0,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 0,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0,
+      "[data-conformance-id=\"schedule-rail-step\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:52:39.654Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 2, second half: 'Continue arms it exactly as today' — the same run's page after Continue was pressed on the scheduler step inside the run detail column",
+    "controls": {
+      "railColumns": 0,
+      "detailColumns": 0,
+      "selectedStep": null,
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [],
+      "detailColumnHeadings": [],
+      "detailColumnTextLength": 0,
+      "rows": [],
+      "runSurfaceRect": null
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": "scheduled",
+      "scheduled_at": "2026-08-26T19:30:00.000Z",
+      "timezone": "Europe/Berlin",
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:52:39.659Z"
+    },
+    "runtime": "dev-runtime"
+  },
+  {
+    "control": "C9",
+    "theme": "dark",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C9__run-setup-continue-armed__dark.png",
+    "sha256": "e643346c6375ecdf2c8937a6c0056bc80831c7bbc139a7daf80c272a1bda8346",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "dark",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 0,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 0,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0,
+      "[data-conformance-id=\"schedule-rail-step\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:52:48.549Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 2, second half: 'Continue arms it exactly as today' — the same run's page after Continue was pressed on the scheduler step inside the run detail column",
+    "controls": {
+      "railColumns": 0,
+      "detailColumns": 0,
+      "selectedStep": null,
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [],
+      "detailColumnHeadings": [],
+      "detailColumnTextLength": 0,
+      "rows": [],
+      "runSurfaceRect": null
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": "scheduled",
+      "scheduled_at": "2026-08-26T19:30:00.000Z",
+      "timezone": "Europe/Berlin",
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:52:48.549Z"
+    },
+    "runtime": "dev-runtime"
+  },
+  {
+    "control": "C10",
+    "theme": "light",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C10__run-setup-recommendation-step-opened__light.png",
+    "sha256": "cf5486146e0c959e64e71d1e9d7045bb9fd136ae7078c3706b06523530a79375",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "light",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 0,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:48:25.110Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 3: 'the skills-recommendation step ... opens the same way, to the right of the steps, never under a row'",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "recommendation",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [],
+      "detailColumnHeadings": [],
+      "detailColumnTextLength": 0,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 667
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:48:25.111Z"
+    },
+    "runtime": "dev-runtime"
+  },
+  {
+    "control": "C10",
+    "theme": "dark",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C10__run-setup-recommendation-step-opened__dark.png",
+    "sha256": "c2e177746b157a7ef0c7c7811c030a08607ff123ae94903a773c7a450c5af0e2",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "dark",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 0,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:48:41.140Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 3: 'the skills-recommendation step ... opens the same way, to the right of the steps, never under a row'",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "recommendation",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [],
+      "detailColumnHeadings": [],
+      "detailColumnTextLength": 0,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 667
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:48:41.140Z"
+    },
+    "runtime": "dev-runtime"
+  },
+  {
+    "control": "C11",
+    "theme": "light",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C11__run-setup-review-row-pressed__light.png",
+    "sha256": "12076fa5bc0448a5881cb983abc352a3c99cbc50c7c6af036b29d9246289fec2",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "light",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
+      "form button[type=\"submit\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:48:55.337Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 3: 'the review step opens the same way, to the right of the steps, never under a row'",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "schedule",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [
+        "Run right after setup",
+        "Europe/Berlin",
+        "1",
+        "week(s)",
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "09",
+        "00",
+        "Europe/Berlin"
+      ],
+      "detailColumnHeadings": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailColumnTextLength": 13137,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 1723
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:48:55.337Z"
+    },
+    "runtime": "dev-runtime"
+  },
+  {
+    "control": "C11",
+    "theme": "dark",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C11__run-setup-review-row-pressed__dark.png",
+    "sha256": "6a5f296e5daec96a18a5b30a0bf4ac3ba71fcb1f90a7f7039371c5c30633f8c1",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-3efc-448e-8659-e8246713b5e2/trigger",
+    "resolvedTheme": "dark",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
+      "form button[type=\"submit\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-26T05:49:09.838Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)",
+    "runId": "2b9859f8-3efc-448e-8659-e8246713b5e2",
+    "requires": "cinatra#2970 acceptance 3: 'the review step opens the same way, to the right of the steps, never under a row'",
+    "controls": {
+      "railColumns": 1,
+      "detailColumns": 1,
+      "selectedStep": "schedule",
+      "lifecycleCardHosts": 0,
+      "agenticRunProgressPanels": 0,
+      "detailColumnButtons": [
+        "Run right after setup",
+        "Europe/Berlin",
+        "1",
+        "week(s)",
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "09",
+        "00",
+        "Europe/Berlin"
+      ],
+      "detailColumnHeadings": [
+        "When should this run?",
+        "Run at",
+        "Timezone",
+        "Repeat every",
+        "On",
+        "At",
+        "Timezone",
+        "Estimated run duration"
+      ],
+      "detailColumnTextLength": 13137,
+      "rows": [
+        {
+          "tag": "button",
+          "key": "schedule",
+          "text": "1Schedule",
+          "selected": "true",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-schedule-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "recommendation",
+          "text": "2Recommendation",
+          "selected": "false",
+          "reached": null,
+          "ariaDisabled": null,
+          "dataAction": "open-recommendation-step",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        },
+        {
+          "tag": "button",
+          "key": "review",
+          "text": "3Review",
+          "selected": "false",
+          "reached": "false",
+          "ariaDisabled": "true",
+          "dataAction": "review-step-unavailable",
+          "nativeDisabled": false,
+          "tabIndex": 0
+        }
+      ],
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 1723
+      }
+    },
+    "dbAt": {
+      "status": "pending_approval",
+      "created_at": "2026-08-26T05:41:31.728Z",
+      "started_at": null,
+      "completed_at": null,
+      "trigger_type": null,
+      "scheduled_at": null,
+      "timezone": null,
+      "released_at": null,
+      "review_gates": "0",
+      "read_at": "2026-08-26T05:49:09.839Z"
+    },
+    "runtime": "dev-runtime"
   }
 ]

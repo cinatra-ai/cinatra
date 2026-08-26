@@ -356,3 +356,86 @@ above.
 Both are real assistant threads written by the shipped chat route. No transcript
 was seeded, no turn was written by a driver and no proposal token was minted by
 hand.
+
+
+## 5. The 2026-08-26 re-shoot (cinatra#2970, PR #2975) — the run behind C7, C9, C10 and C11
+
+Every value below is a DATABASE column or a grep over the app server's own log,
+and both are committed unedited beside this file:
+`readback/2975-reshoot-readback.json` (rows + runtime screens, written by
+`readback/2975-reshoot-read-back.mjs`) and `readback/2975-runtime-evidence.txt`
+(the log lines, with the grep that produced each block). Nothing in this round
+inserts a run, a trigger, a gate or a record.
+
+### The run
+
+- **run id** `2b9859f8-3efc-448e-8659-e8246713b5e2`
+- **status at every shutter** `pending_approval` (read back per record in `dbAt`)
+- **`agent_runs.created_at`** `2026-08-26 05:41:31.728575+00`
+- **`agent_runs.started_at`** NULL — the run has never executed
+- **`agent_runs.human_present`** `t`; **`source_type`** `agent_builder`
+- **`agent_run_triggers`** none until Continue was pressed; then exactly one:
+  `scheduled`, `scheduled_at 2026-08-26 19:30:00+00`, `timezone Europe/Berlin`,
+  `enabled t`, `released_at` NULL, `job_scheduler_id trigger-release-2b9859f8-…`,
+  row created `2026-08-26 05:49:58.71+00`
+- **`artifact_review_gates`** 0 on the whole lane — which is why the review row
+  reads "not reached"
+- **run page** `/agents/cinatra-ai/blog-draft-writer-agent/2b9859f8-…/trigger`
+
+### The provider, and the limits of what these readings establish
+
+```
+ provider |  model  | source | operation | calls | input_tokens | output_tokens |           first_at            |            last_at
+----------+---------+--------+-----------+-------+--------------+---------------+-------------------------------+-------------------------------
+ openai   | gpt-5.5 | llm    | stream    |     2 |        43324 |           303 | 2026-08-26 05:41:13.726925+00 | 2026-08-26 05:41:39.278666+00
+(1 row)
+```
+
+The provider was configured through the app's own `/setup/model` form, so the app
+sealed the connection itself; the credential is in no file, no argument, no log and
+no record here.
+
+**The runtime screens** (a hit is proof of a problem; a zero is the absence of that
+particular line and nothing more):
+
+| screen | reading |
+|---|---|
+| `scriptedRuntimeLines` | 0 |
+| `preRouterAttempts` / `preRouterShortCircuits` | 0 / 0 |
+| `noProviderRefusals` | 0 |
+| `mcpToolListRecoveries` (the cold 424 earlier rounds saw) | 0 |
+| `mcpPublicUnreachableRefusals` | **2** — the two turns refused before the ingress was warmed; see below |
+| `publicMcpCallbacks` (positive, unattributed) | **8** |
+| `bridgeRunSelects` (positive) | 0 — no run executed this round |
+
+**What CANNOT be established here, said plainly.** This host prints **no
+environment at all** for the listening process — `ps -Ewww` returns zero `KEY=`
+tokens under macOS System Integrity Protection — so
+`serverScriptedProviderEnv: null` establishes NOTHING, and the readback records
+`serverEnvAvailable: false` beside it rather than letting the null read as
+"absent". What IS positively established is elsewhere: the usage rows above, the
+eight callbacks from the provider's own servers into this instance's `/api/mcp`
+over the public origin, the zero scripted-runtime lines, and the fact that the
+server was launched with the switch explicitly removed from its environment.
+
+### The one fallback in this round, named
+
+The runtime HEADs the public MCP URL with a 2.5-second budget before every turn and
+refuses the turn outright if it does not answer (`#1699`). The FIRST TLS handshake
+through this lane's ingress takes about five seconds; warmed it takes about 0.3 s.
+Two chat turns were refused for that reason before the ingress was warmed with one
+HEAD request. Both refusals are quoted in `readback/2975-runtime-evidence.txt`,
+left in rather than trimmed out. Nothing was stood in for, and the measured turn
+ran on the real provider through the real public toolbox.
+
+### The direct-SQL lane writes, disclosed — there is one driver that writes
+
+`evidence/2970-setup-rail/drivers/11-lane-identity.mjs` makes the throwaway lane
+account an administrator (`UPDATE public."user" SET role='admin'`) and writes ONE
+Better Auth membership row (`INSERT INTO public.member`) so the account is a member
+of the organization the instance's own boot import stamped every agent template
+with. Both are account provisioning on a database that is dropped when the lane
+ends; neither touches a run, a trigger, a gate, a record or any row a photographed
+screen reads. This round creates NO second organization — round 5's driver pair did,
+and a second organization is a lane artefact a picture of the product should never
+carry.

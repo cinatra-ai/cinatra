@@ -1,5 +1,14 @@
 # cinatra#2970 (PR #2975) — C7, the setup run page of a run that has not started
 
+> **These pictures pre-date the rail-label fix, and they are kept for what they
+> caught.** They were shot on `04e83f5b`, where every rail row drew its numeral
+> above an EMPTY title. The fix landed in `f8b53416` on this branch. The owed
+> re-shoot is **round 6 of the #2939 proof set**, `evidence/2788-s9d-rework/` —
+> C7 re-shot on the two-column surface with the rail naming its steps, plus C9,
+> C10 and C11 for acceptance items 2 and 3. Nothing in this folder was re-taken:
+> a picture of a defect is worth keeping as the record of the defect.
+
+
 Head under proof: the PR branch head this lane drove, plus this evidence commit.
 
 **Read `PLAN-WALK.md` beside this file.** It names, for every cell here, the exact

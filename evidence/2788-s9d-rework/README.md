@@ -1,5 +1,143 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
+## Round 6 (2026-08-26) — C7 re-shot on the two-column setup surface, and the three cells cinatra#2970 adds
+
+> **What changed and what did not.** ONE cell of this set was re-shot — **C7**,
+> the run's setup scheduling step — because cinatra#2970 (PR #2975) rebuilt the
+> screen it photographs. **The other twelve pictures are byte-identical**: their
+> SHA-256s in the table below are the ones round 5 committed, and
+> `page-controls.json`'s two C8 records are byte-identical to round 5's, in the
+> same place in the file. Three cells were ADDED — C9, C10, C11 — for the
+> acceptance items C7 alone cannot answer.
+
+**The FAIL round 5 had to report is gone.** Round 5 wrote: *"ONE cell still
+carries a FAIL and says so: C7, against the named drawing's two-column frame … a
+standing gap between the drawing and the shipped setup wizard, which this slice
+does not touch."* cinatra#2970 closed that gap, and the re-shot C7 measures it:
+the same anchors that read **`run-step-rail-column` 0 / `run-detail-column` 0** in
+round 5's record read **1 and 1** in the new one, on the same screen, through the
+same reader. The rail carries the run's three setup steps **named** — `1 Schedule`,
+`2 Recommendation`, `3 Review` — and the unchanged scheduling form ("When should
+this run?", the three option rows, Estimated run duration, **Continue**) is drawn
+in the RIGHT column, with no agentic run progress card anywhere in the window
+(`agentic-run-progress` 0, `lifecycle-card-host` 0).
+
+**The empty rail titles are gone too.** Round 5's C7 could not have shown them —
+the screen had no rail. The lane that first shot this screen inside the new frame
+(`evidence/2970-setup-rail/`, on this branch) found every rail row drawing its
+numeral above an EMPTY title, because a server component was reading a label
+constant out of a `"use client"` module. That was fixed on this branch before this
+round, and these pixels are the first that show the rail naming its steps.
+
+### The three cells this round ADDS, and why C7 could not carry them
+
+| cell | shows | answers |
+|---|---|---|
+| **C9** | the SAME run's page after **Continue** was pressed on the scheduler step: `Trigger configuration` — type `scheduled`, `Aug 26, 2026, 9:30:00 PM`, `Europe/Berlin` — and `Cancel trigger` | cinatra#2970 acceptance 2, second half: *"Continue arms it exactly as today"*. C7 is its BEFORE: one run, one press between the two pictures |
+| **C10** | the **skills-recommendation** row pressed on that same run: the row takes the selection, the run detail column carries the step — and draws **nothing** | cinatra#2970 acceptance 3, first half. It does not pass; see below |
+| **C11** | the **review** row pressed: nothing happens at all, the scheduler stays open | cinatra#2970 acceptance 3, second half. It does not pass either; see below |
+
+### TWO ACCEPTANCE ITEMS DO NOT PASS ON THESE PIXELS, AND THE CELLS ARE FILED SAYING SO
+
+cinatra#2970 acceptance 3 reads: *"The skills-recommendation step and the review
+step open the same way, to the right of the steps, never under a row."* Neither
+half is met on this head, and each failure has a different cause, read out of the
+code the pictures were taken against:
+
+1. **The recommendation step opens onto an EMPTY run detail (C10).** The step's
+   surface is the one shipped `RecommendationHoldCard`; with no live hold it
+   resolves to nothing and renders no DOM at all, so the right column is blank —
+   `detailColumnTextLength` **0**, counted off the live page, and the picture shows
+   an empty right half of the screen. The rail's own guard cannot prevent it: it
+   asks whether the step's surface EXISTS, and a component element exists however
+   the component later resolves. PR #2975's own text names this exact residual
+   ("a started run with no live hold can therefore still open a step whose card
+   resolves to nothing"); C10 is that residual photographed. **What it means for
+   the issue:** on this head the ruling's last clause — *"the right column never
+   shows an empty step surface"* — is reachable by a person, on the run this round
+   walked, in two presses.
+2. **The review step can NEVER be opened here (C11).** On the setup run page the
+   review step is composed with `surface: null` unconditionally
+   (`instance-screens.tsx`), so `isRunSurfaceStepSelectable` closes the row for
+   every run, whatever `reached` says. The row is drawn, numbered and muted, it
+   carries `aria-disabled="true"` and `data-action="review-step-unavailable"`, and
+   pressing it does nothing: the scheduler stays open and the detail column keeps
+   the form. That is the RULING honoured, and acceptance item 3 unmet, at the same
+   time — the two sentences are in tension and only the maintainer can settle
+   which one the screen should obey.
+
+Neither is a regression this round introduces and neither is fixed here: this lane
+shoots the owed cells, it does not change the change under review.
+
+### One more reading worth writing down: the rail's guard does not cover this run's status
+
+The run these cells stand on reads `pending_approval`, which is **not** one of the
+three pre-execution statuses `setupStepReachedForRunStatus` closes rows for
+(`pending_input`, `pending_trigger`, `armed`). So its recommendation row is left
+UNSTATED — drawn plainly, no `aria-disabled`, `data-action="open-recommendation-step"`
+— and is therefore pressable, which is how C10 exists at all. A run that has
+answered its scheduler and is waiting on its trigger choice (`pending_trigger`, the
+state `evidence/2970-setup-rail/` photographed) has the row CLOSED instead. Both
+readings are in the committed records, and neither is inferred.
+
+### The runtime, and the two limits this round hit
+
+`node scripts/dev-server.mjs` (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, on a **dedicated lane database** on the local verify
+Postgres and Redis, loopback-only, with a clone of this branch's own extension
+tree. It is **not** a production-equivalent build — every record is labelled
+`dev-runtime`. Cells are shot at `deviceScaleFactor: 2`, uncropped, at the full
+1440x900 window (2880x1800 device pixels).
+
+The provider is REAL and was configured **through the app's own `/setup/model`
+form** by a driver that read the credential from its process environment and typed
+it into the form, so the app sealed the connection itself; the credential is in no
+file, no argument, no log and no record here. `cinatra.usage_events` records what
+the instance actually called: provider `openai`, model `gpt-5.5`, 2 streamed calls.
+`CINATRA_TEST_LLM_PROVIDER` was removed from the server's environment at launch and
+is set in nothing this lane starts, and the server log carries **zero**
+scripted-runtime lines. What this round can NOT say is stated rather than implied:
+this host prints **no environment at all** for the listening process (macOS SIP), so
+the process-table read establishes nothing — `serverEnvAvailable: false` in
+`readback/2975-reshoot-readback.json`, which is why the positive evidence is the
+usage rows, the eight `POST /api/mcp 200` callbacks from the provider's own servers,
+and the absent scripted lines.
+
+**Two lane limits, named rather than hidden.**
+
+1. **A stale build cache 404'd the chat handshake.** The lane's first boot failed
+   to resolve the extension tree; the build cache it left behind then served a 404
+   for `POST /api/assistants/chat/capabilities`, and the chat surface fails closed
+   on that handshake, so no turn ran. Clearing the cache and rebooting fixed it.
+   A lane-environment fault, not a product finding — but it is why the first two
+   chat attempts of this session produced nothing.
+2. **The public MCP probe timed out on a cold TLS handshake.** Before every turn
+   the runtime HEADs the public MCP URL with a 2.5 s budget and refuses the turn
+   outright if it does not answer (`#1699`). The first handshake through this
+   lane's ingress takes about five seconds; warmed, it takes about 0.3 s. Two
+   turns were refused before the ingress was warmed with one HEAD request. Both
+   refusals are in `readback/2975-runtime-evidence.txt`, left in rather than
+   trimmed out, and nothing was stood in for.
+
+### Where this round's own artefacts are
+
+`2975-reshoot-walk.json` (the executable plan, both passes) ·
+`drivers/2975-reshoot-page-controls.mjs` (the capture driver; `page-control.mjs` is
+BYTE-UNCHANGED) · `readback/2975-reshoot-readback.json` (the rows and the runtime
+screens) · `readback/2975-runtime-evidence.txt` (the server's own lines, with the
+grep that produced each block and the public origin redacted) ·
+`readback/2975-chain.json` (the chat chain and what was measured either side of
+each press) · `readback/2975-reshoot-read-back.mjs` (the readback driver). The chain
+drivers this round reused and added live in `evidence/2970-setup-rail/drivers/`
+(`08-chat-run-parked.mjs`, and the new `11-lane-identity.mjs` and
+`12-scheduler-continue.mjs`).
+
+**The canonical index is untouched.** `scripts/ci/chat-hitl-capture-index.json`
+carries no C7 cell (it never did) and no record in it was rewritten: this screen
+draws no lifecycle card at all, which is half of what these cells prove, so a
+record of that index could only be made by inventing an anchor.
+
+
 ## Round 5 — every pictured cell re-shot on a chain with nothing stood in
 
 Rounds 3 and 4 had to report one thing about themselves, and the maintainer
@@ -251,10 +389,16 @@ the setup wizard, not a regression this PR introduces).
 | `C3__run-page-configured__dark.png` | `63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d` | record `S9d-C3__schedule-card__run_card__decided__dark` |
 | `C6__chat-ran__light.png` | `e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
 | `C6__chat-ran__dark.png` | `ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
-| `C7__run-setup-scheduling-step__light.png` | `411fc70e6ca118e5be252299bbb9128540cc2617e6375699343f7fceafe33296` | page control (light) — no index record |
-| `C7__run-setup-scheduling-step__dark.png` | `3082afe8621e456965c40b1eacfa30fccdc64a8dd49ff8670e35d97f6a6a8cc0` | page control (dark) — no index record |
+| `C7__run-setup-scheduling-step__light.png` | `45989355236faada4a82e848c71db3fcdb5e8684e8ded28d46d9806d604b1a44` | page control (light) — no index record — **re-shot 2026-08-26 (round 6)** |
+| `C7__run-setup-scheduling-step__dark.png` | `298f594c0e5fe6e2faceaa92cb6f7f6e287b50f6f30fda4d57ba09d716b3ae87` | page control (dark) — no index record — **re-shot 2026-08-26 (round 6)** |
 | `C8__run-detail-after-fire__light.png` | `3831af1d87c0a6f4dd60a6b284149d23d472ecbaf2653448fcb792009e64c359` | page control (light) — no index record |
 | `C8__run-detail-after-fire__dark.png` | `86fff475add5688313ea40b11e92b77a65ac601110e0eee0af6e2024a8a32514` | page control (dark) — no index record |
+| `C9__run-setup-continue-armed__light.png` | `6d1a709ec62f5b18731a79520eee954a2086b1d261a192b40e95fc480f209cb0` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
+| `C9__run-setup-continue-armed__dark.png` | `e643346c6375ecdf2c8937a6c0056bc80831c7bbc139a7daf80c272a1bda8346` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
+| `C10__run-setup-recommendation-step-opened__light.png` | `cf5486146e0c959e64e71d1e9d7045bb9fd136ae7078c3706b06523530a79375` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
+| `C10__run-setup-recommendation-step-opened__dark.png` | `c2e177746b157a7ef0c7c7811c030a08607ff123ae94903a773c7a450c5af0e2` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
+| `C11__run-setup-review-row-pressed__light.png` | `12076fa5bc0448a5881cb983abc352a3c99cbc50c7c6af036b29d9246289fec2` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
+| `C11__run-setup-review-row-pressed__dark.png` | `6a5f296e5daec96a18a5b30a0bf4ac3ba71fcb1f90a7f7039371c5c30633f8c1` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
 
 The two round 2's **C3** records were deleted from
 `scripts/ci/chat-hitl-capture-index.json` (56 records → 54) together with their
