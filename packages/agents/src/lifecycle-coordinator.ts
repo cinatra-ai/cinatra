@@ -66,6 +66,8 @@ import type { GuardedRunCompanionWrite } from "./org-write-run-seam";
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import type { AgentRunStatus } from "./run-status";
 
+import { emitLifecycleMomentOpened } from "./lifecycle-part-outbox";
+
 // ---------------------------------------------------------------------------
 // The answer shape
 // ---------------------------------------------------------------------------
@@ -399,6 +401,26 @@ async function stateMoment(input: {
       },
       input.authority,
     );
+    // THE MOMENT OPENED, SO THE OUTBOX IS FED (cinatra#2930, W3). The plan:
+    // "In a conversation the platform itself writes the card into the run's own
+    // turn, from an outbox the coordinator feeds when a moment opens — a durable
+    // part with its provenance and its place in the turn, so it is there after a
+    // reload and whether or not the assistant's model says anything."
+    //
+    // AFTER the record and not before it: the injected part points AT the run's
+    // stated moment, so a part written first would name a moment the row does
+    // not state yet. A CLEARED moment feeds nothing — there is no card to put
+    // anywhere — and the host writer is the one that decides whether the run is
+    // playing out in a conversation at all.
+    if (input.moment !== null) {
+      await emitLifecycleMomentOpened({
+        runId: input.run.id,
+        orgId: input.run.orgId,
+        moment: input.moment,
+        cardKind: cardKindForMoment(input.moment),
+        cardRef: input.cardRef ?? null,
+      });
+    }
   } catch (err) {
     // The run id is request-influenced, so it is a discrete ARGUMENT and never
     // interpolated into the format string (CodeQL js/tainted-format-string).
