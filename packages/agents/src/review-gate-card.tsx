@@ -162,6 +162,7 @@ import type {
 import {
   useComposerFocusBinding,
   useLifecycleCardAuth,
+  useLifecycleCardColorScheme,
   useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardResolve,
@@ -169,6 +170,7 @@ import {
   type ComposerCommentResult,
   type ComposerFocusBinding,
   type LifecycleCardFrame,
+  type LifecycleColorScheme,
 } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
 import {
@@ -206,11 +208,23 @@ export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
  * and paints blank; the client cannot mint one, and it never invents one. A
  * same-site host receives no such URL and this composes exactly what it
  * composed before.
+ *
+ * EVERY HOST, THE PALETTE IT IS PAINTING IN (cinatra#2931). The island is a
+ * nested document, so it cannot see the surface around it; left to itself it
+ * resolves a palette from its OWN theme state. On a first-party page that store
+ * is the app's own and the answer came out right by coincidence; inside a
+ * third-party application it is a partitioned store nothing writes, so the
+ * island painted the DEFAULT palette — a light panel inside a dark widget, which
+ * is the defect this closes. The scheme rides here for EVERY host, from the same
+ * read, so no host is a special case and the widget is not a patch. A host whose
+ * document declares no palette names none, and the island keeps the resolution
+ * it always had.
  */
 export function reviewTargetIslandSrc(
   ref: string,
   frame: LifecycleCardFrame | null,
   serverIslandSrc?: string | null,
+  colorScheme?: LifecycleColorScheme | null,
 ): string {
   const params = new URLSearchParams({ ref });
   const credential = islandCredentialFrom(serverIslandSrc, ref);
@@ -219,12 +233,20 @@ export function reviewTargetIslandSrc(
     params.set("assistant", frame.assistant);
     params.set("instanceId", frame.instanceId);
   }
+  if (colorScheme) params.set(REVIEW_ISLAND_COLOR_SCHEME_PARAM, colorScheme);
   return `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
 }
 
 /** The query parameter the island reads its credential from — the client half
  *  of `src/lib/lifecycle/review-island-credential.ts`. */
 const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
+
+/** The query parameter the island reads the HOST's palette from — the client
+ *  half of `src/app/lifecycle/review-island/island-color-scheme.ts`, mirrored
+ *  here for the same reason the credential's key is. The literal is pinned on
+ *  this side by `__tests__/review-island-host-color-scheme.test.tsx` and on the
+ *  server side by the island page's own suite. */
+const REVIEW_ISLAND_COLOR_SCHEME_PARAM = "scheme";
 
 /**
  * The credential OUT of a server-issued island URL — never the URL itself.
@@ -433,6 +455,11 @@ export function ReviewGateCard({
   // The host's embedding context, when it has one (cinatra#2577). Only an
   // embedded host declares it; it addresses the island and nothing else.
   const cardFrame = useLifecycleCardFrame();
+  // The palette THIS host is painting in (cinatra#2931). It addresses the island
+  // and nothing else: the card itself is drawn by the host's own stylesheet and
+  // has never needed to know. Read for every host from the one read, so the
+  // island cannot follow one host and not another.
+  const cardColorScheme = useLifecycleCardColorScheme();
   // The FIRST absence: a subtree that declared no host is not a lifecycle
   // surface at all. Every DECLARED host — the chat thread, the run card, the
   // page gate region and the site widget — draws this card, identically.
@@ -464,6 +491,52 @@ export function ReviewGateCard({
   const state: LifecycleCardState | null = resolved?.state ?? null;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  // THE ADDRESS THE ISLAND IS FRAMED AT — which is not always what the newest
+  // answer and the current palette would compose (cinatra#2931).
+  //
+  // A credentialed island URL is a SINGLE-USE bearer: the grant is spent the
+  // moment the frame paints from it. `ReviewTargetIsland` keys the iframe on the
+  // `src` STRING, so ANY rewrite after that paint remounts the frame — on a
+  // spent grant, or on no grant at all — and the island goes blank in front of
+  // the reader. That is a worse defect than the one the palette is here to fix,
+  // and it has two ways to happen: the surface repaints, or an answer arrives
+  // that carries no grant (the mint can fail while the gate is still perfectly
+  // pending). So the card holds the address it framed and lets it move on ONE
+  // condition only — a grant it has not seen before.
+  //
+  //   • A FRESH GRANT adopts the palette in force at that moment. The frame
+  //     remounts once, on a grant nothing has spent.
+  //   • NOTHING TO SPEND on either side is the cookie-authenticated island: no
+  //     grant, no remount cost, so a repaint lands immediately — exactly what
+  //     this surface did before the mechanism existed.
+  //   • OTHERWISE the held address stands, and a repaint asks ONCE PER PALETTE
+  //     for a fresh one. An answer that fails, or that carries no grant, leaves
+  //     the island painted as it is rather than blanking it, and the next
+  //     palette the reader chooses asks again.
+  const liveIslandSrc = resolved?.islandSrc ?? null;
+  const liveCredential = islandCredentialFrom(liveIslandSrc, view.ref);
+  const [islandAddress, setIslandAddress] = useState<{
+    scheme: LifecycleColorScheme | null;
+    islandSrc: string | null;
+    askedFor: LifecycleColorScheme | null | undefined;
+  }>({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  const heldCredential = islandCredentialFrom(islandAddress.islandSrc, view.ref);
+  if (liveCredential !== null && liveCredential !== heldCredential) {
+    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  } else if (islandAddress.scheme === cardColorScheme) {
+    // Nothing is outstanding — the frame is already in the host's palette. Drop
+    // any standing request, so a reader who returns to a palette whose ask went
+    // unanswered is asked for again rather than left latched on it.
+    if (islandAddress.askedFor !== undefined) {
+      setIslandAddress({ ...islandAddress, askedFor: undefined });
+    }
+  } else if (heldCredential === null && liveCredential === null) {
+    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  } else if (islandAddress.askedFor !== cardColorScheme) {
+    setIslandAddress({ ...islandAddress, askedFor: cardColorScheme });
+    refresh();
+  }
 
   // The ref-bound fallback action. Built once per ref so the decision bar's
   // identity is stable across re-resolves.
@@ -652,11 +725,14 @@ export function ReviewGateCard({
   // use: the held copy is spent the moment the island paints from it, which
   // makes the copy in this state — and every other copy of the address — inert
   // rather than merely short-lived.
-  const serverIslandSrc = resolved?.islandSrc ?? null;
+  // THE HELD ONE, not the newest one — see the address state above. On a cookie
+  // host the two are the same `null` and this composes byte-for-byte what it
+  // composed before.
+  const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
-    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc),
-    islandCredentialed: islandCredentialFrom(serverIslandSrc, view.ref) !== null,
+    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
+    islandCredentialed: heldCredential !== null,
     expanded,
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,

@@ -56,6 +56,12 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({ ReviewGateLoading: () 
 
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
+import {
+  islandBodyClassName,
+  islandDocumentGroundCss,
+  parseIslandColorScheme,
+  REVIEW_ISLAND_COLOR_SCHEME_PARAM,
+} from "../island-color-scheme";
 import ReviewTargetIslandPage from "../page";
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
@@ -366,5 +372,118 @@ describe("a frame that presents an island credential", () => {
     const el = await renderIsland(REF, { ic: CREDENTIAL });
     expect(isEmptyIsland(el)).toBe(true);
     expect(redirect).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2931 (epic #2926 W4) — the island paints in its HOST's palette
+// ---------------------------------------------------------------------------
+//
+// The card that frames this document names the palette the HOST is painting in,
+// because a nested document cannot see the surface around it and the one it
+// resolves for itself is right only where its theme state happens to be the
+// app's. This is the server half: what the page does with what it was told,
+// including for a refusal — a denial inside a dark card is a painted rectangle
+// too, and every denial must still be the same one.
+
+describe("the island paints in the palette the host named", () => {
+  const ready = () =>
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1")],
+      pinnedCapturePairs: {},
+      permissions: { canDecide: true, canComment: true },
+    });
+
+  const classOf = (el: ReactElement): string | undefined =>
+    (el.props as { className?: string }).className;
+
+  it("reads the parameter the card writes", () => {
+    expect(REVIEW_ISLAND_COLOR_SCHEME_PARAM).toBe("scheme");
+  });
+
+  it("carries the DARK palette onto the body it draws the ladder in", async () => {
+    ready();
+    const el = await renderIsland(REF, { scheme: "dark" });
+    expect(classOf(el)).toBe(islandBodyClassName("dark"));
+    expect(classOf(el)).toMatch(/(^| )dark( |$)/);
+    expect((el.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"]).toBe(
+      "dark",
+    );
+  });
+
+  // The RE-ANCHORED INK. `body` computes its colour from the token as the
+  // DOCUMENT root sees it and every descendant inherits that computed value, so
+  // redefining the token on a wrapper alone leaves the renderer's own unstyled
+  // prose in the document's ink — dark text on a dark panel, which is a
+  // different reading of the very defect this slice closes. The class is the
+  // structural pin for that; a cascade cannot be measured here.
+  it("re-anchors the ink inside the palette it painted", async () => {
+    ready();
+    for (const scheme of ["dark", "light"] as const) {
+      const el = await renderIsland(REF, { scheme });
+      expect(classOf(el)).toMatch(/(^| )text-foreground( |$)/);
+      expect(classOf(el)).toMatch(/(^| )min-h-dvh( |$)/);
+    }
+  });
+
+  // The document's own ground — the frame's scrollbar and the canvas an
+  // overscroll exposes — is outside any wrapper, so the page states it. The
+  // values come from the closed enum, never from the request's text.
+  it("hands the document's own ground to the same palette", async () => {
+    ready();
+    const el = await renderIsland(REF, { scheme: "dark" });
+    expect(JSON.stringify(el)).toContain(islandDocumentGroundCss("dark"));
+    expect(islandDocumentGroundCss("dark")).toBe(
+      ":root{color-scheme:dark}body{background:transparent}",
+    );
+    expect(islandDocumentGroundCss(null)).toBeNull();
+  });
+
+  it("states no ground rule at all when the host names no palette", async () => {
+    ready();
+    const el = await renderIsland(REF, {});
+    expect(JSON.stringify(el)).not.toContain("color-scheme");
+  });
+
+  it("carries the LIGHT palette as the app's own light palette class", async () => {
+    ready();
+    const el = await renderIsland(REF, { scheme: "light" });
+    expect(classOf(el)).toBe(islandBodyClassName("light"));
+    expect(classOf(el)).toMatch(/(^| )cinatra( |$)/);
+  });
+
+  it("draws exactly what it drew before when the host names no palette", async () => {
+    ready();
+    const named = await renderIsland(REF, {});
+    expect(classOf(named)).toBe("flex flex-col gap-3 bg-surface p-3");
+    expect(
+      (named.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"],
+    ).toBeUndefined();
+  });
+
+  it("refuses an unknown palette word rather than putting it in a class", async () => {
+    ready();
+    for (const junk of ["", "DARK", "cinatra", "system", "dark ", "'/><script>"]) {
+      expect(parseIslandColorScheme(junk)).toBeNull();
+      const el = await renderIsland(REF, { scheme: junk });
+      expect(classOf(el)).toBe("flex flex-col gap-3 bg-surface p-3");
+    }
+  });
+
+  it("paints a DENIAL in the same palette — and every denial in the same one", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "not-authorized" });
+    const denials = [
+      await renderIsland(REF, { scheme: "dark" }),
+      await renderIsland("not-one-of-ours", { scheme: "dark" }),
+      await renderIsland(undefined, { scheme: "dark" }),
+    ];
+    for (const el of denials) {
+      expect(isEmptyIsland(el)).toBe(true);
+      expect(classOf(el)).toMatch(/(^| )dark( |$)/);
+    }
+    const shapes = new Set(denials.map((el) => JSON.stringify(el.props)));
+    expect(shapes.size).toBe(1);
   });
 });
