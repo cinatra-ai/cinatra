@@ -48,6 +48,22 @@ export {
   serializeMemoryManifest,
 } from "./manifest.ts";
 export {
+  buildMemoryAdapterBlock,
+  buildMemoryAdapterDescription,
+  buildMemorySeedBundle,
+  extractMemoryBootstrapPointer,
+  extractMemoryWalkthroughScript,
+  memorySeedConceptPath,
+  parseMemorySeedSections,
+  MEMORY_CONVENTIONS_DOC_PATH,
+  MEMORY_RULE_VOCABULARY,
+  MEMORY_SEED_BUNDLE_ID,
+  MEMORY_SEED_BUNDLE_NAME,
+  MEMORY_SEED_BUNDLE_PATH,
+  type MemorySeedFile,
+  type MemorySeedSection,
+} from "./seed.ts";
+export {
   recallMemoryConcepts,
   type MemoryRecallMatch,
   type RecallMemoryOptions,

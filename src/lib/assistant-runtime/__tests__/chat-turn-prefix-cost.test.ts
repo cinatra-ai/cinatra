@@ -30,7 +30,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { delegatedChatAllowedToolNames } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { coreDelegatedChatAdmittedNames } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 // #2777's landed, state-derived resolver — the one the production builder
 // calls. Imported, never copied.
 import {
@@ -129,6 +129,44 @@ vi.mock("../pending-confirmation-context", () => ({
 // class over the REAL policy names. The connection-gating half has its own
 // suite over the real catalog (`chat-mcp-capability-gating.test.ts`, #2777) and
 // is deliberately not re-tested here — this file's subject is the PREFIX.
+// cinatra#2817 slice 1 — the catalog now seeds from the request-scoped
+// capability PLAN, so this test stubs the plan BUILDER rather than the static
+// name list it used to read. The stub reproduces today's production catalog
+// (every legacy-admitted name, carrying the class in force for it), which is
+// exactly the input this test's prefix-cost reasoning is about; that the plan
+// is genuinely produced by the registration pass is pinned separately, in
+// `capability-plan-parity.test.ts`.
+vi.mock("@/lib/mcp-server", () => ({
+  buildDelegatedChatCapabilityPlan: async (input?: {
+    resolveCapabilityKey?: (name: string) => string | null | undefined;
+  }) => {
+    const core = await import("@cinatra-ai/mcp-server/core-delegated-chat-surface");
+    const decls = await import("@cinatra-ai/mcp-server/capability-plan");
+    const servable = core.coreDelegatedChatAdmittedNames().map((name, order) => ({
+      name,
+      registeredName: name,
+      order,
+      declaredClass: decls.hostDeclaredDelegatedChatClass(name),
+      ownerPackage: "@cinatra-ai/host",
+      resolvedVersion: "2817.1.0",
+      capabilityKey: input?.resolveCapabilityKey?.(name) ?? null,
+      dispatchTarget: {
+        kind: "host" as const,
+        packageName: "@cinatra-ai/host",
+        version: "2817.1.0",
+        name,
+      },
+      identityFailure: null,
+      reserved: false,
+    }));
+    return {
+      entries: servable,
+      outcomes: servable.map((planned) => ({ planned, registered: true })),
+      servable,
+    };
+  },
+}));
+
 vi.mock("@/lib/connector-inventory.server", () => ({
   DEFAULT_CONNECTOR_INVENTORY_DEPS: {},
   buildConnectorInventory: vi.fn(async () => ({ connectors: [] })),
@@ -198,7 +236,7 @@ import { runAssistantTurn } from "../runtime";
 import { CHAT_SYSTEM_POLICY_TRAILER } from "../chat-system-prefix";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
 
-const ALL_ALLOWED = delegatedChatAllowedToolNames();
+const ALL_ALLOWED = coreDelegatedChatAdmittedNames();
 
 // ---------------------------------------------------------------------------
 // The resolver's DECLARED INPUT, named (convergence round 2, finding 3).

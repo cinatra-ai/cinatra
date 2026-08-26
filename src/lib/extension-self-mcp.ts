@@ -17,6 +17,16 @@ import "server-only";
 // CLOSED on a deny or a boundary error — a connector with the `mcp` port can
 // never reach a privileged primitive it would be denied over the wire.
 //
+// DELEGATED-CHAT PARITY (cinatra#2817): a delegated-restricted self-invocation
+// now runs the SAME pure evaluator, over the SAME planned primitive identity and
+// the SAME immutable admission snapshot, that the transport's registration choke
+// point and call-time guard run. The one thing this path must do for itself is
+// re-pin the identity to the CALLER: the captured map is a union built once per
+// generation, while the version a given caller is served depends on that
+// caller's own resolved edges. Deciding against the union's identity instead of
+// the caller's would let a same-name admission for another version authorize a
+// call that dispatches somewhere else.
+//
 // Context handling: when the call originates inside a live MCP request, the
 // existing `mcpRequestContextStorage` frame is PRESERVED verbatim (so
 // delegated-chat / A2A / run / project restrictions carry through — never
@@ -32,31 +42,44 @@ import "server-only";
 // the request-context store instead).
 
 import type { ActorContext } from "@/lib/authz/actor-context";
+import type { PlannedPrimitive } from "@cinatra-ai/mcp-server/capability-plan";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
 /**
  * The captured entry the host's primitive map now holds: the handler PLUS the
- * typed delegated-chat declaration its registration carried (cinatra#2771).
+ * PLANNED PRIMITIVE its registration produced (cinatra#2771 → cinatra#2817).
  * Locally mirrored (this module is deliberately import-light and loads
  * `@/lib/mcp-server` lazily); the host's `CapturedHostPrimitive` is the
  * authoritative shape and is structurally identical.
  */
 type CapturedHostPrimitive = {
   handler: CapturedMcpToolHandler;
-  delegatedChat?: "read" | "discovery" | "dispatch" | "none";
+  planned: PlannedPrimitive;
 };
 
-// GENERATION-KEYED CACHE (#310): the host's `name → handler` map is memoised, but
-// the cache is now keyed by the extension CONTROL-PLANE generation instead of an
-// ad-hoc `null`-on-transition reset. A lifecycle transition (activate / hot-update
-// / rollback / teardown) bumps the generation; this cache compares the generation
-// it was built at against the current one and REBUILDS iff they differ — so a
-// newly-activated extension's primitives appear (and a torn-down extension's
-// disappear) on the next call without a per-site `__reset`. A Promise so concurrent
-// first-callers share one build; the `{ generation, promise }` pairing lets a
-// concurrent caller that started a build for an OLD generation be superseded.
+// GENERATION-KEYED CACHE (#310). The host's `name → handler` map is memoised,
+// keyed by the extension CONTROL-PLANE generation — the one thing it actually
+// depends on. A lifecycle transition (activate / hot-update / rollback /
+// teardown) bumps the generation; this cache compares and REBUILDS iff they
+// differ, so a newly-activated extension's primitives appear (and a torn-down
+// one's disappear) on the next call.
+//
+// WHY ADMISSION IS NOT A SECOND AXIS (cinatra#2817 slice 3). This map is the
+// UNRESTRICTED union — it holds every primitive, and it caches no authorization
+// decision. Since the perimeter swap, whether a delegated-restricted caller may
+// reach one of them is decided PER CALL by the shared evaluator against that
+// request's own immutable snapshot. So a revocation takes effect on the very
+// next call whether or not this map was rebuilt, which is strictly stronger
+// than invalidating a cache and would be the guarantee even if the map never
+// changed. Keying on the snapshot as well would rebuild the whole map on every
+// review and force an admission-store read onto unrestricted callers, who have
+// no use for one.
+//
+// A Promise so concurrent first-callers share one build; the
+// `{ generation, promise }` pairing lets a concurrent caller that started a
+// build for an OLD generation be superseded.
 let cached: { generation: number; promise: Promise<Map<string, CapturedHostPrimitive>> } | null =
   null;
 
@@ -80,8 +103,67 @@ async function getHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
 }
 
 /**
+ * Resolve the identity the CALLER's invocation will actually dispatch to.
+ *
+ * This is the difference between "an admission exists for a primitive with this
+ * name" and "an admission exists for the package at the version that is about
+ * to run". The captured map is a UNION built once per activation generation; the
+ * version a given caller is served depends on that caller's own resolved edges,
+ * so the planned identity must be re-pinned to the caller before the evaluator
+ * sees it. Without this, a same-name admission belonging to another version
+ * could authorize a call that dispatches somewhere else entirely.
+ *
+ * `null` means the identity could not be resolved, which DENIES.
+ */
+async function resolveCallerBoundIdentity(
+  planned: PlannedPrimitive,
+): Promise<PlannedPrimitive | null> {
+  if (planned.identityFailure !== null) return null;
+  const target = planned.dispatchTarget;
+  if (!target) return null;
+  // A core/bundled primitive has no edges — the host identity IS the dispatch.
+  if (target.kind === "host") return planned;
+
+  const { resolveEdgeBoundExtensionVersion } = await import("@/lib/extension-edge-bound-serving");
+  const decision = await resolveEdgeBoundExtensionVersion({
+    targetPackageName: target.packageName,
+  });
+  // A fail-closed edge refusal is exactly that: the dispatch would throw, so the
+  // decision must not pretend an identity exists.
+  if (decision.kind === "refuse") return null;
+  const servingVersion = decision.kind === "versioned" ? decision.version : null;
+
+  // THE DECLARATION TRAVELS WITH THE VERSION, SO THE VERSION MAY NOT MOVE ALONE
+  // (codex round-1 #3). The captured entry carries ONE registration's declared
+  // class and malformed state — the union winner's. Re-pinning only the version
+  // would build a primitive that never existed: version B's identity wearing
+  // version A's declaration, digested into a tuple no review ever approved, or
+  // worse, one that another review did.
+  //
+  // The union is keyed by NAME, so the losing version's own planned entry is not
+  // reachable from here to substitute. Rather than synthesize, this REFUSES: an
+  // edge-pinned caller whose pin names a version the captured entry does not
+  // describe gets `identity_unresolved`, and the transport — which plans
+  // per-request and therefore holds the RIGHT entry — remains the way to reach
+  // it. Narrowing, deliberately, and only in the case where the alternative is
+  // deciding against a declaration that belongs to something else.
+  if (target.kind === "extension-versioned") {
+    // A retained-only union entry: it serves ONLY under a pin naming its own
+    // version. `none` / `default` means this caller's edges do not pin it, and
+    // the strict versioned-only dispatch would refuse anyway.
+    return servingVersion === target.version ? planned : null;
+  }
+  // A default union entry serves ONLY while the caller resolves to the default.
+  // A pin to any version — including one that happens to equal the default's
+  // resolved version string — is a different registration with its own
+  // declaration, so it is not this entry's to authorize.
+  if (servingVersion !== null) return null;
+  return planned;
+}
+
+/**
  * Test/back-compat helper — drop the memoised map so the next call rebuilds it.
- * Production invalidation now flows through the control-plane generation (a
+ * Production invalidation flows through the control-plane generation above (a
  * lifecycle transition bumps it; this cache compares + rebuilds), so production
  * call sites bump the generation instead of calling this. Kept for tests and for
  * any path that wants an explicit local clear.
@@ -105,6 +187,7 @@ export async function callHostPrimitive(
   input: unknown,
   options: CallHostPrimitiveOptions = {},
 ): Promise<unknown> {
+  const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
   const handlers = await getHandlers();
   const captured = handlers.get(primitiveName);
   if (!captured) {
@@ -113,42 +196,84 @@ export async function callHostPrimitive(
         `registered under that name. Known primitives are the host's MCP tool set; check the name.`,
     );
   }
-  const handler = captured.handler;
+  // The captured wrapper. A delegated-restricted extension call REPLACES it
+  // below with a version-pinned dispatch; everything else runs it as before.
+  let handler = captured.handler;
 
-  const { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } = await import("@cinatra-ai/mcp-server");
-  const { declarationPermitsDelegatedChat, resolveDelegatedChatClass } = await import(
-    "@cinatra-ai/mcp-server/delegated-chat-tool-policy"
+  const { evaluateDelegatedChatAdmission } = await import(
+    "@cinatra-ai/mcp-server/delegated-chat-admission"
   );
 
   const invoke = async () => {
     const ctx = mcpRequestContextStorage.getStore();
-    // (a) Delegated-chat allowlist — parity with policedRegisterTool: a
-    // delegated-restricted frame may only reach allowlisted (read/discovery/
-    // dispatch) primitives. Deny otherwise, BEFORE the boundary classification.
-    if (ctx?.delegatedRestricted && !isDelegatedChatMcpToolAllowed(primitiveName)) {
-      throw new Error(
-        `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP requests.`,
-      );
-    }
-    // (a2) The registration's typed delegated-chat declaration (cinatra#2771),
-    // applied on exactly the terms `policedRegisterTool` applies it — SAME
-    // composition, SAME order: AFTER admission and NARROW-ONLY. A declaration
-    // can only withdraw a primitive its own registration declined (`none`, or a
-    // value that normalized to it); it can never make an unadmitted name
-    // self-invocable, because (a) above has already refused those.
+    // (a) THE SHARED EVALUATOR — parity with the live transport's registration
+    // choke point and call-time guard: the same pure function, the same planned
+    // primitive identity, the same immutable request snapshot.
     //
-    // An absent declaration means NONE (owner ruling), so this reads through
-    // the SAME `resolveDelegatedChatClass` the choke point uses — the interim
-    // class the legacy allowlist implies stands in until something declares.
-    // Using one resolver on both sides is what keeps the in-process
-    // self-invoker and the live transport from disagreeing about the SAME
-    // registration, which is the lossy hop the #2771 review named.
-    const effectiveClass = resolveDelegatedChatClass(primitiveName, captured.delegatedChat);
-    if (ctx?.delegatedRestricted && !declarationPermitsDelegatedChat(effectiveClass)) {
-      throw new Error(
-        `[extension-self-mcp] "${primitiveName}" declines the delegated chat surface ` +
-          `(delegatedChat: "${effectiveClass ?? "undeclared"}").`,
-      );
+    // The identity is re-pinned to THIS CALLER first, so a same-name admission
+    // belonging to another owner or another version cannot authorize the call
+    // that is actually about to dispatch.
+    if (ctx?.delegatedRestricted) {
+      // THE REQUEST'S SNAPSHOT, INHERITED WHERE THERE IS ONE (codex round-1 #2,
+      // round-2 #2). The transport writes the snapshot it decided against onto
+      // the frame it re-enters around the handler, so a self-invocation nested
+      // in a live request reuses it rather than loading a fresher one — two
+      // snapshots inside one request is exactly the disagreement the immutable
+      // snapshot exists to end.
+      //
+      // Loaded LAZILY and only here. An unrestricted caller has no admission
+      // question to answer, so it must not acquire an admission-store
+      // dependency (and must not start failing when that store is down).
+      // Off the transport there is nothing to inherit, so one is loaded — and an
+      // unreadable store denies, as everywhere else.
+      const admissionSnapshot =
+        ctx.delegatedChatAdmissionSnapshot ??
+        (await (
+          await import("@/lib/delegated-chat-admission-store")
+        ).loadDelegatedChatAdmissionSnapshot());
+      // THE SAME CANONICAL-NAME RULE THE TRANSPORT APPLIES (codex whole-diff
+      // round #2). The live delegated perimeter refuses a registration whose
+      // served name differs from the normalized one it reasoned about; the
+      // self-capture keeps mixed-case registrations, so without this a reviewed
+      // `Acme_Thing_List` would be absent from the catalog and absent from the
+      // live server, yet reachable in-process — the evaluator case-folds, so the
+      // admission key would match. Parity here is the whole point of this path.
+      if (captured.planned.registeredName !== captured.planned.name) {
+        throw new Error(
+          `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP ` +
+            "requests: non_canonical_primitive_name.",
+        );
+      }
+      const identity = await resolveCallerBoundIdentity(captured.planned);
+      if (!identity) {
+        throw new Error(
+          `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP ` +
+            "requests: identity_unresolved (the caller's serving version could not be resolved).",
+        );
+      }
+      const decision = evaluateDelegatedChatAdmission(identity, admissionSnapshot);
+      if (!decision.allowed) {
+        throw new Error(
+          `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP ` +
+            `requests: ${decision.reason}.`,
+        );
+      }
+      // (a2) PIN THE DISPATCH TO THE IDENTITY THAT WAS AUTHORIZED (codex
+      // round-1 #1). The captured wrapper re-resolves the caller's edge and is
+      // drift-TOLERANT by design, so an activation landing between the decision
+      // above and the call below could execute a version this admission never
+      // covered. The pinned dispatch resolves once and REFUSES on any mismatch.
+      //
+      // Host primitives are unaffected: they have no edges, so there is nothing
+      // to drift and the captured handler is already the only thing that runs.
+      const pinned = identity.dispatchTarget;
+      if (pinned && pinned.kind !== "host") {
+        const { dispatchAuthorizedExtensionPrimitive } = await import(
+          "@/lib/extension-authorized-dispatch"
+        );
+        handler = (pinnedInput: unknown) =>
+          dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
+      }
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.
     // Fail CLOSED on a deny OR any boundary error.

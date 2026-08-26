@@ -55,7 +55,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import {
   isDelegatedWidgetMcpToolAllowed,
   type WidgetDelegationKind,
@@ -154,9 +154,18 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
   it("the ONLY chat-reachable lifecycle decision primitive is the named exception", () => {
     const reachable = inventoryPrimitiveNames()
       .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
-      .filter((name) => isDelegatedChatMcpToolAllowed(name));
+      .filter((name) => isCoreDelegatedChatAdmitted(name));
     // Exactly one, by name. Anything else that reaches this list is the
     // regression this file has always existed to catch.
+    //
+    // THE PREDICATE IS THIS BRANCH'S, THE EXPECTATION IS MAIN'S (merge of
+    // cinatra#2988 into cinatra#2817). #2817 deleted the name-only
+    // `isDelegatedChatMcpToolAllowed` and replaced it with the projection of
+    // the REAL admission evaluator over the core admission records. Main's W5a
+    // exception is unchanged in substance: the one lent-action primitive is
+    // reachable, and it is reachable because the host DECLARES it (see
+    // `CORE_PROPOSAL_OVERRIDE` in `@cinatra-ai/mcp-server/capability-plan`),
+    // not because a name sits on a list.
     expect(reachable).toEqual([LENT_ACTION_PRIMITIVE]);
   });
 
@@ -181,7 +190,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // chat gains that the widget is quietly denied.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
-      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .filter((name) => isCoreDelegatedChatAdmitted(name))
       .sort();
     for (const kind of WIDGET_KINDS) {
       const widgetReachable = inventoryPrimitiveNames()
@@ -199,7 +208,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // one bound-card control the person's own message lent it, once.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
-      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .filter((name) => isCoreDelegatedChatAdmitted(name))
       .sort();
     expect(chatReachable).toEqual([
       "artifact_review_gate_render",
@@ -213,7 +222,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
 
   for (const name of FORBIDDEN_LIFECYCLE_NAMES) {
     it(`${name} is refused by BOTH delegated policies`, () => {
-      expect(isDelegatedChatMcpToolAllowed(name), `chat: ${name}`).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), `chat: ${name}`).toBe(false);
       for (const kind of WIDGET_KINDS) {
         expect(isDelegatedWidgetMcpToolAllowed(kind, name), `${kind}: ${name}`).toBe(
           false,
@@ -228,7 +237,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // expose it, so a future edit cannot open the class with a one-line change.
     for (const verb of ["decide", "approve", "reject", "resume", "confirm", "arm"]) {
       expect(
-        isDelegatedChatMcpToolAllowed(`artifact_review_gate_${verb}`),
+        isCoreDelegatedChatAdmitted(`artifact_review_gate_${verb}`),
         verb,
       ).toBe(false);
     }
@@ -312,7 +321,7 @@ describe("the read-only pull primitives are reachable from BOTH delegated perime
       // handlers resolve their own principal from the request frame — for a
       // widget frame that means the signed `lifecycle.read` grant plus a live
       // standing resolution — and refuse generically otherwise.
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name)).toBe(true);
       for (const kind of WIDGET_KINDS) {
         expect(isDelegatedWidgetMcpToolAllowed(kind, name), kind).toBe(true);
       }
