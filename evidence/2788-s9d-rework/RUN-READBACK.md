@@ -1,5 +1,45 @@
 # RUN-READBACK — the rows behind the pictures
 
+**Round 7 (2026-08-26) is the current round**, and its rows are committed rather
+than only quoted: `readback/2975-r7-readback.json` holds every run, trigger, park,
+outbox row, gate and usage aggregate as `readback/2975-r7-read-back.mjs` printed
+them, unedited, and `readback/2975-r7-runtime-evidence.txt` holds the server log
+lines this file narrates, with the grep that produced each block and the
+instance's public origin redacted. Where a number here and a row there disagree,
+the row is right.
+
+## Round 7 — what the database says
+
+**Twelve runs exist on this lane; six carry a cell.** Every one was created by the
+app's own dispatch after a person asked for it in the app's own chat. Nothing was
+inserted, updated or seeded.
+
+| fact | value |
+|---|---|
+| runs that carry a cell | `37087a03…` (C7, C10b, C9) · `197063c3…` (C10, C10c) · `e227ce72…` (C11) · `cd3151cc…` (C11b light) · `7e7d2bdd…` (C11b dark) |
+| `human_present` / `source_type` on every one | `t` / `agent_builder` |
+| the hold | one `lifecycle_continuation_park`, checkpoint `recommendation`, `parked` → `released` when **Confirm** was pressed on the card |
+| the armed one-off | one `agent_run_triggers` row, `scheduled`, `2026-08-26 19:30:00+00`, `Europe/Berlin`, `enabled`, `released_at` NULL |
+| the immediate runs | one `agent_run_triggers` row each, `immediate`, released at once — which is why their pages stay the SETUP surface (`shouldShowPersistentTab` is false for `immediate`) |
+| review gates | 4 on the lane, each opened by the sweeper from that run's own `artifact_produced_outbox` row |
+| the outbox→gate window | `12:58:07.233` → `12:58:32.076` — **25 s** on the C11 run; about 5 s on the C11b runs |
+| provider | `openai`, models `gpt-5.5` and `gpt-5.5-2026-04-23`, **84** calls in `usage_events` |
+| the agent runtime's own calls | **9** `[llm-bridge-run-select] served-by=run_token` lines — the runtime resolving this instance's sealed connection by the run's own token |
+| the provider's callbacks | **94** `POST /api/mcp 200` over the public ingress |
+| scripted-runtime lines | **0** |
+| what cannot be established | this host prints no environment for the listening process, so the process-table read establishes nothing — recorded as `serverEnvAvailable: false` rather than letting a null read as "absent" |
+
+### The direct-SQL writes this lane made, disclosed
+
+Two, both provisioning and neither a record: the lane account was given the `admin`
+role in Better Auth's own table, and a membership row was written so the account
+belongs to the organization the instance's boot import stamped every agent template
+with (`evidence/2970-setup-rail/drivers/01-lane-setup.mjs`, `02-join-template-org.mjs`,
+which carry the same disclosure). Everything else — every run, trigger, park,
+outbox row, gate, install row and skill match — was written by the app itself
+through its own screens.
+
+
 Round 5's runs come first, because they are the runs ALL FOURTEEN pictures are
 taken on. Rounds 4 and 3 follow, unchanged, as the record of what was withdrawn:
 **no committed picture stands on them any more.**

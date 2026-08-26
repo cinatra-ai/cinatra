@@ -1,5 +1,132 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
+## Round 7 (2026-08-26) — every cell of round 6 re-shot on the fixed head, and the three readings the fix defines
+
+> **Why the whole round was re-shot.** Round 6's four cells were taken BEFORE the
+> change this pull request's *"Acceptance item 3 — the recommendation and review
+> rows open to the right"* section describes. Pictures taken before a fix are the
+> record of the defect, not of the fix, so all four — **C7, C9, C10, C11** — are
+> taken again here, and three readings the fix defines are ADDED: **C10b** (a run
+> with no recommendation park — the row closed and muted), **C10c** (a run whose
+> hold was decided — the settled row), and **C11b** (the review step while the run
+> works — the placeholder with the spinning icon).
+>
+> **The other twelve pictures are byte-identical** to the SHA-256s round 5
+> committed, and `page-controls.json`'s two **C8** records are byte-identical to
+> round 5's, in the same place in the file. The canonical capture index is
+> untouched.
+
+### The two FAILs round 6 reported are gone, and the pixels say so
+
+Round 6 had to file **C10 FAIL** ("the skills-recommendation step opens onto an
+EMPTY run detail", `detailColumnTextLength` **0**) and **C11 FAIL** ("the review
+step can NEVER be opened here"). On this head:
+
+| round 6 | round 7 |
+|---|---|
+| C10: row 2 pressed, run detail **blank**, `detailColumnTextLength` **0** | C10: row 2 opens the shipped `recommendation_hold` card — `[data-lifecycle-card="recommendation_hold"]` **1**, host `run_card`, the chip **Blog Content Skill** with **Confirm / Adjust / Skip**, `detailColumnTextLength` **35** |
+| C11: row 3 carried `aria-disabled`, a forced press changed **nothing** — the step could not be opened for any run | C11: row 3 reads `data-run-surface-rail-reached="true"` / `data-action="open-review-step"`, and opens the run's review slot — `[data-run-review-slot]` **1** with `[data-conformance-id="review-gate-card"]` **1** inside it |
+
+### The cells, and what each one is
+
+| cell | reading | run |
+|---|---|---|
+| **C7** | the first-time run page: two columns, the rail NAMING `1 Schedule` / `2 Recommendation` / `3 Review`, the unchanged scheduling form open in the right column, no run progress | the setup run, before any press |
+| **C9** | the SAME run after **Continue** with a one-off armed ahead | the same run, one press later |
+| **C10** | the skills-recommendation row pressed on a run with a **LIVE hold** — the hold card, in the right column | a run held at its skills question |
+| **C10b** | the same row on a run with **no park at all** — closed, muted, `aria-disabled="true"`, and a forced press changes nothing | the C7 run |
+| **C10c** | the same row after the hold was **DECIDED** on the card — the settled reading of the same one renderer (`Blog Content Skill ✓ CONFIRMED`) | the C10 run, after Confirm |
+| **C11** | the review row pressed once a **gate is on file** — the review card in place | a completed run that produced a reviewable artifact |
+| **C11b** | the review row pressed **while the run works** — the placeholder with the spinning icon | two runs caught inside the outbox→gate window |
+
+### Six runs, and why one could not carry them all
+
+Each is a property of the screen under proof, not a convenience:
+
+1. **A one-off armed AHEAD leaves the setup surface.** `shouldShowPersistentTab`
+   is true for a `scheduled`/`recurring` trigger row, so the page becomes the
+   Trigger tab. C7 and C9 are therefore a genuine BEFORE and AFTER of one press on
+   ONE run — and C10b is shot on that same run, before the press — but that run
+   can never also show a hold or a review.
+2. **The hold only fires for an agent that HAS a candidate skill.**
+   `maybeHoldRunForRecommendation` parks only when the request-aware scorer returns
+   a candidate, and a candidate is an assigned skill of that agent. A skill was
+   assigned through the app's own **Matches** tab
+   (`drivers/2975-r7-assign-skill.mjs`); C10 and C10c stand on a run of that agent.
+3. **The review step needs a run that produced a reviewable artifact.** C11 stands
+   on a run that ran to completion on the real provider and whose artifact opened a
+   gate. **C11b's two themes come from two runs**, and the reason is measured, not
+   assumed: `runReviewStepReading` answers `working` only between the artifact's
+   PENDING outbox row and the gate the sweeper opens from it, and on this lane that
+   window ran **25 s** on one run and about **5 s** on another — shorter than two
+   shutters. The catcher (`drivers/2975-r7-catch-review-readings.mjs`) polls the
+   run's own rows four times a second and fires inside the window; the light and
+   dark cells each caught their own run's window, and each record carries its run
+   id and its shutter time.
+
+### What this lane could NOT do, said plainly
+
+- **The marketplace could not install anything.** Its own screen says installing
+  needs the package registry connected, and this lane holds no registry
+  credential. The agent under proof was installed through the product's OTHER
+  install path — the **Upload Extension** screen
+  (`drivers/2975-r7-install-extension.mjs`) — which needs none. Its dependency was
+  installed the same way. Both rows are in the readback
+  (`installedAgents`, `owner_level: organization`).
+- **Two runs of this lane were dispatched by the explicit-dispatch pre-router**,
+  not by the model's own tool call, because the sentence naming the package
+  triggers that path. **Neither carries a cell.** Both are named in
+  `readback/2975-r7-runtime-evidence.txt` with the grep that found them.
+- **Two turns were refused before the ingress was warmed**, and five more across
+  the session: the runtime HEADs the public MCP URL with a 2.5 s budget and
+  refuses the turn outright if it does not answer. The first TLS handshake through
+  this lane's ingress takes about five seconds; warmed, about 0.3 s. All seven
+  refusals are quoted in the runtime evidence rather than trimmed out.
+- **What the review card DRAWS INSIDE ITSELF is a lane reading, not this issue's.**
+  On these pixels the card's content rung says *"review target unavailable — slot
+  'detail', reason 'no-semantic-renderer'"* and falls back to the generic read-only
+  view of the artifact. That is the artifact type's renderer, not the review step,
+  and nothing here changes it. (cinatra#3008, the separate defect where the
+  markdown representation held the producer's JSON envelope, is CLOSED; this is a
+  different reading and is recorded, not fixed.)
+
+### The runtime
+
+`node scripts/dev-server.mjs` (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, on a **dedicated lane database** on the local verify
+Postgres and Redis, loopback-only, with the agent runtime and the instance's own
+package registry brought up beside it. It is **not** a production-equivalent build
+— every record is labelled `dev-runtime`. Cells are shot at `deviceScaleFactor: 2`,
+uncropped, at the full 1440x900 window (2880x1800 device pixels).
+
+The provider is REAL and was configured **through the app's own `/setup/model`
+form**, so the app sealed the credential itself; it is in no file, no argument, no
+log and no record here. `cinatra.usage_events` records what the instance actually
+called: provider `openai`, models `gpt-5.5` and `gpt-5.5-2026-04-23`, **84** calls.
+`CINATRA_TEST_LLM_PROVIDER` was removed from the server's environment at launch and
+is set in nothing this lane starts, and the server log carries **zero**
+scripted-runtime lines. What this round can NOT say is stated rather than implied:
+this host prints **no environment at all** for the listening process, so the
+process-table read establishes nothing — `serverEnvAvailable: false` in
+`readback/2975-r7-readback.json`, which is why the positive evidence is the usage
+rows, the **94** `POST /api/mcp 200` callbacks from the provider's own servers over
+the public ingress, the **9** `[llm-bridge-run-select] served-by=run_token` lines
+the agent runtime produced, and the absent scripted lines.
+
+### Where this round's own artefacts are
+
+`2975-reshoot-walk.json` (the executable plan) ·
+`drivers/2975-reshoot-page-controls.mjs` (the capture driver, BYTE-UNCHANGED from
+round 6) · `drivers/2975-r7-confirm-hold.mjs`, `2975-r7-continue-immediate.mjs`,
+`2975-r7-catch-review-readings.mjs`, `2975-r7-press-continue.mjs`,
+`2975-r7-assign-skill.mjs`, `2975-r7-install-extension.mjs` ·
+`readback/2975-r7-readback.json` (the rows and the runtime screens) ·
+`readback/2975-r7-runtime-evidence.txt` (the server's own lines, with the grep that
+produced each block and the public origin redacted) ·
+`readback/2975-r7-read-back.mjs` (the readback driver). The chain drivers reused
+from the earlier round live in `evidence/2970-setup-rail/drivers/`.
+
+
 ## Round 6 (2026-08-26) — C7 re-shot on the two-column setup surface, and the three cells cinatra#2970 adds
 
 > **What changed and what did not.** ONE cell of this set was re-shot — **C7**,
@@ -373,9 +500,9 @@ run's setup scheduling step is behind it. **C5 rides on its own untouched
 proposal**, whose shipped 30-minute window was allowed to actually run out.
 `RUN-READBACK.md` gives every row, including the proposal-ref→consume-key join
 that binds the conversation to the run. `PLAN-WALK.md` carries the graded verdict
-for each picture, written after looking at the pixels; **one cell still carries a
-FAIL on a clause and says so** (C7, against the named drawing — a standing gap in
-the setup wizard, not a regression this PR introduces).
+for each picture, written after looking at the pixels. (Round 5's standing FAIL on
+C7 against the named drawing is gone; round 7's section at the top of this file is
+the current reading of every cell it re-shot.)
 
 | file | sha256 | filed as |
 |---|---|---|
@@ -389,16 +516,22 @@ the setup wizard, not a regression this PR introduces).
 | `C3__run-page-configured__dark.png` | `63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d` | record `S9d-C3__schedule-card__run_card__decided__dark` |
 | `C6__chat-ran__light.png` | `e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
 | `C6__chat-ran__dark.png` | `ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
-| `C7__run-setup-scheduling-step__light.png` | `45989355236faada4a82e848c71db3fcdb5e8684e8ded28d46d9806d604b1a44` | page control (light) — no index record — **re-shot 2026-08-26 (round 6)** |
-| `C7__run-setup-scheduling-step__dark.png` | `298f594c0e5fe6e2faceaa92cb6f7f6e287b50f6f30fda4d57ba09d716b3ae87` | page control (dark) — no index record — **re-shot 2026-08-26 (round 6)** |
+| `C7__run-setup-scheduling-step__light.png` | `a81dd65f4e393f32f4fd3ff5b1c3895edafc75011715fa42ca7e8fea36a95261` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C7__run-setup-scheduling-step__dark.png` | `534081e8532a18564580d6e3f4a4b13e010144aab3c0433e0c486d7438f67efb` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
 | `C8__run-detail-after-fire__light.png` | `3831af1d87c0a6f4dd60a6b284149d23d472ecbaf2653448fcb792009e64c359` | page control (light) — no index record |
 | `C8__run-detail-after-fire__dark.png` | `86fff475add5688313ea40b11e92b77a65ac601110e0eee0af6e2024a8a32514` | page control (dark) — no index record |
-| `C9__run-setup-continue-armed__light.png` | `6d1a709ec62f5b18731a79520eee954a2086b1d261a192b40e95fc480f209cb0` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
-| `C9__run-setup-continue-armed__dark.png` | `e643346c6375ecdf2c8937a6c0056bc80831c7bbc139a7daf80c272a1bda8346` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
-| `C10__run-setup-recommendation-step-opened__light.png` | `cf5486146e0c959e64e71d1e9d7045bb9fd136ae7078c3706b06523530a79375` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
-| `C10__run-setup-recommendation-step-opened__dark.png` | `c2e177746b157a7ef0c7c7811c030a08607ff123ae94903a773c7a450c5af0e2` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
-| `C11__run-setup-review-row-pressed__light.png` | `12076fa5bc0448a5881cb983abc352a3c99cbc50c7c6af036b29d9246289fec2` | page control (light) — no index record — **added 2026-08-26 (round 6)** |
-| `C11__run-setup-review-row-pressed__dark.png` | `6a5f296e5daec96a18a5b30a0bf4ac3ba71fcb1f90a7f7039371c5c30633f8c1` | page control (dark) — no index record — **added 2026-08-26 (round 6)** |
+| `C9__run-setup-continue-armed__light.png` | `1bd431eab8e3b40515a73ab7b953a772fe106cfbe9e457a2c3047c74642e9888` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C9__run-setup-continue-armed__dark.png` | `59a5ca4a7dbaf0282cd6abf843e72c704c806d36fc1881ce04e9f20b217fda6a` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C10__run-setup-recommendation-step-opened__light.png` | `8a9d2412cdf7aafb864a75699e4397b2c470c26840c5194d3813fb94603eb136` | page control (light) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C10__run-setup-recommendation-step-opened__dark.png` | `1c5da95d7aeda19f5c9ec322e597ea130e5cf1e659e4e5f782a08b5cda653202` | page control (dark) — no index record — **re-shot 2026-08-26 (round 7)** |
+| `C10b__run-setup-recommendation-row-closed__light.png` | `21f5edb032152bc0003f460e32ef6f5915586bc6963a56ac83a63c263c4a7cab` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
+| `C10b__run-setup-recommendation-row-closed__dark.png` | `7bc1c5cb6b9df196d05ad2b7d46fc45e395264613415c8919f5b63c78abfe099` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
+| `C10c__run-setup-recommendation-step-settled__light.png` | `4a2e850fc297ef6dd0306dc8675733417a649fd6149475ce84a4ce8f30647dbe` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
+| `C10c__run-setup-recommendation-step-settled__dark.png` | `8db18c07246ea931b8f7ba5d540a956d9a7639001217248a20ebe1c3debefbcf` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
+| `C11__run-setup-review-step-opened__light.png` | `32d934bfe7a1c1c4763cf64a637ef7de8de3d82807c6195980332cc9c33639f7` | page control (light) — no index record — **re-shot and renamed 2026-08-26 (round 7)** |
+| `C11__run-setup-review-step-opened__dark.png` | `9f0f7118072bf7480e3475e37ef833e2b715c35e745314509d6af25b3b3dea98` | page control (dark) — no index record — **re-shot and renamed 2026-08-26 (round 7)** |
+| `C11b__run-setup-review-step-working__light.png` | `9e7763a02d1c8a9b934470b7cf7064eaaf3538243c9e104c1edc696285711a5f` | page control (light) — no index record — **added 2026-08-26 (round 7)** |
+| `C11b__run-setup-review-step-working__dark.png` | `0ce7bd4271f28a9c5009338613db5b803c1dee5b72dd5e39431515546c15b46f` | page control (dark) — no index record — **added 2026-08-26 (round 7)** |
 
 The two round 2's **C3** records were deleted from
 `scripts/ci/chat-hitl-capture-index.json` (56 records → 54) together with their
