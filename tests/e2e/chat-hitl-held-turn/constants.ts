@@ -132,14 +132,19 @@ export const TRANSCRIPT_SLOT = "[data-transcript-slot]";
  * and the generic produced-views container. A non-null read therefore proves the
  * card is inside SOME slot, which is not the positional rule S9i states.
  *
- * The `agent_run` container is identifiable by what only IT carries: the inline run
- * panel for that same run. The panel's link out to the run page is built by the
- * platform from the run id (`buildAgentInstancePath`), so an anchor whose href ends
- * in `/<runId>` is the panel for THIS run and exists in no other container. Pinning
- * the card's slot container to the one holding that link is what makes the runtime
- * gate as strong as the jsdom matrix's `slotOf(card) === producingSlot`.
+ * The `agent_run` container names its own run: `data-agent-run-slot="<runId>"`, put
+ * there by the container itself. Pinning the card's slot container to the one that
+ * names THIS run is what makes the runtime gate as strong as the jsdom matrix's
+ * `slotOf(card) === producingSlot`.
+ *
+ * IT USED TO BE THE PANEL'S LINK. The container was identified by the inline run
+ * panel's own link out to the run page, because that panel was the one thing only
+ * this container held. cinatra#2790 (epic #2784 S9f) made that untrue in exactly
+ * the state this flow measures: while the skills can still be chosen the turn draws
+ * no run panel, so in a HELD turn there is no link to find. The container is the
+ * stabler anchor and was always the thing being asked about.
  */
-export const INLINE_RUN_PAGE_LINK = '[data-testid="inline-run-page-link"]';
+export const AGENT_RUN_SLOT = "[data-agent-run-slot]";
 /** The composer. */
 export const CHAT_PROMPT = '[data-testid="chat-prompt-input"]';
 

@@ -130,25 +130,31 @@ describe("the screen composes THROUGH the step, not beside it", () => {
   it("hands the rail and the run detail to the schedule step, with the first paint it derived", () => {
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
     expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
-    expect(SCREEN_SRC).toMatch(
-      /initialSelection=\{opensOnScheduleStep \? "schedule" : "detail"\}/,
-    );
+    // The screen derives its first paint through the whole ladder since
+    // cinatra#2790 (S9f) — `runDetailInitialStep`, which composes this
+    // predicate — so the pin follows the composition rather than the spelling
+    // it used to have.
+    expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);
+    expect(SCREEN_SRC).toContain("runDetailInitialStep({");
     expect(SCREEN_SRC).toContain("runDetailOpensOnSchedule({");
     expect(SCREEN_SRC).toContain("runHasExecutionRecord({");
   });
 
   it("puts the run's panels INSIDE the detail slot — never beside the schedule step", () => {
     const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
-    const detailEnd = SCREEN_SRC.indexOf("if (scheduleRailRef) {");
+    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
     expect(detailStart).toBeGreaterThan(-1);
     expect(detailEnd).toBeGreaterThan(detailStart);
     const detail = SCREEN_SRC.slice(detailStart, detailEnd);
     for (const panel of ["<OrchestratorStepperPanel", "<SetupCompletionWatcher"]) {
       expect(detail, panel).toContain(panel);
     }
-    // And the step is placed with BOTH slots — a placement that kept a column of
-    // its own would be the composition the plan rules out.
-    const stepAt = SCREEN_SRC.indexOf("<ScheduleRailStep");
+    // And the steps are placed with BOTH slots — a placement that kept a column
+    // of its own would be the composition the plan rules out. The frame is the
+    // one that carries them since cinatra#2790 (S9f), because the run page now
+    // has two gate steps in one rail.
+    const stepAt = SCREEN_SRC.indexOf("<RunSurfaceRail");
     expect(stepAt).toBeGreaterThan(detailEnd);
+    expect(SCREEN_SRC).toContain('key: "schedule"');
   });
 });

@@ -267,3 +267,94 @@ describe("TriggerScreenClient — duration estimate banner", () => {
     expect(banner).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE READ-ONLY READING (cinatra#2980).
+//
+// design@fe2182547d4a `specs/app-components.html` § "Standard scheduling step",
+// the "Configured schedule step" reading: "Once a *Run right after setup* or
+// *Schedule for later* schedule has fired it cannot be changed any more: the
+// form stays as a **read-only** reading with no controls at all."
+//
+// The screen mounts this reading for a run whose own one-off schedule has fired
+// — the finished "Run right after setup" run of the issue. The form is still
+// drawn (it is the reading of what the schedule was), and nothing on it can be
+// pressed.
+// ---------------------------------------------------------------------------
+describe("TriggerScreenClient — the read-only reading of a fired one-off", () => {
+  it("offers NO control to re-arm — the submit is gone", () => {
+    renderForm({ readOnly: true });
+    expect(screen.queryByText("Continue")).toBeNull();
+    expect(screen.queryByText("Continuing…")).toBeNull();
+  });
+
+  it("still draws the same form — the rows and the duration line", () => {
+    renderForm({ readOnly: true });
+    expect(screen.getByText("When should this run?")).toBeTruthy();
+    expect(screen.getByText("Run right after setup")).toBeTruthy();
+    expect(screen.getByText("Schedule for later")).toBeTruthy();
+    expect(screen.getByText("Recurring")).toBeTruthy();
+    expect(screen.getByText("Estimated run duration")).toBeTruthy();
+  });
+
+  it("disables every control in it, not only the submit", () => {
+    const { container } = renderForm({ readOnly: true });
+    const fieldset = container.querySelector<HTMLFieldSetElement>(
+      "fieldset[data-schedule-readonly]",
+    );
+    expect(fieldset).not.toBeNull();
+    expect(fieldset?.disabled).toBe(true);
+    // Every row lives INSIDE it, so no row can be selected — a disabled
+    // fieldset disables its descendants, which is the whole reason it is the
+    // wrapper rather than a per-control flag that a new control could miss.
+    const row = screen.getByText("Run right after setup").closest("button");
+    expect(row).not.toBeNull();
+    expect(fieldset?.contains(row!)).toBe(true);
+  });
+
+  // A READING THAT MOVES IS NOT A READING. The three rows are not all form
+  // controls — two of them are plain divs with click handlers, which a disabled
+  // fieldset does not reach — so pressing one must be pinned to change NOTHING,
+  // not merely to submit nothing (a click never submits, even when editable, so
+  // asserting only that would pass on a form that visibly re-selects itself).
+  it("does not change its own selection when a row is pressed", () => {
+    renderForm({ readOnly: true });
+    const recurringRow = screen.getByText("Recurring").closest("div");
+    const immediateRow = screen.getByText("Run right after setup").closest("button");
+    expect(immediateRow?.className).toContain("border-primary");
+
+    fireEvent.click(screen.getByText("Recurring"));
+
+    // The selection is where it was: the immediate row still carries the
+    // selected edge and the recurring row still does not.
+    expect(immediateRow?.className).toContain("border-primary");
+    expect(recurringRow?.className).not.toContain("border-primary");
+    expect(mockedSetRunTrigger).not.toHaveBeenCalled();
+    expect(routerState.push).not.toHaveBeenCalled();
+  });
+
+  it("arms nothing even if the form itself is submitted", async () => {
+    // The submit CONTROL is gone, but the form element keeps its handler and a
+    // submit event can still reach it. The reading must not act on one.
+    //
+    // Asserted THROUGH a wait: the handler runs its resolver asynchronously, so
+    // an assertion taken on the same tick would pass before an unsafe callback
+    // had run — i.e. for the wrong reason.
+    const { container } = renderForm({ readOnly: true });
+    const form = container.querySelector("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    await waitFor(() => {
+      expect(mockedSetRunTrigger).not.toHaveBeenCalled();
+    });
+    expect(routerState.push).not.toHaveBeenCalled();
+  });
+
+  // The editable reading is the default and is untouched: every other run still
+  // reaches the form it always had.
+  it("leaves the editable reading alone", () => {
+    const { container } = renderForm();
+    expect(screen.getByText("Continue")).toBeTruthy();
+    expect(container.querySelector("fieldset[data-schedule-readonly]")).toBeNull();
+  });
+});

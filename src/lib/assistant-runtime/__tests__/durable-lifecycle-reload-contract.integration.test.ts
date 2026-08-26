@@ -2250,13 +2250,30 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
 
       if (carriage.kind === "recommendation_hold") {
         // What S9j DOES owe this carriage: the durable run identity reaches the
-        // ruled run_card mount in the reloaded turn. The hold card's own mount is
-        // the next slice's; the persistence beneath it is this one's.
-        const pinned = root.querySelector(`[data-inline-run-card="${drive.identity}"]`);
+        // reloaded turn and names the container the run was dispatched at.
+        //
+        // RE-ANCHORED (cinatra#2790, epic #2784 S9f) from the run panel to that
+        // container. The stub above resolves a LIVE hold, and a held run draws no
+        // run progress card at all — "An agentic run progress card is not visible
+        // while the recommended skills can be selected". The persisted identity is
+        // therefore read where it is unconditional: on the `agent_run` slot the
+        // reload rebuilt.
+        const pinned = root.querySelector(`[data-agent-run-slot="${drive.identity}"]`);
         expect(
           pinned,
-          "the reloaded turn did not mount the run card on the persisted runId",
+          "the reloaded turn did not rebuild the agent_run slot on the persisted runId",
         ).not.toBeNull();
+        // AND THE SHAPE THE RULING NAMES, after a real reload: the chip row is
+        // back, the run card is not. This is the durable half of the rule — the
+        // live half is pinned in the chat package's own transcript suites.
+        expect(
+          root.querySelector('[data-lifecycle-card="recommendation_hold"]'),
+          "the reloaded held turn did not re-project the chip row",
+        ).not.toBeNull();
+        expect(
+          root.querySelector("[data-inline-run-card]"),
+          "the reloaded held turn drew a run progress card while the skills can still be chosen",
+        ).toBeNull();
       }
     });
 

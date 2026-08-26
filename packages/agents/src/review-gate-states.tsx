@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
+import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -137,6 +138,62 @@ export function ReviewGateLoading() {
         <div className="h-1.5 w-4/5 rounded bg-surface-muted" />
         <div className="h-1.5 w-2/3 rounded bg-surface-muted" />
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997).
+ *
+ * The maintainer's words are the whole specification, so they are quoted rather
+ * than paraphrased:
+ *
+ *   "The 'Agentic Run Progress' card should basically just be a card (maybe even
+ *    an empty review screen) with a spinning icon which is a temporary
+ *    placeholder for the review screen. Once the agent is done and the output
+ *    generated, that 'Agentic Run Progress' card is being automatically replaced
+ *    with the 'Review requested' screen."
+ *
+ * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
+ * nothing else. There is no heading, no status word, no progress sentence and no
+ * step list, because the words authorize none of those and the card they
+ * describe is defined by what it does NOT say: it is the review screen's own
+ * frame, empty, while the screen is still coming.
+ *
+ * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
+ * of the review screen's states — the one before the gate exists — and it is
+ * built from the two pieces the review screen is already built from: the same
+ * 30px header tile the gate header draws its clipboard mark in, and the shipped
+ * `ReviewGateLoading` bar motif. Keeping it here is what makes the swap read as
+ * one card changing rather than two cards trading places, and it is why the
+ * replacement needs no new geometry: the placeholder and the screen that
+ * replaces it are the same box.
+ *
+ * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
+ * — the same component the orchestrator stepper's executing card spins — not a
+ * second spinner drawn here.
+ *
+ * Conformance anchor: `review-gate-placeholder`.
+ */
+export function ReviewGatePlaceholder() {
+  return (
+    <div
+      data-conformance-id="review-gate-placeholder"
+      // A busy REGION, named for a reader who cannot see the spin. The label is
+      // not copy on the card — nothing is drawn from it — it is the accessible
+      // name of a region that is deliberately wordless.
+      role="status"
+      aria-busy="true"
+      aria-label="Working"
+      className="flex w-full flex-col gap-3"
+    >
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+          <LoadingSpinner className="size-4" />
+        </span>
+      </div>
+      <ReviewGateLoading />
     </div>
   );
 }

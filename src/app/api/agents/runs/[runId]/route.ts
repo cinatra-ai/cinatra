@@ -9,6 +9,13 @@ import {
   readAgentTemplateById,
   type ActorRoleHints,
 } from "@cinatra-ai/agents";
+// The RUN'S OWN REVIEW SLOT (cinatra#2997). A dedicated SUBPATH import, never
+// the barrel: the gate store reaches the host review cores, and this route is
+// the only consumer here — see the barrel's own note on why it is not
+// re-exported. The read runs AFTER the run has been authorized below, so it is
+// a plain run-scoped read behind this route's own door.
+import { readRunReviewSlot } from "@cinatra-ai/agents/artifact-review-gate-store";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   authenticateWidgetConversationRequest,
   isWidgetBranchRequest,
@@ -116,6 +123,40 @@ async function seedResponse(
   // wayflow-<a2aTaskId> / setup-<runId> gate-identity fallbacks.
   const hitlContext = await deriveRunHitlContext(run, { template });
 
+  // WHAT THE RUN CARD DRAWS WHERE THE REVIEW SCREEN GOES (cinatra#2997).
+  //
+  // The card is a placeholder for the review screen while the agent works and
+  // becomes that screen when the work opens one, so the run's own seed has to
+  // carry the answer — the card must not have to ask a model, and a person must
+  // not have to ask for it in a new turn. Two values and nothing else:
+  //
+  //   `ref`      — the SERVER-MINTED opaque ticket for this run's own review
+  //                gate, minted here exactly as the run screen mints it, from
+  //                (runId, reviewTaskId). The card is only ever addressed by
+  //                one of these, and it re-authorizes itself on resolve — so
+  //                this is a pointer the reader already cleared the door for,
+  //                never a projection of the gate.
+  //   `awaiting` — the run produced something whose review question is still
+  //                open in the outbox. It is what holds the placeholder up
+  //                between `completed` and the gate row existing.
+  //
+  // An instance with no app secret cannot mint a ref; the field is then null and
+  // the card draws its terminal rendering, which is the same answer this route
+  // gave before this field existed.
+  // FAIL-SOFT, and deliberately so. This field tells the run card which of its
+  // readings to draw; the SEED is what mounts the card at all. A slot read that
+  // throws must therefore cost the reader the placeholder's precision, never the
+  // panel — so the failure answers "no review here", which is exactly the seed
+  // this route served before the field existed, and the card's own read tries
+  // again a moment later.
+  const reviewSlot = await readRunReviewSlot(run.id).catch(() => ({
+    reviewTaskId: null,
+    awaiting: false,
+  }));
+  const reviewGateRef = reviewSlot.reviewTaskId
+    ? encodeLifecycleGateRef({ runId: run.id, reviewTaskId: reviewSlot.reviewTaskId })
+    : null;
+
   // Surface the template+run metadata fields the chat-inline
   // <AgenticRunPanel> wrapper needs (templateId for HITL-assist endpoints,
   // agentPackageName for renderer override resolution, agUiEnabled to pick
@@ -146,6 +187,7 @@ async function seedResponse(
       createdAt: m.createdAt.toISOString(),
     })),
     hitlContext,
+    reviewGate: { ref: reviewGateRef, awaiting: reviewSlot.awaiting },
   });
 }
 

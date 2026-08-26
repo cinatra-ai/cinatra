@@ -142,9 +142,15 @@ describe("every digest input is really an input", () => {
   // mounts, and `trigger_schedule_proposal` stopped being it when S9d
   // (cinatra#2788) landed the same two. `recommendation_hold` is what is left —
   // a typed interrupt with no gate-region cell recorded on any row.
-  it("a HOST CELL added to the parity row invalidates the digest", () => {
+  it("a HOST CELL CHANGED on the parity row invalidates the digest", () => {
+    // It used to ADD `page_gate_region` to this row, because that cell was the
+    // one `recommendation_hold` did not have. cinatra#2790 (S9f) gave it all
+    // four, so adding is no longer a mutation at all — the assertion would pass
+    // vacuously against an unchanged document. Changing a cell that IS there
+    // exercises the same input by the same path, and cannot go quiet the way an
+    // add did once the row filled up.
     const drifted = clone(contract());
-    drifted.domExpectations.hostParity.recommendation_hold.hosts.page_gate_region = "composition";
+    drifted.domExpectations.hostParity.recommendation_hold.hosts.chat_thread = "composition";
     expect(
       auditAnchorContract({ anchorContract: drifted, manifest: manifest() }).join("\n"),
     ).toContain("the anchor digest is stale");

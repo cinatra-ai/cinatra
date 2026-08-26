@@ -1,0 +1,71 @@
+{
+  "requests": [
+    {
+      "label": "recommendation-resolve",
+      "method": "POST",
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "resourceType": "fetch",
+      "cookie": "absent",
+      "widgetUserToken": "present (cwu_)",
+      "widgetOrigin": "present",
+      "widgetAssistant": "present"
+    },
+    {
+      "label": "recommendation-resolve",
+      "method": "POST",
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "resourceType": "fetch",
+      "cookie": "absent",
+      "widgetUserToken": "present (cwu_)",
+      "widgetOrigin": "present",
+      "widgetAssistant": "present"
+    },
+    {
+      "label": "recommendation-decide",
+      "method": "POST",
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
+      "resourceType": "fetch",
+      "cookie": "absent",
+      "widgetUserToken": "present (cwu_)",
+      "widgetOrigin": "present",
+      "widgetAssistant": "present"
+    },
+    {
+      "label": "recommendation-resolve",
+      "method": "POST",
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "resourceType": "fetch",
+      "cookie": "absent",
+      "widgetUserToken": "present (cwu_)",
+      "widgetOrigin": "present",
+      "widgetAssistant": "present"
+    }
+  ],
+  "responses": [
+    {
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "status": 200
+    },
+    {
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "status": 200
+    },
+    {
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
+      "status": 200
+    },
+    {
+      "path": "/api/lifecycle-views/recommendation-hold",
+      "status": 200
+    }
+  ],
+  "decideOutcomes": [
+    {
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
+      "status": 200,
+      "outcomeOk": true,
+      "outcomeError": null,
+      "outcomeDispatched": true
+    }
+  ]
+}

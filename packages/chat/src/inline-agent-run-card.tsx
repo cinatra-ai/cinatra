@@ -26,8 +26,7 @@
  * button, stale-gate suppression, and grouped setup handling.
  */
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   AgenticRunPanel,
   type SerializedAgentRunMessage,
@@ -42,23 +41,21 @@ import {
 } from "./conversation-credential";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
 
-/**
- * Parse a scoped npm package name into the `/agents/[vendor]/[packageName]/
- * [instanceId]` run-page path. A verbatim copy of the host's pure
- * `src/lib/agent-url.ts:buildAgentInstancePath`, duplicated here for the same
- * reason `packages/notifications/src/agent-run-href.ts` duplicates it: four
- * lines with zero dependencies, and the four routes this card is reachable from
- * carry a locked reachable-module budget that one more leaf would grow. A unit
- * test pins this output against the host builder's, so the two cannot drift.
- */
-function buildAgentInstancePath(
-  agentPackageName: string,
-  instanceId: string,
-): string {
-  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `/agents/${agentPackageName}/${instanceId}`;
-}
+// THE RUN-PAGE LINK IS GONE (cinatra#2997), AND SO IS THE BUILDER IT NEEDED.
+//
+// The maintainer's words: "Also, the 'Open the run page' link in the top right
+// below the 'Agentic Run Progress' card should be removed." The whole run
+// lifecycle plays out in this card now — the placeholder while the agent works,
+// the review screen when the work opens one — so a link out of the conversation
+// is an invitation to leave the surface that already holds everything.
+//
+// What used to live here was a four-line verbatim copy of the host's
+// `src/lib/agent-url.ts:buildAgentInstancePath`, duplicated for a reachable
+// module budget, with a unit test pinning the copy against the original. Both
+// are deleted with the link: a copy kept for a caller that no longer exists is
+// a drift risk with no benefit, and the two other copies in the tree
+// (`packages/notifications/src/agent-run-href.ts`, `execution.ts`) still carry
+// their own pins for their own callers.
 
 /**
  * Append-only creation-progress timeline.
@@ -111,6 +108,14 @@ type SeedData = {
    * away. It is read off the same response as every other seed value.
    */
   hitlContext?: HitlGateContext | null;
+  /**
+   * THE RUN'S REVIEW SLOT (cinatra#2997) — the server-minted ticket for this
+   * run's own review gate, and whether a produced output's review question is
+   * still open. Read off the same response as every other seed value, so the
+   * card's first paint already knows whether it is the placeholder or the
+   * review screen.
+   */
+  reviewGate?: { ref: string | null; awaiting: boolean } | null;
 };
 
 type LoadFailureReason = "not-found" | "forbidden" | "transient" | "unaddressable";
@@ -163,11 +168,59 @@ function seedRequest(
   return { url, init: brokerRequestInit(credential.auth, base) };
 }
 
+/**
+ * THE SLOT READER THIS SURFACE ASKS WITH (cinatra#2997).
+ *
+ * The panel re-reads the run's review slot after the run finishes, so the
+ * placeholder can become the review screen without anybody asking. That read is
+ * the SAME route the seed above uses, and it must therefore travel on the SAME
+ * credential — built by the one shared builder, so a widget frame keeps
+ * `credentials: "omit"` and never sends an ambient cookie, and a host that
+ * cannot say who is asking reads nothing at all.
+ */
+function reviewSlotReader(
+  credential: ConversationCredential,
+  runId: string,
+):
+  | ((signal: AbortSignal) => Promise<{ ref: string | null; awaiting: boolean } | null>)
+  | undefined {
+  const request = seedRequest(credential, runId);
+  if (!request) return undefined;
+  return async (signal) => {
+    const res = await fetch(request.url, { ...request.init, signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      reviewGate?: { ref?: string | null; awaiting?: boolean } | null;
+    };
+    if (!data?.reviewGate) return null;
+    return {
+      ref: typeof data.reviewGate.ref === "string" && data.reviewGate.ref.length > 0
+        ? data.reviewGate.ref
+        : null,
+      awaiting: Boolean(data.reviewGate.awaiting),
+    };
+  };
+}
+
 export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
+  recommendationDecided,
 }: {
   runId: string;
+  /**
+   * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
+   * (cinatra#2790, epic #2784 S9f).
+   *
+   * Resolved ONCE by the conversation's own recommendation card and passed
+   * down, because inside a transcript the conversation owns that card and the
+   * panel mounts none of its own — so the panel has nothing to read it from.
+   * The plan's ruling is what it carries: "The agentic run progress card
+   * appears once the skills are decided; no skill inside it can be selected."
+   * The panel draws no skill picker when this is true. Absent/false is the
+   * unchanged reading, for a run that never had a recommendation.
+   */
+  recommendationDecided?: boolean;
   /**
    * Forwarded to AgenticRunPanel so the chat thread can drive an open HITL gate
    * via the prompt window. Fires with a stable descriptor on gate identity
@@ -186,6 +239,13 @@ export function InlineAgentRunCard({
   // is an effect dependency below, and a fresh object every render would make
   // the seed re-fire on every render — a polling loop, not a mount load.
   const credential = useConversationCredential();
+  // Memoized on the same two values the seed's credential is, for the same
+  // reason: it is a hook input below, and a fresh function every render would
+  // restart the panel's slot reader on every render.
+  const slotReader = useMemo(
+    () => reviewSlotReader(credential, runId),
+    [credential, runId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -275,21 +335,14 @@ export function InlineAgentRunCard({
     );
   }
 
-  // PLATFORM-BUILT, never model-authored (cinatra#2729 defect 1). The run page
-  // lives at `/agents/<vendor>/<packageName>/<runId>`; the chat used to carry
-  // whatever URL the model wrote for it, which was `/agents/runs/<runId>` — an
-  // API path with no page behind it, so the one link out of the conversation
-  // 404'd. The href is built here by the SAME builder the notification writer
-  // uses, from the package name the run API returned, so it cannot be guessed
-  // and cannot drift. Absent package name -> no link at all, rather than a
-  // fabricated one. The link is SECONDARY: the card above it already carries
-  // everything needed to act on the run.
-  const runPageHref = seed.agentPackageName
-    ? buildAgentInstancePath(seed.agentPackageName, runId)
-    : null;
-
   return (
-    <div className="my-2">
+    // `data-inline-run-card` names the run this panel was mounted for. Passive —
+    // it draws nothing and drives nothing — and it exists because the panel's
+    // PRESENCE is now a ruled property of the turn: it is withheld while the
+    // recommended skills can still be chosen, so a proof of that state has to be
+    // able to count it and find none. The same name the transcript suites' own
+    // stand-in for this panel has always declared.
+    <div className="my-2" data-inline-run-card={runId}>
       <CreationProgressTimeline runId={runId} />
       <AgenticRunPanel
         runId={runId}
@@ -304,19 +357,11 @@ export function InlineAgentRunCard({
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
+        recommendationDecided={recommendationDecided}
         surface="chat"
+        initialReviewGate={seed.reviewGate ?? null}
+        readReviewSlot={slotReader}
       />
-      {runPageHref ? (
-        <div className="mt-1 flex justify-end">
-          <Link
-            href={runPageHref}
-            data-testid="inline-run-page-link"
-            className="text-xs text-muted-foreground underline underline-offset-2"
-          >
-            Open the run page
-          </Link>
-        </div>
-      ) : null}
     </div>
   );
 }

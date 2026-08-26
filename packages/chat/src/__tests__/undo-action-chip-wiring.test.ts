@@ -18,8 +18,14 @@ describe("chat undo chip wiring", () => {
     const src = read("src/chat-messages-view.tsx");
     expect(src).toMatch(/import \{ UndoActionChip \} from "\.\/chat-undo-action-chip"/);
     // Mounted inside the agent_run tool_call branch (which has part.runId).
+    // RE-ANCHORED (cinatra#2790, epic #2784 S9f): that branch now renders one
+    // component — `AgentRunTurnSlot` — because the turn's shape depends on the
+    // run's recommendation state (the run card waits while the skills can still
+    // be chosen), which needs state the `.map` body cannot hold. The chip is
+    // mounted inside that container, on the same run, unconditionally as before.
     expect(src).toMatch(/part\.name === "agent_run" && part\.runId/);
-    expect(src).toMatch(/<UndoActionChip runId=\{part\.runId\}/);
+    expect(src).toMatch(/<AgentRunTurnSlot/);
+    expect(src).toMatch(/<UndoActionChip runId=\{runId\}/);
   });
 
   it("the chip uses bounded polling + the ?openRestore deep-link", () => {

@@ -1,0 +1,10 @@
+{
+  "$comment": "The review-page round of cinatra#2790 S9f R4. reviewRunId is the run the committed R-cells were shot on: started person-present through /agents/<agent>/new, decided chip by chip on the run page, then driven through its own input and its trigger form. firstPassRunId is an earlier run driven the same way whose sequence stopped at the run's own input step; it is named so a single pass cannot be mistaken for a result.",
+  "reviewRunId": "2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+  "firstPassRunId": "4f4215d5-5a24-4975-a186-bd1e9a3e34b2",
+  "templateId": "6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b",
+  "artifactId": "5f94f3fb-00e1-46ed-9427-1c5b86289395",
+  "revisionId": "b43357d2-9be0-4c18-b607-383abb08a5d6",
+  "reviewTaskId": "lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
+  "gateId": "d2a6aba2-8cff-472a-a027-43a8ceaf0d55"
+}

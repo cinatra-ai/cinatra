@@ -1,0 +1,30 @@
+# cinatra#2790 S9f rework — the app log's own lines for the pictured run, verbatim.
+# Filtered to the lifecycle/runtime markers; host paths scrubbed.
+
+[chat] explicit-dispatch used embedded inputParams JSON for @cinatra-ai/blog-draft-writer-agent (deterministic fast-path; kept 1/1 keys after visibility filter)
+[chat] explicit-dispatch HARD invokePrimitive returned: {"runId":"a2622ce0-0690-470c-8944-640f46ff778a","status":"pending_input"}
+[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: @cinatra-ai/blog-draft-writer-agent → runId=a2622ce0-0690-470c-8944-640f46ff778a
+[llm-bridge] preferredProvider openai unavailable, falling back to configured default
+[llm-bridge-run-select] served-by=run_token run=a2622ce0-0690-470c-8944-640f46ff778a org=d78e8d02-6bd3-4652-bd80-d419addd1f89 token-invalid=false token-divergent=false
+ POST /api/llm-bridge 200 in 629ms (next.js: 154ms, proxy.ts: 1679µs, application-code: 473ms)
+[chat] explicit-dispatch used embedded inputParams JSON for @cinatra-ai/blog-draft-writer-agent (deterministic fast-path; kept 1/1 keys after visibility filter)
+[chat] explicit-dispatch HARD invokePrimitive returned: {"runId":"8ff25a9b-2e54-4daf-acd1-9688a1e196b1","status":"pending_input"}
+[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: @cinatra-ai/blog-draft-writer-agent → runId=8ff25a9b-2e54-4daf-acd1-9688a1e196b1
+[context-route] run resolved kind=resolve via=run_token run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 ctx=1c27773e-3082-4e1b-9be9-14c8e15c2b74 count=3
+[context-route] ok kind=resolve via=run_token run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 ctx=1c27773e-3082-4e1b-9be9-14c8e15c2b74 slot=draftContext count=3
+[wayflow] run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 task=96486f4f-be50-47d6-bdf4-46045f8c909e state=input-required status={"state":"input-required","timestamp":"2026-08-23T23:39:22.395673"} artifacts=null
+[human-gate-park] run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 parked on WayFlow gate wayflow-96486f4f-be50-47d6-bdf4-46045f8c909e
+[context-route] run resolved kind=finalize via=run_token run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 ctx=1c27773e-3082-4e1b-9be9-14c8e15c2b74 count=3
+[context-route] ok kind=finalize via=run_token run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 ctx=1c27773e-3082-4e1b-9be9-14c8e15c2b74 slot=draftContext count=3
+[llm-bridge] preferredProvider openai unavailable, falling back to configured default
+[llm-bridge-run-select] served-by=run_token run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 org=d78e8d02-6bd3-4652-bd80-d419addd1f89 token-invalid=false token-divergent=false
+ POST /api/llm-bridge 200 in 523ms (next.js: 7ms, proxy.ts: 1805µs, application-code: 514ms)
+[wayflow] run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 task=7f8bd38a-2028-4b1d-989f-5eb5241cb812 state=completed status={"state":"completed","timestamp":"2026-08-23T23:39:49.956579"} artifacts=null
+[artifact-materializer] run=8ff25a9b-2e54-4daf-acd1-9688a1e196b1 output=content extension=@cinatra-ai/blog-post-artifact failed: titleFrom output "title" did not resolve to a non-empty string
+
+# ---------------------------------------------------------------------------
+# THE REAL-PROVIDER ATTEMPT, from the WayFlow runtime's OWN container log.
+# Run 7eddddbb-25cd-4ff2-9523-f22c1587ede3 — the step's model call against the
+# configured REAL provider. Origins scrubbed.
+# ---------------------------------------------------------------------------
+RuntimeError: error executing POST request to <app-origin>/api/llm-bridge: 500, {"error":"Internal server error","detail":"The AI provider could not reach this instance's public MCP server at <app-origin>/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again."}

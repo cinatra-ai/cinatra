@@ -1,0 +1,156 @@
+# cinatra#2790 S9f - R6 RE-SHOOT - the raw database readback
+# Read with psql against the lane database at the moment of writing. Every
+# clause RUN-READBACK.md makes about a column is answered here.
+#
+# The PICTURED run is b632737c-a18c-4c3a-acbf-1aa6c60af623 (the R6 pair's own run);
+# 8a6a113d-a47f-46be-b917-f65c162e9a68 is the REAL-PROVIDER attempt that measured this
+# machine's limit before it.
+
+## agent_runs - 8a6a113d-a47f-46be-b917-f65c162e9a68
+-[ RECORD 1 ]-+-------------------------------------
+id            | 8a6a113d-a47f-46be-b917-f65c162e9a68
+status        | failed
+human_present | t
+run_by        | 8573dc1e-228e-4eb0-9f7a-b6a1ed403979
+org_id        | 197ba74d-3ac5-4647-bcde-7b662323f524
+source_type   | agent_builder
+template_id   | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
+created_at    | 2026-08-24 11:42:55.447308+00
+completed_at  | 2026-08-24 11:43:41.445+00
+error         | WayFlow task failed
+
+## the template this run belongs to, and the organization that owns it - 8a6a113d-a47f-46be-b917-f65c162e9a68
+-[ RECORD 1 ]-----+-------------------------------------
+template_id       | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
+package_name      | @cinatra-ai/blog-draft-writer-agent
+template_org_id   | 197ba74d-3ac5-4647-bcde-7b662323f524
+organization_name | Default
+organization_slug | default
+
+## lifecycle_continuation_park - 8a6a113d-a47f-46be-b917-f65c162e9a68
+-[ RECORD 1 ]-------------------------------------
+run_id      | 8a6a113d-a47f-46be-b917-f65c162e9a68
+checkpoint  | recommendation
+status      | released
+created_at  | 2026-08-24 11:42:56.245715+00
+resolved_at | 2026-08-24 11:43:21.039935+00
+
+## run_selected_skill_revisions - 8a6a113d-a47f-46be-b917-f65c162e9a68
+                       skill_id                        |   selection_source    |          selected_at          
+-------------------------------------------------------+-----------------------+-------------------------------
+ @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-24 11:43:21.034617+00
+ @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-24 11:43:21.034617+00
+ @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-24 11:43:21.034617+00
+(3 rows)
+
+## representation / artifact_produced_outbox / artifact_review_gates - 8a6a113d-a47f-46be-b917-f65c162e9a68
+ representations | produced_outbox | review_gates 
+-----------------+-----------------+--------------
+               0 |               0 |            0
+(1 row)
+
+
+## agent_runs - b632737c-a18c-4c3a-acbf-1aa6c60af623
+-[ RECORD 1 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+id            | b632737c-a18c-4c3a-acbf-1aa6c60af623
+status        | failed
+human_present | t
+run_by        | 8573dc1e-228e-4eb0-9f7a-b6a1ed403979
+org_id        | 197ba74d-3ac5-4647-bcde-7b662323f524
+source_type   | agent_builder
+template_id   | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
+created_at    | 2026-08-24 11:44:06.877588+00
+completed_at  | 2026-08-24 11:44:47.758+00
+error         | artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed): content [@cinatra-ai/blog-post-artifact]: titleFrom output "title" did not resolve to a non-empty string
+
+## the template this run belongs to, and the organization that owns it - b632737c-a18c-4c3a-acbf-1aa6c60af623
+-[ RECORD 1 ]-----+-------------------------------------
+template_id       | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
+package_name      | @cinatra-ai/blog-draft-writer-agent
+template_org_id   | 197ba74d-3ac5-4647-bcde-7b662323f524
+organization_name | Default
+organization_slug | default
+
+## lifecycle_continuation_park - b632737c-a18c-4c3a-acbf-1aa6c60af623
+-[ RECORD 1 ]-------------------------------------
+run_id      | b632737c-a18c-4c3a-acbf-1aa6c60af623
+checkpoint  | recommendation
+status      | released
+created_at  | 2026-08-24 11:44:07.822411+00
+resolved_at | 2026-08-24 11:44:33.942714+00
+
+## run_selected_skill_revisions - b632737c-a18c-4c3a-acbf-1aa6c60af623
+                       skill_id                        |   selection_source    |          selected_at          
+-------------------------------------------------------+-----------------------+-------------------------------
+ @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-24 11:44:33.932359+00
+ @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-24 11:44:33.932359+00
+ @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-24 11:44:33.932359+00
+(3 rows)
+
+## representation / artifact_produced_outbox / artifact_review_gates - b632737c-a18c-4c3a-acbf-1aa6c60af623
+ representations | produced_outbox | review_gates 
+-----------------+-----------------+--------------
+               0 |               0 |            0
+(1 row)
+
+
+## THE STRONG BINDING between the typed chat turn and the PICTURED run.
+## The driver's own binding fell back to "newest agent_runs row" (its
+## sequence-state says so). This is the independent one, and the SERVER wrote
+## it: the assistant turn in the pictured run's own thread carries the
+## pre-router's dispatch part, and that part names the run id.
+-[ RECORD 1 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+thread_id     | 76566921-ea38-44ba-a746-767103c5c2fa
+role          | assistant
+created_at    | 2026-08-24 11:44:03.155341+00
+dispatch_part | {"id": "explicit_dispatch_pre_router", "name": "agent_run", "type": "tool_call", "serverLabel": "cinatra-mcp"}
+-[ RECORD 2 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+thread_id     | 76566921-ea38-44ba-a746-767103c5c2fa
+role          | assistant
+created_at    | 2026-08-24 11:44:08.193908+00
+dispatch_part | {"id": "explicit_dispatch_pre_router", "kind": "tool_call", "name": "agent_run", "runId": "b632737c-a18c-4c3a-acbf-1aa6c60af623", "status": "completed", "resultLabel": "Agent Run"}
+
+
+## The person who typed that turn and decided the chips
+-[ RECORD 1 ]-------------------------------
+id    | 8573dc1e-228e-4eb0-9f7a-b6a1ed403979
+email | s9f-cap2@example.com
+role  | admin
+
+
+## Every organization in this lane - there is exactly ONE, and it owns the template
+                  id                  |  name   |  slug   
+--------------------------------------+---------+---------
+ 197ba74d-3ac5-4647-bcde-7b662323f524 | Default | default
+(1 row)
+
+
+## The provider row. The MEMBER NAMES are listed first, because that is what
+## proves there is no key member left; the two PUBLISHED, non-secret values the
+## evidence cites (the default model name and the service tier) are printed after
+## them. No sealed value is printed here or anywhere in this directory.
+## Read AFTER the sequence, so this is the post-clear shape: the key member is
+## gone and the published model name is what remains.
+        key        |        member        
+-------------------+----------------------
+ openai_connection | availableModels
+ openai_connection | defaultModel
+ openai_connection | promptCachingEnabled
+ openai_connection | serviceTier
+(4 rows)
+
+defaultModel=gpt-5.5 serviceTier=flex
+
+## The same STRONG BINDING for the REAL-PROVIDER attempt, so both runs in this
+## round are bound to their own typed turn by the server rather than by order.
+-[ RECORD 1 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+thread_id     | 5738b6bb-439f-432e-9239-8031937fdc58
+role          | assistant
+created_at    | 2026-08-24 11:42:49.631041+00
+dispatch_part | {"id": "explicit_dispatch_pre_router", "name": "agent_run", "type": "tool_call", "serverLabel": "cinatra-mcp"}
+-[ RECORD 2 ]-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+thread_id     | 5738b6bb-439f-432e-9239-8031937fdc58
+role          | assistant
+created_at    | 2026-08-24 11:42:56.579985+00
+dispatch_part | {"id": "explicit_dispatch_pre_router", "kind": "tool_call", "name": "agent_run", "runId": "8a6a113d-a47f-46be-b917-f65c162e9a68", "status": "completed", "resultLabel": "Agent Run"}
+

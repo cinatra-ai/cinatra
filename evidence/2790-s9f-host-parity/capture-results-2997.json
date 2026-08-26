@@ -1,0 +1,1171 @@
+{
+  "results": [
+    {
+      "cell": "R7a__review-placeholder__run_card__working",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "b7655c986512d63378ccf43e928260c10c487d8492fc214f7c1281dd4239756d",
+      "observed": [
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "svg.animate-spin",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-loading\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-conformance-id": "review-gate-placeholder",
+        "role": "status",
+        "aria-busy": "true",
+        "aria-label": "Working"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Review pending policycore-defaultawaiting review orchestration",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:05:43.451Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "R7a__review-placeholder__run_card__working__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "514df4d38460ffb2cc4fa894f5d1d16f53e7983f24e71a9678cb5d2a59930ca6",
+      "observed": [
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "svg.animate-spin",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-loading\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-conformance-id": "review-gate-placeholder",
+        "role": "status",
+        "aria-busy": "true",
+        "aria-label": "Working"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Review pending policycore-defaultawaiting review orchestration",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:05:44.606Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "S5a__review-placeholder__run_card__in-conversation__working",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "40e0009e05577d77ad2c8a56deba7ad2a4cef593e5b980968fc3cfaaa10d19e9",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "svg.animate-spin",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-loading\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-conformance-id": "review-gate-placeholder",
+        "role": "status",
+        "aria-busy": "true",
+        "aria-label": "Working"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": false,
+        "surfaceChildren": null,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:05:49.965Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "S5a__review-placeholder__run_card__in-conversation__working__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "63afa85b59b1f134045ecd930a090a075926786132f1f7d438e473282347ed37",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "svg.animate-spin",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-loading\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-conformance-id": "review-gate-placeholder",
+        "role": "status",
+        "aria-busy": "true",
+        "aria-label": "Working"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": false,
+        "surfaceChildren": null,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:05:51.089Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "S5__review-card__run_card__in-conversation__pending",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "56742ba70bcbfd0f9c41c77fa51eae4d301154d96d23db6709e5d8c0116980c9",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "run_card",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": false,
+        "surfaceChildren": null,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:06:10.222Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "S5__review-card__run_card__in-conversation__pending__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "d0a212a8d765c7c2d1fb720950e83187611654a193fbd0d098cdb9014ab31767",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-inline-run-card]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "run_card",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": false,
+        "surfaceChildren": null,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:06:11.377Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "R7__review-card__run_card__pending",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "9dab65857e3d9a3218b2ce35114e1f5c2b5ca931d7f901b208beeb173aa4ce67",
+      "observed": [
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "run_card",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Review",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:06:19.365Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "R7__review-card__run_card__pending__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "97ab220e1c666a2b33987a1b3c1f92fef47a703d1d86a11d4ad6c4981813ecfe",
+      "observed": [
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-review-slot]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-placeholder\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-testid=\"inline-run-page-link\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "run_card",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [],
+      "transcript": null,
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": false,
+        "detailColumnPresent": false,
+        "chipRowPresent": false,
+        "chipRowInDetailColumn": false,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": false,
+        "railStepSelected": null,
+        "railStepSettled": null,
+        "railStepText": null,
+        "railStepIndicatorText": null,
+        "railStepIndicatorHasCheckGlyph": false,
+        "railRowLabels": null,
+        "agenticRunProgressHeadings": 0,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Review",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-26T01:06:20.509Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 27,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "92020",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 56,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 6,
+          "bridgeRunSelects": 1
+        }
+      }
+    }
+  ],
+  "wire": [
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:34.645Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-26T01:04:34.668Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:34.957Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-26T01:04:35.037Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-26T01:04:35.059Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-26T01:04:35.073Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:39.640Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:41.947Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-26T01:04:41.952Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-26T01:04:42.022Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:46.702Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:51.702Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:54.171Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:04:54.373Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-26T01:04:54.458Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-26T01:04:55.135Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:15.240Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:18.201Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:20.450Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:21.254Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:24.198Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:25.408Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:27.208Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:30.487Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:30.584Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:33.191Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:35.411Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:36.213Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:39.706Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:40.745Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:46.880Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-26T01:05:46.929Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:47.085Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-26T01:05:47.158Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:49.578Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:51.767Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:52.583Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:55.600Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:05:56.840Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:05:58.596Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:06:01.934Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:06:02.091Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:06:04.755Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:06:06.842Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/lifecycle-views/resolve",
+      "status": 200,
+      "at": "2026-08-26T01:06:07.309Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:06:07.617Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/9002128d-9782-4420-9faf-aafc753a66e6",
+      "status": 200,
+      "at": "2026-08-26T01:06:10.692Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-26T01:06:11.823Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/lifecycle-views/resolve",
+      "status": 200,
+      "at": "2026-08-26T01:06:13.670Z"
+    }
+  ],
+  "pageErrors": []
+}

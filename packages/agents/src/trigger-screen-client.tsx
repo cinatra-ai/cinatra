@@ -115,9 +115,27 @@ export type TriggerScreenClientProps = {
    *  behaves like every other HITL renderer (canonical onChange path). The
    *  WayFlow persist node owns actual storage via trigger_config_set. */
   onSubmit?: (values: FormValues) => void | Promise<void>;
+  /**
+   * THE READ-ONLY READING (cinatra#2980).
+   *
+   * design@fe2182547d4a `specs/app-components.html` § "Standard scheduling
+   * step", the "Configured schedule step" reading: "Once a *Run right after
+   * setup* or *Schedule for later* schedule has fired it cannot be changed any
+   * more: the form stays as a **read-only** reading with no controls at all."
+   *
+   * So the form is still DRAWN — it is the reading of the schedule this run had
+   * — and it carries nothing to press: no submit, no assistant panel to fill it
+   * in, and every row disabled through one `fieldset` rather than through a flag
+   * on each control that a control added later could miss.
+   *
+   * Set by the run page for a run whose own one-off schedule has already fired
+   * (`shouldFreezeFiredOneOffSchedule`); every other mount is unchanged.
+   */
+  readOnly?: boolean;
 };
 
 export function TriggerScreenClient(props: TriggerScreenClientProps) {
+  const readOnly = props.readOnly === true;
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -307,6 +325,12 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   }
 
   const onSubmit = (values: FormValues) => {
+    // NOTHING IS SUBMITTED FROM THE READ-ONLY READING (cinatra#2980). The submit
+    // CONTROL is gone, but the form element keeps its handler, and a submit
+    // event can still reach it (a stray Enter, a programmatic submit). The
+    // server refuses this anyway; refusing it here means the reading never even
+    // asks.
+    if (readOnly) return;
     setServerError(null);
     // HITL renderer path: defer to the parent's onChange via props.onSubmit.
     // The WayFlow persist node owns storage via trigger_config_set, so we
@@ -374,11 +398,23 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
               </Button>
 
               {/* Schedule for later */}
+              {/* THE ROW IS A DIV, so the read-only reading's disabled fieldset
+                  does not reach it (a fieldset disables form controls, not
+                  arbitrary click handlers). Its handler and its pointer
+                  affordance are withheld explicitly instead — without this the
+                  "reading" would still change its own selection under the
+                  cursor (cinatra#2980). */}
               <div
-                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors cursor-pointer ${
-                  triggerType === "scheduled" ? "border-primary bg-primary/5" : "border-input hover:bg-muted"
+                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors ${
+                  readOnly ? "" : "cursor-pointer"
+                } ${
+                  triggerType === "scheduled"
+                    ? "border-primary bg-primary/5"
+                    : readOnly
+                      ? "border-input"
+                      : "border-input hover:bg-muted"
                 }`}
-                onClick={() => setValue("triggerType", "scheduled")}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "scheduled")}
               >
                 <div className="flex items-center gap-3">
                   <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${triggerType === "scheduled" ? "border-primary" : "border-muted-foreground"}`}>
@@ -430,12 +466,18 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                 </div>
               </div>
 
-              {/* Recurring */}
+              {/* Recurring — a div for the same reason, withheld the same way. */}
               <div
-                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors cursor-pointer ${
-                  triggerType === "recurring" ? "border-primary bg-primary/5" : "border-input hover:bg-muted"
+                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors ${
+                  readOnly ? "" : "cursor-pointer"
+                } ${
+                  triggerType === "recurring"
+                    ? "border-primary bg-primary/5"
+                    : readOnly
+                      ? "border-input"
+                      : "border-input hover:bg-muted"
                 }`}
-                onClick={() => setValue("triggerType", "recurring")}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "recurring")}
               >
                 <div className="flex items-center gap-3">
                   <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${triggerType === "recurring" ? "border-primary" : "border-muted-foreground"}`}>
@@ -643,34 +685,68 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             <p className="text-sm text-muted-foreground">{durationCopy(props.durationEstimate ?? null)}</p>
           </div>
 
-          {/* Submit */}
-          {serverError && <p className="text-sm text-destructive">{serverError}</p>}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={isPending} className="gap-1.5">
-              {isPending ? "Continuing…" : "Continue"}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
+          {/* Submit — absent entirely in the read-only reading (cinatra#2980):
+              "no controls at all". A disabled Continue would still be a control,
+              and would still say the schedule is a thing you re-arm here. There
+              is no submit, so there is no server error to render either. */}
+          {readOnly ? null : (
+            <>
+              {serverError && <p className="text-sm text-destructive">{serverError}</p>}
+              <div className="flex justify-end">
+                <Button type="submit" disabled={isPending} className="gap-1.5">
+                  {isPending ? "Continuing…" : "Continue"}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </>
+          )}
 
     </>
+  );
+
+  // ONE WRAPPER DISABLES THE WHOLE READING (cinatra#2980). A disabled `fieldset`
+  // disables every form control inside it, so the rows, the date-time field, the
+  // recurrence builder and the timezone selects are all inert without each of
+  // them having to know about it — and a control added to this form later is
+  // inert too. It carries the form's own layout classes so the reading is drawn
+  // exactly as the editable form is, which is what the spec's "the form stays"
+  // means.
+  const formBody = readOnly ? (
+    <fieldset
+      disabled
+      data-schedule-readonly=""
+      className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+    >
+      {formContent}
+    </fieldset>
+  ) : (
+    formContent
   );
 
   return (
     <>
     <form onSubmit={handleSubmit(onSubmit)}>
       {props.embeddedAsRenderer ? (
-        <div className="flex flex-col gap-6">{formContent}</div>
+        <div className="flex flex-col gap-6">{formBody}</div>
       ) : (
         <Card>
-          <CardContent className="flex flex-col gap-6 p-6">{formContent}</CardContent>
+          <CardContent className="flex flex-col gap-6 p-6">{formBody}</CardContent>
         </Card>
       )}
     </form>
     {/* Always-visible bottom overlay — no toggle (by design).
-        resetSignal omitted — trigger form has no renderer transitions. */}
+        resetSignal omitted — trigger form has no renderer transitions.
+        NOT in the read-only reading (cinatra#2980): the panel exists to FILL IN
+        this form from a sentence, which is a control like any other. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={!props.embeddedAsRenderer && !!props.templateId && !!portalTarget && props.isAdmin !== false}
+      visible={
+        !readOnly &&
+        !props.embeddedAsRenderer &&
+        !!props.templateId &&
+        !!portalTarget &&
+        props.isAdmin !== false
+      }
       conversation={conversation}
       promptPending={promptPending}
       storageKey={`cinatra_trigger_assist_${props.templateId}`}

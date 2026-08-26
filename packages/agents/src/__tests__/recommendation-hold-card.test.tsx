@@ -590,6 +590,66 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     }
   });
 
+  // THE RUNTIME INSTANCE CONTRACT ON EVERY HOST THAT ENUMERATES A PRODUCTION
+  // ADAPTER (cinatra#2790, epic #2784 S9f). The run card was the only such host
+  // until this slice; the widget conversation column and the review page's gate
+  // region are the two it added, and S9b (cinatra#2794) added the chat thread —
+  // so the count that makes "one rendered instance per kind x host" true has to
+  // be taken on ALL FOUR rather than on one and generalized to the rest. This
+  // list is what the one-card gate's R8 reads back as the kind's instance
+  // proof, so a host that gains an adapter and is not driven here is a
+  // violation rather than a silent gap.
+  //
+  // THE WIDGET HOST IS DRIVEN THROUGH ITS OWN TRANSPORT, which is the point of
+  // driving it at all: a credential-declaring surface never reaches the
+  // cookie-bound server action, so the run through it proves the broker read
+  // paints the same single row — and the assertion that the action was NOT
+  // called is what keeps that honest.
+  it("every host with a production adapter draws EXACTLY ONE chip row", async () => {
+    const WIDGET_AUTH = {
+      headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
+      credentials: "omit" as RequestCredentials,
+    };
+    const brokerFetch = vi.fn(async () => ({ ok: true, json: async () => HELD }) as unknown as Response);
+    vi.stubGlobal("fetch", brokerFetch);
+    try {
+      // The hosts are named as literals, one per line, because this test IS the
+      // record of which hosts were actually driven.
+      for (const host of ["run_card", "chat_thread", "site_widget", "page_gate_region"] as const) {
+        const viaBroker = host === "site_widget";
+        holdStateMock.mockClear();
+        brokerFetch.mockClear();
+        holdStateMock.mockImplementation(async () => HELD);
+        const { container, unmount } = await mountCard({
+          wireRef: "hold-ref-1",
+          host,
+          ...(viaBroker ? { auth: WIDGET_AUTH } : {}),
+        });
+        await waitFor(() =>
+          expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+        );
+        // EXACTLY ONE instance on this host. A second adapter drawing beside
+        // this one is the failure the one-card rule exists to prevent, and it
+        // is only visible as a COUNT on rendered DOM.
+        expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
+        const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+        expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+        expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+        expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+        expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+        // …and the row really came from the transport this host declares.
+        expect(brokerFetch.mock.calls.length > 0).toBe(viaBroker);
+        expect(holdStateMock.mock.calls.length > 0).toBe(!viaBroker);
+        unmount();
+        cleanup();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("draws nothing at all for a run that was never held", async () => {
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await mountCard({ wireRef: null });
@@ -889,8 +949,17 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     // `instance-screens-recommendation-host.test.ts`).
     expect(instanceScreens).toMatch(/<RecommendationHoldCard/);
     expect(instanceScreens).toMatch(/host="run_card"/);
+    // The gate is NAMED once since cinatra#2790 (S9f) because a second reader
+    // depends on it: it decides the rail step's SURFACE — a step whose surface
+    // another module draws would be a second mount, so on that branch the step
+    // is handed none. It does NOT decide whether the entry EXISTS: a settled
+    // entry keeps its place on every branch, because a history row needs no
+    // surface to justify it (`recommendationRailEntry`).
     expect(instanceScreens).toMatch(
-      /screenHostsRecommendationCard\(runDetailPanel\)\s*\?\s*\(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
+      /const hostsRecommendationCard = screenHostsRecommendationCard\(runDetailPanel\);/,
+    );
+    expect(instanceScreens).toMatch(
+      /hostsRecommendationCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
     );
     // The park is still read — for ONE thing: the Run button is withheld while a
     // hold is live. That is the run's dispatchability, not a rendering of the
@@ -902,10 +971,19 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     const card = read("run-recommendation-chip-row.tsx");
     // The behavioural half of this invariant ("a successful resolve schedules
     // nothing") is the fake-timer test at the top of this file. This half bans
-    // the primitive a poll would be rebuilt from: the only timer in the file is
-    // the bounded FAILURE budget, which `setInterval` could never express.
+    // the primitive a poll would be rebuilt from, and counts the ones that are
+    // allowed to exist. There are TWO, and neither repeats:
+    //
+    //   1. the bounded FAILURE budget — armed only when a resolve threw, spent
+    //      after three delays, and cleared by its own effect;
+    //   2. the one-shot READ DEADLINE (cinatra#2790, epic #2784 S9f) — armed once
+    //      per trigger, so a request that never settles cannot leave the
+    //      conversation withholding the run progress card for ever. It fires at
+    //      most once and is cleared with the effect that armed it.
+    //
+    // `setInterval` could express neither, which is why it stays banned outright.
     expect(card).not.toMatch(/setInterval/);
-    expect([...card.matchAll(/setTimeout\(/g)]).toHaveLength(1);
+    expect([...card.matchAll(/setTimeout\(/g)]).toHaveLength(2);
   });
 });
 

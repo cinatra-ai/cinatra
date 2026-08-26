@@ -25,6 +25,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -73,7 +74,15 @@ import {
 } from "./orchestrator-actions";
 import { startDevChildPreviewRun, buildSubmissionMapByStepIndex, type SubmissionMapEntry, type SubmissionMapEntries } from "./run-actions";
 import { RunCompletionCard } from "./run-completion-affordances";
-import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import {
+  LifecycleCardSurfaceProvider,
+  defaultRunReviewSlotReader,
+  useRunReviewSlot,
+  type RunReviewSlot,
+} from "./lifecycle-card-runtime";
+// The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
+// panel draws, so a run's terminal card reads the same on both panels.
+import { ReviewGatePlaceholder } from "./review-gate-states";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
   ReviewGateCard,
@@ -207,6 +216,16 @@ export type OrchestratorStepperPanelProps = {
   railExtras?: readonly RunStepRailEntry[];
   /** Deep-link base for those rows: `/agents/<slug>/<runId>/review`. */
   reviewHrefBase?: string;
+  /**
+   * THE RUN'S REVIEW SLOT (cinatra#2997) — "on the run page, the same is true".
+   *
+   * The run page serves this panel for a flow or orchestrator run, and such a
+   * run reaches the SAME moment the agentic panel's card was rebuilt for: it
+   * finishes, and the sweeper opens a review on what it produced. So its
+   * terminal card becomes the review screen too, from the same server-read slot,
+   * kept current by the same shared reader.
+   */
+  initialReviewGate?: RunReviewSlot | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -1470,6 +1489,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     policySteps,
     railExtras = EMPTY_RAIL_EXTRAS,
     reviewHrefBase = "",
+    initialReviewGate,
   } = props;
 
   const router = useRouter();
@@ -1911,6 +1931,17 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // ---------------------------------------------------------------------------
   // State-discriminated card — ORDER MATTERS (Pitfall 8): check stopped FIRST.
   // ---------------------------------------------------------------------------
+  // THE RUN'S REVIEW SLOT (cinatra#2997), through the ONE shared reader both run
+  // panels use, so the run page cannot hold two answers about the same run. This
+  // panel is served only on the run page, which is first-party and same-origin,
+  // so it takes the default reader.
+  const slotReader = useMemo(() => defaultRunReviewSlotReader(runId), [runId]);
+  const { slot: reviewSlot, mayStillOpen: reviewMayStillOpen } = useRunReviewSlot({
+    status,
+    initial: initialReviewGate,
+    read: slotReader,
+  });
+
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
@@ -2031,13 +2062,34 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // copy would point at a "select a completed step" affordance that isn't
     // on the page (coderabbit finding, cinatra#2519). "no-steps" gets the
     // same step-result evidence without the dead pointer.
+    //
+    // cinatra#2997 — AND THE REVIEW SCREEN TAKES THIS CARD'S PLACE when the
+    // finished work opened one. "On the run page, the same is true": a flow run
+    // reaches `completed` and the shipped sweeper opens the review on what it
+    // produced, exactly as an agentic run does, so the terminal card here
+    // becomes the SAME 'Review requested' screen rather than a completion notice
+    // beside a review nobody is shown. While the review is still being opened
+    // the card is the placeholder — the same one the agentic panel draws.
+    //
+    // The completion notice stays for the reading the request does not cover: a
+    // run that finished with nothing reviewable.
     stageCard =
       status === "completed" ? (
-        <RunCompletionCard
-          runId={runId}
-          agentId={agentId}
-          outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
-        />
+        reviewSlot.ref ? (
+          <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} />
+        ) : reviewMayStillOpen ? (
+          <Card data-run-review-slot="working">
+            <CardContent className="p-6">
+              <ReviewGatePlaceholder />
+            </CardContent>
+          </Card>
+        ) : (
+          <RunCompletionCard
+            runId={runId}
+            agentId={agentId}
+            outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
+          />
+        )
       ) : null;
   }
 
