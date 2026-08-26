@@ -37,7 +37,10 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import {
+  HitlConversationPanel,
+  type HitlConversationEntry,
+} from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 /** The renderer id the assist endpoint is already tuned for on this subject.
@@ -96,16 +99,42 @@ export function SchedulePromptWindow({
   // THE EXCHANGE IS THE RUN'S, not this component's (cinatra#2933). The window
   // keeps no parallel copy it could show instead; the store is the state.
   const runWindow = useRunWindowConversation({ runId, surface: "armed-trigger" });
+  const sendRunWindowTurn = runWindow.send;
+  /**
+   * THE PLATFORM'S OWN LINE ABOUT THE FORM FILL — not the conversation.
+   *
+   * The assist call below is a SECOND job beside the run's conversation: it
+   * fills THIS FORM's fields. When it fails, the fields are not filled, and a
+   * reader who is told nothing reads the run's own answer as if the form had
+   * been filled too. So the failure is still said out loud.
+   *
+   * It is NOT a parallel transcript, which is the thing this slice removed from
+   * every window: nothing is written here on the success path, the run's stored
+   * exchange is still the only record of what was asked and answered, and this
+   * line is shown after it. The review page's window already carries its
+   * platform outcome exactly this way.
+   */
+  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
+  // Offset well past the stored positions so a platform line can never take a
+  // stored entry's React key.
+  const outcomeIdRef = useRef(1_000_000);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // A QUESTION IN FLIGHT WHEN THE SCHEDULE ENDS IS DROPPED (cinatra#3004).
+  // A FORM FILL IN FLIGHT WHEN THE SCHEDULE ENDS IS DROPPED (cinatra#3004).
   // Withdrawing the window hides the panel; it does not stop the request the
   // reader had already sent. Without this, a Cancel schedule landing mid-answer
-  // would leave a live call whose reply is appended to a conversation nobody
-  // can see any more. The abort's own path appends nothing and clears the
-  // pending flag in its `finally`, so nothing else has to be undone here.
+  // would leave a live call still trying to fill fields nobody can change any
+  // more. The abort's own path appends nothing and clears the pending flag in
+  // its `finally`, so nothing else has to be undone here.
+  //
+  // WHAT IS NOT DROPPED, stated rather than left to be discovered: the RUN's
+  // conversation turn (cinatra#2933). It is a stored turn — the whole point of
+  // the per-run window is that what was asked is still there after a reload and
+  // from the schedule's other host — so once it is accepted it stands, and a
+  // schedule ending afterwards does not reach back and unsay it. Only the form
+  // fill, which has become pointless, is cancelled.
   useEffect(() => {
     if (!readOnly) return;
     abortRef.current?.abort();
@@ -121,7 +150,7 @@ export function SchedulePromptWindow({
       // The run's own conversation carries what was typed and what came back.
       // The assist call below still fills THIS FORM's fields, which is a
       // different job and is retired by #2934 together with the fill.
-      void runWindow.send(prompt);
+      void sendRunWindowTurn(prompt);
       setPromptPending(true);
       try {
         const res = await fetch(
@@ -160,11 +189,19 @@ export function SchedulePromptWindow({
           "[schedule-prompt-window] assist failed",
           err instanceof Error ? err.message : String(err),
         );
+        setOutcomeLines((prev) => [
+          ...prev,
+          {
+            id: ++outcomeIdRef.current,
+            role: "assistant",
+            content: "Could not fetch suggestions — please try again.",
+          },
+        ]);
       } finally {
         setPromptPending(false);
       }
     },
-    [templateId, runId, runWindow],
+    [templateId, runId, sendRunWindowTurn],
   );
 
   return (
@@ -184,7 +221,7 @@ export function SchedulePromptWindow({
           !!templateId &&
           !!mount
         }
-        conversation={runWindow.entries}
+        conversation={[...runWindow.entries, ...outcomeLines]}
         promptPending={promptPending || runWindow.pending}
         storageKey={`cinatra_schedule_assist_${templateId}_step`}
         onSubmit={handlePromptSubmit}

@@ -28,7 +28,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
@@ -52,10 +52,22 @@ vi.mock("next/navigation", () => ({
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
   // The real PromptField pulls browser-only deps jsdom cannot load. The stub
-  // surfaces the placeholder as text. A <div>, not a raw <input>: the
-  // design-system lint gate forbids the bare element.
-  PromptField: ({ placeholder }: { placeholder?: string }) => (
-    <div data-testid="run-window-prompt">{placeholder}</div>
+  // surfaces the placeholder as text and exposes the send, so a test can put a
+  // question into a window the way a reader does. A <div>, not a raw <input>:
+  // the design-system lint gate forbids the bare element.
+  PromptField: ({
+    placeholder,
+    onSubmit,
+  }: {
+    placeholder?: string;
+    onSubmit?: (v: string) => unknown;
+  }) => (
+    <div data-testid="run-window-prompt">
+      {placeholder}
+      <button type="button" onClick={() => onSubmit?.("reschedule to 9 on weekdays")}>
+        send-run-window-turn
+      </button>
+    </div>
   ),
 }));
 
@@ -303,6 +315,56 @@ const SURFACES: Surface[] = [
  * carrying that behaviour through the change that made this window the run's
  * conversation.
  */
+describe("a form fill that fails is still said out loud", () => {
+  // The armed schedule's window does TWO jobs with one typed sentence: it puts
+  // the turn into the run's conversation, and it asks the assist route to fill
+  // this form's fields. When the second fails the fields are not filled, and a
+  // reader told nothing would read the run's own answer as if they had been.
+  //
+  // The line is the PLATFORM's, not the conversation's: nothing is written on
+  // the success path, the stored exchange stays the only record of what was
+  // asked and answered, and this is shown after it.
+  it("shows the platform's line when the assist call fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
+    const { SchedulePromptWindow } = await import("../schedule-prompt-window");
+    render(
+      <SchedulePromptWindow
+        templateId="tmpl-2933"
+        runId="run-2933"
+        canRespondInWindow={true}
+        readOnly={false}
+      />,
+    );
+    await settle();
+    fireEvent.click(screen.getByText("send-run-window-turn"));
+    const notice = await screen.findByText(/Could not fetch suggestions/i);
+    expect(notice).not.toBeNull();
+  });
+
+  it("writes no platform line when the assist call succeeds", async () => {
+    // The success path must add nothing: the stored exchange already carries
+    // the answer, and a second copy beside it is the parallel transcript this
+    // slice removed from every window.
+    const { SchedulePromptWindow } = await import("../schedule-prompt-window");
+    render(
+      <SchedulePromptWindow
+        templateId="tmpl-2933"
+        runId="run-2933"
+        canRespondInWindow={true}
+        readOnly={false}
+      />,
+    );
+    await settle();
+    fireEvent.click(screen.getByText("send-run-window-turn"));
+    await settle();
+    expect(screen.queryByText(/Could not fetch suggestions/i)).toBeNull();
+    expect(screen.queryByText(/^Done\.$/)).toBeNull();
+  });
+});
+
 describe("the armed schedule's window is withdrawn once the schedule is over", () => {
   it("draws no box for a reader WITH access when the schedule can no longer change", async () => {
     const { SchedulePromptWindow } = await import("../schedule-prompt-window");

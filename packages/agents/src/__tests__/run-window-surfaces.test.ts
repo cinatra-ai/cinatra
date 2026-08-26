@@ -162,6 +162,21 @@ describe("the window is drawn only for a person the run would answer", () => {
     expect(scheduleWindowPasses).toHaveLength(2);
   });
 
+  it("the two values are on the RUN PAGE'S OWN mount, not merely somewhere in the file", () => {
+    // A COUNT ALONE WOULD NOT HAVE CAUGHT THIS. The screen already passed both
+    // values five times over before the fix — just never at the watcher — so a
+    // total says nothing about which mount got them. This reads the
+    // SetupCompletionWatcher element itself and requires both inside it.
+    const screens = read("packages/agents/src/instance-screens.tsx");
+    const open = screens.indexOf("<SetupCompletionWatcher");
+    expect(open).toBeGreaterThan(-1);
+    const close = screens.indexOf("/>", open);
+    expect(close).toBeGreaterThan(open);
+    const mount = screens.slice(open, close);
+    expect(mount).toContain("templateId={template.id}");
+    expect(mount).toContain("canRespondInWindow={canRespondInWindow}");
+  });
+
   it("the run page's panel can be given a template at all", () => {
     // The prop's ABSENCE from the watcher was the mechanical cause: the page
     // had nowhere to put the id even had it tried.
