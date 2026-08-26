@@ -59,7 +59,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_run_get": {
     description:
-      "Get the status and results of an agent run by ID. Returns status, stepResults, error, startedAt, and completedAt. The terminal statuses are 'completed', 'failed', 'pending_approval' and 'stopped'. Read a run with it when the person asks how that run is doing. A run started in a conversation needs none of this: its own card re-reads the run and shows its progress there.",
+      "Get the status and results of an agent run by ID. Returns status, stepResults, error, startedAt, and completedAt. A run ENDS at 'completed', 'failed' or 'stopped', and WAITS ON A PERSON at 'pending_approval' or 'pending_input' — a run in either of those two moves again only when somebody acts, never on its own. Read a run with it when the person asks how that run is doing. A run started in a conversation needs none of this: its own card re-reads the run and shows its progress there.",
     inputSchema: z.object({
       runId: z.string().describe("ID of the agent run to retrieve."),
     }),

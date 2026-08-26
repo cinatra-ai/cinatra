@@ -438,12 +438,14 @@ export function deriveProducedOutputTitle(input: {
  *
  * IT IS ONE RULE, AND THAT IS THE WHOLE POINT. `agent_run`'s description used to
  * carry two: say the platform's sentence back exactly, AND follow the start with
- * `agent_run_get` polling until a terminal status. A model given two rules obeys
- * the one it read last — the final W5d pictures show it: the widget's door, which
+ * `agent_run_get` polling until a terminal status. In the turns the final W5d
+ * pictures caught, the second one is what the model did: the widget's door, which
  * carried the reply rule ALONE, relayed the platform's sentence word for word on
  * every capture, while the chat host, whose door carried both, polled the run and
  * then wrote prose of its own about what it had found. Same platform, same
- * sentence on the wire, two sets of instructions, two answers.
+ * sentence on the wire, two sets of instructions, two answers. That is an
+ * observation about what happened, not a law about models — and it is enough:
+ * one rule cannot lose to a second rule that is not there.
  *
  * SO THE PROGRESS IS THE CARD'S JOB, SAID OUTRIGHT. The card re-reads the run and
  * settles in place; a model chasing the same run in the same turn can only

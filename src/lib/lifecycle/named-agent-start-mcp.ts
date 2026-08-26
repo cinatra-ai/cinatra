@@ -168,9 +168,11 @@ const inputSchema = z
  * THE WORDS THIS DOOR GIVES THE MODEL.
  *
  * Its own half says what the door is for; the reply half is `RUN_START_REPLY_RULE`
- * — the platform's ONE rule, imported rather than re-typed, so this door and
- * `agent_run` cannot drift into telling two hosts two different things. That
- * drift is not hypothetical: it is what the final W5d captures caught.
+ * — the platform's ONE rule, imported rather than re-typed, so the REPLY RULE
+ * itself cannot drift between this door and `agent_run`. That drift is not
+ * hypothetical: it is what the final W5d captures caught. It fixes the rule and
+ * nothing else — what each door says around it is still its own, and what a
+ * host's skills tell the model on top of both is outside this module's reach.
  */
 export const NAMED_AGENT_START_TOOL_DESCRIPTION =
   "Start the agent the person named, as that person, with their permissions. " +

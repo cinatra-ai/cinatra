@@ -65,7 +65,7 @@
     {
       "primitiveName": "agent_named_start",
       "file": "src/lib/lifecycle/named-agent-start-mcp.ts",
-      "line": 418
+      "line": 420
     },
     {
       "primitiveName": "agent_registry_list",

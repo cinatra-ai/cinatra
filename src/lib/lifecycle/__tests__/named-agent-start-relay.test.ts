@@ -158,9 +158,10 @@ describe("the platform's refusal, relayed", () => {
 // The widget's door landed the platform's sentence every time and the chat
 // host's did not, and the difference was in the words each door gives the model:
 // this one carried the reply rule ALONE, while `agent_run` carried it beside an
-// order to poll the run afterwards — and the poll took the last word. The rule
-// is now ONE exported string and both doors carry it, so a divergence between
-// the hosts' instructions is impossible rather than merely unlikely.
+// order to poll the run afterwards — and in the turn the captures caught, the
+// poll is what the model did. The rule is now ONE exported string and both doors
+// carry it, so the REPLY RULE cannot differ between the hosts. That is all these
+// cases claim: what each door says around the rule is still its own.
 // ---------------------------------------------------------------------------
 
 describe("the words the widget's door gives the model", () => {

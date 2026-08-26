@@ -10,8 +10,8 @@
 // THE CARD IS WHAT SHOWS A RUN'S PROGRESS, so the model is not told to chase it.
 // Until this change `agent_run`'s description carried TWO rules in one text: say
 // the platform's sentence back exactly, AND "MUST be followed by `agent_run_get`
-// polling until a terminal status". On a real model the second one took the last
-// word — the final W5d captures show the chat host answering in prose of its own
+// polling until a terminal status". In the turn the final W5d captures caught, the
+// second one is what the model did — the chat host answers in prose of its own
 // ("The blog draft run is paused for human input before it starts. Run ID: …")
 // while the widget, whose door carries the reply rule ALONE, relayed the
 // platform's sentence word for word. One text, two rules, two hosts, two
