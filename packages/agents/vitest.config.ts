@@ -211,6 +211,45 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/delegated-chat-tool-policy.ts",
       ),
+      // cinatra#2817 N1/N2 — THE NEW `@cinatra-ai/mcp-server` SUBPATHS.
+      // Every subpath the exports map gains must appear here AND in the root
+      // tsconfig `paths` map, or the three maps disagree and only production
+      // resolves.
+      // The barrel below is aliased to a single-file stub, and vite matches
+      // aliases by PREFIX in order, so ANY subpath that is not listed above it
+      // falls through and resolves to an invalid `mcp-server.ts/<sub>` path (the
+      // same trap the `obo-ceiling` entry documents). Two species, and the
+      // distinction is load-bearing:
+      //
+      //   PURE LEAF  -> alias to REAL source, like obo-ceiling and
+      //                 delegated-chat-tool-policy. No server-only, no host dep,
+      //                 no cross-module shared instance; exercising the real logic
+      //                 is the point. (`core-delegated-chat-surface` does memoize
+      //                 ONE deterministic snapshot of this build's own core
+      //                 records — a pure derivation of a frozen literal, not state
+      //                 a caller can observe or a second resolution can split.)
+      //   SINGLETON  -> alias to THE SAME STUB FILE the barrel resolves to.
+      //                 `request-context` exports a live `AsyncLocalStorage`, so
+      //                 pointing the subpath at real source while the barrel
+      //                 stays stubbed would make them TWO storages: a frame
+      //                 established through a barrel-imported storage would be
+      //                 invisible to a writer that read the subpath one, and the
+      //                 row would be written unscoped instead of failing loudly.
+      //                 `src/lib/__tests__/sealed-room-inheritance.test.ts` mocks
+      //                 both specifiers onto one storage for exactly this reason.
+      "@cinatra-ai/mcp-server/request-context": path.join(__dirname, "src/__tests__/__mocks__/mcp-server.ts"),
+      "@cinatra-ai/mcp-server/capability-plan": path.join(
+        root,
+        "packages/mcp-server/src/capability-plan.ts",
+      ),
+      "@cinatra-ai/mcp-server/delegated-chat-admission": path.join(
+        root,
+        "packages/mcp-server/src/delegated-chat-admission.ts",
+      ),
+      "@cinatra-ai/mcp-server/core-delegated-chat-surface": path.join(
+        root,
+        "packages/mcp-server/src/core-delegated-chat-surface.ts",
+      ),
       // Stub the mcp-server barrel itself. The real index.tsx imports React UI components from the host app
       // (`@/components/ui/*`), which are out of reach for this package's
       // vitest config. Our stub exports the runtime values used by

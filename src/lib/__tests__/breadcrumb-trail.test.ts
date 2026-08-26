@@ -495,3 +495,43 @@ describe("isIdLikeSegment / idSegmentPlaceholder (#1737)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// READING 3 of cinatra#3004's live-proof round — THE SUB-ROUTE IS NAMED FOR
+// WHAT IT SHOWS.
+//
+// The run's schedule surface lives at `/agents/<vendor>/<pkg>/<run>/trigger`,
+// and the crumb was the path segment title-cased: "Trigger". The surface is the
+// schedule form, the tab above it says Schedule, and "trigger" is not a word
+// this surface uses any more. The ROUTE keeps its path — a bookmark still opens
+// the same page — so the label is the only thing that moves.
+// ---------------------------------------------------------------------------
+describe("buildBreadcrumbTrail — the agent instance's sub-route labels (cinatra#3004)", () => {
+  it("names the schedule surface Schedule, on a path that is unchanged", () => {
+    const crumbs = buildBreadcrumbTrail("/agents/vendor/pkg/run-1/trigger", {
+      contributions: [{ prefix: "/agents/vendor/pkg/run-1", label: "Sales Bot" }],
+    });
+    expect(crumbs).toEqual([
+      { label: "Agents", href: "/agents" },
+      { label: "Sales Bot", href: "/agents/vendor/pkg/run-1" },
+      { label: "Schedule", href: "/agents/vendor/pkg/run-1/trigger" },
+    ]);
+  });
+
+  it("leaves every other sub-route exactly as it was", () => {
+    expect(
+      buildBreadcrumbTrail("/agents/vendor/pkg/run-1/permissions").map((c) => c.label),
+    ).toEqual(["Agents", "Run 1", "Permissions"]);
+    expect(
+      buildBreadcrumbTrail("/agents/vendor/pkg/run-1/setup").map((c) => c.label),
+    ).toEqual(["Agents", "Run 1", "Setup"]);
+  });
+
+  it("renames the sub-route crumb only — a run whose own id is `trigger` is not a schedule", () => {
+    // The map is read at the SUB-ROUTE position (segment 5) and nowhere else,
+    // so the instance segment keeps whatever names it.
+    expect(
+      buildBreadcrumbTrail("/agents/vendor/pkg/trigger").map((c) => c.label),
+    ).toEqual(["Agents", "Trigger"]);
+  });
+});

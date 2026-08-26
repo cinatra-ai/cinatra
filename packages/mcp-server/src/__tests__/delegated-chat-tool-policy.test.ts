@@ -1,16 +1,29 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
 import {
-  isDelegatedChatMcpToolAllowed,
-  delegatedChatAllowedToolNames,
+  carriesDeniedDelegatedChatVerbToken,
+  delegatedChatProposalOverrideNames,
+  isDelegatedChatProposalOverrideName,
+  isHardDeniedDelegatedChatFamily,
 } from "../delegated-chat-tool-policy";
+import {
+  coreDelegatedChatAdmittedNames,
+  isCoreDelegatedChatAdmitted,
+} from "../core-delegated-chat-surface";
+import { HOST_PRIMITIVE_DECLARATIONS } from "../capability-plan";
 
-// Regression table for the delegated chat MCP tool policy.
-// The policy is the authoritative server-side gate for what a chat-delegated
+// Regression table for the delegated chat MCP tool perimeter.
+//
+// The perimeter is the authoritative server-side gate for what a chat-delegated
 // on-behalf-of token may see/call. A false-deny silently breaks chat dispatch;
 // a false-allow is a privilege/destructive escalation. Pin both directions.
+//
+// SINCE cinatra#2817 the question is asked of the DECISION, not of a name list:
+// `isCoreDelegatedChatAdmitted` runs the real shared evaluator over this build's
+// real migrated core admission records. Every case below therefore exercises the
+// same code path a live request takes, with the core surface substituted for a
+// request snapshot.
 
-describe("isDelegatedChatMcpToolAllowed", () => {
+describe("the core delegated-chat surface", () => {
   it("allows the core agent dispatch + discovery surface", () => {
     for (const name of [
       "agent_list",
@@ -27,12 +40,12 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "extensions_search",
       // Purge dry-run and destructive execution are explicitly
       // assistant-invocable; admin-gated at the extensions MCP registry layer.
-      // "purge"/"execute" are NOT denied verb tokens, so ALLOWED_EXACT
-      // membership is reached.
+      // "purge"/"execute" are NOT denied verb tokens, so the admission lookup
+      // is reached.
       "extensions_purge",
       "extensions_purge_execute",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 
@@ -47,7 +60,7 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "skills_catalog_list",
       "skills_library_list",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 
@@ -95,30 +108,31 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "metric_usage_events",
       "metric_usage_summary",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 
   it("allows the WordPress governed-invoker primitives, denies the retired narrow reads they replaced (cinatra#2022 S7 PR-δ)", () => {
     // wordpress_site_tool_call / wordpress_site_tools_list are the S2/S3
-    // governed-invoker primitives, chat-reachable as of this PR (ALLOWED_EXACT
-    // swap). See the file-header AMENDMENT note for the two compensating
+    // governed-invoker primitives, chat-reachable as of this PR (they carry a
+    // host declaration and a migrated core admission). See the file-header
+    // AMENDMENT note for the two compensating
     // controls (S5 destructive-confirmation hook + the per-instance policy
     // floor, now restricted+empty by default) that keep this narrow.
-    expect(isDelegatedChatMcpToolAllowed("wordpress_site_tool_call")).toBe(true);
-    expect(isDelegatedChatMcpToolAllowed("wordpress_site_tools_list")).toBe(true);
+    expect(isCoreDelegatedChatAdmitted("wordpress_site_tool_call")).toBe(true);
+    expect(isCoreDelegatedChatAdmitted("wordpress_site_tools_list")).toBe(true);
     // The two narrow read-only entries they replaced are no longer chat-
     // reachable under their own names (they're superseded by the generic
     // primitives above, not additionally allowed).
-    expect(isDelegatedChatMcpToolAllowed("wordpress_instances_list")).toBe(false);
-    expect(isDelegatedChatMcpToolAllowed("wordpress_posts_list")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("wordpress_instances_list")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("wordpress_posts_list")).toBe(false);
   });
 
   it("allows agent_run_stop (user-directed run cancellation, proposal override)", () => {
-    expect(isDelegatedChatMcpToolAllowed("agent_run_stop")).toBe(true);
+    expect(isCoreDelegatedChatAdmitted("agent_run_stop")).toBe(true);
     // The bulk variant + resume stay denied.
-    expect(isDelegatedChatMcpToolAllowed("agent_runs_stop")).toBe(false);
-    expect(isDelegatedChatMcpToolAllowed("agent_run_resume")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("agent_runs_stop")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("agent_run_resume")).toBe(false);
   });
 
   it("denies privilege-mutating + destructive + lifecycle tools", () => {
@@ -179,7 +193,7 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "agent_jobs_process_due",
       "apollo_jobs_run",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 
@@ -200,7 +214,7 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "agent_compile",
       "agent_save",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 
@@ -216,7 +230,7 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "approvals_get",
       "agent_creation_request_decide",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 
@@ -230,13 +244,14 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "artifact_review_gate_render",
       "verification_record_render",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 
   it("denies the lifecycle DECISION class by construction, not just by omission (cinatra#2567)", () => {
-    // The allowlist alone already denies these. The verb backstop is what makes
-    // adding one to ALLOWED_EXACT insufficient to expose it — a review is
+    // The absence of an admission already denies these. The verb backstop is
+    // what makes declaring and admitting one insufficient to expose it — a
+    // review is
     // resolved on a rendered decision surface by a person, never by the model.
     for (const name of [
       "artifact_review_gate_decide",
@@ -247,76 +262,123 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "trigger_schedule_arm",
       "verification_record_approve",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 
-  it("keeps the allowlist and the verb backstop CONSISTENT — every allowed name still passes", () => {
-    // The two halves of this policy can silently disagree: a new denied verb
-    // token would shadow an allowlisted read and the tool would vanish from
-    // chat with no failing test anywhere near it. Read the sets straight out of
-    // the source so the check covers every entry, not a hand-copied sample.
-    const source = readFileSync(
-      new URL("../delegated-chat-tool-policy.ts", import.meta.url),
-      "utf8",
-    );
-    const setEntries = (setName: string): string[] => {
-      const block = new RegExp(
-        `${setName}\\s*=\\s*new Set<string>\\(\\[(.*?)\\n\\]\\);`,
-        "s",
-      ).exec(source);
-      if (!block) throw new Error(`could not read ${setName} from the policy source`);
-      const withoutComments = block[1]
-        .split("\n")
-        .filter((line) => !line.trim().startsWith("//"))
-        .join("\n");
-      return [...withoutComments.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
-    };
-    const allowed = [...setEntries("ALLOWED_EXACT"), ...setEntries("ALLOWED_PROPOSAL_OVERRIDE")];
-    // Sanity: the extraction found the real sets, not an empty match.
-    expect(allowed.length).toBeGreaterThan(50);
-    for (const name of allowed) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+  it("keeps the host DECLARATIONS and the verb backstop CONSISTENT", () => {
+    // The two halves can silently disagree: a new denied verb token would
+    // shadow a declared read and the primitive would vanish from chat with no
+    // failing test anywhere near it. Read EVERY host declaration, not a
+    // hand-copied sample.
+    const declared = Object.keys(HOST_PRIMITIVE_DECLARATIONS);
+    expect(declared.length).toBeGreaterThan(50);
+    for (const name of declared) {
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// The AUTHORITATIVE allowed-name accessor (cinatra#2776).
+// THE HARD BACKSTOPS, on their own (cinatra#2817 slice 3).
+//
+// These three used to be branches inside one opaque boolean. They are separate
+// exported predicates now, so a caller must state which rule it is applying —
+// and so the two UNCONDITIONAL ones can be pinned as unconditional.
+// ---------------------------------------------------------------------------
+describe("the hard backstops", () => {
+  it("family denies are name-only, case-folded, and cover prefix AND substring forms", () => {
+    for (const name of [
+      "permissions_grant",
+      "PERMISSIONS_GRANT",
+      "apollo_jobs_list",
+      "agent_system_reset",
+      "queue_jobs_drain",
+      "worker_process_due",
+    ]) {
+      expect(isHardDeniedDelegatedChatFamily(name), name).toBe(true);
+    }
+    for (const name of ["agent_list", "skills_installed_get", "artifacts_get"]) {
+      expect(isHardDeniedDelegatedChatFamily(name), name).toBe(false);
+    }
+  });
+
+  it("the verb backstop matches WHOLE tokens, case-folded", () => {
+    for (const name of ["objects_delete", "OBJECTS_DELETE", "agent_run_resume", "x_publish_y"]) {
+      expect(carriesDeniedDelegatedChatVerbToken(name), name).toBe(true);
+    }
+    // "installed" is not "install"; "approvals" is not "approve".
+    for (const name of ["skills_installed_get", "approvals_list", "artifact_review_gates_list"]) {
+      expect(carriesDeniedDelegatedChatVerbToken(name), name).toBe(false);
+    }
+  });
+
+  it("the proposal override is exactly the seven audited names", () => {
+    const names = delegatedChatProposalOverrideNames();
+    expect([...names]).toEqual([...names].sort());
+    for (const name of names) {
+      expect(isDelegatedChatProposalOverrideName(name), name).toBe(true);
+    }
+    expect(isDelegatedChatProposalOverrideName("objects_delete")).toBe(false);
+  });
+
+  it("the override bypasses the VERB backstop and nothing else", () => {
+    // Every override name carries a denied verb token or has no reason to be
+    // there — that is what the override is FOR.
+    const verbBearing = delegatedChatProposalOverrideNames().filter((n) =>
+      carriesDeniedDelegatedChatVerbToken(n),
+    );
+    expect(verbBearing.length).toBeGreaterThan(0);
+    for (const name of verbBearing) {
+      // Admitted despite the verb token...
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
+      // ...but the family denies still hold above it.
+      expect(isHardDeniedDelegatedChatFamily(name), name).toBe(false);
+    }
+  });
+
+  it("a DENIED FAMILY loses even when it is on the override list and declared", () => {
+    // Constructed rather than found: no such name exists today, and the point
+    // is that adding one could not open the family.
+    expect(isCoreDelegatedChatAdmitted("permissions_dashboards_create")).toBe(false);
+    expect(isHardDeniedDelegatedChatFamily("permissions_dashboards_create")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CORE-SURFACE PROJECTION (cinatra#2776 accessor → cinatra#2817 projection).
 //
 // The hosted-MCP wire gate needs to know which primitive names may NEVER appear
-// as inline function schemas on a provider request. Reading `ALLOWED_EXACT`
-// alone is WRONG: `ALLOWED_PROPOSAL_OVERRIDE` is accepted independently, above
-// the verb backstop, so every proposal-path primitive would be missing from the
-// check. This accessor is the widget policy's `delegatedWidgetAllowedToolNames`
-// twin for chat, and these tests pin the property that makes it authoritative.
+// as inline function schemas on a provider request. It used to read a name
+// accessor; it now reads a projection DERIVED by running every host declaration
+// back through the real evaluator, so it cannot drift from the decision.
 // ---------------------------------------------------------------------------
-describe("delegatedChatAllowedToolNames", () => {
-  it("is the UNION of both allowlists — the proposal overrides are included", () => {
-    const names = delegatedChatAllowedToolNames();
-    // An ALLOWED_EXACT member and an ALLOWED_PROPOSAL_OVERRIDE member (the
-    // latter carries a create/update verb token and is reachable ONLY through
-    // the override branch — the exact class `ALLOWED_EXACT` alone misses).
+describe("coreDelegatedChatAdmittedNames", () => {
+  it("includes the proposal-override members, not just the plain reads", () => {
+    const names = coreDelegatedChatAdmittedNames();
+    // A plain admitted read and two override members (which carry a
+    // create/update/stop verb token and are reachable ONLY because the override
+    // sits above the verb backstop).
     expect(names).toContain("agent_list");
     expect(names).toContain("agent_run_stop");
     expect(names).toContain("agent_creation_request_propose");
   });
 
-  it("agrees with the decision function in BOTH directions", () => {
-    const names = delegatedChatAllowedToolNames();
+  it("agrees with the decision in BOTH directions", () => {
+    const names = coreDelegatedChatAdmittedNames();
     // Nothing the decision function would refuse can appear here.
     for (const name of names) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
     // And a denied name is absent.
     for (const denied of ["permissions_grant", "artifact_delete", "approvals_decide"]) {
-      expect(isDelegatedChatMcpToolAllowed(denied), denied).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(denied), denied).toBe(false);
       expect(names).not.toContain(denied);
     }
   });
 
   it("is sorted, deduped and non-trivial (a vacuous set would make the gate blind)", () => {
-    const names = delegatedChatAllowedToolNames();
+    const names = coreDelegatedChatAdmittedNames();
     expect(names.length).toBeGreaterThan(50);
     expect([...names]).toEqual([...names].sort());
     expect(new Set(names).size).toBe(names.length);

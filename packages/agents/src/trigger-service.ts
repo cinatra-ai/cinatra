@@ -1098,7 +1098,72 @@ export async function getRunTriggerForActor(
  * status armed → stopped for scheduled/recurring trigger types.
  *
  * Idempotent: if there is no trigger row, returns ok without side effects.
+ *
+ * A SCHEDULE THAT WAS STOPPED IS NOT DELETED FROM HERE (cinatra#3004).
+ *
+ * The plan: "A recurring schedule that ran at least once and was then cancelled
+ * is over … the run is over and nothing in that run can be configured anymore."
+ * **Cancel schedule** ends it by STAMPING the row (`stopRecurringTriggerForActor`)
+ * rather than removing it, and every refusal that keeps the ending — the save
+ * guard, and `setRunTriggerForActor`'s own stopped gate — reads that row. So a
+ * delete would not merely tidy: it would take the ending away and hand the
+ * finished run back to the arm path, which sees no row and refuses nothing.
+ *
+ * Refused HERE rather than guarded at each caller, because the callers are the
+ * point: this function is reached from a server action and from two MCP
+ * handlers, and "no surface can walk around the ending" is only true if the one
+ * function they share says no.
+ *
+ * WHAT "OVER" MEANS is `scheduleIsOver` below, in the plan's own two clauses.
+ * Everything else is deleted exactly as before: a live schedule, and a one-off
+ * whose run is still going.
+ *
+ * THE READ HAPPENS UNDER THE TRIGGER CLAIM (cinatra#2981), like every other
+ * writer on this row. Without it a delete could read `stopped_at IS NULL`, wait,
+ * and then remove the row a **Cancel schedule** stamped in the meantime — the
+ * exact ending this refusal exists to keep.
  */
+/**
+ * IS THIS RUN'S SCHEDULE OVER? (cinatra#3004)
+ *
+ * The plan's sentence has two clauses and this predicate is both of them:
+ *
+ *   · "a recurring schedule that ran at least once and was then cancelled" —
+ *     `stoppedAt`, which `stopRecurringTriggerForActor` only ever stamps AFTER a
+ *     first fire (it refuses a schedule that has not fired), so there is no
+ *     stopped-before-first-fire row for this to catch by accident;
+ *   · "a run set to run once that already ran: the run is over" — a ONE-OFF that
+ *     has FIRED, on a run that has reached a terminal status.
+ *
+ * BOTH HALVES OF THE SECOND CLAUSE ARE NEEDED. The fired stamp alone would also
+ * refuse the ordinary tidy-up of a run dispatched a moment ago and still going —
+ * **Run right after setup** stamps `releasedAt` the instant it arms. The
+ * terminal status alone would refuse clearing a schedule that never fired at
+ * all, which is not an ending, only a run that ended some other way.
+ *
+ * EVERYTHING THAT IS NOT RECURRING IS A ONE-OFF, written that way round so a
+ * kind added later is protected by default rather than slipping through unnamed
+ * — the same reading `setRunTriggerForActor`'s fired-one-off guard takes.
+ *
+ * Exported for the regression test, which reads the rule rather than inferring
+ * it from a delete's side effects.
+ */
+export function scheduleIsOver(
+  trigger: {
+    triggerType: string;
+    releasedAt: Date | null;
+    stoppedAt: Date | null;
+  },
+  runStatus: string | null | undefined,
+): boolean {
+  if (trigger.stoppedAt) return true;
+  return (
+    trigger.triggerType !== "recurring" &&
+    trigger.releasedAt !== null &&
+    TERMINAL_RUN_STATUSES.has(runStatus ?? "")
+  );
+}
+
 export async function deleteRunTriggerForActor(
   actor: TriggerActorContext,
   args: { runId: string },
@@ -1111,26 +1176,55 @@ export async function deleteRunTriggerForActor(
     return { ok: false, error: "forbidden" };
   }
 
-  const trigger = await readRunTriggerByRunId(args.runId);
-  if (!trigger) return { ok: true };
-
+  let outcome: { refusal?: string; deleted?: string | null };
   try {
-    await cancelTriggerSchedule({
-      jobSchedulerId: trigger.jobSchedulerId,
-      triggerType: trigger.triggerType,
+    outcome = await withTriggerClaim(args.runId, async (trigger) => {
+      if (!trigger) return { deleted: null };
+      // THE RUN'S STATUS IS READ AT THE SERIALIZATION POINT, not before it.
+      // Half of `scheduleIsOver` is the RUN's own outcome, and the read above
+      // happened before this call queued for the claim: a released one-off that
+      // was still running then can have finished while this delete waited, and
+      // deciding on that stale status would remove the very ending this refusal
+      // exists to keep. A run that has vanished under us keeps the status the
+      // authorization was taken on.
+      const live = await readAgentRunById(args.runId);
+      if (scheduleIsOver(trigger, live?.status ?? run.status)) {
+        return { refusal: SAVE_SCHEDULE_REFUSALS.overCannotRemove };
+      }
+      try {
+        await cancelTriggerSchedule({
+          jobSchedulerId: trigger.jobSchedulerId,
+          triggerType: trigger.triggerType,
+        });
+      } catch (err) {
+        console.warn(
+          "[deleteRunTriggerForActor] cancel of BullMQ job failed (continuing with DB delete)",
+          args.runId,
+          err,
+        );
+      }
+      await deleteRunTriggerByRunId(args.runId);
+      return { deleted: trigger.triggerType };
     });
   } catch (err) {
-    console.warn(
-      "[deleteRunTriggerForActor] cancel of BullMQ job failed (continuing with DB delete)",
-      args.runId,
-      err,
-    );
+    if (err instanceof TriggerClaimUnavailableError) {
+      // Another writer held the claim longer than this call would wait. NOTHING
+      // was removed, so the schedule is exactly as the reader last saw it.
+      console.warn(
+        "[deleteRunTriggerForActor] the trigger claim was not available — the schedule is unchanged",
+        args.runId,
+      );
+      return { ok: false, error: SAVE_SCHEDULE_REFUSALS.busy };
+    }
+    throw err;
   }
-  await deleteRunTriggerByRunId(args.runId);
+  if (outcome.refusal) return { ok: false, error: outcome.refusal };
+  // Idempotent: no row to remove, and nothing else to undo either.
+  if (outcome.deleted == null) return { ok: true };
 
   if (
-    trigger.triggerType === "scheduled" ||
-    trigger.triggerType === "recurring"
+    outcome.deleted === "scheduled" ||
+    outcome.deleted === "recurring"
   ) {
     // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
     const authority = await verifySessionAuthority(actor.userId, run.orgId);
@@ -1191,9 +1285,12 @@ export async function deleteRunTriggerForActor(
 //     path at fire time, so a job that outlives the cancel still refuses to
 //     fire. Two independent stops, neither trusting the other.
 //
-// The Trigger tab's own **Cancel trigger** is untouched and still deletes: it is
-// a different control on a different surface, and §7.1 documents it as the
-// delete it is.
+// NO SURFACE OFFERS THE DELETE ANY MORE (cinatra#3004). The run's schedule tab
+// used to carry a **Cancel trigger** that called `deleteRunTriggerForActor`, and
+// that was the hole: with the row gone, every refusal that keeps a schedule's
+// ending — this module's stopped gate and the save guard — reads nothing and
+// refuses nothing. The tab now draws the schedule form, whose ending is this
+// operation, and the delete refuses a stopped row outright.
 // ---------------------------------------------------------------------------
 
 export type StopRecurringTriggerResult =
@@ -1208,10 +1305,10 @@ export async function stopRecurringTriggerForActor(
 
   const run = await readAgentRunById(args.runId);
   if (!run) return { ok: false, error: "run not found" };
-  // The same standing **Cancel trigger** takes — the run's owner or an
-  // administrator. Stopping a schedule is not an admin-only act: it takes
-  // something away rather than starting work, which is what the withdrawn
-  // Run now needed admin standing for.
+  // The run's owner or an administrator — the same standing every other
+  // operation on this run's schedule takes. Stopping a schedule is not an
+  // admin-only act: it takes something away rather than starting work, which is
+  // what the withdrawn Run now needed admin standing for.
   if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
     return { ok: false, error: "forbidden" };
   }
@@ -1411,6 +1508,10 @@ export const SAVE_SCHEDULE_REFUSALS = {
   /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
   stopped:
     "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
+  /** cinatra#3004 — a schedule that is OVER, asked to be REMOVED rather than
+   *  changed. The row is the record of the ending, so it stays. */
+  overCannotRemove:
+    "This run's schedule is over, so it can't be changed or removed. Start a new run to schedule it again.",
   /** The prior scheduler would not cancel, so the replacement was NOT installed
    *  — the schedule the reader is looking at is still the live one. */
   cancelFailed:

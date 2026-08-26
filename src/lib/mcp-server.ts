@@ -1,20 +1,18 @@
 import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
-import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
+import { admitToolInputSchema, createMcpRuntimeServer, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
 // Re-exported so `@/lib/mcp-server` stays the single import surface for the
 // self-primitive map's shape, while the testable seams live alongside the
 // registry they replay — a module a unit test can import without this file's
 // connector/DB graph, and one already on every route this file is on.
-export {
-  buildReplayedExtensionToolConfig,
-  createSelfPrimitiveRecordingServer,
-} from "./extension-mcp-registry";
 export type {
   CapturedHostPrimitive,
   CapturedMcpToolHandler,
   ReplayedExtensionRegistration,
 } from "./extension-mcp-registry";
+import type { CapabilityPlan, PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
+import type { DelegatedChatAdmissionSnapshot } from "@cinatra-ai/mcp-server/delegated-chat-admission";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -65,10 +63,16 @@ import {
   listExtensionMcpTools,
   markEffectiveExtensionMcpTools,
   unmarkEffectiveExtensionMcpToolCollisions,
+  UNRESOLVED_EXTENSION_VERSION,
   buildReplayedExtensionToolConfig,
   createSelfPrimitiveRecordingServer,
   type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
+export {
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+  UNRESOLVED_EXTENSION_VERSION,
+};
 // Edge-bound serving chokepoint (cinatra#1392 Gap 1 wiring): an extension tool
 // dispatch consults the TRUSTED dependent identity and — when its resolved edge
 // pins a NON-DEFAULT version of the tool's package — serves THAT version's
@@ -86,6 +90,7 @@ import {
   dispatchVersionedOnlyExtensionMcpTool,
   planExtensionToolDiscovery,
   planSelfInvokerRetainedUnion,
+  wrapExtensionToolResult,
 } from "@/lib/extension-edge-bound-serving";
 import { listServableVersionKeyedMcpTools } from "@/lib/extension-version-keyed-serving";
 
@@ -190,22 +195,6 @@ const connectorModuleHostOptions = {
     return { userId: s?.userId ?? undefined, orgId: s?.organizationId ?? undefined };
   },
 };
-
-/** The MCP result envelope for a plain extension-handler value (mirrors the
- * connector modules): arrays → { items }, objects → as-is, scalars/undefined →
- * { result }. Shared by the live-transport replay and the self-invoker capture
- * so the two surfaces stay byte-identical. */
-function wrapExtensionToolResult(raw: unknown) {
-  const resolved = raw === undefined ? null : raw;
-  return {
-    content: [{ type: "text", text: JSON.stringify(resolved) }],
-    structuredContent: Array.isArray(resolved)
-      ? { items: resolved }
-      : typeof resolved === "object" && resolved !== null
-        ? (resolved as Record<string, unknown>)
-        : { result: resolved },
-  };
-}
 
 /** Request-scoped info the transport threads into the per-request registration
  * pass (cinatra#1392 S8 discovery union). `verifiedAgentRunId` is the agent-run
@@ -352,10 +341,26 @@ export async function registerAllCapabilities(
               { expected: "versioned", packageName: entry.packageName, name, version: entry.version },
               input,
             );
+    // cinatra#2817 slice 1 — the PROVENANCE the choke point plans this
+    // registration under. Written by the host from the DISCOVERY PLAN's own
+    // resolution (the default entry's registry version, or the retained
+    // entry's pinned version), never from anything the extension supplied.
+    const resolvedVersion =
+      entry.mode === "default" ? entry.tool.resolvedVersion ?? null : entry.version;
+    const dispatchTarget: PrimitiveDispatchTarget = {
+      kind: entry.mode === "default" ? "extension-default" : "extension-versioned",
+      packageName,
+      version: resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION,
+      name: name.toLowerCase(),
+    };
     try {
       (server.registerTool as (...a: unknown[]) => unknown)(
         name,
-        buildReplayedExtensionToolConfig(name, registration),
+        buildReplayedExtensionToolConfig(name, registration, {
+          ownerPackage: packageName,
+          resolvedVersion,
+          dispatchTarget,
+        }),
         async (input: unknown) => {
           const raw = await dispatchPlanned(input);
           return wrapExtensionToolResult(raw);
@@ -386,6 +391,78 @@ export async function registerAllCapabilities(
   // teardown still removes a package's entries wholesale.
   markEffectiveExtensionMcpTools(effectiveExtensionTools);
   unmarkEffectiveExtensionMcpToolCollisions(skippedCollisions);
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE REQUEST-SCOPED CAPABILITY PLAN (cinatra#2817 slice 1).
+//
+// The delegated-chat CATALOG is derived, not listed — and since this slice it
+// is derived from the SAME registration pass that decides what registers.
+// `buildDelegatedChatCapabilityPlan` runs one delegated-chat registration pass
+// and returns the plan it produced: `plan.servable` holds exactly the
+// primitives `registerTool` accepted, each carrying its normalized name,
+// declared class, owning package, exact resolved version, capability key and
+// dispatch target.
+//
+// WHY THE CATALOG MAY NOT REPLAY REGISTRATION ITSELF. A second pass against a
+// second sink is a second answer. The S8 discovery union already registers a
+// CALLER-DEPENDENT tool set, and slice 2 adds an admission snapshot that can
+// change between two passes — so a catalog built by its own replay could
+// advertise a primitive the live perimeter refuses, or hide one it serves.
+// Deriving the catalog from a plan the pass itself produced removes the
+// possibility rather than testing for its absence.
+//
+// THE ONE THING THIS DOES NOT AND CANNOT COLLAPSE, stated plainly. A chat TURN
+// and an MCP REQUEST are different requests, minutes apart, often in different
+// processes. No plan can be shared between them, so the catalog a turn ships
+// and the perimeter a later MCP request enforces are necessarily built by two
+// passes at two times. That is why the catalog is ADVISORY and the transport is
+// AUTHORITATIVE — the pre-existing contract, unchanged here: a hint that named
+// a primitive the request's own plan does not serve buys a refusal, never a
+// call. What this slice removes is the SECOND ANSWER: the catalog no longer
+// derives from a different input (a static name list) than the perimeter, so
+// the two can only differ by the state that genuinely changed between them.
+// ---------------------------------------------------------------------------
+
+/**
+ * Run ONE delegated-chat registration pass and return the capability plan it
+ * produced. The server built here is discarded; the plan is the product.
+ */
+export async function buildDelegatedChatCapabilityPlan(input?: {
+  requestContext?: RegisterCapabilitiesRequestContext;
+  resolveCapabilityKey?: (name: string) => string | null | undefined;
+  /**
+   * The snapshot to decide against. Supply one when the caller already holds
+   * the request's snapshot; otherwise it is loaded here, so the plan and the
+   * catalog derived from it are still decided against a real admission state
+   * rather than an absent one (which would return an EMPTY plan).
+   */
+  admissionSnapshot?: DelegatedChatAdmissionSnapshot;
+}): Promise<CapabilityPlan> {
+  let captured: CapabilityPlan | undefined;
+  const snapshot =
+    input?.admissionSnapshot ??
+    (await (
+      await import("@/lib/delegated-chat-admission-store")
+    ).loadDelegatedChatAdmissionSnapshot());
+  await createMcpRuntimeServer({
+    name: "cinatra-mcp-server",
+    version: "0.2.0",
+    toolPolicyMode: "delegated-chat",
+    registerCapabilities: registerAllCapabilities,
+    registerRequestContext: input?.requestContext,
+    resolveCapabilityKey: input?.resolveCapabilityKey,
+    delegatedChatAdmissionSnapshot: snapshot,
+    onCapabilityPlan: (plan) => {
+      captured = plan;
+    },
+  });
+  if (!captured) {
+    // Unreachable in practice (the callback fires before the builder returns),
+    // but a plan that never arrived must read as EMPTY, never as "everything".
+    return { entries: [], outcomes: [], servable: [] };
+  }
+  return captured;
 }
 
 /** A captured MCP tool handler — the SDK callback `(args, extra) => CallToolResult`. */
@@ -443,11 +520,25 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
       unionSkipped.push({ name: tool.name, packageName: tool.packageName });
       continue;
     }
-    handlers.set(tool.name, {
-      // The registry already normalized the declaration structurally, so this
-      // is either a valid class or `undefined` (undeclared / neutral).
-      delegatedChat: tool.delegatedChat,
-      handler: async (input: unknown) => {
+    // cinatra#2817 slice 1 — captured through the SAME recording server (and
+    // therefore the SAME planner) the module block used, with the provenance
+    // the host resolved for this registration. Setting the map directly, as
+    // this did before, would have produced an entry with no planned identity —
+    // and the self-invoker would then have had no way to consult an admission
+    // record bound to the package + version actually about to serve.
+    (recordingServer.registerTool as (...a: unknown[]) => unknown)(
+      tool.name,
+      buildReplayedExtensionToolConfig(tool.name, tool, {
+        ownerPackage: tool.packageName,
+        resolvedVersion: tool.resolvedVersion,
+        dispatchTarget: {
+          kind: "extension-default",
+          packageName: tool.packageName,
+          version: tool.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION,
+          name: tool.name.toLowerCase(),
+        },
+      }),
+      async (input: unknown) => {
         // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
         // transport replay, so the in-process self-invoker serves identically.
         // (No plan-pinning here: this map applies no schema validation, so the
@@ -456,7 +547,7 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
         const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
         return wrapExtensionToolResult(raw);
       },
-    });
+    );
     unionEffective.push({ name: tool.name, packageName: tool.packageName });
   }
 
@@ -480,13 +571,27 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   });
   for (const entry of retainedUnion.register) {
     const target = { packageName: entry.packageName, name: entry.name };
-    handlers.set(entry.name, {
-      delegatedChat: entry.delegatedChat,
-      handler: async (input: unknown) => {
+    (recordingServer.registerTool as (...a: unknown[]) => unknown)(
+      entry.name,
+      buildReplayedExtensionToolConfig(
+        entry.name,
+        { delegatedChat: entry.delegatedChat },
+        {
+          ownerPackage: entry.packageName,
+          resolvedVersion: entry.version,
+          dispatchTarget: {
+            kind: "extension-versioned",
+            packageName: entry.packageName,
+            version: entry.version,
+            name: entry.name.toLowerCase(),
+          },
+        },
+      ),
+      async (input: unknown) => {
         const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
         return wrapExtensionToolResult(raw);
       },
-    });
+    );
   }
   for (const deduped of retainedUnion.dedupedExtensionNames) {
     console.debug(
@@ -554,6 +659,24 @@ export const mcpServerMount = createMcpServerMount({
   // gated the registry removal; the removal has LANDED, so it now records the
   // surviving channels (obo / durable / header / none) as ongoing observability.
   onRunContextServedBy: recordMcpRunContextServedBy,
+  // cinatra#2817 slice 1 — the LIVE request's plan carries the same capability
+  // keys the chat catalog derives, from the same catalog-declared
+  // `mcpPrimitivePrefixes`. Lazy so the connector catalog stays off this
+  // module's eager graph.
+  resolvePrimitiveCapabilityKeys: async () => {
+    const { buildCatalogCapabilityKeyResolver } = await import("@/lib/connector-inventory.server");
+    return buildCatalogCapabilityKeyResolver();
+  },
+  // cinatra#2817 slice 3 — ONE immutable admission snapshot per MCP request,
+  // loaded BEFORE registration. Registration filtering, the plan the catalog is
+  // derived from, and the call-time guard all decide against this same object,
+  // so a revocation landing mid-request cannot make them disagree.
+  loadDelegatedChatAdmissionSnapshot: async () => {
+    const { loadDelegatedChatAdmissionSnapshot } = await import(
+      "@/lib/delegated-chat-admission-store"
+    );
+    return loadDelegatedChatAdmissionSnapshot();
+  },
   readConfiguredLlmProviders: async () => {
     const providers = ["openai", "anthropic", "gemini"] as const;
     const results = await Promise.all(
@@ -564,7 +687,7 @@ export const mcpServerMount = createMcpServerMount({
   // Verify delegated MCP on-behalf-of tokens. Two flavors:
   //   1. chat-OBO (`cinatra.chat.mcp-obo`): the chat user calling via
   //      OpenAI's hosted MCP relay. Resolves to `delegation: "chat"` →
-  //      chat tool-policy allowlist applies.
+  //      declaration-bound chat admission applies.
   //   2. agent-run-OBO (`cinatra.agent-run.mcp-obo`): an agent dispatched
   //      by the chat, calling cinatra-mcp through the bridge. Resolves to
   //      `delegation: "agent_run"` → unrestricted at registration time,

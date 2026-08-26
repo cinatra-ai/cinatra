@@ -7,7 +7,11 @@ import {
   type CinatraBetterAuthPlugins,
 } from "./better-auth-plugins";
 import { and, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
-import { createMcpServerAuthPlugins, CLI_SCOPES } from "@cinatra-ai/mcp-server";
+// Deep subpaths, NOT the `@cinatra-ai/mcp-server` barrel: auth.ts is reached
+// from every authenticated route, and the barrel pulls the MCP runtime server
+// plus the admin UI graph behind it (cinatra#732 route-graph pressure).
+import { createMcpServerAuthPlugins } from "@cinatra-ai/mcp-server/credentials";
+import { CLI_SCOPES } from "@cinatra-ai/mcp-server/auth-plugins";
 import { getTrustedOriginHostnames } from "@cinatra-ai/mcp-server/credentials";
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import {
