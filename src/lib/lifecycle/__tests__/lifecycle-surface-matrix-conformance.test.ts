@@ -125,7 +125,15 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
     const carried = [...LIFECYCLE_DATA_PART_VIEW_TYPES, ...LIFECYCLE_INTERRUPT_KINDS].sort();
     expect(carried).toEqual([...LIFECYCLE_CARD_KINDS].sort());
     for (const kind of LIFECYCLE_CARD_KINDS) {
-      expect(LIFECYCLE_CARD_CARRIAGE[kind], kind).toMatch(/^(data_part|interrupt)$/);
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two
+      // axes. `represent` is the wire one this matrix is about; `canonical`
+      // says which fact decides the card is live, and both are closed sets.
+      expect(LIFECYCLE_CARD_CARRIAGE[kind].represent, kind).toMatch(
+        /^(data_part|interrupt)$/,
+      );
+      expect(LIFECYCLE_CARD_CARRIAGE[kind].canonical, kind).toMatch(
+        /^(run_state|data_part)$/,
+      );
     }
   });
 

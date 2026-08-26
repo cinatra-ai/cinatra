@@ -151,6 +151,33 @@ export function classifyRunWaitInterrupt(
   return isSetupInterruptTaskId(interrupt.reviewTaskId) ? "input" : "approval";
 }
 
+/**
+ * WHERE A WAIT'S NOTIFICATION SHOULD LAND (cinatra#2930, epic #2926 W3).
+ *
+ * The plan: "When a run waits at a moment, the notification links to the
+ * conversation the run was started from — for the review as for a question —
+ * and to the run page otherwise."
+ *
+ * SO THIS IS A SECOND QUESTION, NOT A SECOND ANSWER TO THE FIRST. A review is
+ * still an APPROVAL for copy — it is a decision about work the agent already
+ * did, and `classifyRunWaitInterrupt` keeps saying so, which is what keeps the
+ * badge and the notification wording exactly as they are. What changes is only
+ * the destination: a run that reached its review moment in a conversation has
+ * its card there, and sending the reader to the run page instead is sending
+ * them to a second copy of a decision they are already standing in front of.
+ *
+ * Fails CLOSED to the run page: a wait with nothing readable keeps the
+ * pre-existing destination, exactly as the classifier keeps the pre-existing
+ * copy.
+ */
+export function waitNotificationLandsInConversation(
+  interrupt: RunWaitInterruptDescriptor | null | undefined,
+): boolean {
+  if (!interrupt) return false;
+  if (interrupt.lifecycleMoment === "review") return true;
+  return classifyRunWaitInterrupt(interrupt) === "input";
+}
+
 /** Badge copy for a setup-field INPUT pause. */
 export const AWAITING_INPUT_BADGE_LABEL = "Awaiting input";
 

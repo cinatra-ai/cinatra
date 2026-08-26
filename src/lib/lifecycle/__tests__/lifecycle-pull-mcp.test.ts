@@ -223,10 +223,17 @@ describe("minting through the REAL producer bind", () => {
   it("renders a review gate as an artifact_review_gate DATA_PART", async () => {
     const [ref] = await listRefs();
     const res = await call("artifact_review_gate_render", { ref });
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the recognition answer now
+      // records WHICH producer minted it. The pull tools are kept and are
+      // recorded as re-presentation — "the 'show me' tools the model can call
+      // stay as a second way to bring a card back into view, recorded as
+      // exactly that" — so `tool_represented` IS the assertion here, not an
+      // artefact of it. The PAYLOAD the sink writes is unchanged.
     expect(throughProducerBind(res, "artifact_review_gate_render")).toEqual({
       viewType: "artifact_review_gate",
       schemaVersion: 1,
       ref,
+      provenance: "tool_represented",
     });
   });
 
@@ -237,6 +244,8 @@ describe("minting through the REAL producer bind", () => {
       viewType: "verification_summary",
       schemaVersion: 1,
       ref,
+      // AMENDED BY cinatra#2930, for the reason above.
+      provenance: "tool_represented",
     });
   });
 
