@@ -1276,6 +1276,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     runId={run.id}
                     agentId={agentId}
                     instanceId={instanceId}
+                    // cinatra#2933 (lifecycle-b W5b) -- the run page is one of
+                    // the five windows, and this watcher is the panel it is
+                    // drawn by. Both halves travel together: the template the
+                    // window's turns are addressed to, and the answer this
+                    // page already resolved once from the RUN's own access, so
+                    // the box appears for a person the run would answer and for
+                    // nobody else. Same two values the other four windows on
+                    // this page are given.
+                    templateId={template.id}
+                    canRespondInWindow={canRespondInWindow}
                     initialStatus={run.status}
                     initialError={run.error ?? null}
                     initialMessages={serializeRunMessages(completedRunMessages)}

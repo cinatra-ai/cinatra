@@ -62,6 +62,24 @@ type SetupCompletionWatcherProps = {
    * the server from the RUN's access and forwarded to the panel unchanged.
    */
   canRespondInWindow?: boolean;
+  /**
+   * The run's template id (cinatra#2933, lifecycle-b W5b).
+   *
+   * This watcher is the run page's ONLY production mount of AgenticRunPanel
+   * outside the chat, and the panel draws the run's prompt window only for a
+   * caller that names the template: the window's turns POST to
+   * /api/agents/builder/[templateId]/hitl-assist, and that route asks the RUN
+   * whether this person may answer (`canRespondInRunWindow(runId, templateId)`).
+   * Without the id there is no bound run to ask about, so the panel draws no
+   * box at all -- which is what the run page did.
+   *
+   * The screen that mounts this watcher already holds the run's template row
+   * and hands `template.id` to each of the other windows it mounts. It is
+   * forwarded here unchanged, exactly like `canRespondInWindow`: no fallback,
+   * no id invented on the client. Absent still means no window, which keeps
+   * every caller that has no template byte-identical.
+   */
+  templateId?: string;
   initialStreamedText?: string;
   /**
    * Server-derived gate context for the first paint (see AgenticRunPanel's
@@ -95,6 +113,7 @@ export function SetupCompletionWatcher({
   triggerConfigured = false,
   initialStreamedText,
   canRespondInWindow,
+  templateId,
   initialHitlContext,
   initialReviewGate,
 }: SetupCompletionWatcherProps) {
@@ -224,6 +243,7 @@ export function SetupCompletionWatcher({
   return (
     <AgenticRunPanel
       canRespondInWindow={canRespondInWindow}
+      templateId={templateId}
       runId={runId}
       initialStatus={initialStatus}
       initialError={initialError}

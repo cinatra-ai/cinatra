@@ -6,12 +6,38 @@
 // refuses a message before the assistant sees it"), and for the copy to come
 // from the ratified drawing rather than from a slice's imagination.
 //
-// This is a SOURCE-level conformance test, deliberately: what it pins is
-// structural — which surface each window declares, that every window goes
-// through the one controller and the one server bridge, that no window carries
-// a placeholder string of its own, and that the chat mount opens no second
-// conversation. A rendering test could not tell a second copy of the controller
-// from the shared one.
+// WHAT THIS SUITE MAY CLAIM, AND WHAT IT MAY NOT.
+//
+// It reads SOURCE. That is the right instrument for a structural claim — which
+// surface each window declares, that every window goes through the one
+// controller and the one server bridge, that no window carries a placeholder
+// string of its own, that the chat mount opens no second conversation. A render
+// could not tell a second copy of the controller from the shared one.
+//
+// It is the WRONG instrument for "the window is there", and saying so is not a
+// theory: this suite reported green on a run page that drew no window at all.
+// Every string it looked for was present in `agentic-run-panel.tsx` — the
+// surface, the controller, the access gate — and what was missing was a prop at
+// the mount, which no string in that file could show. The run page's window was
+// simply not on the screen.
+//
+// So "is it drawn, and is it drawn only for a person the run would answer" is
+// now asserted against real DOM, and this suite no longer restates it:
+//
+//   * `run-window-surfaces.render.test.tsx` (this directory) mounts the run
+//     page, the step-by-step screen, the schedule screen and the armed-trigger
+//     tab, and reads AC1 and AC3 off the rendered document;
+//   * `run-page-window-render.test.tsx` (this directory) mounts the run page's
+//     PRODUCTION path — `SetupCompletionWatcher`, the way `instance-screens.tsx`
+//     mounts it — with the props the page really passes;
+//   * `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/`
+//     `__tests__/review-prompt-window.render.test.tsx` does the same for the
+//     fifth window, under the root suite that resolves the host app.
+//
+// The one claim about drawing that stays here is the one no render can reach:
+// `instance-screens.tsx` is an async server component that reads the database,
+// so the fact that it hands BOTH values to all five of its windows is checked in
+// its source.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -75,17 +101,10 @@ describe("each of the five windows outside the chat is a per-run conversation", 
 });
 
 describe("the window is drawn only for a person the run would answer", () => {
-  const gated = [
-    ["packages/agents/src/agentic-run-panel.tsx", "canRespondInWindow !== false"],
-    ["packages/agents/src/orchestrator-stepper-panel.tsx", "canRespondInWindow !== false"],
-    ["packages/agents/src/trigger-screen-client.tsx", "props.canRespondInWindow !== false"],
-    ["packages/agents/src/trigger-tab-client.tsx", "props.canRespondInWindow !== false"],
-  ] as const;
-  for (const [file, guard] of gated) {
-    it(`${file.split("/").pop()} gates its box on the run's access`, () => {
-      expect(read(file)).toContain(guard);
-    });
-  }
+  // The four per-window guards that used to be matched here as strings are now
+  // read off the rendered DOM by `run-window-surfaces.render.test.tsx`, which
+  // mounts each window twice and requires the two answers to DIFFER — a window
+  // that draws no box at all can no longer pass the refusal reading.
 
   it("the schedule screen no longer hides its box behind the platform tier", () => {
     const src = read("packages/agents/src/trigger-screen-client.tsx");
@@ -96,7 +115,35 @@ describe("the window is drawn only for a person the run would answer", () => {
   it("the run's own access answer is resolved on the server, once", () => {
     const screens = read("packages/agents/src/instance-screens.tsx");
     expect(screens).toContain("canRespondInRunWindow(run.id)");
-    expect(screens.match(/canRespondInWindow=\{canRespondInWindow\}/g) ?? []).toHaveLength(4);
+  });
+
+  it("the screen hands BOTH values to every window it mounts — five, not four", () => {
+    // THE DEFECT THIS PINS, so it cannot come back.
+    //
+    // The run page's window is drawn by AgenticRunPanel, whose only production
+    // mount outside the chat is SetupCompletionWatcher. That mount was given
+    // NEITHER value: no `templateId`, so the panel's box was gated false on
+    // every real run and no window was ever drawn; and no `canRespondInWindow`,
+    // so had one been drawn its access gate would have read the panel's
+    // "absent ⇒ shown" default instead of the run's answer.
+    //
+    // Both are counted, and both counts are FIVE, because the two travel
+    // together: a window addressed to a template nobody may answer in is the
+    // thing AC3 forbids, and a window with access but no template cannot be
+    // drawn at all.
+    const screens = read("packages/agents/src/instance-screens.tsx");
+    const accessPasses = screens.match(/canRespondInWindow=\{canRespondInWindow\}/g) ?? [];
+    const templatePasses = screens.match(/templateId=\{template\.id\}/g) ?? [];
+    expect(accessPasses).toHaveLength(5);
+    expect(templatePasses).toHaveLength(5);
+  });
+
+  it("the run page's panel can be given a template at all", () => {
+    // The prop's ABSENCE from the watcher was the mechanical cause: the page
+    // had nowhere to put the id even had it tried.
+    const watcher = read("packages/agents/src/setup-completion-watcher.tsx");
+    expect(watcher).toContain("templateId?: string;");
+    expect(watcher).toContain("templateId={templateId}");
   });
 
   it("the field-assist route asks the run, not the platform tier, when a run is named", () => {
