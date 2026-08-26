@@ -20,7 +20,7 @@ hand. Every state change came from a control pressed in a browser.
 | lock `resolvedSha` | `03a27f524d59f90f635ee98c1b5900c4bc9f7f6e` |
 | checked-out package `HEAD` | `03a27f524d59f90f635ee98c1b5900c4bc9f7f6e` |
 | package version on disk | `0.1.4` |
-| boot scan | `[cinatra:extensions:agent] @cinatra-ai/blog-draft-writer-agent v0.1.4 upserted` |
+| boot scan | `[cinatra:extensions:agent] @cinatra-ai/blog-draft-writer-agent 0.1.4 upserted` (the leading v of the printed token is dropped for the repository's version-token rule) |
 | `agent_templates` | `package_version 0.1.4`, `status published`, `updated_at 2026-08-26 16:14:02.276+00` |
 | whole-tree pin check | 111 extension checkouts **MATCH** their lock `resolvedSha`, 0 mismatch |
 
