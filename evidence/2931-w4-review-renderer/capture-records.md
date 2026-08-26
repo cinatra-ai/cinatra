@@ -1,6 +1,9 @@
 # capture records — cinatra#2931 (W4), 2026-08-26
 
-Head under proof: **`1c3649503d511942538c626d4ebc964e50e1302c`**.
+Head under proof: **`011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** for **W3** and
+**W7**, re-taken on this head; **`1c3649503d511942538c626d4ebc964e50e1302c`** for
+**W0**, **W1**, **W5** and **W9**, whose files are carried over **byte-identical**
+(their sha256 values below are unchanged from that commit).
 Runtime: Next.js dev on `http://localhost:3000`; the agent runtime container on
 `:3010`, reaching the app back at `http://host.docker.internal:3000`; a plain
 static server on a second origin for the third-party page of W7.
@@ -37,6 +40,12 @@ agent_runs
   status       completed
   created_at   2026-08-26 16:30:24.087882+00
   completed_at 2026-08-26 16:31:33.762+00
+
+  id           01437642-8900-4c12-9cfc-c9a5db44ca24   (pending, re-take — W3, W7)
+  status       completed
+  template_id  3ac23e05-c031-43a8-8596-e502ea21bdd2
+  created_at   2026-08-26 21:56:40.743289+00
+  completed_at 2026-08-26 22:20:48.581+00
 ```
 
 ## The review gates
@@ -62,7 +71,33 @@ artifact_review_gates
   resolved_at    2026-08-26 16:57:23.200555+00
   created_at     2026-08-26 16:32:02.567646+00
   review_task_id lifecycle-review:5d35715afe035c0b1b5b2ffc9898f4f1827ffe15a3f8ab0f93ee1d0957368bd4
+
+  id             21f9c749-3ba6-4fd1-9506-9406af5a271c        (the re-take)
+  run_id         01437642-8900-4c12-9cfc-c9a5db44ca24
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  created_at     2026-08-26 22:35:26.49634+00
+  review_task_id lifecycle-review:c8114bc82275b69353cb694efbc9f26000d0f6896a49ad1595ee23c2de386e97
+  pinned_targets [{"artifactId":"601fb949-b082-4c58-bbff-29dcce67b756",
+                   "representationRevisionId":"85de01bf-7113-40cb-8666-8ae74896d7da"}]
+
+artifact_produced_outbox                       (why the gate took 14 min 38 s)
+  event_id                   c8114bc82275b69353cb694efbc9f26000d0f6896a49ad1595ee23c2de386e97
+  producer_run_id            01437642-8900-4c12-9cfc-c9a5db44ca24
+  artifact_id                601fb949-b082-4c58-bbff-29dcce67b756
+  representation_revision_id 85de01bf-7113-40cb-8666-8ae74896d7da
+  event_kind                 artifact_produced
+  status                     processed
+  created_at                 2026-08-26 22:20:48.13639+00
+  processed_at               2026-08-26 22:35:28.077474+00
 ```
+
+The event sat `pending` because the review-orchestration loop lost its queue lock
+during a slow first boot and stopped rescheduling itself in that process. Restarting
+the app re-registered the loops; the first scan logged `scanned=1 gatesCreated=1`.
+Nothing was inserted by hand to make the gate appear.
 
 ## The decision the browser wrote
 
@@ -99,7 +134,29 @@ artifact_blobs
   created_at  2026-08-26 16:49:29.20187+00
   first bytes "## Where the hours actually go"
   count of `"content":` in the blob   0
+
+representation                       (the re-take run's target — W3, W7)
+  id                85de01bf-7113-40cb-8666-8ae74896d7da
+  artifact_id       601fb949-b082-4c58-bbff-29dcce67b756
+  revision          1
+  form              file
+  created_by_run_id 01437642-8900-4c12-9cfc-c9a5db44ca24
+  created_at        2026-08-26 22:20:48.13639+00
+
+artifact_blobs
+  sha256      5b4ae32f84ef09b6583e9ef2bcdfcb7f8eb21cfcecbfaa5b1a26a4d5fff6dd7b
+  size_bytes  19104
+  mime        text/markdown
+  created_at  2026-08-26 22:20:47.644942+00
+  first bytes "## Where the hours actually go"
+  count of `"content":` in the blob   0
+  markdown headings in the blob       4
 ```
+
+The blob was read back from disk at its own content address: the file at the
+storage key hashes to the `sha256` above, is 19 104 bytes, begins
+`## Where the hours actually go`, and contains **zero** occurrences of
+`"content":`. No JSON envelope reaches the card in this set either.
 
 ## The usage ledger — the real model, both runs
 
@@ -111,7 +168,22 @@ usage_events   (occurred_at, provider, model, operation, agent_label, in/out tok
   2026-08-26 16:31:30.652+00  openai  gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38844 / 1732
   2026-08-26 16:31:52.707+00  openai  gpt-5.5-2026-04-23  generate  artifact-matcher          1693 / 93
   2026-08-26 16:31:58.666+00  openai  gpt-5.5-2026-04-23  generate  artifact-matcher          1719 / 179
+
+the re-take run (W3, W7)
+  2026-08-26 21:56:50.389+00  openai  gpt-5.5             stream    chat                     23247 / 137
+  2026-08-26 22:20:45.477+00  openai  gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38763 / 4568
+  2026-08-26 22:20:58.191+00  openai  gpt-5.5-2026-04-23  generate  artifact-matcher          4462 / 107
+  2026-08-26 22:21:04.181+00  openai  gpt-5.5-2026-04-23  generate  artifact-matcher          4488 / 309
 ```
+
+`effective_provider` on the draft row reads `openai`. The whole-tree pin check was
+re-run on this head before a picture was taken: **112** extension checkouts MATCH
+their lock `resolvedSha`, **0** mismatch, **0** missing. The boot scan on this
+instance read `@cinatra-ai/blog-draft-writer-agent 0.1.4 skipped — already up to
+date` (the leading letter of the printed token is dropped for the repository's
+version-token rule) — the registry row was already at that version from the earlier
+round, and `agent_templates.package_version` still reads `0.1.4`, `status
+published`.
 
 ## The slot, as the page itself recorded it
 
@@ -150,7 +222,11 @@ cookie jar at capture time (name/attributes only; no value is recorded anywhere)
 
 ## The captures
 
-Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each.
+Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The four rows
+marked **re-take** were shot on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`; the
+other eight are the files committed at `1c3649503d511942538c626d4ebc964e50e1302c`,
+**unchanged byte for byte** — each sha256 below was recomputed from the file in the
+tree and matches the value recorded then.
 
 | file | sha256 | bytes |
 |---|---|---|
@@ -158,12 +234,12 @@ Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each.
 | `captures/W0__placeholder__chat_thread__working__dark.png` | `38d368768dad138e0b3b22d3c29730cf60ce326fd243c10f27b183fea3e4268c` | 339 355 |
 | `captures/W1__review-card__chat_thread__pending__light.png` | `949b1332c9ae2fce007a09ca40df2878c992341e257e71b2b64bc31ade9dbec1` | 367 024 |
 | `captures/W1__review-card__chat_thread__pending__dark.png` | `69ea12575b17332b1df0264df9faeb76a2c67610aef5bab625c139207f7e6856` | 361 362 |
-| `captures/W3__review-card__run_page__pending__light.png` | `5a245bb48352487bd7ac726396c37085ff3547003511fb56072b9eb99f96383b` | 327 075 |
-| `captures/W3__review-card__run_page__pending__dark.png` | `155a9f75bd4fc4882a40efc3012ecb89076e90dca8525075a980b7c1499b3643` | 323 344 |
+| **re-take** `captures/W3__review-card__run_page__pending__light.png` | `5055a6aec844906e370e222fbbcbf1498a800719630cd895ec4714039317d50c` | 303 384 |
+| **re-take** `captures/W3__review-card__run_page__pending__dark.png` | `a7efd95649707ff0a9950fbd71258d2161ab393ee06e49bf9e4348c3002abc52` | 299 783 |
 | `captures/W5__review-card__review_page__pending__light.png` | `5043a26216cf84cad32b2ddd8a3c902d693c30a04343f25aeca6c562e5245127` | 410 819 |
 | `captures/W5__review-card__review_page__pending__dark.png` | `adc54073b9a7ac10b2845aaf498ef184811005e2fe4be982e5e1206d90e0b4f8` | 407 338 |
-| `captures/W7__review-card__site_widget__pending__light.png` | `5f1b322044a09d25157cd1d54f679c337e8c3beddb74b22027312e55be5f7c41` | 203 315 |
-| `captures/W7__review-card__site_widget__pending__dark.png` | `38b7b8188a59a2cf529bb42722d6f14f3dbd98c49f01c6a9c7dcc55f309d4cb9` | 202 617 |
+| **re-take** `captures/W7__review-card__site_widget__pending__light.png` | `2e1d0d54674b5a7642fb552563e0a03f4626c5506175783368d867f88fce6a7e` | 198 449 |
+| **re-take** `captures/W7__review-card__site_widget__pending__dark.png` | `03a11fe63a1aea4d4f8948cb94f6a07ec942b90460a6e4930e2f2462c047562b` | 194 432 |
 | `captures/W9__review-card__review_page__decided__light.png` | `99114f8cc08d16a8994e4109de0db02f0334823868b2d3d1f9e21fc4e3c8d676` | 149 191 |
 | `captures/W9__review-card__review_page__decided__dark.png` | `e51a699ddd043ff38c00ce622cb77fdce41796d854309169cd02f276423c3b57` | 147 818 |
 
@@ -177,12 +253,16 @@ W0 light  16:49:33.505  slot=working ph=1 cards=0 approve=0            after: tr
 W0 dark   16:49:46.028  slot=working ph=1 cards=0 approve=0            after: true
 W1 light  16:50:04.945  slot=review  ph=0 cards=1 approve=1 island=1   after: true
 W1 dark   16:50:20.590  slot=review  ph=0 cards=1 approve=1 island=1   after: true
-W3 light  16:50:36.178  slot=review  ph=0 cards=1 approve=1 island=1   after: true
-W3 dark   16:50:51.735  slot=review  ph=0 cards=1 approve=1 island=1   after: true
+W3 light  22:45:23      cards=1 islands=1 iframes=1 approve/reject/comment=1/1/1
+                        island body=1 empty=0 targets=1 rendered=true
+                        promptWindow=false noRenderer=false floor=0 preview=0 download=0
+W3 dark   22:45:37      the same readings, theme=dark
 W5 light  16:53:00      cards=1 approve=1 reject=1 comment=1 island rendered+rawsource
 W5 dark   16:53:14      cards=1 approve=1 reject=1 comment=1 island rendered+rawsource
-W7 dark   17:37:33      cards=1 islands=1 signin-controls=0 approve=1 reject=1 comment=1
-W7 light  17:39:09      cards=1 islands=1 signin-controls=0 approve=1 reject=1 comment=1
+W7 light  22:54:30      cards=1 islands=1 signin-controls=0 approve/reject/comment=1/1/1
+                        island body=1 empty=0 targets=1 rendered=true
+                        signInPrompt=false noRenderer=false floor=0 preview=0 download=0
+W7 dark   23:04:17      the same readings, theme=dark
 W9 light  16:57:31      cards=1 approve=0 reject=0 comment=0 resolved=true
 W9 dark   16:57:43      cards=1 approve=0 reject=0 comment=0 resolved=true
 
@@ -192,3 +272,43 @@ separate mounts of the third-party page — the embed mints a fresh conversation
 context, so each theme was mounted with the theme already set and asked for this
 run's review in its own turn.
 ```
+
+## The island's address, read live on this head (W3's route)
+
+The card composes the island address from the palette class of the document **it**
+is mounted in. Read from the parent DOM while pressing the app's own theme control,
+three times in a row:
+
+```
+root class ... cinatra    island src /lifecycle/review-island  params [ref, scheme]  scheme=light
+root class ... dark       island src /lifecycle/review-island  params [ref, scheme]  scheme=dark
+root class ... cinatra    island src /lifecycle/review-island  params [ref, scheme]  scheme=light
+```
+
+The palette named on the address tracks the host document's palette class exactly,
+and moves when the reader changes it. On this first-party route the address carries
+**no** credential parameter; the credentialed arm is the third-party application's.
+No credential value is recorded here, or anywhere in this directory.
+
+## The island's colour, measured in pixels
+
+Sampled from the committed captures themselves — the island's ground, and the rows
+the target chip's pill outline runs through.
+
+```
+                                        island ground     brightest pixel on the
+                                                          chip's border rows
+run page, dark            (W3)          rgb(13,24,42)     rgb(37,47,63)   pill drawn
+run page, dark, mounted dark            rgb(13,24,42)     rgb(37,47,63)   pill drawn
+third-party application, dark  (W7)     rgb(13,24,42)     rgb(14,25,44)   pill ABSENT
+run page, light           (W3)          near-white        pill drawn
+third-party application, light (W7)     near-white        pill drawn
+```
+
+The island's ground is the same value on both hosts in dark — the defect the earlier
+W7 dark frame showed (a white panel inside a dark widget) is gone. The one reading
+that still differs between hosts is the chip's pill outline, absent in the
+third-party application in dark; it is named in the README's W7 cell rather than
+left to be found. The "mounted dark" row is a separate load, taken with the app
+already dark before the run page opened, so the pill is not a product of the repaint
+path.

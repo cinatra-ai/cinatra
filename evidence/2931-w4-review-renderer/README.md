@@ -1,11 +1,17 @@
 # cinatra#2931 (W4) — the reviewed work, drawn by its own renderer, on the merged head
 
-Every picture in this directory was taken on **2026-08-26**, on branch head
-**`1c3649503d511942538c626d4ebc964e50e1302c`**, on a live dev instance, against
-**two real agent runs on the real provider** — `CINATRA_TEST_LLM_PROVIDER` unset,
-no stub, no scripted provider, no seeded row. The previous set is **replaced in
-full**: it was shot before `main` pinned the corrected draft-writer agent, and the
-draft the card renders is the very thing that pin changes.
+Every picture in this directory was taken on **2026-08-26**, on a live dev
+instance, against **real agent runs on the real provider** —
+`CINATRA_TEST_LLM_PROVIDER` unset, no stub, no scripted provider, no seeded row.
+
+**Two cells were re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — the
+run page (**W3**), because that surface moved under the branch, and the
+third-party application (**W7**), because that is the cell the island's
+colour-scheme defect was seen in and this head carries its fix. They were shot
+against a **third** real run, left pending at its review. The other four cells —
+**W0**, **W1**, **W5**, **W9** — stand unchanged from
+`1c3649503d511942538c626d4ebc964e50e1302c`, **byte-identical**; their sha256 values
+in [`capture-records.md`](capture-records.md) are the same values recorded then.
 
 ## The pin, checked three ways before a single picture was taken
 
@@ -35,8 +41,9 @@ decided one.
 
 | | run | what it carries |
 |---|---|---|
-| **pending** | `579d0473-4b5d-40b9-9d79-8126560bbf06` | W0, W1, W3, W5, W7 — still `pending` in `artifact_review_gates` as this is written |
+| **pending** | `579d0473-4b5d-40b9-9d79-8126560bbf06` | W0, W1, W5 — still `pending` in `artifact_review_gates` as this is written |
 | **decided** | `8bfc1191-eeca-4b6a-ac86-a636f476c28e` | W9 — Approve pressed for real in the browser |
+| **pending, re-take** | `01437642-8900-4c12-9cfc-c9a5db44ca24` | W3, W7 on `011da4d6133a…` — still `pending`; gate `21f9c749-3ba6-4fd1-9506-9406af5a271c` |
 
 Both were started by **one** turn typed into the chat (no `@`-mention). Every
 `Continue` in the log is one of the run's **own** gates — a setup card and the
@@ -47,6 +54,10 @@ schedule step — pressed in the browser before the run began writing.
 A `MutationObserver` on the card's own `data-run-review-slot` attribute recorded
 every change of reading. The conversation and the run page each carried their own
 observer and **neither page was reloaded after the turn was typed.**
+
+This record belongs to the run behind **W0**, **W1** and **W5**; the swap it
+measures is what those three cells show. **W3** and **W7** were re-taken later,
+against a third run, and claim nothing from this timeline.
 
 | when (UTC) | what | source |
 |---|---|---|
@@ -71,6 +82,41 @@ it would stand in that record as a third reading. It does not.
 the run terminates (15.3 s). What this head changes is that the slot *holds* the
 placeholder across that window instead of flipping to a completion notice. The
 minting order is upstream of this slice.
+
+## The re-take run, measured
+
+The third run — `01437642-8900-4c12-9cfc-c9a5db44ca24` — was started by **one**
+turn typed into the chat, and every gate it paused on was answered in the browser:
+its setup field, then **Run right after setup** and `Continue` on the run page's
+own schedule step, then `Continue` on its context slot. It carries **W3** and
+**W7**.
+
+| when (UTC) | what | source |
+|---|---|---|
+| `21:56:20.017` | the ONE turn is typed into the conversation | driver |
+| `21:56:40.743` | the run row is created | row |
+| `22:07:54` | the schedule step is answered — **Run right after setup**, then `Continue` | driver |
+| `22:19:28.186` | the context slot is answered — `Continue`, no eligible context | log |
+| `22:20:45.477` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 763 in / 4 568 out | ledger row |
+| `22:20:47.645` | the blob is written — 19 104 bytes, `text/markdown` | row |
+| `22:20:48.136` | representation revision **1** is written, and the produced event is queued | row |
+| `22:20:48.581` | **the run terminates** | row |
+| `22:35:26.496` | the review gate is minted | row |
+| `22:45:23` / `22:45:37` | **W3** light / dark | shutter |
+| `22:54:30` / `23:04:17` | **W7** light / dark | shutter |
+
+**The gate took 14 min 38 s, and the reason is named rather than smoothed over.**
+It is not the product's normal timing. This instance's first boot was slow enough
+that background loops lost their queue locks while starting, and the log shows the
+review-orchestration loop failing to re-delay itself
+(`Missing lock for job lifecycle-review-orchestration-loop. moveToDelayed`) — after
+which it never ran again **in that process**, and the produced event sat `pending`
+in `artifact_produced_outbox`. Restarting the app re-registered the loops
+(`review-orchestration (30s) + gate-maintenance (60s) loops scheduled`); the first
+scan after that logged `scanned=1 gatesCreated=1` and the gate row appeared two
+seconds later. **That a loop which loses its lock does not reschedule itself is a
+real reading and is named here**; it is an observation from this instance, not a
+claim about this slice, which does not touch that loop.
 
 ## How the pictures were taken
 
@@ -170,35 +216,69 @@ no `Expand` control; this surface does.
 `captures/W3__review-card__run_page__pending__light.png` ·
 `captures/W3__review-card__run_page__pending__dark.png`
 
+**Re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — this surface moved
+under the branch, so the earlier pair is replaced rather than carried forward.
+
 **The plan says** — *"The target ladder: build-time renderer, runtime renderer,
 metadata floor — the renderer decides, never the host."*
 
-**§I requires** — the two-column frame, *"a step rail down the left"* and
-*"the run detail on the right"*; and *"a gate step opens the gate's own surface in
-place — a pending review renders the review gate (§III–§VII) right here in the run
-detail, under the same rail, never as a standalone document"*, the gate carrying
-*"gate header, review target(s), decision bar and the prompt window"*.
+**§I requires** — the two-column frame, *"a step rail down the left"* naming
+*"the run's ordered steps"* and *"the run detail on the right"*; the rail *"merged so
+that a gate is not a page of its own but a step in the run"*, with *"the step the
+run is paused on … highlighted; steps already passed sit above it, steps still to
+come below"*; and *"a gate step opens the gate's own surface in place — a pending
+review renders the review gate (§III–§VII) right here in the run detail, under the
+same rail, never as a standalone document"*, the gate carrying *"gate header,
+review target(s), decision bar and the prompt window"*.
 
-**Shows** — the run surface: the rail at the left, the review gate opened **in the
-run detail** with the same header, the same pinned revision, the draft rendered as
-prose by the same renderer, `Expand`, and the decision floor. Counted: **1** card
-root, **1** island, island `body=1 empty=0 targets=1 rendered=true`, **0** floor
-diagnostics, **1**/**1**/**1** Approve/Reject/Comment. The observer recorded this
-page's swap at `16:49:47.114` — 291 ms after the conversation's, with nothing
-pressed on either page.
+**Shows** — the run surface, two columns. The **rail** carries `Step 1` with a
+check above `Review` with the gate's own mark, connected in order — the gate is an
+entry **on the rail**, not a page of its own. The **detail column** holds the gate
+opened in place: `Review requested` / `Awaiting your decision`, the title, the
+`Blog Post Artifact` chip, the pinned revision `85de01bf-711…` with
+`text/markdown`, the draft **rendered as prose** by the artifact's own renderer,
+`Expand`, and the decision floor — the rationale field over `Comment` `Reject`
+`Approve`. Counted, both themes: **1** card root, **1** island, **1** iframe,
+island `body=1 empty=0 targets=1 rendered=true`, **0** floor diagnostics, **0**
+`no renderer resolved`, **0** Preview, **0** Download, **1**/**1**/**1**
+Approve/Reject/Comment.
 
-**Verdict: PASS on the ladder and on the in-place gate. Two named DEVIATIONS from
-§I, both pre-existing and outside this slice's renderer:**
+**The island follows the page.** In dark the rendered pane is dark with light ink —
+ground `rgb(13,24,42)`, the same value the surrounding card paints. The address the
+card frames names the palette it read from the document it is mounted in: the
+island `src` carries `scheme`, and pressing the app's own theme control moves it —
+root class `cinatra` → `scheme=light`, root class `dark` → `scheme=dark`, and back
+to `light` — re-read live on this head. On this first-party route the address
+carries **no** credential; the credentialed arm is the widget's (W7).
 
-1. **The rail does not carry the gate.** §I: *"The rail lists the run's steps in
-   order, merged so that a gate is not a page of its own but a step in the run …
-   The step the run is paused on is highlighted; steps already passed sit above
-   it, steps still to come below."* On this route the rail carries `1 Schedule`
-   **alone** — no `Review` entry, no passed/paused/to-come treatment — while the
-   review gate is open in the detail beside it.
-2. **No prompt window under the gate.** §I draws the gate's surface as *"gate
+**Verdict: PASS on the ladder, on the in-place gate, and — new on this head — on
+the rail's merged gate entry. Three named DEVIATIONS from §I, all pre-existing and
+outside this slice's renderer:**
+
+1. **The paused step is not highlighted as drawn.** §I: *"The step the run is
+   paused on is highlighted."* The drawn example gives it a coloured rule, a
+   shaded row and its own small-caps state line (`AWAITING YOUR DECISION`). This
+   rail draws `Review` as an ordinary entry: no rule, no shaded row, no state
+   line.
+2. **The work step is named by position, not by what it did.** §I has the rail
+   name *"the ordinary work steps"* (the example: `Fetched Q3 cohort`, `Drafted
+   re-engagement email`). This rail says `Step 1`.
+3. **No prompt window under the gate.** §I draws the gate's surface as *"gate
    header, review target(s), decision bar **and the prompt window**"*. On this
    route the prompt window is absent; it is drawn on the review route (W5).
+
+**Not exercised by this cell:** §I's resolved-gate history — *"A resolved gate
+stays on the rail as read-only history … records how it was settled"*. This run
+has no resolved gate, so the rail has nothing to keep. W9 reads that clause and
+names its deviation there.
+
+**Why there is no `Schedule` entry.** This run was armed **Run right after setup**
+on the run page's own schedule step, so it has no schedule row. The tab strip
+reads `Setup · Permissions`: the schedule tab is rendered only when the surface has
+a schedule to show (`src/components/agent-instance-nav.tsx`, `showTriggerTab`), and
+its label is the schedule's own word. The earlier pair, taken before that work
+merged, showed a rail of `1 Schedule` **alone** with no gate entry; on this head
+the rail carries the gate and the schedule entry is correctly absent.
 
 ### W5 — the review page, pending
 
@@ -235,48 +315,70 @@ deviations, both pre-existing:**
 `captures/W7__review-card__site_widget__pending__light.png` ·
 `captures/W7__review-card__site_widget__pending__dark.png`
 
+**Re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — this is the cell the
+colour-scheme defect was seen in, and the head now carries its fix.
+
 **The plan says** — *"The card always shows you something; it is never blank.
 Three presentations ship, and the renderer decides which, never the screen it is
 read on."*
 
 **Requires** — the same review card inside another application's conversation, the
-target drawn by its renderer, and **no login prompt**.
+target drawn by its renderer, whole, and **no login prompt**.
 
 **Shows** — a plain page on another origin mounting the Cinatra widget in an
 iframe, holding **this run's** card: `Review requested` / `Awaiting your
 decision`, the title, the `Blog Post Artifact` chip, the pinned revision
-`f1fcb330-373…`, the draft **rendered as prose**, `Expand`, and `Comment`
-`Reject` `Approve` over the rationale field, with the widget's own composer
-beneath. Counted inside the frame: **1** card, **1** island, island
-`body=1 empty=0 targets=1 rendered=true`, **1**/**1**/**1**
+`85de01bf-711…` with `text/markdown`, the draft **rendered as prose**, `Expand`,
+and `Comment` `Reject` `Approve` over the rationale field, with the widget's own
+composer beneath. Counted inside the frame, both themes: **1** card, **1** island,
+island `body=1 empty=0 targets=1 rendered=true`, **1**/**1**/**1**
 Approve/Reject/Comment, **0** `data-embed-signin` controls, **no** sign-in copy
-anywhere in the frame, **0** floor diagnostics, **0** Preview, **0** Download.
+anywhere in the frame, **0** floor diagnostics, **0** `no renderer resolved`,
+**0** Preview, **0** Download.
+
+**The dark defect is fixed, and the fix is measured, not asserted.** The earlier
+pair showed the card's chrome dark and the target island a **white panel with dark
+ink**. On this head the island in the third-party application is **dark**: its
+ground measures `rgb(13,24,42)` — the same value the island paints on the
+first-party run page in dark (W3) — and the draft is light ink on it. The whole
+target panel is inside the island document, not the card: the island's own text is
+the title, the chip, the pinned-revision line and the rendered prose, while the
+card contributes only the header and the decision floor.
+
+**One named DEVIATION, measured on both hosts so the claim is exact:** the target
+chip's **pill outline** is not drawn inside the third-party application in dark.
+Scanning the chip's border rows: on the first-party run page in dark the border
+sits at `rgb(37,47,63)` against the island ground `rgb(13,24,42)` — and it is
+there **both** when the island mounts dark and when it repaints into dark, checked
+separately — while inside the third-party application in dark the brightest pixel
+across those same rows is `rgb(14,25,44)`, indistinguishable from the ground. In
+light the pill is drawn on both hosts. The chip's label stays legible; what is
+missing is its outline. Ground, ink and every other reading follow the host on
+both — this is one border token that does not, and it is named here rather than
+left to be found.
 
 **Cross-site is measured, not asserted.** The reader signed in through the frame's
 **own** hosted-PKCE popup, so an app-origin session cookie exists in the browser
 (`better-auth.session_token`, `domain=localhost`, `SameSite=Lax`, `httpOnly`) —
 and the island document request still went out with `cookie: absent`, while the
-lifecycle resolves carry `cookie: absent`,
+two lifecycle resolves per capture carry `cookie: absent`,
 `x-cinatra-widget-user-token: present (cwu_)` and the host page's own origin in
 `x-cinatra-widget-origin`. The host page is served by a plain static server on a
-different origin **and a different site** from the app.
+different origin **and a different site** from the app. Both frames were taken in
+a fresh browser context with an **empty** cookie jar.
 
-**Verdict: PASS — the card renders whole, cross-site, with no login prompt. One
-named DEVIATION, reproducible:** in the widget host the card's chrome follows the
-dark theme but the **target island keeps its light palette** — the island is a
-nested document whose theme is fixed when it mounts, and the embed frame draws no
-theme control of its own. On the app hosts the island does follow the theme
-(compare W1 and W3 dark, where the rendered pane is dark). Both W7 frames were
-mounted with the theme already set, so this is the surface's reading and not the
-driver toggling after the fact.
+**Verdict: PASS — the card renders whole, cross-site, with no login prompt, and
+the island now follows the host's colour scheme in both themes. One named
+deviation: the chip's pill outline in dark, above.**
 
 *Said plainly:* the widget conversation reaches the card by asking for it — the
-turn typed into the widget names the run under proof, because five reviews from
-earlier rounds are also pending on this instance and the assistant otherwise
-answers with whichever one it finds. The run panel deliberately withholds the
-slot's automatic swap on this host (`packages/agents/src/agentic-run-panel.tsx`,
-`widgetHostedPanel`), so the automatic replacement is **not** claimed for the
-widget; what this cell proves is that the card renders, cross-site, with no login
+turn typed into the widget names the run and the pinned revision under proof,
+because reviews from earlier rounds are also pending on this instance and the
+assistant otherwise answers with whichever one it finds. The run panel deliberately
+withholds the slot's automatic swap on this host
+(`packages/agents/src/agentic-run-panel.tsx`, `widgetHostedPanel`), so the
+automatic replacement is **not** claimed for the widget; what this cell proves is
+that the card renders, cross-site, in the host's own colour scheme, with no login
 prompt.
 
 ### W9 — the review page, decided
@@ -330,9 +432,9 @@ both pre-existing:**
 |---|---|---|---|---|
 | W0 placeholder | the conversation, working | ✔ | ✔ | **PASS** — frame + spinner, no status, no result, nothing to press, no run-page link; drawn example's heading absent (named) |
 | W1 review card | the conversation, pending | ✔ | ✔ | **PASS** — swapped in place on its own, drawn as prose by its renderer, one composer, no prompt window; no provenance row (named) |
-| W3 review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder and the in-place gate; the rail carries no gate entry and no prompt window (2 deviations, named) |
+| W3 review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder, the in-place gate and the rail's merged gate entry; the paused step is not highlighted, the work step is named by position, no prompt window (3 deviations, named) |
 | W5 review card | the review page, pending | ✔ | ✔ | **PASS** — the same run surface, rendered beside raw source, floor, prompt window; rail treatment and prompt copy (2 deviations, named) |
-| W7 review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire; the island keeps its light palette in dark (1 deviation, named) |
+| W7 review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and the island now follows the host's colour scheme in both themes; the chip's pill outline is not drawn in dark (1 deviation, measured on both hosts) |
 | W9 decided | the review page, decided | ✔ | ✔ | **PASS** — `renderer_kind = first-party`; the reviewed target and the rail's settled state are missing (2 deviations, named) |
 
 ## What this round does NOT claim, and what it dropped
@@ -354,5 +456,10 @@ both pre-existing:**
 4. **The rail's contents**, the missing prompt window on the plain run route, and
    the resolved gate's omission of the reviewed target — all named above, all
    pre-existing, all outside this slice's renderer.
+5. **That the gate's minting delay on the re-take run is product timing.** It is
+   not; it is this instance's lost queue lock, named and explained above.
+6. **That every token inside the island resolves on every host.** One does not —
+   the target chip's pill outline in dark inside the third-party application —
+   measured on both hosts and named in W7.
 
 Row-level readback, hashes and stamps: [`capture-records.md`](capture-records.md).
