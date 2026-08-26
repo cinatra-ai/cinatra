@@ -412,7 +412,16 @@ export function scriptedTurnStartsAgent(instructions: string): string | null {
  * own schema decides whether that is enough.
  */
 export function scriptedTurnAgentInputParams(instructions: string): string {
-  const marker = instructions.match(/\binput[\s_]?params?\b\s*[:=]?\s*(?=\{)/i);
+  // THE WHITESPACE IS UNAMBIGUOUS ON PURPOSE. `\s*[:=]?\s*` puts two runs of
+  // whitespace either side of an OPTIONAL character, so a stretch of whitespace
+  // can be split between them in many ways and the engine tries each — on this
+  // runtime, a sentence with sixty thousand tabs and no `{` took ~18 seconds to
+  // refuse, and the sentence is the person's own text. Written this way the
+  // first run takes all the whitespace and the optional group can only begin at
+  // a character that is not whitespace, so there is nothing left to split. The
+  // reading is unchanged for every shape a person writes; the suite asserts
+  // both halves of that.
+  const marker = instructions.match(/\binput[\s_]?params?\b\s*(?:[:=]\s*)?(?=\{)/i);
   if (!marker || marker.index === undefined) return "{}";
   const start = instructions.indexOf("{", marker.index);
   if (start === -1) return "{}";
