@@ -469,7 +469,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/objects-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Core objects store read/written heavily on request paths. Highest-volume migration target for the staged async conversion.",
+      "Core objects store read/written heavily on request paths. Highest-volume migration target for the staged async conversion. cinatra#2591 adds one call site, resolveObjectIdsByAnchorNodeUuids: a READ-ONLY id resolution (SELECT id, graphiti_anchor_node_uuid WHERE graphiti_anchor_node_uuid = ANY($1) AND (org_id = $2 OR $2 IS NULL) AND deleted_at IS NULL) that maps the anchor UUIDs a graph recall returned back onto the rows they name. It goes through the SAME bridge as every other read in this file, adds NO write, and makes NO authorization decision: every resolved id is re-fetched through listObjectsByFilter with the caller's actor, which applies the ownership filter, the sealed-room project clause and the soft-delete filter in SQL. Same class, same migration path.",
   },
   "src/lib/project-writable.ts": {
     class: "migratable-request-path",
