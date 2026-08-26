@@ -241,3 +241,185 @@ default and are unaffected.
 3. **Anything about the schedule CARD.** This leg exercises the agent page's schedule
    form and its persistent Trigger tab. The card surfaces that #2978 changed were
    already pictured on that PR.
+
+---
+
+# The one-off leg (2026-08-26) — acceptance item 1, word for word
+
+Item 1 reads: **"Chat card and run-page step, one-off fired: read-only, no controls
+(real run on a real model, pictured)."** The recurring leg above proves the model
+execution; it pictures the agent page's schedule tab. This leg is item 1's own two
+surfaces — the **chat card** and the **run page's Schedule step** — after a **one-off**
+came due on its own clock, with the run it fired finishing on a real provider.
+
+Nothing was inserted, seeded or released by hand. No clock was moved. The only SQL any
+step ran is `select`. Every action below happened in the shipped UI.
+
+## The round
+
+| moment | UTC |
+|---|---|
+| the schedule stated in the chat composer; the assistant drew its scheduling card | `03:58:32Z` |
+| **Confirm** pressed on the card — trigger row written, `scheduled`, `2026-08-26 04:15:00Z`, UTC | `03:59:09Z` |
+| `C1` shot — the card armed, before the fire | `03:59:10Z` |
+| **the one-off fired on its own clock** — `released_at` | `04:15:00.112Z` |
+| the fired run asked for its one visible input on the run page; the input was typed and **Continue** pressed | `04:15:43Z` |
+| the round's single model call, per the app's usage ledger | `04:16:06.508Z` |
+| the run finished `completed` | `04:16:06.943Z` |
+| `R2`, `R1`, `C2` shot | `04:16:16Z` – `04:17:49Z` |
+
+## The pictures
+
+`captures-one-off/`. Eight files, four readings, light and dark for every one. Full
+window, 1440×900 at device scale 2 (2880×1800), uncropped.
+
+| cell | reading |
+|---|---|
+| `C1` | the chat card, one-off armed, **before** the fire |
+| `C2` | the chat card, the same card, **after** the fire |
+| `R1` | the run page's Schedule step, after the fire |
+| `R2` | the run page's own reading of the finished run |
+
+## requires / shows / verdict
+
+**`C1` — the chat card, armed, before the fire**
+- *requires* (the leg's control): the card this leg fires from is a ONE-OFF armed by the
+  person's own Confirm on the card in the conversation — so that `C2`'s freeze is a
+  change of state and not the card's resting look.
+- *shows*: the assistant's answer "Scheduling card shown. I found **Agent Planner** and
+  proposed a one-time run for **August 26, 2026 at 04:15 UTC**. Confirm or adjust the
+  schedule on the card in this conversation. I did **not** run the agent now.", and
+  below it the card: `Run right after setup` / **`Schedule for later` selected** /
+  `Recurring`, `Run at 08/26/2026, 04:15 AM`, `Timezone UTC`, `Estimated run duration
+  Unavailable.`, and one control on the floor — **Save changes**. Measured on the whole
+  screen: all three mode rows enabled, both schedule inputs enabled, `Save changes` 1,
+  `Cancel schedule` 0, **`release-trigger-now` 0**.
+- *verdict*: **PASS**, light and dark.
+
+**`C2` — the chat card after the one-off fired**
+- *requires* (item 1): "Chat card … one-off fired: read-only, no controls."
+- *shows*: the same card in the same conversation, the same rows — `Schedule for later`
+  still the chosen row, `Run at 08/26/2026, 04:15 AM`, `Timezone UTC` — both inputs now
+  greyed, all three mode rows greyed, and **no floor at all**: the `Save changes` that
+  stood in `C1` is gone and nothing replaced it. Measured: mode rows 3/3 disabled,
+  inputs 2/2 disabled, `Save changes` 0, `Confirm` 0, `Cancel schedule` 0,
+  `Cancel trigger` 0, **`release-trigger-now` 0**.
+- *verdict*: **PASS**, light and dark.
+
+**`R1` — the run page's Schedule step after the one-off fired**
+- *requires* (item 1): "… and run-page step, one-off fired: read-only, no controls."
+- *shows*: `Agent Planner (2)`, the `Setup` tab, the rail rows `1 Schedule` (selected)
+  and `Step 1` (checked), and the schedule form drawn **to the right of the rail**:
+  `Schedule for later` chosen, `Run at 08/26/2026, 04:15 AM` and `Timezone UTC` greyed,
+  all three mode rows greyed, **no floor** — no `Save changes`, no `Cancel schedule` —
+  and the prompt window ("Ask Cinatra to suggest edits to the fields above…") sitting
+  **below** the scheduler card. Measured: mode rows 3/3 disabled, inputs 2/2 disabled,
+  every floor control 0, **`release-trigger-now` 0**.
+- *verdict*: **PASS**, light and dark.
+
+**`R2` — the run page's own reading of the finished run**
+- *requires* (item 1): "real run on a real model" — the run the one-off fired reached a
+  real provider and finished, and the run page says so.
+- *shows*: `Agentic Run Progress` with the badge **`completed`**, and the card
+  "**Run complete** — This run finished. Its output is in the run transcript below."
+  with **Start new run**. **There is no transcript below it**, and nothing else on the
+  page carries the model's text; the rail's `Step 1` is checked and opens nothing.
+- *verdict*: **PASS on the completion reading, DEFECT on the output reading** — the same
+  already-stated defect as `P3` above (the completion copy promises a transcript the
+  surface does not render). The run really did produce the model text quoted below; the
+  product does not show it. Not re-filed here — it is the `P3` finding, seen again on a
+  one-off.
+
+## The rows, read back
+
+The trigger row (the one-off the card armed):
+
+```
+run_id             43ddf2b2-681b-4b85-b7c1-ec3c5c82950b
+trigger_type       scheduled          (the one-off kind; `recurring` is the other)
+scheduled_at       2026-08-26 04:15:00+00
+cron_expression    (empty)
+timezone           UTC
+enabled            t
+released_at        2026-08-26 04:15:00.112+00      <- the fire
+last_fired_at      (null)             <- a one-off stamps `released_at`, not this
+stopped_at         (null)
+job_scheduler_id   present
+created_at         2026-08-26 03:59:09.62+00
+updated_at         2026-08-26 04:15:00.112+00
+```
+
+The run it fired:
+
+```
+id                 43ddf2b2-681b-4b85-b7c1-ec3c5c82950b
+title              Agent Planner (2)
+status             completed
+template_id        2c35373d-5650-4ddb-b127-a26a47250abb
+a2a_task_id        e1bc7ea1-9e97-4913-ae85-8be2f5c30c01
+created_at         2026-08-26 03:59:09.674567+00
+completed_at       2026-08-26 04:16:06.943+00
+error              (null)
+```
+
+The app's usage ledger, from the fire onwards — exactly one call:
+
+```
+provider  model                 calls  first_at                      last_at
+openai    gpt-5.5-2026-04-23    1      2026-08-26 04:16:06.507982+00  2026-08-26 04:16:06.507982+00
+```
+
+0.4 s before the run completed.
+
+**This one is bound by an id, not only by time.** Unlike the recurring leg, the run and
+the runtime turn are the same record: the run's `a2a_task_id` is the task id in its own
+step result, and the payload the runtime received carries
+`"cinatra_run_id": "43ddf2b2-681b-4b85-b7c1-ec3c5c82950b"`. The usage-ledger row is
+still correlated to the run by TIME (0.4 s before completion, nothing else running) —
+`usage_events` carries no run id, so that half is unchanged.
+
+## What the model produced
+
+The run's step result is one `wayflow_response` carrying the agent's `findings` for the
+OAS body the run was given (the same "Weekly Support Digest" flow as the recurring leg).
+Verbatim:
+
+- `missing_control_flow_connections` — "Add explicit control_flow_connections for
+  start → summarise → human review → send → end so execution order and reachability are
+  unambiguous."
+- `missing_hitl_review_gate` — "Insert an InputMessageNode after the summarise step and
+  before send so the human reviews the actual generated digest before delivery."
+- `side_effect_needs_gate` — "Declare an approvalPolicy or equivalent confirmation gate
+  around the send step because sending the digest to the team is a write/side-effect
+  action."
+- `define_referenced_components` — "Include $referenced_components for start, summarise,
+  send, and end so node types are explicit and the LLM-summary versus delivery node
+  choices can be reviewed."
+
+Those sentences are about the flow that was actually handed in; the wording differs from
+the recurring leg's four findings on the same body, which is what a model answer looks
+like and what a canned one does not.
+
+## Two things this leg found
+
+1. **A schedule armed from the chat card creates a run with NO inputs, and the product
+   asks for them only AFTER the fire.** The proposal tool takes an agent and a schedule
+   and nothing else, so the run is written with `input_params {}`; the run page shows a
+   single `Schedule` step and no configuration step while the schedule is pending. When
+   the one-off came due, the run went to `pending_approval` and the run page drew
+   `Awaiting input` with the agent's one visible field (`Oas JSON`, labelled
+   *(optional)* although the agent's OAS gives it no default). Typing it and pressing
+   **Continue** let the run reach the runtime and finish. So a scheduled run of this
+   agent does not complete unattended: **it fires on time and then waits for a person**.
+   That is what "one-off fired" looks like for an agent with a required input, and it is
+   worth a decision — the fire is punctual, the execution is not autonomous.
+2. **The run page's completion copy still promises a transcript that is not there** —
+   the `P3` defect above, unchanged on the one-off road.
+
+## What this leg does NOT establish
+
+1. **That the usage-ledger row is per-request attributable to this run.** It is bound by
+   time, as above.
+2. **That the run page ever shows model output.** It does not — see `R2`.
+3. **Anything about a recurring schedule.** That is the leg above, and #2978's own
+   pictures.
