@@ -25,6 +25,7 @@
     "./install-target-picker": "./src/install-target-picker.ts",
     "./llm-provider-policy": "./src/llm-provider-policy.ts",
     "./store": "./src/store.ts",
+    "./review-task-actions": "./src/review-task-actions.ts",
     "./lifecycle-coordinator": "./src/lifecycle-coordinator.ts",
     "./builtin-assistant-template": "./src/builtin-assistant-template.ts",
     "./agent-template-identity": "./src/agent-template-identity.ts",

@@ -21,7 +21,37 @@
 // chat. The second direction matters because a silent withdrawal presents as
 // "the assistant stopped finding my reviews", which reads like a model problem
 // rather than a policy edit.
-import { describe, expect, it } from "vitest";
+//
+// ---------------------------------------------------------------------------
+// THE RULE IS REWRITTEN, NOT WEAKENED (cinatra#2932, lifecycle-b W5a).
+//
+// From the plan (PLAN: Agents Lifecycle (B), section 4):
+//
+//   "This is the one deliberate exception to the rule that the assistant never
+//    operates a lifecycle decision. It exists only for the card you have
+//    explicitly bound, and the written rule and its tests are rewritten openly
+//    to name the exception where it is enforced — so the guarantee that chat
+//    never decides on its own stands whole and stays readable."
+//
+// So the rule now reads: THE MODEL MAY PRESENT A LIFECYCLE INTERACTION, AND MAY
+// RESOLVE ONE ONLY THROUGH `lifecycle_bound_card_decide`, ONLY WITH A
+// SERVER-MINTED SINGLE-USE GRANT FOR THE CARD THE PERSON BOUND AND THE ONE
+// CONTROL IT NAMES.
+//
+// THE SCANNER IS NOT EXEMPTED, and that is the whole point of how this file
+// changed. The exception is not a name added to an ignore list: the primitive is
+// still scanned, still classified as a lifecycle DECISION by the same
+// family+verb rules as everything else, and still has to be enumerated here by
+// name. What changed is that the expected reachable set now HAS one decision
+// primitive in it, and this file additionally asserts WHERE that exception is
+// enforced — the handler refuses without a grant — so "reachable" and
+// "permitted" stay two different things in the test as well as in the code.
+//
+// A SECOND DECISION PRIMITIVE STILL FAILS HERE. The set below is exact, so
+// anything else that carries a lifecycle name and a decision verb onto either
+// delegated policy fails exactly as it did before.
+// ---------------------------------------------------------------------------
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -30,6 +60,13 @@ import {
   isDelegatedWidgetMcpToolAllowed,
   type WidgetDelegationKind,
 } from "@cinatra-ai/mcp-server/delegated-widget-tool-policy";
+// The exception's own module: the name it registers under, and the two fixed
+// refusals its handler answers with. Imported so this file names the SAME
+// strings the enforcement point uses rather than three literals that can drift.
+import {
+  LENT_ACTION_NO_AUTHORITY,
+  LENT_ACTION_PRIMITIVE,
+} from "../lent-action-mcp";
 
 const INVENTORY_PATH = resolve(
   __dirname,
@@ -114,11 +151,13 @@ const FORBIDDEN_LIFECYCLE_NAMES = [
 ];
 
 describe("no lifecycle decide/mutate primitive is reachable from a delegated perimeter", () => {
-  it("the generated inventory contains no chat-reachable lifecycle decision primitive", () => {
+  it("the ONLY chat-reachable lifecycle decision primitive is the named exception", () => {
     const reachable = inventoryPrimitiveNames()
       .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
       .filter((name) => isDelegatedChatMcpToolAllowed(name));
-    expect(reachable).toEqual([]);
+    // Exactly one, by name. Anything else that reaches this list is the
+    // regression this file has always existed to catch.
+    expect(reachable).toEqual([LENT_ACTION_PRIMITIVE]);
   });
 
   it("the generated inventory contains no widget-reachable lifecycle DECISION primitive", () => {
@@ -128,7 +167,10 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     const reachable = inventoryPrimitiveNames()
       .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
       .filter((name) => WIDGET_KINDS.some((k) => isDelegatedWidgetMcpToolAllowed(k, name)));
-    expect(reachable).toEqual([]);
+    // The same one exception, for the epic's parity reason: a person does the
+    // same things inside a third-party application as in the app, and the
+    // deciding authority there is built fresh from the widget's own credential.
+    expect(reachable).toEqual([LENT_ACTION_PRIMITIVE]);
   });
 
   it("the widget's reachable lifecycle set EQUALS chat's — parity, both directions", () => {
@@ -150,10 +192,11 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     }
   });
 
-  it("that shared set is exactly the four READ-ONLY pulls — nothing that resolves an interaction", () => {
+  it("that shared set is the four READ-ONLY pulls plus the ONE named exception", () => {
     // The parity assertion above says "the same"; this one says "the same WHAT".
     // Together they are the whole rule: the person sees everything on every
-    // surface, and the AI transport resolves nothing on any of them.
+    // surface, and the AI transport resolves nothing on any of them EXCEPT the
+    // one bound-card control the person's own message lent it, once.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
       .filter((name) => isDelegatedChatMcpToolAllowed(name))
@@ -161,6 +204,8 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     expect(chatReachable).toEqual([
       "artifact_review_gate_render",
       "artifact_review_gates_list",
+      // THE ONE EXCEPTION, in its alphabetical place rather than tucked away.
+      LENT_ACTION_PRIMITIVE,
       "schedule_proposal_render",
       "verification_record_render",
     ]);
@@ -187,6 +232,65 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
         verb,
       ).toBe(false);
     }
+  });
+});
+
+describe("the exception is named WHERE IT IS ENFORCED, not merely allowed", () => {
+  // Reaching a tool is not permission to use it. The policy edits above make the
+  // primitive VISIBLE; what makes it safe is the grant its handler demands, and
+  // the rule is only honestly rewritten if this file says so and checks it.
+
+  it("the primitive's own name declares the class it belongs to", () => {
+    // Deliberately NOT a name chosen to slip past the verb backstop: it carries
+    // `decide`, so it is denied by construction and had to be admitted by an
+    // explicit, disclosed override in BOTH policies.
+    expect(LENT_ACTION_PRIMITIVE.split("_")).toContain("decide");
+  });
+
+  it("the handler refuses when the request frame carries NO grant", async () => {
+    // The enforcement point, exercised. A model that can SEE the tool and calls
+    // it with a well-formed argument gets nothing: no grant on the frame, no
+    // action, and the fixed sentence back.
+    vi.resetModules();
+    vi.doMock("@cinatra-ai/mcp-server", () => ({
+      mcpRequestContextStorage: {
+        getStore: () => ({ userId: "usr_1", orgId: "org_1" }),
+      },
+    }));
+    vi.doMock("@cinatra-ai/agents/review-task-actions", () => ({
+      approveReviewTaskInternal: vi.fn(),
+    }));
+    vi.doMock(
+      "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions",
+      () => ({ submitReviewDecisionAction: vi.fn() }),
+    );
+    vi.doMock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
+      enforceReviewRunAccess: vi.fn(),
+      readGatePinnedTargets: vi.fn(),
+    }));
+    vi.doMock("@cinatra-ai/agents/store", () => ({
+      readLatestDurableHitlGateArtifact: vi.fn(),
+    }));
+    vi.doMock("@cinatra-ai/agents/db", () => ({ agentBuilderPool: { query: vi.fn() } }));
+    const mod = await import("../lent-action-mcp");
+    const out = await mod.handleLentAction({ ref: "anything", control: "approve" });
+    expect(out.structuredContent).toEqual({
+      ok: false,
+      message: LENT_ACTION_NO_AUTHORITY,
+    });
+    vi.resetModules();
+  });
+
+  it("the typed CarveOut twin exists at the delegated-chat boundary", () => {
+    // The policy override and the typed record are kept in lockstep by the authz
+    // inventory coverage suite; this assertion is here so the RULE'S own file
+    // states that the exception is written down in the authorization record too,
+    // not only in a transport allowlist.
+    const source = readFileSync(
+      resolve(__dirname, "../../authz/carve-out.ts"),
+      "utf8",
+    );
+    expect(source).toContain(LENT_ACTION_PRIMITIVE);
   });
 });
 
@@ -218,5 +322,13 @@ describe("the read-only pull primitives are reachable from BOTH delegated perime
   it("every pull primitive actually EXISTS in the generated inventory", () => {
     const names = new Set(inventoryPrimitiveNames());
     for (const name of PULL_PRIMITIVES) expect(names.has(name), name).toBe(true);
+  });
+
+  it("and so does the ONE exception — it is scanned, never exempted", () => {
+    // The machine-scanned record is the thing this whole file rests on. A
+    // primitive registered under a CONSTANT instead of a literal would be
+    // invisible to the scanner, which is how an exception quietly stops being
+    // one; asserting its presence keeps that door shut.
+    expect(new Set(inventoryPrimitiveNames()).has(LENT_ACTION_PRIMITIVE)).toBe(true);
   });
 });
