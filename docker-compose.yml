@@ -63,7 +63,7 @@ services:
     # in the cinatra-redis volume): Redis 8.8 writes RDB format v14, Redis 7.4
     # reads only <=v12 and refuses a newer dump (crash-loop class). Re-resolve
     # at bump time: `docker buildx imagetools inspect redis:8-alpine`.
-    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+    image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 6379 on 0.0.0.0.
     volumes:
@@ -99,7 +99,7 @@ services:
       retries: 20
 
   nango-db:
-    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     # Upgrade track: HELD at postgres 17-alpine as a DELIBERATE VALIDATED HOLD
     # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
@@ -147,7 +147,7 @@ services:
     # moving tag. The works-after nango arm (CI) proves the synthetic
     # connection-store round-trip on the candidate; the OAuth smoke is a
     # deploy-time gate. Converged 2026-07-11. See docs/internals/workflows/upgrade-track.md.
-    image: nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1
+    image: nangohq/nango-server:hosted@sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2
     # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
     # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
     # `on-failure:N`, which exhausts its retry budget and returns to
