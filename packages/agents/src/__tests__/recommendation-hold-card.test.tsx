@@ -961,10 +961,35 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     expect(instanceScreens).toMatch(
       /hostsRecommendationCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
     );
-    // The park is still read — for ONE thing: the Run button is withheld while a
-    // hold is live. That is the run's dispatchability, not a rendering of the
-    // interaction, and it is the only surviving use.
-    expect([...instanceScreens.matchAll(/readRecommendationParkForRun/g)]).toHaveLength(2);
+    // The park is still read, and never to DRAW the interaction. Two uses, one
+    // per screen, and the import above them:
+    //
+    //   • the run screen withholds the Run button while a hold is live (the
+    //     run's dispatchability, not a rendering of the interaction), and asks
+    //     the same read whether the rail carries an entry at all
+    //     (`recommendationRailEntry`, cinatra#2790);
+    //   • the SETUP run page asks that same entry question for its own rail
+    //     (cinatra#2970) — whether the row exists and can be opened, never what
+    //     the card draws inside it.
+    //
+    // "Does the run carry this step" is the RAIL's question and the rail's
+    // alone; the card remains the one authority on the interaction, and neither
+    // screen derives a state, a candidate set or a decision from the park.
+    expect([...instanceScreens.matchAll(/readRecommendationParkForRun/g)]).toHaveLength(3);
+    // Each screen reads it ONCE, so a second read cannot creep back in under
+    // either of them.
+    const runScreen = instanceScreens.slice(
+      instanceScreens.indexOf("export async function SetupScreen"),
+      instanceScreens.indexOf("export async function PermissionsScreen"),
+    );
+    const triggerScreen = instanceScreens.slice(
+      instanceScreens.indexOf("export async function TriggerScreen"),
+    );
+    expect([...runScreen.matchAll(/await readRecommendationParkForRun\(/g)]).toHaveLength(1);
+    expect([...triggerScreen.matchAll(/await readRecommendationParkForRun\(/g)]).toHaveLength(1);
+    // And what each does with it is the ENTRY predicate, not a derivation.
+    expect(triggerScreen).toMatch(/recommendationRailEntry\(\{/);
+    expect(triggerScreen).not.toMatch(/<RunRecommendationChipRow/);
   });
 
   it("the card has no repeating timer — the retired poll cannot come back through it", () => {

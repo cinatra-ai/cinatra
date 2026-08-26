@@ -14,11 +14,12 @@
 //
 // WHAT THIS FILE IS. Those two columns and the selection between them, and
 // nothing else. The rows are drawn by the steps themselves (each gate step owns
-// its own row, because each carries its own anchors), the run's remaining rows
-// are the page's `rail`, and the run's own reading is the page's `detail`. This
-// component never invents any of the three, and it never decides which step is
-// open on first paint — the screen does, because only the screen knows whether
-// the run has run and whether it is paused on a gate.
+// its own row, because each carries its own anchors) or, for a step whose row is
+// nothing but a numeral and a word, by the shared `RunSurfaceRailRow` below; the
+// run's remaining rows are the page's `rail`, and the run's own reading is the
+// page's `detail`. This component never invents any of the three, and it never
+// decides which step is open on first paint — the screen does, because only the
+// screen knows whether the run has run and whether it is paused on a gate.
 //
 // WHY THE STEPS ARE A LIST. Plan (A) §6.2 puts the recommendation "at the
 // trigger position, the top entry on the step rail, ahead of the work steps it
@@ -26,8 +27,19 @@
 // can carry both, so the frame takes them in the order the screen lists them and
 // the rail below renumbers around them (`stepOffset`) — one rail, one selection,
 // one open surface at a time.
+//
+// A STEP WITH NOTHING TO OPEN IS NOT SELECTABLE (cinatra#2970).
+// The setup run page let every row be opened, so a step the run had not reached
+// opened an EMPTY run detail. cinatra#2970: "a step the run has not reached
+// cannot be selected. Its row stays on the rail, muted, so the series is
+// visible; clicking it does nothing; the scheduler stays open; the right column
+// never shows an empty step surface." The frame is the one authority on that,
+// because the frame is what changes the selection: `isRunSurfaceStepSelectable`
+// below is asked before every selection AND for the first paint, so no row —
+// however it is drawn, and by whichever module — can open an empty column.
 // ---------------------------------------------------------------------------
 
+import { Check } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -37,42 +49,38 @@ import {
   type ReactNode,
 } from "react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/**
- * WHICH step the run detail is showing: one of the gate steps that head the
- * rail, or the run's own detail (its steps and their progress, the gate the
- * review page opened on).
- */
-export type RunStepSelection = "recommendation" | "schedule" | "detail";
+// THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
+// labels are not: `instance-screens.tsx` is a SERVER component and it composes
+// the setup run page's steps, so it has to evaluate the predicate. A
+// non-component export of a `"use client"` module reaches the server graph as a
+// client reference, and calling one is not calling the function
+// (`instance-screens-client-boundary.test.ts`). One definition, in a module with
+// no boundary to cross.
+import {
+  isRunSurfaceStepSelectable,
+  resolveRunSurfaceSelection,
+  runSurfaceNodeExists,
+  type RunStepSelection,
+  type RunSurfaceRailStep,
+} from "./run-surface-rail-step";
 
-/** A gate step that heads the rail: its row, and the surface it opens onto. */
-export type RunSurfaceRailStep = {
-  /** The selection value this step answers to. */
-  key: Exclude<RunStepSelection, "detail">;
-  /** The rail ROW. Drawn inside the rail column, above the page's own rows. */
-  row: ReactNode;
-  /**
-   * The step's own surface, drawn in the run detail while this step is open.
-   *
-   * NULLISH (`null` or `undefined`) means this step HAS no surface of its own,
-   * and the run detail stays as the page composed it. `ReactNode` already admits
-   * both, which is why the sentinel is stated as nullish rather than narrowed to
-   * `null` — a narrower type here would be a claim the type system does not make.
-   *
-   * That is the settled recommendation on the branch whose panel draws the card
-   * (cinatra#2790, S9f): the entry keeps its place on the rail as read-only
-   * history, and the reading it would open onto is already inside the run detail
-   * beside it. Handing it the card a second time would be a second mount of the
-   * one renderer; handing it nothing is exactly right, and is why the run detail
-   * FALLS BACK rather than emptying — without that fallback a row resolving to
-   * what is already on screen would blank the column instead.
-   *
-   * Every OTHER step supplies a real surface, including the settled
-   * recommendation on the branch the screen hosts.
-   */
-  surface: ReactNode;
-};
+// Re-exported as TYPES ONLY. The subpath consumers already import
+// `RunStepSelection` from is this module (`schedule-rail-step.ts` re-exports it
+// again for the review page), and a type crosses no boundary. The predicate is
+// deliberately NOT re-exported: a server caller that reached it through here
+// would be handed a client reference.
+export type { RunStepSelection, RunSurfaceRailStep };
+
+// THE RAIL'S LABELS ARE NOT DECLARED HERE. They live in
+// `run-surface-rail-labels.ts`, a module carrying no directive, because the
+// setup run page's SERVER component reads them: an export of THIS module reaches
+// the server graph as a client reference, and dotting into a reference yields
+// `undefined` rather than the label (cinatra#2970). Both sides import the same
+// plain value instead. The components stay here — a component is exactly what
+// the boundary is built to carry.
 
 const RunStepSelectionContext = createContext<{
   selected: RunStepSelection;
@@ -94,7 +102,7 @@ export function useRunStepSelection() {
 }
 
 /**
- * THE ROW VOCABULARY, shared so the two gate rows cannot drift apart.
+ * THE ROW VOCABULARY, shared so the rail's rows cannot drift apart.
  *
  * The row is the shadcn <Button>, not a raw <button> — the design-system
  * boundary (eslint `no-restricted-syntax`) admits no raw control JSX outside the
@@ -104,6 +112,13 @@ export function useRunStepSelection() {
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
   "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+
+/**
+ * The same row, for one that cannot be opened: neither the hover affordance nor
+ * the press animation of a row that does something (cinatra#2970).
+ */
+export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
+  "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
@@ -123,13 +138,125 @@ export function runSurfaceRailTitleClass(selected: boolean) {
   return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
 }
 
+/**
+ * ONE RAIL ROW, for a step whose row is a numeral and a word (cinatra#2970).
+ *
+ * The gate steps that carry their own anchors draw their own rows
+ * (`ScheduleRailStepRow`, `RecommendationRailStepRow`); this is the row for a
+ * step that carries none, built from the SAME three class helpers above so a
+ * rail of both kinds is one rail rather than two vocabularies side by side.
+ *
+ * It reads the selection from the frame's own context exactly as those rows do,
+ * so the frame stays the single authority on what can be opened: a press on a
+ * closed row reaches `select`, which refuses it.
+ *
+ * AND IT DRAWS THE RESOLVED-GATE HISTORY ROW (cinatra#2975), because the rail
+ * has exactly one row component and a reading only one of its rows could make is
+ * not a reading of the rail. The ratified drawing: "A resolved gate stays on the
+ * rail as read-only history — its entry keeps its place and records how it was
+ * settled." That is the completed circle in place of the numeral and the title
+ * unhighlighted — the same three class helpers, the same circle, one glyph
+ * instead of one numeral. `RecommendationRailStepRow` has drawn it since
+ * cinatra#2790; the setup run page's rows could not, so a run whose skills
+ * question had just been answered came back to that page still numbered.
+ */
+export function RunSurfaceRailRow({
+  selectionKey,
+  label,
+  displayStep,
+  conformanceId,
+  indicatorConformanceId,
+  action,
+  reached,
+  settled = false,
+  selectable = true,
+  rowAttributes,
+}: {
+  /** The step this row selects. */
+  selectionKey: Exclude<RunStepSelection, "detail">;
+  label: string;
+  /** The numeral the circle shows — the row's 1-based position in its rail. */
+  displayStep: number;
+  /** The row's own conformance id, so a capture can address exactly this row. */
+  conformanceId: string;
+  /** The indicator's conformance id, where the caller measures the circle. */
+  indicatorConformanceId?: string;
+  /** The row's `data-action` — what pressing it does, in the walk's vocabulary.
+   *  A row that cannot be opened is handed the name of THAT state instead, so a
+   *  walk (or a suite) selecting `open-<key>-step` finds no element it cannot
+   *  actually press. */
+  action: string;
+  /** Has the run reached this step? `undefined` states nothing — see
+   *  `RunSurfaceRailStep.reached`. */
+  reached?: boolean;
+  /** Has this step's gate been ANSWERED? A settled row is the rail's read-only
+   *  history row: the completed circle where the numeral was, and the title left
+   *  unhighlighted because the surface is not on it. It changes neither what the
+   *  row opens nor whether it can be opened — see `RunSurfaceRailStep.settled`. */
+  settled?: boolean;
+  /** Can this row be opened? A row that cannot is still DRAWN — the rail is the
+   *  run's series of steps and hiding a row would hide the series — but it does
+   *  not act: no click handler, `aria-disabled` so assistive technology is told
+   *  what the muted tokens say, and no press animation. */
+  selectable?: boolean;
+  /** Anchors that belong to THIS row's own host, added verbatim. */
+  rowAttributes?: Record<string, string>;
+}): ReactElement {
+  const selection = useRunStepSelection();
+  const selected = selection?.selected === selectionKey;
+  // The emphasised treatment is for the row the surface is actually on. A row
+  // that cannot be opened never gets it — and neither does a row its page has
+  // said the run has not reached.
+  const emphasised = Boolean(selected) && selectable && reached !== false;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      data-run-surface-rail-step=""
+      data-run-surface-rail-step-key={selectionKey}
+      data-run-surface-rail-selected={selected ? "true" : "false"}
+      data-run-surface-rail-reached={reached === undefined ? undefined : reached ? "true" : "false"}
+      // Mirrors the gate rows' own `data-…-step-settled`, so one capture reads
+      // the settled circle the same way on every rail it appears in.
+      data-run-surface-rail-settled={settled ? "true" : "false"}
+      data-conformance-id={conformanceId}
+      data-action={action}
+      aria-current={selected ? "step" : undefined}
+      // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
+      // row out of the tab order, so keyboard focus could not reach the row —
+      // and "its row stays on the rail, so the series is visible" is precisely
+      // what cinatra#2970 keeps. `aria-disabled` leaves the row in the tab order
+      // and announces it as unavailable when focus arrives on it.
+      aria-disabled={selectable ? undefined : "true"}
+      onClick={selectable ? () => selection?.select(selectionKey) : undefined}
+      className={selectable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
+      {...rowAttributes}
+    >
+      <span
+        data-conformance-id={indicatorConformanceId}
+        // A settled circle is FILLED whether or not its step is the open one:
+        // it is what the rail already gives a completed step, and it is what
+        // makes the row read as history rather than as something still ahead.
+        className={runSurfaceRailIndicatorClass(emphasised || settled)}
+      >
+        {settled ? <Check className="h-3 w-3" /> : displayStep}
+      </span>
+      {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
+          "the completed circle in place of the numeral, the title
+          unhighlighted". No status word is added beside it: the drawing shows
+          none. */}
+      <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
+    </Button>
+  );
+}
+
 export function RunSurfaceRail({
   steps,
   rail = null,
   detail = null,
   initialSelection,
 }: {
-  /** The gate steps heading the rail, in the order the plan puts them. */
+  /** The steps heading the rail, in the order the plan puts them. */
   steps: readonly RunSurfaceRailStep[];
   /** The REST of the rail: the page's own step rows, drawn under the gate rows. */
   rail?: ReactNode;
@@ -141,7 +268,9 @@ export function RunSurfaceRail({
    */
   initialSelection: RunStepSelection;
 }): ReactElement {
-  const [selected, setSelected] = useState<RunStepSelection>(initialSelection);
+  const [selected, setSelected] = useState<RunStepSelection>(() =>
+    resolveRunSurfaceSelection(steps, detail, initialSelection),
+  );
   // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken inside a gate step calls `router.refresh()`,
   // which re-renders the server tree WITHOUT remounting this client component —
   // so a selection kept only from the first paint would leave the reader parked
@@ -156,12 +285,21 @@ export function RunSurfaceRail({
   const [lastInitial, setLastInitial] = useState<RunStepSelection>(initialSelection);
   if (initialSelection !== lastInitial) {
     setLastInitial(initialSelection);
-    setSelected(initialSelection);
+    setSelected(resolveRunSurfaceSelection(steps, detail, initialSelection));
   }
   const open = steps.find((step) => step.key === selected) ?? null;
 
+  // THE ONE PLACE A SELECTION CHANGES, so it is the one place that can refuse
+  // one (cinatra#2970). A row drawn by any module reaches this; a key naming a
+  // step that cannot be opened is dropped and the reader stays where they were,
+  // which is "clicking it does nothing" written where it cannot be bypassed.
+  const select = (next: RunStepSelection) => {
+    if (resolveRunSurfaceSelection(steps, detail, next) !== next) return;
+    setSelected(next);
+  };
+
   return (
-    <RunStepSelectionContext.Provider value={{ selected, select: setSelected }}>
+    <RunStepSelectionContext.Provider value={{ selected, select }}>
       {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows. */}
       <div
         data-conformance-id="run-step-rail-column"
@@ -178,14 +316,21 @@ export function RunSurfaceRail({
       <div
         data-conformance-id="run-detail-column"
         data-run-detail-column=""
+        data-run-surface-selected-step={selected}
         className="flex min-w-0 flex-1 flex-col gap-4"
       >
         {/* A step with no surface of its own keeps the run detail — see
-            `RunSurfaceRailStep.surface`. `??` and not a truth test: a surface is
-            a ReactNode, and a FALSY one that exists — `false`, `0`, `""` — is
-            still the step's own and must not fall back. Nullish is the sentinel,
-            which is what `??` tests and `ReactNode` admits. */}
-        {open?.surface ?? detail}
+            `RunSurfaceRailStep.surface`.
+
+            THE SAME FUNCTION THAT DECIDED THE ROW COULD BE OPENED decides what
+            is drawn, so the two cannot disagree. It used to be `?? detail`
+            here and `runSurfaceNodeExists` in the predicate, and they part
+            company on `false`: the predicate reads it as nothing drawn and lets
+            the row open on the strength of the fallback, while `??` treats it
+            as the step's own surface and suppresses the fallback — an openable
+            row over an empty column, which is the one thing this rail must not
+            produce. */}
+        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
       </div>
     </RunStepSelectionContext.Provider>
   );

@@ -44,6 +44,24 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   "stopped",
 ]);
 
+/**
+ * The run statuses a run holds BEFORE it has ever run (cinatra#2788, S9d).
+ *
+ * `armed` and `pending_trigger` are the schedule's own states — the trigger is
+ * set and the agent is waiting for it — and `pending_input` is the setup that
+ * precedes both. None of them can carry an execution record, so none of them
+ * has run progress to show.
+ *
+ * Lives here beside `TERMINAL_RUN_STATUSES`, the other run-status set, so the
+ * screens that ask the question and the tests that pin the answer can both read
+ * it without importing a screen's whole module graph.
+ */
+export const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_input",
+  "pending_trigger",
+  "armed",
+]);
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.

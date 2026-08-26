@@ -1,0 +1,9 @@
+# Transcript of drivers/03-provider-setup.mjs, the run that configured this
+# lane's provider through the app's own setup form. The driver prints pass/fail
+# lines and nothing else — the credential it reads from its environment never
+# reaches its output, a file, an argument or the app's log.
+PASS signed in
+PASS reached /setup/model
+PASS selected the OpenAI provider
+PASS filled the key field through the app's own form
+PASS the app accepted the submission and sealed the connection itself

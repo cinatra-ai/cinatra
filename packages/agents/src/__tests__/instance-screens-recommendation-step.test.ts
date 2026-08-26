@@ -37,6 +37,20 @@ const SCREEN_SRC = fs.readFileSync(
   "utf-8",
 );
 
+/**
+ * The RUN screen's own body — `SetupScreen`, which serves the run page. The
+ * module also holds `PermissionsScreen`, `DataScreen` and `TriggerScreen`; the
+ * last of those is the setup run page, which since cinatra#2970 composes a
+ * recommendation step of its own. Assertions about "this screen mounts the card
+ * once" are about ONE screen, so they read one screen.
+ */
+const RUN_SCREEN_SRC = (() => {
+  const start = SCREEN_SRC.indexOf("export async function SetupScreen");
+  const end = SCREEN_SRC.indexOf("export async function PermissionsScreen", start + 1);
+  if (start < 0 || end < 0) return "";
+  return SCREEN_SRC.slice(start, end);
+})();
+
 const BASE = {
   hasRecommendationStep: false,
   recommendationHeld: false,
@@ -212,13 +226,23 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
   });
 
   it("makes exactly ONE `recommendation_hold` mount and uses it in both slots", () => {
-    expect(SCREEN_SRC.match(/<RecommendationHoldCard\b/g) ?? []).toHaveLength(1);
-    expect(SCREEN_SRC).toContain("const recommendationCardNode = hostsRecommendationCard ? (");
+    // SCOPED TO THIS SCREEN, and it has to be: the module holds four screens,
+    // and the setup run page is a screen of its own with a recommendation step
+    // of its own (cinatra#2970). Two mounts in one FILE is not two mounts on one
+    // page — `/trigger`'s setup surface and the run page are different routes
+    // that never render together — and the one-card rule is about instances.
+    // The setup screen's own single mount is pinned in
+    // `instance-screens-setup-rail.test.ts`; a file-wide count here would either
+    // fail on a screen it is not about, or quietly stop being about this one.
+    expect(RUN_SCREEN_SRC.match(/<RecommendationHoldCard\b/g) ?? []).toHaveLength(1);
+    expect(RUN_SCREEN_SRC).toContain(
+      "const recommendationCardNode = hostsRecommendationCard ? (",
+    );
     // The step's surface and the run detail both reference that ONE mount —
     // the surface takes it bare (`surface: recommendationCardNode`) and the
     // detail slot draws it as a child (`{recommendationCardNode}`).
     expect(SCREEN_SRC).toContain("surface: recommendationCardNode,");
-    expect(SCREEN_SRC.match(/\{recommendationCardNode\}/g) ?? []).toHaveLength(1);
+    expect(RUN_SCREEN_SRC.match(/\{recommendationCardNode\}/g) ?? []).toHaveLength(1);
   });
 
   it("keeps the run's panels INSIDE the detail slot — never beside the open gate step", () => {

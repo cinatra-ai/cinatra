@@ -1,0 +1,395 @@
+{
+  "slice": "2970-setup-rail",
+  "records": [
+    {
+      "cell": "C7__setup-run-page__schedule-open__unreached-rows-muted",
+      "step": "c7-light",
+      "theme": "light",
+      "resolvedTheme": "light",
+      "framing": "window",
+      "runId": "3ad285c7-a7e0-44af-baba-e44dd4794ee2",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3ad285c7-a7e0-44af-baba-e44dd4794ee2/trigger",
+      "screenshot": "evidence/2970-setup-rail/captures/C7__setup-run-page__light.png",
+      "sha256": "e90fe853e6a74f906fda5ebdabfab44eb3eae170229da38eabea7fbe9dafabf0",
+      "px": {
+        "width": 2880,
+        "height": 1800,
+        "css": "1440x900",
+        "deviceScaleFactor": 2
+      },
+      "requires": "the two-column run surface: the rail on the left carrying the run's three setup steps in order (their titles render EMPTY on this head \u2014 see README.md), the scheduler open in the detail column on the right, no agentic run progress beside it, and the recommendation and review rows muted and unselectable",
+      "controls": {
+        "railColumns": 1,
+        "detailColumns": 1,
+        "selectedStep": "schedule",
+        "lifecycleCardHosts": 0,
+        "agenticRunProgressPanels": 0,
+        "scheduleRailStepAnchors": 0,
+        "detailColumnNativeRadioInputs": 0,
+        "detailColumnButtons": [
+          "Run right after setup",
+          "Europe/Berlin",
+          "1",
+          "week(s)",
+          "Sun",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "09"
+        ],
+        "rows": [
+          {
+            "tag": "button",
+            "key": "schedule",
+            "text": "1",
+            "selected": "true",
+            "reached": null,
+            "ariaDisabled": null,
+            "dataAction": "open-schedule-step",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "recommendation",
+            "text": "2",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "recommendation-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "review",
+            "text": "3",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "review-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          }
+        ],
+        "runSurfaceRect": {
+          "x0": 928,
+          "y0": 447,
+          "x1": 2464,
+          "y1": 1723
+        },
+        "detailHtmlDigest": "a83b8cd1f79e7598ee8195c6166a1eecfbd2b1cff87a0097edbac08abf95d753"
+      },
+      "dbAt": {
+        "status": "pending_trigger",
+        "created_at": "2026-08-25T10:03:54.552Z",
+        "started_at": null,
+        "completed_at": null,
+        "trigger_type": null,
+        "scheduled_at": null,
+        "timezone": null,
+        "released_at": null,
+        "review_gates": "0",
+        "read_at": "2026-08-25T10:59:20.763Z"
+      },
+      "recordedAt": "2026-08-25T10:59:20.780Z",
+      "runtime": "dev-runtime"
+    },
+    {
+      "cell": "C7-click__setup-run-page__after-pressing-both-muted-rows",
+      "step": "c7-click",
+      "theme": "light",
+      "resolvedTheme": "light",
+      "framing": "window",
+      "runId": "3ad285c7-a7e0-44af-baba-e44dd4794ee2",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3ad285c7-a7e0-44af-baba-e44dd4794ee2/trigger",
+      "screenshot": "evidence/2970-setup-rail/captures/C7-click__setup-run-page__light.png",
+      "sha256": "b9c0e18ec020a597a54127725ebdf55b657e4b1582d57f365b08e6a395458acb",
+      "px": {
+        "width": 2880,
+        "height": 1800,
+        "css": "1440x900",
+        "deviceScaleFactor": 2
+      },
+      "requires": "the same page after both muted rows were pressed: the scheduler still open, the detail column unchanged, nothing selected that was not selected before",
+      "controls": {
+        "railColumns": 1,
+        "detailColumns": 1,
+        "selectedStep": "schedule",
+        "lifecycleCardHosts": 0,
+        "agenticRunProgressPanels": 0,
+        "scheduleRailStepAnchors": 0,
+        "detailColumnNativeRadioInputs": 0,
+        "detailColumnButtons": [
+          "Run right after setup",
+          "Europe/Berlin",
+          "1",
+          "week(s)",
+          "Sun",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "09"
+        ],
+        "rows": [
+          {
+            "tag": "button",
+            "key": "schedule",
+            "text": "1",
+            "selected": "true",
+            "reached": null,
+            "ariaDisabled": null,
+            "dataAction": "open-schedule-step",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "recommendation",
+            "text": "2",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "recommendation-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "review",
+            "text": "3",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "review-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          }
+        ],
+        "runSurfaceRect": {
+          "x0": 928,
+          "y0": 447,
+          "x1": 2464,
+          "y1": 1723
+        },
+        "detailHtmlDigest": "204aaff202d859ea609fdd3007d37dd419e13c4ac30a5a337a668192d93d1c3b"
+      },
+      "dbAt": {
+        "status": "pending_trigger",
+        "created_at": "2026-08-25T10:03:54.552Z",
+        "started_at": null,
+        "completed_at": null,
+        "trigger_type": null,
+        "scheduled_at": null,
+        "timezone": null,
+        "released_at": null,
+        "review_gates": "0",
+        "read_at": "2026-08-25T10:59:25.988Z"
+      },
+      "recordedAt": "2026-08-25T10:59:25.995Z",
+      "runtime": "dev-runtime"
+    },
+    {
+      "cell": "C7__setup-run-page__schedule-open__unreached-rows-muted__dark",
+      "step": "c7-dark",
+      "theme": "dark",
+      "resolvedTheme": "dark",
+      "framing": "window",
+      "runId": "3ad285c7-a7e0-44af-baba-e44dd4794ee2",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3ad285c7-a7e0-44af-baba-e44dd4794ee2/trigger",
+      "screenshot": "evidence/2970-setup-rail/captures/C7__setup-run-page__dark.png",
+      "sha256": "dbd67b4da98086ed248c21849711ce39a898b8e660fad44cad7d9f021b824b6f",
+      "px": {
+        "width": 2880,
+        "height": 1800,
+        "css": "1440x900",
+        "deviceScaleFactor": 2
+      },
+      "requires": "the same reading in dark",
+      "controls": {
+        "railColumns": 1,
+        "detailColumns": 1,
+        "selectedStep": "schedule",
+        "lifecycleCardHosts": 0,
+        "agenticRunProgressPanels": 0,
+        "scheduleRailStepAnchors": 0,
+        "detailColumnNativeRadioInputs": 0,
+        "detailColumnButtons": [
+          "Run right after setup",
+          "Europe/Berlin",
+          "1",
+          "week(s)",
+          "Sun",
+          "Mon",
+          "Tue",
+          "Wed",
+          "Thu",
+          "Fri",
+          "Sat",
+          "09"
+        ],
+        "rows": [
+          {
+            "tag": "button",
+            "key": "schedule",
+            "text": "1",
+            "selected": "true",
+            "reached": null,
+            "ariaDisabled": null,
+            "dataAction": "open-schedule-step",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "recommendation",
+            "text": "2",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "recommendation-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          },
+          {
+            "tag": "button",
+            "key": "review",
+            "text": "3",
+            "selected": "false",
+            "reached": "false",
+            "ariaDisabled": "true",
+            "dataAction": "review-step-unavailable",
+            "nativeDisabled": false,
+            "tabIndex": 0
+          }
+        ],
+        "runSurfaceRect": {
+          "x0": 928,
+          "y0": 447,
+          "x1": 2464,
+          "y1": 1723
+        },
+        "detailHtmlDigest": "a83b8cd1f79e7598ee8195c6166a1eecfbd2b1cff87a0097edbac08abf95d753"
+      },
+      "dbAt": {
+        "status": "pending_trigger",
+        "created_at": "2026-08-25T10:03:54.552Z",
+        "started_at": null,
+        "completed_at": null,
+        "trigger_type": null,
+        "scheduled_at": null,
+        "timezone": null,
+        "released_at": null,
+        "review_gates": "0",
+        "read_at": "2026-08-25T10:59:31.863Z"
+      },
+      "recordedAt": "2026-08-25T10:59:31.868Z",
+      "runtime": "dev-runtime"
+    }
+  ],
+  "clickProof": {
+    "detailBeforeDigest": "204aaff202d859ea609fdd3007d37dd419e13c4ac30a5a337a668192d93d1c3b",
+    "detailAfterDigest": "204aaff202d859ea609fdd3007d37dd419e13c4ac30a5a337a668192d93d1c3b",
+    "detailIdentical": true,
+    "selectedBefore": "schedule",
+    "selectedAfter": "schedule",
+    "rowsBefore": [
+      {
+        "tag": "button",
+        "key": "schedule",
+        "text": "1",
+        "selected": "true",
+        "reached": null,
+        "ariaDisabled": null,
+        "dataAction": "open-schedule-step",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      },
+      {
+        "tag": "button",
+        "key": "recommendation",
+        "text": "2",
+        "selected": "false",
+        "reached": "false",
+        "ariaDisabled": "true",
+        "dataAction": "recommendation-step-unavailable",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      },
+      {
+        "tag": "button",
+        "key": "review",
+        "text": "3",
+        "selected": "false",
+        "reached": "false",
+        "ariaDisabled": "true",
+        "dataAction": "review-step-unavailable",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      }
+    ],
+    "rowsAfter": [
+      {
+        "tag": "button",
+        "key": "schedule",
+        "text": "1",
+        "selected": "true",
+        "reached": null,
+        "ariaDisabled": null,
+        "dataAction": "open-schedule-step",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      },
+      {
+        "tag": "button",
+        "key": "recommendation",
+        "text": "2",
+        "selected": "false",
+        "reached": "false",
+        "ariaDisabled": "true",
+        "dataAction": "recommendation-step-unavailable",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      },
+      {
+        "tag": "button",
+        "key": "review",
+        "text": "3",
+        "selected": "false",
+        "reached": "false",
+        "ariaDisabled": "true",
+        "dataAction": "review-step-unavailable",
+        "nativeDisabled": false,
+        "tabIndex": 0
+      }
+    ],
+    "pixelsIdentical": false,
+    "pixelDiff": {
+      "width": 2880,
+      "height": 1800,
+      "totalPixels": 5184000,
+      "differingPixels": 13,
+      "identical": false,
+      "bbox": {
+        "x0": 84,
+        "x1": 169,
+        "y0": 66,
+        "y1": 79
+      },
+      "maxChannelSum": 32,
+      "runSurfaceRect": {
+        "x0": 928,
+        "y0": 447,
+        "x1": 2464,
+        "y1": 1723
+      },
+      "differingPixelsInsideRunSurface": 0
+    }
+  }
+}
