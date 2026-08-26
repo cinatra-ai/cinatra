@@ -25,7 +25,7 @@ import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lif
 import { resolveReviewActorContext } from "./review-actor";
 
 /**
- * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891
+ * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f
  * §IV/§V). The client sends only the disposition + rationale (display + DECIDE
  * only); the server re-resolves the reviewing actor, assembles the WHOLE-gate
  * decision the #1807 core requires for a terminal disposition (every pinned
