@@ -188,10 +188,11 @@ export async function readProposalConsume(
  * recorded, at the one moment they were all true: the confirm transaction.
  *
  * `null` for a run that no proposal produced, which is the honest answer for a
- * schedule armed from the run's own scheduling step. The card draws nothing for
- * it rather than claiming a proposal that never existed — the run's Trigger tab
- * is that schedule's surface, and inventing a second one here is exactly the
- * parallel renderer the epic forbids.
+ * schedule armed from the run's own scheduling step. That is a fact about where
+ * the schedule CAME FROM, never about who may read it: since cinatra#3004 such
+ * a run is read under the run's own access control and draws the same card on
+ * the same run-scoped ref, so this row no longer decides whether there is a
+ * card at all.
  */
 export async function readProposalConsumeByRunId(
   runId: string,

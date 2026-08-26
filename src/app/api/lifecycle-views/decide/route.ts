@@ -274,6 +274,10 @@ export async function POST(request: Request): Promise<Response> {
       // it — this route asserts nothing about admin standing itself.
       role:
         actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null,
+      // The same standing the RESOLVE route hands down (cinatra#3004): a
+      // run-addressed card whose run came from no proposal is reached under the
+      // RUN's own access control, and a control that draws must also press.
+      access: { actor: actorCtx.actor, roles: actorCtx.roleHints },
     });
     return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });
   }
