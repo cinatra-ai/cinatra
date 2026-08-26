@@ -23,7 +23,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { setupStepReachedForRunStatus, type AgentRunStatus } from "../run-status";
 
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
@@ -56,6 +55,12 @@ const SETUP_BRANCH = sliceBetween("const setupSteps: SetupRailStep[]", "</AgentP
 /** The scheduler step's surface, as the screen composes it once, above. */
 const SCHEDULER_SURFACE = sliceBetween(
   "const schedulerStepSurface = (",
+  "const setupSteps: SetupRailStep[]",
+);
+
+/** The review step's own surface, as the screen composes it once, above. */
+const REVIEW_STEP_SURFACE = sliceBetween(
+  "const reviewStepSurface =",
   "const setupSteps: SetupRailStep[]",
 );
 
@@ -106,6 +111,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
     const step = start < 0 || end < 0 ? "" : SETUP_BRANCH.slice(start, end);
     expect(step).toContain('<LifecycleCardSurfaceProvider host="run_card">');
     expect(step).toContain("<RecommendationHoldCard");
+    // AND NOTHING AT ALL where the run has no recommendation. A surface that is
+    // an element of a card that resolves to nothing is what shipped an empty
+    // right column (cell C10 of the #2939 set): the element exists, so the rail
+    // cannot see that the card will draw nothing.
+    expect(step).toContain("surface: !recommendationStepOpens ? null : (");
     // ONE mount in this screen. The run page mounts the same renderer in its own
     // screen (`SetupScreen`) and the two never render together, but a SECOND
     // mount inside THIS screen would be two instances of the one renderer on one
@@ -196,105 +206,71 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(SETUP_BRANCH).toContain("    : [];");
   });
 
-  it("READS whether the run reached a step — it never asserts it", () => {
-    // The rail says which steps are still ahead, so a hard-coded `false` would
-    // be a claim the screen cannot make: this branch also serves a run that
-    // already holds a recommendation park or a review gate.
+  it("READS the run's own rows for both steps — never the run's status", () => {
+    // THE INVERSION THIS FIXES (cells C10 and C11 of the #2939 proof set). The
+    // rows were closed off the pre-execution STATUS SET, and that is the
+    // opposite of the question: a recommendation hold parks its run at
+    // `pending_input`, so the row closed exactly when the card had something to
+    // draw. Both rows read the run's own rows now.
+    expect(SCREEN_SRC).not.toContain("setupStepReachedForRunStatus");
     expect(SETUP_BRANCH).not.toContain("reached: false");
-    expect(SETUP_BRANCH).toContain("reached: setupReviewGates.length > 0");
+
+    // THE SKILLS STEP: the same predicate the run page asks (cinatra#2790), so
+    // one rail entry rule serves both screens rather than two that can disagree.
     expect(TRIGGER_SCREEN).toContain(
-      "const setupReviewGates = run ? await listReviewGatesForRun(run.id) : [];",
+      "const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;",
     );
-    expect(TRIGGER_SCREEN).not.toContain("readRecommendationParkForRun");
+    expect(TRIGGER_SCREEN).toContain("const recommendationEntry = recommendationRailEntry({");
+    // This screen IS the host on the setup surface: it draws no run-detail
+    // panel, so there is no other module that could mount the card.
+    expect(TRIGGER_SCREEN).toContain("hostsCard: true,");
+
+    // THE REVIEW STEP: the same reader the run page's panel uses (cinatra#2997),
+    // and the pure step from its two facts to the three readings.
+    expect(TRIGGER_SCREEN).toContain(
+      "const runReviewSlot = run ? await readRunReviewSlot(run.id) : null;",
+    );
+    expect(TRIGGER_SCREEN).toContain(
+      "const reviewStepReading = runReviewStepReading(runReviewSlot);",
+    );
   });
 
-  it("asks the run's status whether the skills step was reached — one call, no second read", () => {
-    // The WIRING only. What the answer IS per status is the table below, which
-    // runs the real function instead of reading its source.
+  it("opens the skills step exactly when the run HAS a recommendation to show", () => {
+    // A TERMINAL PARK IS NOT A DECIDED ONE. The entry predicate answers whether
+    // the row exists; whether it can be OPENED on a page with no run detail to
+    // fall back to is its companion, because the TTL sweeper's fail-closed
+    // `policy_unresolved` park is terminal and carries no decision to show.
+    expect(TRIGGER_SCREEN).toContain("const recommendationStepOpens = recommendationRailStepOpens({");
+    expect(TRIGGER_SCREEN).toContain("parkStatus: recommendationPark?.status,");
     const recommendation = SETUP_BRANCH.slice(
       SETUP_BRANCH.indexOf('key: "recommendation"'),
       SETUP_BRANCH.indexOf('key: "review"'),
     );
-    expect(recommendation).toContain("reached: setupStepReachedForRunStatus(run.status),");
-    // Off the RUN's status, never off a second reading of the hold's park — the
-    // card is the one authority on that interaction (cinatra#2573).
-    expect(TRIGGER_SCREEN).not.toContain("readRecommendationParkForRun");
-  });
-});
-
-describe("setupStepReachedForRunStatus — what the run's status says about a setup step", () => {
-  // THE RULING (cinatra#2970): "a step the run has not reached cannot be
-  // selected; its row stays on the rail, muted; clicking it does nothing; the
-  // scheduler stays open; the right column never shows an empty step surface."
-  //
-  // The whole status space is pinned, so a status ADDED later cannot quietly
-  // fall into the wrong column: `ALL_STATUSES` is the type's own list, and the
-  // last case fails if a member is missing from it.
-  // A `Record` KEYED BY THE TYPE, so a status added to `AgentRunStatus` later
-  // fails to COMPILE here until someone says which column it belongs in. A
-  // plain array would silently stay short.
-  const EXPECTED: Record<AgentRunStatus, false | undefined> = {
-    pending_input: false,
-    pending_trigger: false,
-    armed: false,
-    queued: undefined,
-    running: undefined,
-    pending_approval: undefined,
-    waiting_trigger: undefined,
-    completed: undefined,
-    failed: undefined,
-    stopped: undefined,
-  };
-  const ALL_STATUSES = Object.keys(EXPECTED) as AgentRunStatus[];
-  const NOT_STARTED = ALL_STATUSES.filter((s) => EXPECTED[s] === false);
-  const STARTED = ALL_STATUSES.filter((s) => EXPECTED[s] === undefined);
-
-  it("CLOSES the row on a run that has not started", () => {
-    // These three are unambiguous: none of them can carry an execution record,
-    // so the run has reached neither the recommendation nor the review.
-    for (const status of NOT_STARTED) {
-      expect(setupStepReachedForRunStatus(status)).toBe(false);
-    }
+    expect(recommendation).toContain("reached: recommendationStepOpens,");
+    expect(recommendation).toContain("surface: !recommendationStepOpens ? null : (");
   });
 
-  it("states NOTHING once the run has started — and never asserts `true`", () => {
-    // Unstated is the third answer, not "no": the page has read nothing about
-    // the step, so the row is drawn plainly and the card is the authority on
-    // what is in it. `true` would be the claim this screen cannot make.
-    for (const status of STARTED) {
-      expect(setupStepReachedForRunStatus(status)).toBeUndefined();
-    }
-  });
+  it("makes the review step's surface the run's REVIEW SLOT — the placeholder, then the card", () => {
+    // Item 3 of cinatra#2970, second half. The step was composed
+    // `surface: null` UNCONDITIONALLY, so `isRunSurfaceStepSelectable` closed
+    // its row for every run whatever the run had reached — the review step could
+    // never be opened on this screen at all (cell C11).
+    const review = SETUP_BRANCH.slice(SETUP_BRANCH.indexOf('key: "review"'));
+    expect(review).toContain('reached: reviewStepReading !== "none",');
+    expect(review).toContain("surface: reviewStepSurface,");
+    expect(review).not.toContain("surface: null");
 
-  it("says nothing at all when there is no status to read", () => {
-    expect(setupStepReachedForRunStatus(null)).toBeUndefined();
-    expect(setupStepReachedForRunStatus(undefined)).toBeUndefined();
-  });
-
-  it("leaves a run that DIED BEFORE RUNNING unstated — the named, accepted residual", () => {
-    // `pending_input -> stopped` is a legal edge (`run-status.ts`), so a run can
-    // reach a terminal status without ever running. The terminal statuses are
-    // ambiguous — `stopped` is also what a CANCELLED schedule leaves behind and
-    // `completed` can be setup-success awaiting a trigger — so closing on them
-    // would sometimes close a step the run HAD reached. This function refuses
-    // to guess: it closes only on the three unambiguous pre-execution statuses.
-    // The consequence is recorded here rather than left for someone to find.
-    expect(setupStepReachedForRunStatus("stopped")).toBeUndefined();
-    expect(setupStepReachedForRunStatus("failed")).toBeUndefined();
-  });
-
-  it("puts EVERY run status in exactly one of the two columns", () => {
-    // The two columns are the whole space and they do not overlap.
-    expect(NOT_STARTED.length + STARTED.length).toBe(ALL_STATUSES.length);
-    expect(NOT_STARTED).toEqual(["pending_input", "pending_trigger", "armed"]);
-    for (const status of ALL_STATUSES) {
-      const answer = setupStepReachedForRunStatus(status);
-      // `true` is never an answer this screen gives.
-      expect(answer === false || answer === undefined).toBe(true);
-      expect(answer).toBe(EXPECTED[status]);
-    }
-    // An unknown string is not a run status the screen can read, and it must
-    // not be treated as "not started".
-    expect(setupStepReachedForRunStatus("not-a-status")).toBeUndefined();
+    // Plan (A) §4.2, drawn by the SAME two components the run page's panel
+    // draws the slot with — the placeholder while the run works, the review card
+    // in place once the output is generated.
+    expect(REVIEW_STEP_SURFACE).toContain("<ReviewGatePlaceholder />");
+    expect(REVIEW_STEP_SURFACE).toContain("<ReviewGateCard");
+    expect(REVIEW_STEP_SURFACE).toContain('<LifecycleCardSurfaceProvider host="run_card">');
+    // The swap is the ruled property, so the surface says which reading it is
+    // drawing — the same anchor the run page's panel carries.
+    expect(REVIEW_STEP_SURFACE).toContain("data-run-review-slot=");
+    // The card is addressed by a SERVER-MINTED ref over (runId, reviewTaskId),
+    // exactly as the run page's own seed is.
+    expect(REVIEW_STEP_SURFACE).toContain("encodeLifecycleGateRef({");
   });
 });

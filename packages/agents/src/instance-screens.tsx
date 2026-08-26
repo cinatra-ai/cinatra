@@ -28,16 +28,21 @@ import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 import { deriveRunHitlContext } from "./hitl-context";
-import {
-  PRE_EXECUTION_RUN_STATUSES,
-  setupStepReachedForRunStatus,
-} from "./run-status";
+import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
+// The step from the run's review slot to what the review step draws
+// (cinatra#2970). A leaf, so this server component can call it.
+import { runReviewStepReading } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
-import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
+// §IV's review card, and the placeholder it replaces — the two components the
+// run page's panel draws the run's review slot with (cinatra#2997). The setup
+// run page's review step draws the same slot with the same two, so the review a
+// run owes reads the same on both screens (cinatra#2970).
+import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
+import { ReviewGatePlaceholder } from "./review-gate-states";
 // One import for both card refs: §VII's audit card is addressed by its GATE and
 // §VI's schedule card by its RUN, and the two codecs live in one module.
 import {
@@ -71,7 +76,10 @@ import { ScheduleRailStepRow, ScheduleStepSurface } from "./schedule-rail-step";
 // the recommendation is the run's FIRST step, and it answers the SAME question
 // the setup run page's recommendation row asks (cinatra#2970) — one predicate,
 // read by both screens.
-import { recommendationRailEntry } from "./recommendation-rail-entry";
+import {
+  recommendationRailEntry,
+  recommendationRailStepOpens,
+} from "./recommendation-rail-entry";
 import { RecommendationRailStepRow } from "./recommendation-rail-step";
 // The two columns of the run surface — the step rail on the left, the selected
 // step's own surface on the right. The run page composes the frame around its
@@ -1746,26 +1754,67 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // NULL default to an empty array here.
   const gatedSteps: GatedStep[] = template.gatedSteps ?? [];
 
-  // ── HAS THE RUN REACHED THESE STEPS? (cinatra#2970) ──────────────────────
+  // ── WHAT HAS THIS RUN GOT TO SHOW FOR THESE STEPS? (cinatra#2970) ───────
   //
-  // The rail says which steps are still ahead, so it must READ that rather than
-  // assume it — and where it cannot read it, it says nothing. This branch serves
-  // a run that owes its scheduling step, and such a run can already carry a
-  // review gate (a finished run being given a recurring schedule); that is a
-  // plain run-scoped read behind the access door `readAgentRunById` already
-  // cleared above, and it does not run for `/trigger` reached without a run.
+  // The rail says which steps a person can open, so it must READ that off the
+  // run — and the reading has to be the one the rest of the product already
+  // makes, or the same run says two different things on two screens.
   //
-  // THE SKILLS STEP'S PARK IS STILL NEVER READ. The one authority on that
-  // interaction is the card itself (cinatra#2573); a screen that read the hold's
-  // park a second time to draw around it is exactly the parallel derivation the
-  // one-renderer rule retired, and it is pinned as retired
-  // (`recommendation-hold-card.test.tsx`).
+  // WHAT WENT WRONG, PHOTOGRAPHED (cells C10 and C11 of the #2939 proof set).
+  // Both rows were answered WITHOUT reading the run:
   //
-  // What the screen DOES read is the run's own status: a run that has not
-  // started has reached neither the recommendation nor the review, so that row
-  // is closed below off the pre-execution status set alone (cinatra#2970). Once
-  // the run has started the page claims nothing about the step it has not read.
-  const setupReviewGates = run ? await listReviewGatesForRun(run.id) : [];
+  //   • the skills row closed on the pre-execution STATUS SET, which is the
+  //     opposite of the question it was asked. A recommendation hold parks its
+  //     run at `pending_input` — so the row was CLOSED exactly when the card had
+  //     something to draw, and OPEN exactly when it had nothing. Two presses
+  //     from the scheduler reached an empty run detail.
+  //   • the review row was composed with no surface at all, unconditionally, so
+  //     `isRunSurfaceStepSelectable` closed it for every run there has ever
+  //     been. The review step could not be opened on this screen.
+  //
+  // BOTH ARE THE RUN'S OWN ROWS NOW, through the readers that already own those
+  // questions — no third derivation, and nothing inferred from a status.
+  //
+  // THE SKILLS STEP: `recommendationRailEntry` (cinatra#2790), the same
+  // predicate the run page's rail asks. A run with a LIVE hold opens the card; a
+  // run whose hold was DECIDED opens the settled reading the same one renderer
+  // draws ("a resolved gate stays on the rail as read-only history — its entry
+  // keeps its place and records how it was settled"); a run that never held has
+  // no entry, and its row is closed and muted.
+  //
+  // READING THE PARK IS THE RAIL'S, NOT THE CARD'S. cinatra#2573 makes the card
+  // the one authority on the INTERACTION, and nothing here draws or decides it:
+  // this asks only whether the run ever held, which is what decides that the row
+  // exists at all. That is exactly the read the run page's own rail makes
+  // (`recommendation-rail-entry.ts`), and it is a plain run-scoped read behind
+  // the access door `readAgentRunById` cleared above.
+  const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
+  const recommendationEntry = recommendationRailEntry({
+    hasPark: recommendationPark !== null,
+    held: recommendationPark?.status === "parked",
+    // THIS screen hosts the card here. The setup surface draws no run-detail
+    // panel at all — the run has not run — so there is no other module that
+    // could mount it, and the step's surface is this screen's own mount.
+    hostsCard: true,
+  });
+  // AND CAN IT BE OPENED? A terminal park is not the same as a DECIDED one: the
+  // TTL sweeper's fail-closed `policy_unresolved` leaves a park behind that
+  // nobody answered, and the card draws nothing for it. This page has no run
+  // detail to fall back to, so such a row is closed and muted rather than
+  // openable over an empty column.
+  const recommendationStepOpens = recommendationRailStepOpens({
+    entry: recommendationEntry,
+    parkStatus: recommendationPark?.status,
+  });
+  //
+  // THE REVIEW STEP: `readRunReviewSlot` (cinatra#2997), the same reader the run
+  // page's panel asks, and `runReviewStepReading` for the step from its two
+  // facts to the three readings. A run reaches this screen with a review on file
+  // more often than it looks — a finished immediate run being given a recurring
+  // schedule is exactly that — and a run parked on its own review gate is
+  // another.
+  const runReviewSlot = run ? await readRunReviewSlot(run.id) : null;
+  const reviewStepReading = runReviewStepReading(runReviewSlot);
 
   // ── THE SCHEDULER STEP'S OWN SURFACE (cinatra#2970) ──────────────────────
   //
@@ -1835,6 +1884,58 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     </AgentPanelBody>
   );
 
+  // ── THE REVIEW STEP'S OWN SURFACE (cinatra#2970; plan (A) §4.2) ──────────
+  //
+  // The maintainer's words for this slot, which the run page's panel already
+  // draws and which this step now draws the same way: the card is "a temporary
+  // placeholder for the review screen" while the agent works, and "once the
+  // agent is done and the output generated" it "is being automatically replaced
+  // with the 'Review requested' screen".
+  //
+  // ONE BOX, TWO READINGS, and the box says which it is drawing
+  // (`data-run-review-slot`) — the swap is the ruled property, so a proof has to
+  // be able to see the placeholder go and the review screen arrive in the same
+  // slot. The card is the SHIPPED `ReviewGateCard`, addressed by a server-minted
+  // ref over (runId, reviewTaskId) exactly as the run page's own seed is, and it
+  // re-authorizes itself against that ref.
+  //
+  // WHAT THIS DOES NOT CLOSE, said rather than left to be found: the card draws
+  // nothing at all for a reader its own resolve refuses, so the slot box can be
+  // drawn around nothing. The box is still there — the column is never blank —
+  // and closing the gap needs the card's resolved state, which belongs to the
+  // card. It is the same residual the run page's panel carries.
+  const reviewStepSurface = (() => {
+    if (!run || reviewStepReading === "none") return null;
+    // The gate's ref is minted HERE, from the run and the gate the slot named —
+    // never taken from a client, and never invented for a run that has no gate.
+    const gateRef = runReviewSlot?.reviewTaskId
+      ? encodeLifecycleGateRef({
+          runId: run.id,
+          reviewTaskId: runReviewSlot.reviewTaskId,
+        })
+      : null;
+    return (
+      <section
+        className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+        data-run-review-slot={gateRef ? "review" : "working"}
+      >
+        {gateRef ? (
+          <LifecycleCardSurfaceProvider host="run_card">
+            <ReviewGateCard
+              view={{
+                viewType: "artifact_review_gate",
+                schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                ref: gateRef,
+              }}
+            />
+          </LifecycleCardSurfaceProvider>
+        ) : (
+          <ReviewGatePlaceholder />
+        )}
+      </section>
+    );
+  })();
+
   // ── THE SETUP RUN PAGE'S STEP RAIL (cinatra#2970, epic #2784) ────────────
   //
   // The setup run page shows the series of steps that set the run up — the
@@ -1868,36 +1969,35 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         },
         {
           key: "recommendation",
-          // HAS THE RUN REACHED THIS STEP? (cinatra#2970, the ruling.) A run
-          // that has not started has reached neither this step nor the review,
-          // so its row closes instead of opening an empty run detail; anywhere
-          // else the answer stays UNSTATED and the row is drawn plainly. The
-          // whole table, and why the status set decides it rather than an
-          // evidence read, is on `setupStepReachedForRunStatus` (`run-status.ts`).
-          reached: setupStepReachedForRunStatus(run.status),
+          // HAS THIS RUN GOT A RECOMMENDATION AT ALL? A live hold opens the
+          // card, a decided one opens the settled reading the same renderer
+          // draws, and a run that never held has nothing for this step — so its
+          // row is closed and muted rather than opening an empty column.
+          reached: recommendationStepOpens,
           // The ONE renderer of this interaction (cinatra#2573), on the host
-          // this screen already declares. It is the authority on whether it
-          // draws: with no live hold it resolves to nothing and renders no DOM
-          // at all, which is the honest reading of a step the run has not
-          // reached — never an invented placeholder.
-          surface: (
-            <LifecycleCardSurfaceProvider host="run_card">
-              <RecommendationHoldCard
-                runId={run.id}
-                agentPackageName={template.packageName ?? ""}
-                wireRef={null}
-              />
-            </LifecycleCardSurfaceProvider>
-          ),
+          // this screen declares. It is handed over only where the run has a
+          // recommendation the card will actually draw: an element of a card
+          // that resolves to nothing is still an element, so a rail handed one
+          // unconditionally cannot tell that the column will come up blank —
+          // which is what shipped.
+          surface: !recommendationStepOpens ? null : (
+              <LifecycleCardSurfaceProvider host="run_card">
+                <RecommendationHoldCard
+                  runId={run.id}
+                  agentPackageName={template.packageName ?? ""}
+                  wireRef={null}
+                />
+              </LifecycleCardSurfaceProvider>
+            ),
         },
         {
           key: "review",
-          reached: setupReviewGates.length > 0,
-          // A review exists only after the agent has run and produced something
-          // (plan (A) §7.2 step 5), so a run still in setup has no review
-          // surface to open. The step is named on the rail — it is one of the
-          // run's steps — and its detail stays empty until the run reaches it.
-          surface: null,
+          // The run's own review slot, read by the same reader the run page's
+          // panel reads it with. A run with nothing to review has nothing for
+          // this step, and its row is closed and muted — the plan draws no "no
+          // review yet" screen and none is invented here.
+          reached: reviewStepReading !== "none",
+          surface: reviewStepSurface,
         },
       ]
     : [];

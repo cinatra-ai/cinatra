@@ -67,3 +67,40 @@ export function recommendationRailEntry(params: {
   if (params.held) return params.hostsCard ? "live" : "none";
   return "settled";
 }
+
+/**
+ * CAN THE ROW BE OPENED — on a page that has nothing to fall back to?
+ *
+ * The entry above answers whether the row EXISTS. That is the right question
+ * for the run page, where a settled row deliberately opens nothing and the run
+ * detail beside it stays put. It is not enough for the setup run page
+ * (cinatra#2970), which composes no run detail at all: there a row that opens
+ * nothing opens an EMPTY COLUMN, which the ruling on that issue forbids.
+ *
+ * `parkStatus` is the park's own row status, and the third value is why this
+ * function exists. `parked` is a live hold and `released` is a decision a human
+ * took — the card draws in both. `policy_unresolved` is what the TTL sweeper
+ * leaves behind when a hold expires undecided: the park is terminal, so the
+ * entry above reads it as `settled`, and yet NOBODY DECIDED — there are no
+ * selected revisions and no skip on file, so `resolveRecommendationHoldStateForActor`
+ * answers `none` and the card renders no DOM at all.
+ *
+ * The row still stands on the rail for such a run, named and numbered; it is
+ * simply closed and muted, which is what the rail says about a step that has
+ * nothing to show.
+ *
+ * WHY THE STATUS AND NOT THE EVIDENCE. The decision's evidence — the run's
+ * selected revisions, its skip record — belongs to the card, which is the one
+ * authority on this interaction (cinatra#2573). A screen that read it back to
+ * draw around it is the parallel derivation the one-renderer rule retired. The
+ * park's own status is a fact about the RAIL's entry, and it is the same read
+ * that decides the entry exists at all.
+ */
+export function recommendationRailStepOpens(params: {
+  entry: RecommendationRailEntry;
+  parkStatus: string | null | undefined;
+}): boolean {
+  if (params.entry === "live") return true;
+  if (params.entry !== "settled") return false;
+  return params.parkStatus === "released";
+}

@@ -61,6 +61,7 @@ import { cn } from "@/lib/utils";
 import {
   isRunSurfaceStepSelectable,
   resolveRunSurfaceSelection,
+  runSurfaceNodeExists,
   type RunStepSelection,
   type RunSurfaceRailStep,
 } from "./run-surface-rail-step";
@@ -292,11 +293,17 @@ export function RunSurfaceRail({
         className="flex min-w-0 flex-1 flex-col gap-4"
       >
         {/* A step with no surface of its own keeps the run detail — see
-            `RunSurfaceRailStep.surface`. `??` and not a truth test: a surface is
-            a ReactNode, and a FALSY one that exists — `false`, `0`, `""` — is
-            still the step's own and must not fall back. Nullish is the sentinel,
-            which is what `??` tests and `ReactNode` admits. */}
-        {open?.surface ?? detail}
+            `RunSurfaceRailStep.surface`.
+
+            THE SAME FUNCTION THAT DECIDED THE ROW COULD BE OPENED decides what
+            is drawn, so the two cannot disagree. It used to be `?? detail`
+            here and `runSurfaceNodeExists` in the predicate, and they part
+            company on `false`: the predicate reads it as nothing drawn and lets
+            the row open on the strength of the fallback, while `??` treats it
+            as the step's own surface and suppresses the fallback — an openable
+            row over an empty column, which is the one thing this rail must not
+            produce. */}
+        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
       </div>
     </RunStepSelectionContext.Provider>
   );

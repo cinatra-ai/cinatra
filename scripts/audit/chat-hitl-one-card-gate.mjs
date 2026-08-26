@@ -342,6 +342,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the stepper branch of the same host: the run-detail review branch, which composes the shared card and defines no drawing of its own",
         },
+        {
+          module: "packages/agents/src/instance-screens.tsx",
+          adapter: "mount",
+          region: "step_rail",
+          surface: "production",
+          why: "the SETUP run page's review step (cinatra#2970): the run page before the agent has ever run draws the same two-column frame, and its Review row opens the run's review slot in the run detail — plan (A) §4.2's placeholder while the review is still coming, and this card in place once a gate is on file. It is the same slot the two run panels above draw, read by the same reader (`readRunReviewSlot`, cinatra#2997), so it is one renderer and not a second. It cannot draw beside either of them: the setup surface is served on the /trigger route, which mounts no run panel at all, and the run page's panels are not on it — the picker below decides between the two panels, which are the pair that could otherwise both draw on ONE page",
+        },
       ],
       page_gate_region: [
         {

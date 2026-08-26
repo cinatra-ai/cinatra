@@ -20,22 +20,33 @@
 // of, how many rows the rail has, what is drawn beside the selected step) —
 // none of them is readable from source, which is why they are pinned here.
 //
-// AND WHAT WAS STILL WRONG AFTER THAT. Every row could be opened, so a step the
-// run has not reached opened an EMPTY run detail. cinatra#2970: "a step the
-// run has not reached cannot be selected. Its row stays
-// on the rail, muted, so the series is visible; clicking it does nothing; the
-// scheduler stays open; the right column never shows an empty step surface."
-// Pinned below on the review step and — for a run that has not started, which
-// has reached neither — on the skills step beside it.
+// AND WHAT THE PICTURES CAUGHT AFTER THAT (cells C10 and C11 of the #2939 proof
+// set). Item 3 of cinatra#2970 — "the skills-recommendation step and the review
+// step open the same way, to the right of the steps, never under a row" — was
+// met by NEITHER row:
 //
-// THE SKILLS STEP IS DRIVEN ON THE PRODUCTION RENDERER, not on a stand-in: the
-// step opens the shipped `RecommendationHoldCard`, so the suite mounts THAT and
-// drives its authority through the same mocked action the card's own suite
-// uses. A held run proves the card opens in the run detail; a run that has not
-// started proves the closed row (muted, unselectable, its click a no-op); and a
-// run whose skills step the page never read proves the third answer stays a
-// third answer — the row is drawn plainly, it still opens, and nothing is
-// invented in the card's place.
+//   • the recommendation row was closed by the RUN'S STATUS, which is the
+//     opposite of the question: a recommendation hold parks its run at
+//     `pending_input`, so the row was closed exactly when the card had something
+//     to draw, and open exactly when it had nothing — an empty run detail two
+//     presses from the scheduler;
+//   • the review row was composed with `surface: null` UNCONDITIONALLY, so it
+//     could never open for any run at all.
+//
+// BOTH ROWS NOW READ THE RUN'S OWN ROWS. The recommendation asks the same
+// predicates the run page's rail asks (`recommendationRailEntry` and, for a page
+// with no run detail to fall back to, `recommendationRailStepOpens`), and the
+// review asks the same reader the run page's panel asks (`readRunReviewSlot` ->
+// `runReviewStepReading`, cinatra#2997). This suite drives BOTH through those
+// functions rather than through literals typed into a harness, so a change that
+// inverts either answer fails here.
+//
+// AND THE SURFACES ARE THE PRODUCTION ONES, RESOLVED. The recommendation step
+// opens the shipped `RecommendationHoldCard` and the review step the shipped
+// `ReviewGateCard` / `ReviewGatePlaceholder`, each under the host this page
+// declares, each driven at its own real seam — the card's hold-state action and
+// the lifecycle resolve — so "the row opened onto something" is read off DOM the
+// production components actually drew, never off a wrapper this suite supplied.
 //
 // Run:
 //   cd packages/agents && npx vitest run src/__tests__/setup-run-surface-rail.test.tsx
@@ -51,7 +62,17 @@ import { isRunSurfaceStepSelectable } from "../run-surface-rail-step";
 // The rows are built by the SAME mapping the screen calls, so a row that
 // promises an opening the frame would refuse fails here rather than shipping.
 import { buildSetupRailSteps, type SetupRailStep } from "../setup-run-surface-steps";
-import { setupStepReachedForRunStatus } from "../run-status";
+// The answers the screen reads off the run, through the functions the screen
+// calls. None of them is restated here.
+import {
+  recommendationRailEntry,
+  recommendationRailStepOpens,
+} from "../recommendation-rail-entry";
+import {
+  runReviewStepReading,
+  type RunReviewSlot,
+  type RunReviewStepReading,
+} from "../run-review-slot-reading";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -76,6 +97,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+type DecidedSkill = { skillId: string; name: string; mark: "confirmed" | "adjusted" | "skipped" };
+
 type HoldState =
   | { state: "none" }
   | {
@@ -90,7 +115,8 @@ type HoldState =
       }[];
       holdRef: string;
       canDecide?: boolean;
-    };
+    }
+  | { state: "confirmed"; skillNames: string[]; decided?: DecidedSkill[] };
 
 const holdStateMock = vi.fn(async (): Promise<HoldState> => ({ state: "none" }));
 
@@ -106,13 +132,36 @@ vi.mock("../server-actions", () => ({
   getRunRecommendedSkillsAction: vi.fn(async () => []),
 }));
 
+/** The answer the review card's own resolve gets for an OPEN gate — the shape
+ *  the core's suite and the run panel's slot suite both drive it with. */
+const RESOLVE_PENDING = {
+  kind: "artifact_review_gate",
+  state: { state: "pending", canDecide: true, canComment: true },
+  body: null,
+};
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 beforeEach(() => {
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
+  // The review card resolves ITSELF against the ref it is handed. Answering
+  // that resolve is what makes the card actually draw, so "the row opened onto
+  // the review screen" is read off the card's own root rather than off the box
+  // this page puts around it.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify(RESOLVE_PENDING), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
+  );
 });
 
 const HELD: HoldState = {
@@ -123,6 +172,12 @@ const HELD: HoldState = {
     { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
   ],
   holdRef: "hold-ref-2970",
+};
+
+const DECIDED: HoldState = {
+  state: "confirmed",
+  skillNames: ["Skill A"],
+  decided: [{ skillId: "skill-a", name: "Skill A", mark: "confirmed" }],
 };
 
 /** The scheduler step's surface, standing in for the shipped scheduling form —
@@ -162,30 +217,75 @@ async function recommendationSurface() {
   );
 }
 
-/** The three setup steps as the setup run page composes them.
+/** The review step's surface exactly as the screen composes it: the run's review
+ *  slot, drawn by the SAME two components the run page's panel draws it with. */
+async function reviewSurface(reading: RunReviewStepReading) {
+  if (reading === "none") return null;
+  const { ReviewGateCard, LIFECYCLE_VIEW_SCHEMA_VERSION } = await import("../review-gate-card");
+  const { ReviewGatePlaceholder } = await import("../review-gate-states");
+  const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+  return (
+    <section
+      className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+      data-run-review-slot={reading === "review" ? "review" : "working"}
+    >
+      {reading === "review" ? (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard
+            view={{
+              viewType: "artifact_review_gate",
+              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+              ref: "gate-ref-2970",
+            }}
+          />
+        </LifecycleCardSurfaceProvider>
+      ) : (
+        <ReviewGatePlaceholder />
+      )}
+    </section>
+  );
+}
+
+/** A run's recommendation park, as the screen reads it. */
+type ParkFixture = { status: "parked" | "released" | "policy_unresolved" } | null;
+
+type RunFixture = { park?: ParkFixture; slot?: RunReviewSlot | null };
+
+/**
+ * The three setup steps as the setup run page composes them.
  *
- *  `reached` FOR THE SKILLS STEP IS NOT HARD-CODED HERE. The suite hands in the
- *  RUN STATUS and derives the answer through `setupStepReachedForRunStatus` —
- *  the very function `TriggerScreen` passes `run.status` to — so a change that
- *  stopped closing the row on a run that has not started fails these cases
- *  instead of quietly agreeing with a literal typed into the harness. */
-async function setupSteps(
-  opts: { runStatus?: string; recommendationReached?: boolean } = {},
-): Promise<SetupRailStep[]> {
-  const reached =
-    opts.recommendationReached !== undefined
-      ? opts.recommendationReached
-      : setupStepReachedForRunStatus(opts.runStatus);
+ * NEITHER `reached` IS HARD-CODED. The suite hands in what the RUN'S OWN ROWS
+ * say — its recommendation park and its review slot — and derives both answers
+ * through the very functions `TriggerScreen` calls, so a change that inverts
+ * either one fails these cases instead of quietly agreeing with a literal typed
+ * into a harness.
+ */
+async function setupSteps(opts: RunFixture = {}): Promise<SetupRailStep[]> {
+  const park = opts.park ?? null;
+  const entry = recommendationRailEntry({
+    hasPark: park != null,
+    held: park?.status === "parked",
+    // The setup surface draws no run-detail panel, so this screen is the host.
+    hostsCard: true,
+  });
+  const opens = recommendationRailStepOpens({ entry, parkStatus: park?.status });
+  const reading = runReviewStepReading(opts.slot ?? null);
   return [
     { key: "schedule", surface: <SchedulerForm /> },
-    { key: "recommendation", reached, surface: await recommendationSurface() },
-    { key: "review", reached: false, surface: null },
+    {
+      key: "recommendation",
+      reached: opens,
+      surface: opens ? await recommendationSurface() : null,
+    },
+    {
+      key: "review",
+      reached: reading !== "none",
+      surface: await reviewSurface(reading),
+    },
   ];
 }
 
-async function renderSetupSurface(
-  opts: { runStatus?: string; recommendationReached?: boolean } = {},
-) {
+async function renderSetupSurface(opts: RunFixture = {}) {
   return render(
     // THE SAME COMPOSITION THE SCREEN MOUNTS. The frame draws the two columns;
     // the page draws the box that holds them, which is where the `run-surface`
@@ -207,6 +307,20 @@ const rows = (c: HTMLElement) =>
   Array.from(c.querySelectorAll<HTMLElement>('[data-conformance-id="run-surface-rail-step"]'));
 const holdCard = (c: HTMLElement) =>
   c.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
+const reviewSlot = (c: HTMLElement) =>
+  c.querySelector<HTMLElement>("[data-run-review-slot]");
+
+/** A run holding at its skills question. */
+const LIVE_HOLD: ParkFixture = { status: "parked" };
+/** A run whose skills question a person answered. */
+const DECIDED_HOLD: ParkFixture = { status: "released" };
+/** A run whose skills question EXPIRED undecided — the TTL sweeper's fail-closed
+ *  park. Terminal, and nobody answered it, so the card draws nothing for it. */
+const EXPIRED_HOLD: ParkFixture = { status: "policy_unresolved" };
+/** A run that produced something whose review question is still open. */
+const AWAITING_REVIEW: RunReviewSlot = { reviewTaskId: null, awaiting: true };
+/** A run with a review gate on file. */
+const PENDING_REVIEW: RunReviewSlot = { reviewTaskId: "rt-2970", awaiting: false };
 
 describe("the setup run page draws the two-column run surface", () => {
   it("measures rail 1 / detail 1 — the anchors the capture recorder counts", async () => {
@@ -236,15 +350,16 @@ describe("the setup run page draws the two-column run surface", () => {
     ]);
   });
 
-  it("says which steps are still ahead — and stays silent about the one it cannot read", async () => {
-    const { container } = await renderSetupSurface({ runStatus: "running" });
+  it("says which steps this run has nothing to show for", async () => {
+    // A run that never held and produced nothing: both rows are read as not
+    // reached, off the run's own rows rather than off its status.
+    const { container } = await renderSetupSurface();
 
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-reached"))).toEqual([
-      // the scheduler: the step this page IS; the skills step: unstated, because
-      // the screen may not read the hold to draw around it; the review: read off
-      // the run, which carries no gate.
+      // the scheduler: the step this page IS, and no page claims the run is
+      // still short of the step it is standing on;
       null,
-      null,
+      "false",
       "false",
     ]);
   });
@@ -267,11 +382,13 @@ describe("the setup run page draws the two-column run surface", () => {
   });
 
   it("never draws a step's surface under its rail row", async () => {
-    const { container } = await renderSetupSurface();
+    holdStateMock.mockImplementation(async () => HELD);
+    const { container } = await renderSetupSurface({ park: LIVE_HOLD, slot: PENDING_REVIEW });
 
     for (const row of rows(container)) {
       expect(row.querySelector('[data-testid="scheduler-form"]')).toBeNull();
       expect(row.querySelector("[data-lifecycle-card]")).toBeNull();
+      expect(row.querySelector("[data-run-review-slot]")).toBeNull();
     }
     // The rail column carries rows and nothing else.
     expect(railColumn(container)[0].children.length).toBe(3);
@@ -283,22 +400,26 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(container.textContent).not.toContain("Agentic Run Progress");
     expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
   });
+});
 
-  it("opens the SHIPPED skills-recommendation card to the right of the steps", async () => {
-    // A run that IS holding at its skills question: the production renderer
-    // draws, and it draws in the run detail — never under the rail row.
+// ---------------------------------------------------------------------------
+// ITEM 3, FIRST HALF: THE SKILLS-RECOMMENDATION STEP (cinatra#2970).
+//
+// "The skills-recommendation step and the review step open the same way, to the
+// right of the steps, never under a row."
+// ---------------------------------------------------------------------------
+describe("the skills-recommendation step opens exactly when the run has one to show", () => {
+  it("opens the SHIPPED card to the right of the steps for a LIVE hold", async () => {
     holdStateMock.mockImplementation(async () => HELD);
-    const { container } = await renderSetupSurface({ recommendationReached: true });
+    const { container } = await renderSetupSurface({ park: LIVE_HOLD });
 
-    // A step the run HAS reached is opened exactly as it always was.
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("true");
     expect(rows(container)[1].hasAttribute("aria-disabled")).toBe(false);
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
     await waitFor(() => expect(holdCard(container)).not.toBeNull());
 
     const card = holdCard(container)!;
-    // The rail never contradicts the surface: a page that says a step is still
-    // ahead must not be drawing that step's live card beside the claim.
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(card.getAttribute("data-lifecycle-card-state")).toBe("held");
     expect(detailColumn(container)[0].contains(card)).toBe(true);
     expect(railColumn(container)[0].contains(card)).toBe(false);
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
@@ -308,20 +429,33 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("false");
   });
 
-  it("CLOSES the skills step on a run that has not started — the row stays, muted", async () => {
-    // THE RULING (cinatra#2970): a step the run has not reached cannot be
-    // selected; its row stays on the rail, muted; clicking it does nothing; the
-    // scheduler stays open; the right column never shows an empty step surface.
-    //
-    // DRIVEN OFF A REAL RUN STATUS, through the same function the screen calls:
-    // `armed` is a run whose trigger is set and which has not started, so it has
-    // reached neither the recommendation nor the review.
-    //
-    // The park is still NOT read: the closed row comes from the run's status,
-    // never from a second reading of the hold the card alone owns
-    // (cinatra#2573). This is what retires the residual this suite used to
-    // carry — a row that opened a detail column with nothing in it.
-    const { container } = await renderSetupSurface({ runStatus: "armed" });
+  it("opens the SETTLED reading once a person has decided — the row keeps its place", async () => {
+    // The ratified drawing: "A resolved gate stays on the rail as read-only
+    // history — its entry keeps its place and records how it was settled." The
+    // step opens the same one renderer, which draws its own settled reading —
+    // and the reading is READ BACK here, so a row that opened onto nothing would
+    // fail rather than pass on the press alone.
+    holdStateMock.mockImplementation(async () => DECIDED);
+    const { container } = await renderSetupSurface({ park: DECIDED_HOLD });
+
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(rows(container)[1].getAttribute("data-action")).toBe("open-recommendation-step");
+    fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
+    await waitFor(() => expect(holdCard(container)).not.toBeNull());
+
+    const card = holdCard(container)!;
+    expect(card.getAttribute("data-lifecycle-card-state")).toBe("decided");
+    expect(detailColumn(container)[0].contains(card)).toBe(true);
+    expect(detailColumn(container)[0].textContent).toContain("Skill A");
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
+  });
+
+  it("CLOSES the step on a run that never held — the row stays, muted", async () => {
+    // THE INVERSION THIS FIXES. The row used to close on the run's STATUS, and a
+    // recommendation hold parks its run at `pending_input` — so the row was
+    // closed exactly when the card had something to draw and open when it had
+    // nothing. It closes on the run's own PARK now: no park, no step.
+    const { container } = await renderSetupSurface({ park: null });
 
     // Still a row, still named, still in the series — muted, not removed.
     expect(rows(container).length).toBe(3);
@@ -337,44 +471,43 @@ describe("the setup run page draws the two-column run surface", () => {
     // Clicking it does nothing: the scheduler stays open and the detail column
     // never goes empty.
     fireEvent.click(rows(container)[1]);
-    await waitFor(() => expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"));
+    await waitFor(() =>
+      expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"),
+    );
     expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("false");
     const form = container.querySelector('[data-testid="scheduler-form"]')!;
     expect(form).not.toBeNull();
     expect(detailColumn(container)[0].contains(form)).toBe(true);
     expect(holdCard(container)).toBeNull();
-    // And the card was never even asked: an unreached step opens nothing.
+    // And the card was never even asked: a step the run has nothing for opens
+    // nothing.
     expect(holdStateMock).not.toHaveBeenCalled();
   });
 
-  it("leaves the skills step OPENABLE when the page states nothing about it", async () => {
-    // UNSTATED IS STILL THE THIRD ANSWER. `running` is past the pre-execution
-    // statuses, so the screen states nothing about the skills step, and an
-    // unstated step is drawn plainly and stays openable — the card is the
-    // authority on what is in it.
-    const { container } = await renderSetupSurface({ runStatus: "running" });
+  it("CLOSES the step on a hold that EXPIRED undecided — terminal is not decided", async () => {
+    // The TTL sweeper's fail-closed park is terminal, so the ENTRY predicate
+    // reads it as settled — and nobody answered it, so there are no selected
+    // revisions and no skip on file and the card resolves to nothing. An
+    // openable row over that is the empty column the ruling forbids, and it is
+    // the case a "terminal means decided" reading gets wrong.
+    holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    const { container } = await renderSetupSurface({ park: EXPIRED_HOLD });
 
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBeNull();
-    expect(rows(container)[1].hasAttribute("aria-disabled")).toBe(false);
-    fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
-    await waitFor(() => expect(holdStateMock).toHaveBeenCalled());
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
+    expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
 
-    // THE RESIDUAL THIS CHANGE DOES NOT CLOSE, PINNED SO IT STAYS VISIBLE. With
-    // no live hold the card renders no DOM at all, so an unstated row that IS
-    // opened still leaves the run detail empty. Closing that needs the card's
-    // own resolved authority to reach the rail — a change to the one shipped
-    // recommendation renderer, which the one-card rule (cinatra#2573) keeps out
-    // of this change. What the ruling asked for — the row of a run that has NOT
-    // STARTED — is closed above.
-    expect(holdCard(container)).toBeNull();
-    // The rail is untouched: the step is named, selected, and still a row.
-    expect(rows(container).length).toBe(3);
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
+    fireEvent.click(rows(container)[1]);
+    await waitFor(() =>
+      expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"),
+    );
+    expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
+    expect(holdStateMock).not.toHaveBeenCalled();
   });
 
   it("comes back to the scheduler, and never shows two step surfaces together", async () => {
     holdStateMock.mockImplementation(async () => HELD);
-    const { container } = await renderSetupSurface({ recommendationReached: true });
+    const { container } = await renderSetupSurface({ park: LIVE_HOLD });
 
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
     await waitFor(() => expect(holdCard(container)).not.toBeNull());
@@ -384,37 +517,96 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
     expect(holdCard(container)).toBeNull();
   });
+});
 
-  it("draws a run's progress ONLY where a step's own surface carries it", async () => {
-    // The guard is structural, not a word filter: the detail column shows the
-    // SELECTED step and nothing else, so a page that hands no progress surface
-    // to any step cannot draw one.
-    const { container } = render(
-      <RunSurfaceRail
-        steps={buildSetupRailSteps([
-          { key: "schedule", surface: <SchedulerForm /> },
-          { key: "review", surface: <RunProgress /> },
-        ])}
-        initialSelection="schedule"
-      />,
+describe("recommendationRailStepOpens — a terminal park is not a decided one", () => {
+  it("opens on a live hold and on a released one, and on nothing else", () => {
+    expect(recommendationRailStepOpens({ entry: "live", parkStatus: "parked" })).toBe(true);
+    expect(recommendationRailStepOpens({ entry: "settled", parkStatus: "released" })).toBe(true);
+    // The TTL sweeper's fail-closed park: terminal, and nobody decided.
+    expect(
+      recommendationRailStepOpens({ entry: "settled", parkStatus: "policy_unresolved" }),
+    ).toBe(false);
+    expect(recommendationRailStepOpens({ entry: "none", parkStatus: null })).toBe(false);
+    expect(recommendationRailStepOpens({ entry: "none", parkStatus: undefined })).toBe(false);
+    // An unknown status is not a decision either — it is not read as one.
+    expect(recommendationRailStepOpens({ entry: "settled", parkStatus: "who-knows" })).toBe(
+      false,
     );
-    expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
-    fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
-    expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="scheduler-form"]')).toBeNull();
+  });
+
+  it("is the ENTRY question's companion, not a replacement for it", () => {
+    // The entry says whether the row EXISTS — a settled entry keeps its place on
+    // the rail even where it opens nothing, because the run page has a run
+    // detail behind it. This says whether it can be OPENED where there is
+    // nothing behind it.
+    expect(recommendationRailEntry({ hasPark: false, held: false, hostsCard: true })).toBe(
+      "none",
+    );
+    expect(recommendationRailEntry({ hasPark: true, held: true, hostsCard: true })).toBe("live");
+    expect(recommendationRailEntry({ hasPark: true, held: false, hostsCard: true })).toBe(
+      "settled",
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
-// A STEP THE RUN HAS NOT REACHED CANNOT BE SELECTED (cinatra#2970).
+// ITEM 3, SECOND HALF: THE REVIEW STEP (cinatra#2970).
 //
-// cinatra#2970: "Its row stays on the rail, muted, so the series is visible;
-// clicking it does
-// nothing; the scheduler stays open; the right column never shows an empty step
-// surface."
+// It was composed `surface: null` unconditionally, so it could never open for
+// ANY run — the row carried `aria-disabled` on every setup page and pressing it
+// did nothing at all (cell C11). Its surface is the run's own review slot now,
+// read by the same reader the run page's panel reads it with (cinatra#2997), and
+// drawn by the same two components: plan (A) §4.2's placeholder while the run
+// works, and the review card in place once the output is generated.
 // ---------------------------------------------------------------------------
-describe("a step the run has not reached cannot be opened", () => {
-  it("the unreached review step cannot be opened — the scheduler stays open", async () => {
+describe("the review step opens the run's review slot", () => {
+  it("opens the PLACEHOLDER while the run's review question is still open", async () => {
+    const { container } = await renderSetupSurface({ slot: AWAITING_REVIEW });
+
+    expect(rows(container)[2].getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(rows(container)[2].getAttribute("data-action")).toBe("open-review-step");
+    fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
+
+    const slot = reviewSlot(container)!;
+    expect(slot).not.toBeNull();
+    expect(slot.getAttribute("data-run-review-slot")).toBe("working");
+    expect(
+      slot.querySelector('[data-conformance-id="review-gate-placeholder"]'),
+    ).not.toBeNull();
+    // TO THE RIGHT OF THE STEPS, never under a row.
+    expect(detailColumn(container)[0].contains(slot)).toBe(true);
+    expect(railColumn(container)[0].contains(slot)).toBe(false);
+    // One step at a time.
+    expect(container.querySelector('[data-testid="scheduler-form"]')).toBeNull();
+  });
+
+  it("opens the REVIEW CARD in place once a gate is on file", async () => {
+    const { container } = await renderSetupSurface({ slot: PENDING_REVIEW });
+
+    expect(rows(container)[2].getAttribute("data-run-surface-rail-reached")).toBe("true");
+    fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
+
+    // THE CARD ITSELF, resolved. The box around it proves nothing — the card
+    // draws no DOM until its own resolve answers — so the assertion is on the
+    // card's root, which only appears when the review screen is really there.
+    const card = await waitFor(() => {
+      const el = container.querySelector('[data-conformance-id="review-gate-card"]');
+      if (!el) throw new Error("the review card did not draw");
+      return el as HTMLElement;
+    });
+    const slot = reviewSlot(container)!;
+    expect(slot.getAttribute("data-run-review-slot")).toBe("review");
+    expect(slot.contains(card)).toBe(true);
+    // The card takes the slot, and the placeholder stands down: the swap is the
+    // ruled property (plan (A) §4.2), so both halves are asserted.
+    expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).toBeNull();
+    expect(detailColumn(container)[0].contains(card)).toBe(true);
+    expect(railColumn(container)[0].contains(card)).toBe(false);
+    expect(rows(container)[2].getAttribute("data-run-surface-rail-selected")).toBe("true");
+  });
+
+  it("CLOSES the review step for a run with no review to show — the row stays, muted", async () => {
     const { container } = await renderSetupSurface();
 
     // The row is THERE — the rail is the run's series of steps and a missing row
@@ -470,35 +662,92 @@ describe("a step the run has not reached cannot be opened", () => {
     expect(row.className).toContain("active:not-aria-[haspopup]:translate-y-0");
     expect(row.className).not.toContain("translate-y-px");
   });
+});
 
-  it("closes a row its page read as still ahead, even when that step HAS a surface", () => {
-    // The two reasons a row closes are independent, and the review fixture
-    // happens to carry BOTH (nothing drawn for it, and read as still ahead).
-    // This isolates the second, so the rule cannot be passed by the surface
-    // check alone.
-    const { container } = render(
-      <RunSurfaceRail
-        steps={buildSetupRailSteps([
-          { key: "schedule", surface: <SchedulerForm /> },
-          { key: "review", surface: <RunProgress />, reached: false },
-        ])}
-        initialSelection="schedule"
-      />,
-    );
+// ---------------------------------------------------------------------------
+// THE RULING'S LAST CLAUSE, AS A PROPERTY OF THE WHOLE RAIL (cinatra#2970):
+// "the right column never shows an empty step surface."
+//
+// The two cells that failed (C10, C11) are two instances of one rule, so the
+// rule is checked as a rule: EVERY row the rail draws as openable, opened, and
+// the column read back. What is asserted is the CONTENT the production
+// component drew — the form's own words, the card's own root — never the box
+// this page puts around it, because a box is exactly what an empty column looks
+// like when it has a wrapper.
+// ---------------------------------------------------------------------------
+describe("no selectable row ever opens an empty run detail", () => {
+  const RUNS: { name: string; opts: RunFixture; hold: HoldState }[] = [
+    { name: "a run with nothing but its scheduler", opts: {}, hold: { state: "none" } },
+    { name: "a run holding at its skills question", opts: { park: LIVE_HOLD }, hold: HELD },
+    {
+      name: "a run whose skills question was decided",
+      opts: { park: DECIDED_HOLD },
+      hold: DECIDED,
+    },
+    {
+      name: "a run whose skills hold expired undecided",
+      opts: { park: EXPIRED_HOLD },
+      hold: { state: "none" },
+    },
+    {
+      name: "a run whose review question is still open",
+      opts: { slot: AWAITING_REVIEW },
+      hold: { state: "none" },
+    },
+    {
+      name: "a run with a review gate on file",
+      opts: { slot: PENDING_REVIEW },
+      hold: { state: "none" },
+    },
+    {
+      name: "a run carrying every step at once",
+      opts: { park: LIVE_HOLD, slot: PENDING_REVIEW },
+      hold: HELD,
+    },
+  ];
 
-    const row = rows(container)[1];
-    expect(row.getAttribute("aria-disabled")).toBe("true");
-    expect(row.getAttribute("data-action")).toBe("review-step-unavailable");
-    expect(container.querySelector('[data-action="open-review-step"]')).toBeNull();
+  /** What the production component draws for the step this row opens. */
+  function drawnMarkerFor(key: string, opts: RunFixture): string {
+    if (key === "schedule") return '[data-testid="scheduler-form"]';
+    if (key === "recommendation") return '[data-lifecycle-card="recommendation_hold"]';
+    return runReviewStepReading(opts.slot ?? null) === "review"
+      ? '[data-conformance-id="review-gate-card"]'
+      : '[data-conformance-id="review-gate-placeholder"]';
+  }
 
-    fireEvent.click(row);
+  for (const { name, opts, hold } of RUNS) {
+    it(`${name}: every openable row draws its own surface`, async () => {
+      // THE RUN'S OWN HOLD STATE, not a live one forced on every fixture. A
+      // harness that answers `held` for a decided or expired park is testing a
+      // run that does not exist, and it is exactly how an empty column hides.
+      holdStateMock.mockImplementation(async () => hold);
+      const { container } = await renderSetupSurface(opts);
 
-    expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
-    expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
-    expect(detailColumn(container)[0].getAttribute("data-run-surface-selected-step")).toBe(
-      "schedule",
-    );
-  });
+      const openable = rows(container).filter(
+        (r) => r.getAttribute("aria-disabled") !== "true",
+      );
+      // The rail always carries the step the page is standing on, so "every
+      // openable row" is never vacuously none.
+      expect(openable.length).toBeGreaterThan(0);
+
+      for (const row of openable) {
+        const key = row.getAttribute("data-run-surface-rail-step-key")!;
+        // The row promises an opening, so it must be addressable as one.
+        expect(row.getAttribute("data-action")).toBe(`open-${key}-step`);
+        fireEvent.click(row);
+        await waitFor(() =>
+          expect(
+            detailColumn(container)[0].getAttribute("data-run-surface-selected-step"),
+          ).toBe(key),
+        );
+        const marker = drawnMarkerFor(key, opts);
+        await waitFor(() => {
+          const drawn = detailColumn(container)[0].querySelector(marker);
+          if (!drawn) throw new Error(`${key} opened a run detail with no ${marker} in it`);
+        });
+      }
+    });
+  }
 
   it("marks NO row open when the rail has no step it can open", () => {
     // A degenerate list no page composes — a rail always carries the step its
@@ -530,7 +779,7 @@ describe("a step the run has not reached cannot be opened", () => {
   });
 
   it("never opens onto a step with no surface, even when the page asks for it", async () => {
-    // An `initialSelectedKey` naming a step that has nothing drawn for it falls
+    // An `initialSelection` naming a step that has nothing drawn for it falls
     // through to the first row that HAS a surface, rather than painting the
     // empty right column cinatra#2970 forbids.
     const { container } = render(
@@ -548,6 +797,53 @@ describe("a step the run has not reached cannot be opened", () => {
     expect(rows(container)[2].getAttribute("data-run-surface-rail-selected")).toBe("false");
   });
 
+  it("closes a row its page read as still ahead, even when that step HAS a surface", () => {
+    // The two reasons a row closes are independent. This isolates the `reached`
+    // one, so the rule cannot be passed by the surface check alone.
+    const { container } = render(
+      <RunSurfaceRail
+        steps={buildSetupRailSteps([
+          { key: "schedule", surface: <SchedulerForm /> },
+          { key: "review", surface: <RunProgress />, reached: false },
+        ])}
+        initialSelection="schedule"
+      />,
+    );
+
+    const row = rows(container)[1];
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.getAttribute("data-action")).toBe("review-step-unavailable");
+    expect(container.querySelector('[data-action="open-review-step"]')).toBeNull();
+
+    fireEvent.click(row);
+
+    expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
+    expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
+    expect(detailColumn(container)[0].getAttribute("data-run-surface-selected-step")).toBe(
+      "schedule",
+    );
+  });
+
+  it("the frame FALLS BACK for every value the predicate calls nothing — including `false`", () => {
+    // The predicate and the renderer have to agree on what "nothing drawn" is.
+    // They used to part company on `false`: the predicate read it as nothing and
+    // let the row open on the strength of the run detail behind it, and `??`
+    // read it as the step's own surface and suppressed that fallback — an
+    // openable row over an empty column.
+    const { container } = render(
+      <RunSurfaceRail
+        steps={[
+          { key: "schedule", row: <span data-testid="row-schedule" />, surface: false },
+        ]}
+        detail={<RunProgress />}
+        initialSelection="schedule"
+      />,
+    );
+
+    expect(isRunSurfaceStepSelectable({ surface: false }, <RunProgress />)).toBe(true);
+    expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
+  });
+
   it("keeps the rail's own tri-state rule — surface, and reached only where it is read", () => {
     const surface = <SchedulerForm />;
     // Reached is a THIRD answer: unstated leaves the row openable, because
@@ -563,8 +859,6 @@ describe("a step the run has not reached cannot be opened", () => {
     // settled recommendation carries no surface of its own on purpose, and its
     // row opens onto the reading already beside it (cinatra#2790).
     expect(isRunSurfaceStepSelectable({ surface: null }, surface)).toBe(true);
-    expect(isRunSurfaceStepSelectable({ surface: null, reached: false }, surface)).toBe(
-      false,
-    );
+    expect(isRunSurfaceStepSelectable({ surface: null, reached: false }, surface)).toBe(false);
   });
 });
