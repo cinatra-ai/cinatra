@@ -417,3 +417,46 @@ from the widget on this head. README.md names the two pieces of shipped code tha
 each independently prevent it, with the line that decides in each — and names the
 third gate it does NOT claim, because the convergence round showed it does not
 hold.
+
+---
+
+# cinatra#2997 (the placeholder round) — the pictured run, read out of the database
+
+Every value below is a column read from the capture lane's own database on the
+run the eight placeholder-round cells photograph. Nothing is read off a screen.
+
+The run: **`c0614eeb-07ed-4e16-9a1e-88133a780cfa`**, in the conversation
+`/chat/cinatra-ai/cinatra-assistant/9002128d-9782-4420-9faf-aafc753a66e6`.
+
+## Who created it, and how
+
+| Question | Answer | Column it was read from |
+|---|---|---|
+| Created by | `4e2992ba-e56f-409b-910b-f3e1644db646` — the lane's own signed-in person, the account the browser typed the turn as | `cinatra.agent_runs.run_by` |
+| Person present? | `t` | `cinatra.agent_runs.human_present` |
+| How it was started | `agent_builder` source, from the chat turn | `cinatra.agent_runs.source_type` |
+| Organization | `197ba74d-3ac5-4647-bcde-7b662323f524` — the ONE organization in this lane database | `cinatra.agent_runs.org_id` |
+| Agent | `@cinatra-ai/blog-draft-writer-agent` (template `6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b`) | `cinatra.agent_runs.template_id` → `cinatra.agent_templates.package_name` |
+| Runtime task | `723f6415-18fc-40fd-a0c9-499791454155` | `cinatra.agent_runs.a2a_task_id` |
+| Provider | a sealed `openai_connection` row exists on the instance, written by the app's OWN provider form (`drivers/17-provider-setup-through-the-app.mjs`); the credential is not in this repository, not in this record and not in any log | `cinatra.metadata` key `openai_connection` |
+
+## How the run id was bound to the pictures
+
+`data-inline-run-card="<runId>"` — the inline run card's own name attribute,
+read off the card in the conversation (`runIdSource` in
+`logs/2997-sequence-state.json`). That is the same platform-built value the
+removed "Open the run page" link's href was built FROM, on the same card: the
+link's job as a run-id source moved one attribute earlier when the link went.
+
+## What the run produced
+
+| Table | Rows for this run |
+|---|---|
+| `cinatra.representation` | **1** — `711b1e34-501f-44a2-a1ea-6c1fa3ef4fee`, artifact `2f098e57-4b95-48bd-adad-748164431a00`, revision 1, `01:05:38.852` |
+| `cinatra.artifact_produced_outbox` | **1** — `8533517…`, `pending` when the placeholders were shot, `processed` at `01:06:02.680` |
+| `cinatra.artifact_review_gates` | **1** — `b9aea2d6-9248-4552-939f-fc074b88d4f1`, `lifecycle-review:8533517…`, status `pending`, `01:06:02.533` |
+| `cinatra.lifecycle_continuation_park` | **0** — no recommendation hold fired on this lane for this run |
+
+`cinatra.agent_runs.error` is EMPTY: the run finished clean, which is what makes
+the two readings it is photographed in — placeholder, then review screen — the
+ordinary path rather than a failure's.

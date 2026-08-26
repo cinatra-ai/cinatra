@@ -471,3 +471,29 @@ route and takes ~3.2 s, so two earlier turns were refused with "the public MCP U
 … is not reachable" before any model call was made. Warm, the same HEAD answers
 405 in ~0.29 s. Row 3 above is a warm turn; those two refused turns have no file
 of their own, and this note is the whole of what is claimed about them.
+
+---
+
+# cinatra#2997 (the placeholder round) — the order THIS run actually happened in
+
+The run: **`c0614eeb-07ed-4e16-9a1e-88133a780cfa`**, started person-present from
+the conversation `/chat/cinatra-ai/cinatra-assistant/9002128d-…` by one typed
+turn. All times UTC on 2026-08-26. `timeline-2997.json` beside this file carries
+the driver's own stamps machine-readably; the rows below name the column each
+time was read from.
+
+| # | What happened | Time | Read from |
+|---|---|---|---|
+| 1 | The run was created, person-present, from the conversation | `01:05:06.013` | `cinatra.agent_runs.created_at` |
+| 2 | The run's own question was answered through the card's own Continue | `01:05:12.930` | the driver's clock (`gatePresses[0].at` in `logs/2997-sequence-state.json`) |
+| 3 | The step wrote the run's output | `01:05:38.852` | `cinatra.representation.created_at`, and the `artifact_produced_outbox` row's `created_at` |
+| 4 | The run reached its terminal state — `completed`, no error | `01:05:38.945` | `cinatra.agent_runs.completed_at` + `.error` |
+| 5 | `R7a` (+ dark) were photographed on the RUN PAGE — the placeholder, the run done and its review not yet open | `01:05:43.702` / `01:05:44.808` | `recordedAt` on the two records; the `dbAt` block on each carries the row counts at that instant |
+| 6 | `S5a` (+ dark) were photographed in the CONVERSATION — the same placeholder, the same window | `01:05:50.186` / `01:05:51.305` | `recordedAt` on the two records |
+| 7 | The shipped sweeper opened the review on the produced output | `01:06:02.533` | `cinatra.artifact_review_gates.created_at` (the outbox row's `processed_at` is `01:06:02.680`) |
+| 8 | `S5` (+ dark) were photographed — the SAME conversation slot, now the review screen, under a page that was never reloaded | `01:06:10.473` / `01:06:11.639` | `recordedAt` on the two records; `chatSwappedWithoutReload: true` |
+| 9 | `R7` (+ dark) were photographed — the run page's own slot, on a fresh load | `01:06:19.603` / `01:06:20.746` | `recordedAt` on the two records |
+
+**The placeholder window is rows 4 to 7: 23.6 seconds**, and it is the window
+this round exists to photograph — the run is done, the review is not open yet,
+and the card says nothing rather than announcing a finished run.

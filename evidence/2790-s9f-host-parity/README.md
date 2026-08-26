@@ -18,6 +18,7 @@ round by round and each part still describes the round that wrote it.
 
 | Cells | Run behind them | When | Proof under the real-run rule |
 |---|---|---|---|
+| `S5a` (+ dark), `S5` (+ dark), `R7a` (+ dark), `R7` (+ dark) | `c0614eeb-07ed-4e16-9a1e-88133a780cfa` | 2026-08-26 | **YES** — the placeholder round (cinatra#2997), `drivers/22-placeholder-and-replacement-sequence.mjs`: one run, started by the app's own dispatch from a person's typed turn, its own question answered through the card's own Continue, its step executed with a real provider connection configured, its output written, and the review opened on it by the shipped sweeper. Same negative screens as the rows below (`preRouterShortCircuits` / `preRouterAttempts` / `scriptedRuntimeLines` / `noProviderRefusals` / `mcpDependencyFailures` all 0, process-chain read at every shutter), same stated attribution limit |
 | `S3` (+ dark), `S4` (+ dark), `R2`, `R4` | `aa84c060-15e9-4298-90fe-8cb33c130d6b` | 2026-08-25 | **YES** — a run the app's own dispatch created from a person's turn, decided by real presses, executed its own step with a real provider connection configured, with no scripted-runtime line anywhere in the app server's log and the scripted switch not found one hop above the listening process — a null there is consistent with absence, not a proof of it — and reviewed by the shipped sweeper. Nothing is seeded and nothing is stood in for. *Which* runtime answered a given model call is not recorded by any row — see *The REVIEW-CELL re-shoot* below for exactly how far the attribution goes |
 | `S1` (+ dark), `S2` (+ dark), `R5` (+ dark), `R6` (+ dark) | `aef0f05a-94c9-41ed-a497-798603ecd6bc` | 2026-08-25 | **YES** — the stood-in-legs re-shoot, `drivers/12-real-chain-sequence.mjs` |
 | `H1` `H2` `H3` `H4` `W1` `W2` `W3` (the widget) | a run SEEDED and parked by the walk, read into the widget by a turn naming it | 2026-08-21 | **NO — SCRIPTED-RUNTIME ERA, kept as dated history.** The card, the presses and the settle in them are real; the assistant reply above them came from the deterministic provider and the run under them was seeded rather than dispatched. They are NOT proof of the chain, and the obstacle that keeps them un-re-shootable is code, not effort — see the next section |
@@ -267,6 +268,90 @@ maintainer's question: the chips were decided at `17:03:10`, the step that used
 them ran at `17:04:20`, the artifact it wrote landed at `17:04:21`, the review
 gate was opened on that artifact at `17:04:46`, and the photographs were taken
 at `17:30`.
+
+## The PLACEHOLDER round (cinatra#2997) — what the run card draws, and when
+
+**Why there was another round.** The maintainer read `S3` — the picture at the
+top of issue #2997 — and asked for changes on this pull request, verbatim:
+
+> The "Agentic Run Progress" card should basically just be a card (maybe even an
+> empty review screen) with a spinning icon which is a temporary placeholder for
+> the review screen. Once the agent is done and the output generated, that
+> "Agentic Run Progress" card is being automatically replaced with the "Review
+> requested" screen. On the run page, the same is true. Also, the "Open the run
+> page" link in the top right below the "Agentic Run Progress" card should be
+> removed.
+
+`PLAN: Agents Lifecycle (A)` section 4.2 carries the same ruling in the plan's
+own words, and it is what every cell below is graded against:
+
+> **The run progress card is a temporary placeholder for the review screen.**
+> While the agent works, the conversation shows basically just a card (maybe even
+> an empty review screen) with a spinning icon. Once the agent is done and the
+> output generated, that card is automatically replaced with the "Review
+> requested" screen — in place. On the run page, the same is true. There is no
+> "Open the run page" link below the card.
+
+**Eight cells, one run, both surfaces, both palettes.**
+
+| Cell | What it shows |
+|---|---|
+| `S5a__review-placeholder__run_card__in-conversation__working` (+ dark) | the conversation, while the agent works: the card is the placeholder — the frame, the spinner, the empty review screen — and its own text is EMPTY (`slot.placeholderText: ""` on the record) |
+| `R7a__review-placeholder__run_card__working` (+ dark) | the run page at the same moment on the same run: the same placeholder |
+| `S5__review-card__run_card__in-conversation__pending` (+ dark) | the same conversation, minutes later: the SAME slot holds the "Review requested" screen with Comment / Reject / Approve. The page was never reloaded between the two (`chatSwappedWithoutReload: true`) and nothing was typed after the run's own question was answered (`turnsAtReview: 2`) |
+| `R7__review-card__run_card__pending` (+ dark) | the run page after a fresh load: the same replacement, `data-lifecycle-card-host="run_card"`, state `pending` |
+
+**The removed link is COUNTED, on all eight.** Each record's `slot` block carries
+`removedLinkByTestId` and `removedLinkByText` — the link's own test id and its
+label text, counted on the screen the picture was taken on — and both are `0`
+everywhere. `agenticRunProgressHeadings` is `0` on all eight for the same reason:
+an absence nobody counts is an absence nobody can check.
+
+**Why the conversation's cells are named `run_card` and not `chat_thread`.** The
+review in the conversation is drawn BY THE RUN CARD now — that is the whole
+ruling — so its host declaration is `run_card`, on a `/chat` URL. Both halves of
+the capture contract were widened for exactly that pair and for nothing else
+(`scripts/ci/lib/capture-record-contract.mjs`, `HOST_URL_CLASS`;
+`scripts/audit/lib/chat-hitl-capture-recorder.mjs`, `HOST_URL_CLASSES`), each
+carrying the sentence above as its reason. Every other host still names exactly
+one URL class.
+
+**`S3` (+ dark) stays exactly as it was**, and it is now history rather than a
+claim about this branch: it is the picture the maintainer read, the one issue
+#2997 links at its own commit, and it shows what the card did BEFORE this change
+— "Agentic Run Progress / completed / Run complete", the "Open the run page"
+link, and a review card that only arrived after the person asked a second
+question. Its record and its bytes are untouched.
+
+**The four placeholder cells are deliberately NOT in the canonical capture
+index.** A record there is a CARD claim, and the contract requires the claimed
+card's host anchor and root to have been counted on that screen; a placeholder
+screen has no card on it, which is what makes it a placeholder. They are recorded
+in `capture-records-2997.json`, graded here, and left out of the index on purpose
+— `drivers/23-splice-placeholder-records.mjs` carries the same note.
+
+### What this round's chain did NOT include, stated
+
+* **No recommendation hold.** No `lifecycle_continuation_park` row was written
+  for this run (`recommendationParkRows: 0` on the sequence state), so the
+  skills question the earlier rounds walked never fired on this lane and there
+  were no chips to press. What stands in the same place — the question the
+  person answers before the work starts — is the run's OWN required-input gate,
+  answered through the card's own Continue (`gatePresses`, one press, landed).
+  Neither is a subject of this request.
+* **One lane write, disclosed.** A first probe run of this sequence
+  (`4597815c-dd6b-4dda-b1ae-d2f0ec542138`) was abandoned when the driver was
+  stopped, and its `agent_runs.status` was set to `stopped` by a direct lane
+  write so a dead run could not be mistaken for a live one. It is not the
+  pictured run, nothing was read from it, and no row of the pictured run was
+  written by hand.
+* **The open choice the drawing settles.** The plan's own TODO records two
+  choices for this card that are the owner's: whether the placeholder keeps the
+  card's name in a header (this build draws it BARE, which is what "basically
+  just a card … with a spinning icon" describes), and whether a run that ends
+  with nothing reviewable keeps today's settled reading (this build keeps it).
+  Both are stated on the pull request rather than decided here.
+
 
 ## The runtime, said first
 

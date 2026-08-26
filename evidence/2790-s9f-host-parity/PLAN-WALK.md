@@ -350,3 +350,63 @@ general `agent_run`, so a turn typed into the widget cannot start the **Blog Dra
 Writer Agent** this chain needs. (It can start that one carrier run, and that is
 said here so the sentence is the narrow true one rather than the broad one.) They
 stay as dated scripted-era history; README.md carries the measurement.
+
+
+# cinatra#2997 — the placeholder round, cell by cell
+
+The sentences below are copied character-for-character from
+`PLAN: Agents Lifecycle (A)` section 4.2 in the engineering wiki, and from the
+maintainer's request for changes on pull request 2890 (issue #2997 quotes the
+same words verbatim).
+
+PLAN> **The run progress card is a temporary placeholder for the review screen.** While the agent works, the conversation shows basically just a card (maybe even an empty review screen) with a spinning icon. Once the agent is done and the output generated, that card is automatically replaced with the "Review requested" screen — in place. On the run page, the same is true. There is no "Open the run page" link below the card.
+
+
+CELL: S5a__review-placeholder__run_card__in-conversation__working (+ __dark)
+PLAN> While the agent works, the conversation shows basically just a card (maybe even an empty review screen) with a spinning icon.
+PLAN> There is no "Open the run page" link below the card.
+SHOWS: the conversation while the run works. The card is the frame, one spinning
+  icon (`slot.placeholderSpinners: 1`) and the shipped empty review screen
+  (`slot.placeholderEmptyReviewScreen: true`); its own text is empty
+  (`slot.placeholderText: ""`). No "Agentic Run Progress" heading anywhere on the
+  screen (`agenticRunProgressHeadings: 0`), no completion notice
+  (`runCompletionCards: 0`), and the removed link counted twice at zero.
+  The run's rows at that instant are on the record: output written, review not
+  yet open.
+VERDICT: MET — read on the pixels and on the record's own counts.
+
+
+CELL: R7a__review-placeholder__run_card__working (+ __dark)
+PLAN> On the run page, the same is true.
+SHOWS: the run page at the same moment on the same run — the run panel drawing
+  the same placeholder, beside the run's own step rail. Same counts as `S5a`.
+VERDICT: MET.
+
+
+CELL: S5__review-card__run_card__in-conversation__pending (+ __dark)
+PLAN> Once the agent is done and the output generated, that card is automatically replaced with the "Review requested" screen — in place.
+SHOWS: the SAME conversation slot, minutes later, holding the "Review requested"
+  screen with "Awaiting your decision" and the Comment / Reject / Approve floor.
+  `slot.reviewCardInSlot: true` says the card is inside the box the placeholder
+  was in; `chatSwappedWithoutReload: true` says the page was never reloaded
+  between the two pictures; `turnsAtReview: 2` says nothing was typed after the
+  run's own question was answered — the transcript still holds one turn from the
+  person and one from the assistant.
+VERDICT: MET — automatically, in place, with no question asked.
+
+
+CELL: R7__review-card__run_card__pending (+ __dark)
+PLAN> On the run page, the same is true.
+SHOWS: the run page's own slot holding the same review screen, on the
+  `run_card` host, state `pending`. Shot on a FRESH LOAD of the run page, which
+  is the other half of the ruling: a reload lands on the review screen rather
+  than on a placeholder that has to catch up.
+VERDICT: MET.
+
+
+WHAT NO SENTENCE ABOVE COVERS, stated rather than shown: a run that finishes and
+produced nothing reviewable. There is no review screen for a placeholder to be a
+placeholder FOR, so the completion notice stays for that run — unchanged from
+what shipped. It is not pictured here because this round's run produced an
+output; the reading is pinned in
+`packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx`.
