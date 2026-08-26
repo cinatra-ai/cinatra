@@ -306,6 +306,7 @@
     "test:async-notification-seam": "vitest run --config vitest.integration-2882.config.ts",
     "test:created-at-immutable": "vitest run --config vitest.integration-2911.config.ts --no-coverage",
     "test:lifecycle-moment": "vitest run --config vitest.integration-2928.config.ts --no-coverage",
+    "test:lent-action-grant": "vitest run --config vitest.integration-2932.config.ts --no-coverage",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",
     "test:e2e:marketplace-install": "playwright test -c tests/e2e/config/marketplace-install.config.ts",
