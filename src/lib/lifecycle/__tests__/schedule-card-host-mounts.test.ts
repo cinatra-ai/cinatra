@@ -98,6 +98,20 @@ const RAIL_STEP_TAGS = {
 const REVIEW_PAGE =
   "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx";
 
+/**
+ * THE RUN'S OWN HOST HAS A SECOND ADAPTER (cinatra#3004): the schedule tab of
+ * the run's page. It is the SAME card, declared on the SAME host, drawn without
+ * a rail — the tab is its own page region and has no steps to be a row of. The
+ * two are exclusive by ROUTE, and `runScheduleAdapterFor` is the picker that
+ * says which one a screen draws; its totality is pinned in
+ * `packages/agents/src/__tests__/schedule-run-card-adapters-3004.test.ts`.
+ *
+ * What it REPLACED is why it exists: the tab used to draw a second thing out of
+ * the same facts — a "Trigger configuration" summary, a held-steps tree, and a
+ * Cancel that deleted the trigger row.
+ */
+const SCHEDULE_TAB = "packages/agents/src/run-schedule-tab.tsx";
+
 describe("the four mounts exist and are host-declared", () => {
   it("the transcript hosts are served by the ONE registry row — not by a second table", () => {
     const registry = read(MOUNTS.chat_thread.module);
@@ -177,6 +191,26 @@ describe("the four mounts exist and are host-declared", () => {
     expect(region).not.toContain("Schedule");
   });
 
+  it("the run's schedule tab mounts the same card ONCE, on the same host, with no rail", () => {
+    const tab = read(SCHEDULE_TAB);
+    expect(tab.match(/<\s*ScheduleProposalCard\b/g)).toHaveLength(1);
+    expect(tab).toContain('<LifecycleCardSurfaceProvider host="run_card">');
+    // No second drawing travels with it — the surface is the form. Read as the
+    // DRAWINGS this module composes; the retired card's own strings are pinned
+    // as an absence in real DOM by
+    // `packages/agents/src/__tests__/schedule-surface-agent-page-3004.test.tsx`,
+    // which is where a rendered absence belongs.
+    expect(tab).not.toMatch(/<\s*ScheduleRailStep\b/);
+    expect(tab).not.toMatch(/data-testid="gated-step-tree/);
+    expect(tab).not.toMatch(/<\s*AlertDialog\b/);
+    // And the retired module is gone from the tree rather than left unmounted.
+    expect(() => read("packages/agents/src/trigger-tab-client.tsx")).toThrow();
+    // The screen PLACES it and draws no schedule of its own.
+    const screens = read(RAIL_PLACEMENTS.run_card);
+    expect(screens.match(/<\s*RunScheduleTab\b/g)).toHaveLength(1);
+    expect(screens).not.toMatch(/<\s*ScheduleProposalCard\b/);
+  });
+
   it("both pages mint a SERVER-side ref and draw no step when they cannot", () => {
     const screens = read(RAIL_PLACEMENTS.run_card);
     const reviewPage = read(REVIEW_PAGE);
@@ -188,7 +222,14 @@ describe("the four mounts exist and are host-declared", () => {
     expect(reviewPage).toMatch(/cardRef=\{scheduleCardRef\}/);
     // A run with no schedule row mints no ref, and neither page draws a step:
     // each falls back to the two columns it composed before the step existed.
-    expect(screens).toMatch(/run && trigger \? encodeScheduleRunRef/);
+    // Since cinatra#3004 the run screen asks the picker for that answer, so the
+    // run detail and the run's schedule tab read one rule instead of two.
+    expect(screens).toMatch(
+      /runScheduleAdapterFor\(\{ screen: "run_detail", trigger \}\) === "rail_step"[\s\S]{0,60}encodeScheduleRunRef/,
+    );
+    expect(screens).toMatch(
+      /runScheduleAdapterFor\(\{ screen: "schedule_tab", trigger \}\) === "schedule_tab"[\s\S]{0,60}encodeScheduleRunRef/,
+    );
     expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
     expect(reviewPage).toMatch(/if \(scheduleCardRef\) \{/);
     expect(screens).toMatch(/if \(scheduleRailRef\) \{/);

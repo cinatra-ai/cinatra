@@ -51,9 +51,14 @@ export function AgentInstanceNav({ agentId, instanceId, activeTab, showTriggerTa
           <Link href={base}>Setup</Link>
         </TabsTrigger>
 
+        {/* THE TAB IS NAMED FOR WHAT IT SHOWS (cinatra#3004): the schedule
+            form, in the state this run's schedule is in. The route keeps its
+            path — a person's bookmark still opens the same surface — and only
+            the word a reader sees changes, because "trigger" is not a word this
+            surface uses any more. */}
         {showTriggerTab && (
           <TabsTrigger value="trigger" asChild>
-            <Link href={`${base}/trigger`}>Trigger</Link>
+            <Link href={`${base}/trigger`}>Schedule</Link>
           </TabsTrigger>
         )}
         <TabsTrigger value="permissions" asChild>

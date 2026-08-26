@@ -31,6 +31,8 @@ import "server-only";
 // so the surface cannot be used to probe what exists.
 // ---------------------------------------------------------------------------
 
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { ActorRoleHints } from "@cinatra-ai/agents";
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import {
@@ -71,8 +73,17 @@ export async function resolveTriggerScheduleProposalCard(params: {
   ref: string;
   userId: string;
   orgId: string;
+  /**
+   * The reader's STANDING on the run, for a run-addressed ref whose run came
+   * from no proposal (cinatra#3004). A schedule armed on the run's own
+   * scheduling step is bound to the RUN rather than to one person, so who may
+   * read it is the run's own access question — asked with the same actor and
+   * role hints every other run surface asks it with. Omitted, the service falls
+   * back to the run's own owner.
+   */
+  access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints };
 }): Promise<TriggerScheduleProposalCard> {
-  const { ref, userId, orgId } = params;
+  const { ref, userId, orgId, access } = params;
   if (!userId || !orgId) return ABSENT_PROPOSAL_CARD;
 
   try {
@@ -86,7 +97,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
     // succeeds outright or leaves the token path exactly as it was.
     const runRef = decodeScheduleRunRef(ref);
     const resolved = runRef
-      ? await resolveProposalForRun(runRef.runId, { userId, orgId })
+      ? await resolveProposalForRun(runRef.runId, { userId, orgId }, access)
       : await resolveProposalForReader(ref, { userId, orgId });
 
     if (resolved.phase === "absent") return ABSENT_PROPOSAL_CARD;

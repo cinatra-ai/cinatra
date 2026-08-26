@@ -148,8 +148,13 @@ export function ScheduleRailStepRow({
  * around it cannot ask it what it decided, so the honest reading is the DOM it
  * produced. `MutationObserver` is what makes that reading LIVE — a card that
  * resolves late, or re-resolves into `absent`, moves the window with it.
+ *
+ * EXPORTED because the agent page's schedule surface (cinatra#3004) draws the
+ * same card with the same window under it and owes the reader the same honesty.
+ * One reading, so the two surfaces cannot disagree about whether there is a
+ * scheduler on the page.
  */
-function useSchedulerDrawn(host: HTMLElement | null): boolean {
+export function useSchedulerDrawn(host: HTMLElement | null): boolean {
   const [drawn, setDrawn] = useState(false);
   useEffect(() => {
     if (!host) {

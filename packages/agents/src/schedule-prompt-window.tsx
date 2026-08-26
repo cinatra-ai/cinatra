@@ -10,22 +10,23 @@
 // weekdays' — and the assistant answers in the panel — today the answer does
 // not change the schedule for you."
 //
-// WHY THIS FILE EXISTS. The prompt window shipped on the run's PERSISTENT
-// TRIGGER TAB (`trigger-tab-client.tsx`), which is a different surface from the
-// run page's schedule STEP — the step drew the scheduler and nothing under it.
-// The plan puts the window on the step. Rather than give the product a second
-// prompt window, this is the same panel (`HitlConversationPanel`), the same
-// endpoint and the same `xRenderer` the tab already sends, mounted where the
-// plan asks for it.
+// WHY THIS FILE EXISTS. The prompt window shipped on the run's persistent
+// schedule tab, whose own drawing was a summary of the configuration rather than
+// the form; the run page's schedule STEP drew the scheduler and nothing under
+// it. The plan puts the window on the step. Rather than give the product a
+// second prompt window, this is the same panel (`HitlConversationPanel`), the
+// same endpoint and the same `xRenderer` that tab already sent, mounted where
+// the plan asks for it — and, since cinatra#3004, mounted by BOTH surfaces from
+// here, so the run detail's step and the run's schedule tab ask their questions
+// through one window.
 //
 // IT PORTALS INTO ITS OWN MOUNT, NOT INTO `<main>`. `HitlConversationPanel`
-// takes its portal target from the parent, and the tab hands it
+// takes its portal target from the parent, and the retired tab handed it
 // `document.querySelector("main")` — which puts the window at the END of the
 // page, not under anything in particular. Here the target is a div this
 // component renders itself, so the window lands exactly where the plan puts it:
-// in the run detail column, immediately below the scheduler form. That is a
-// composition decision, not a change to the shared panel — no other surface
-// moves.
+// immediately below the scheduler form. That is a composition decision, not a
+// change to the shared panel — no other surface moves.
 //
 // IT CHANGES NOTHING BY ITSELF. The assist endpoint answers in the panel; it
 // does not write the schedule. cinatra#2853 owns making a typed instruction act
