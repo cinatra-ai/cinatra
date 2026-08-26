@@ -140,6 +140,14 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             payload = json.loads(self.rfile.read(length))
+            # A body of `[]`, `null`, `3` or `"x"` is valid JSON and parses
+            # fine, then has no `.get`. Left to raise, that AttributeError
+            # escapes as a 500 with a traceback while every other malformed
+            # input gets a 400 — the one shape of bad request that looks like a
+            # server fault. It is a bad request like the rest of them.
+            if not isinstance(payload, dict):
+                self._error(400, "request body must be a JSON object")
+                return
             texts = normalize_input(payload.get("input"))
         except (json.JSONDecodeError, ValueError) as exc:
             self._error(400, str(exc))
