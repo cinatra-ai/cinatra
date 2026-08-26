@@ -58,16 +58,33 @@ const WRITE = process.env["MEMORY_SEED_WRITE"] === "1";
  * pair of marker comments; everything outside the markers is host-specific
  * routing (frontmatter, an install note, the surrounding repository map) and
  * must carry no rule.
+ *
+ * `heading` names the section an adapter OWNS inside a larger host file. A
+ * dedicated adapter file owns all of itself and declares none. `AGENTS.md` is
+ * the repository's own instruction file, where `secret`, `credential` and
+ * `duplicate` are ordinary words about something else entirely, so the
+ * no-rule properties below read only its Memory conventions section.
  */
 const ADAPTER_BEGIN = "<!-- memory-conventions:begin -->";
 const ADAPTER_END = "<!-- memory-conventions:end -->";
-const ADAPTERS = [
+interface Adapter {
+  label: string;
+  file: string;
+  heading?: string;
+}
+/** The dedicated adapter file: the only one that carries YAML frontmatter. */
+const SKILL_ADAPTER: Adapter = {
+  label: "Claude Code skill",
+  file: path.join(PKG_ROOT, "skills", "memory-conventions", "SKILL.md"),
+};
+const ADAPTERS: readonly Adapter[] = [
+  SKILL_ADAPTER,
   {
-    label: "Claude Code skill",
-    file: path.join(PKG_ROOT, "skills", "memory-conventions", "SKILL.md"),
+    label: "AGENTS.md",
+    file: path.join(REPO_ROOT, "AGENTS.md"),
+    heading: "## Memory conventions",
   },
-  { label: "AGENTS.md", file: path.join(REPO_ROOT, "AGENTS.md") },
-] as const;
+];
 
 function readDoc(): string {
   return readFileSync(DOC_PATH, "utf8");
@@ -103,9 +120,83 @@ function frontmatter(source: string): string {
   return match?.[1] ?? "";
 }
 
-/** Everything an adapter authored itself: no frontmatter, no generated region. */
-function authoredProse(source: string, label: string): string {
-  return source.replace(frontmatter(source), " ").replace(adapterRegion(source, label), " ");
+/**
+ * Every `## ` line of a host file that is really a heading. Fenced text is
+ * excluded: a `## ` line inside an example is sample text, and read as a
+ * heading it would end the owned scope early, letting every line after it
+ * escape the properties below. Trailing whitespace is normalised away, so a
+ * heading cannot both miss the name check and still close the scope.
+ *
+ * The fence state tracks WHICH delimiter opened the block, because a boolean
+ * toggle is escapable: a `~~~` line inside a ``` example would close the
+ * state and hand the rest of the file back as headings. A fence closes only
+ * on its own character, at least as long as the opener, and carrying no info
+ * string — CommonMark's rule. An unclosed fence widens the scope to the end
+ * of the file, which reads more prose than it owns and can only fail louder.
+ */
+const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(.*?)\s*$/;
+function headingLines(lines: readonly string[]): Map<number, string> {
+  const headings = new Map<number, string>();
+  let open: { mark: string; length: number } | null = null;
+  for (const [i, line] of lines.entries()) {
+    const fence = FENCE.exec(line);
+    if (fence !== null) {
+      const run = fence[1] ?? "";
+      const mark = run[0] ?? "";
+      if (open === null) open = { mark, length: run.length };
+      else if (mark === open.mark && run.length >= open.length && fence[2] === "") {
+        open = null;
+      }
+      continue;
+    }
+    if (open === null && line.startsWith("## ")) headings.set(i, line.trimEnd());
+  }
+  return headings;
+}
+
+/**
+ * The part of a host file an adapter owns: the whole file when it is a
+ * dedicated adapter, otherwise its own section, from its heading to the next
+ * heading of the same level. Two guards keep the narrower scope from becoming
+ * an escape route. The heading must be a heading line carrying exactly that
+ * name, and it must appear EXACTLY once — the same discipline the generated
+ * regions get, because a second section of the same name would hold authored
+ * prose that nothing reads. And the generated region must land inside the
+ * scope, so a heading rename that moved the block elsewhere fails instead of
+ * silencing every property below.
+ */
+function adapterScope(source: string, adapter: Adapter): string {
+  if (adapter.heading === undefined) return source;
+  const lines = source.split("\n");
+  const headings = headingLines(lines);
+  const starts = [...headings].filter(([, text]) => text === adapter.heading);
+  const start = starts[0]?.[0];
+  if (starts.length !== 1 || start === undefined) {
+    throw new Error(
+      `${adapter.label} must carry exactly one ${JSON.stringify(adapter.heading)} heading; found ${starts.length}`,
+    );
+  }
+  const next = [...headings.keys()].filter((i) => i > start);
+  const scope = lines.slice(start, next[0] ?? lines.length).join("\n");
+  if (!scope.includes(ADAPTER_BEGIN) || !scope.includes(ADAPTER_END)) {
+    throw new Error(
+      `${adapter.label}'s ${adapter.heading} section no longer holds the generated region`,
+    );
+  }
+  return scope;
+}
+
+/**
+ * Everything an adapter authored itself, inside the scope it owns: no
+ * frontmatter, no generated region.
+ */
+function authoredProse(source: string, adapter: Adapter): string {
+  const front = frontmatter(source);
+  const scope = adapterScope(source, adapter);
+  return (front === "" ? scope : scope.replace(front, " ")).replace(
+    adapterRegion(source, adapter.label),
+    " ",
+  );
 }
 
 /** Every file under `root`, as bundle-relative POSIX paths. */
@@ -235,7 +326,7 @@ describe("host adapters", () => {
     // substring check still passed, and frontmatter is stripped before the
     // vocabulary ban runs — so containment alone leaves an escape route.
     const description = buildMemoryAdapterDescription(readDoc());
-    const parsed = parseYaml(frontmatter(readFileSync(ADAPTERS[0].file, "utf8"))) as {
+    const parsed = parseYaml(frontmatter(readFileSync(SKILL_ADAPTER.file, "utf8"))) as {
       description?: unknown;
     };
     expect(
@@ -266,7 +357,7 @@ describe("host adapters", () => {
   it("keeps the skill frontmatter parseable as YAML", () => {
     // The description is GENERATED, so a colon or a hash the page's author
     // never thought about would otherwise ship frontmatter no host can read.
-    const parsed = parseYaml(frontmatter(readFileSync(ADAPTERS[0].file, "utf8")));
+    const parsed = parseYaml(frontmatter(readFileSync(SKILL_ADAPTER.file, "utf8")));
     expect(Object.keys(parsed as Record<string, unknown>)).toEqual(["name", "description"]);
     expect(typeof (parsed as { description: unknown }).description).toBe("string");
   });
@@ -288,7 +379,7 @@ describe("host adapters", () => {
     for (const adapter of ADAPTERS) {
       const prose = authoredProse(
         readFileSync(adapter.file, "utf8"),
-        adapter.label,
+        adapter,
       ).toLowerCase();
       for (const word of MEMORY_RULE_VOCABULARY) {
         expect(
@@ -304,7 +395,7 @@ describe("host adapters", () => {
     for (const adapter of ADAPTERS) {
       const outside = authoredProse(
         readFileSync(adapter.file, "utf8"),
-        adapter.label,
+        adapter,
       ).replace(/\s+/g, " ");
       for (const section of sections) {
         const first = (section.body.replace(/\s+/g, " ").split(". ")[0] ?? "").trim();
@@ -317,7 +408,7 @@ describe("host adapters", () => {
   });
 
   it("refuses an adapter that carries the generated markers twice", () => {
-    const doubled = `${readFileSync(ADAPTERS[0].file, "utf8")}\n${ADAPTER_BEGIN}\nanything\n${ADAPTER_END}\n`;
+    const doubled = `${readFileSync(SKILL_ADAPTER.file, "utf8")}\n${ADAPTER_BEGIN}\nanything\n${ADAPTER_END}\n`;
     expect(() => adapterRegion(doubled, "doubled")).toThrow(/exactly one generated region/);
   });
 
