@@ -234,7 +234,6 @@ jobs:
           NDB_IMG="$(svc_image nango-db)";       [ -n "$NDB_IMG" ]        || { echo "::error::could not scrape nango-db image from $COMPOSE"; exit 1; }
           NANGO_IMG="$(svc_image nango-server)"; [ -n "$NANGO_IMG" ]      || { echo "::error::could not scrape nango-server image from $COMPOSE"; exit 1; }
           NEO_IMG="$(svc_image neo4j)";          [ -n "$NEO_IMG" ]        || { echo "::error::could not scrape neo4j image from $COMPOSE"; exit 1; }
-          GR_IMG="$(svc_image graphiti)";        [ -n "$GR_IMG" ]         || { echo "::error::could not scrape graphiti image from $COMPOSE"; exit 1; }
           VC_IMG="$(svc_image verdaccio)";       [ -n "$VC_IMG" ]         || { echo "::error::could not scrape verdaccio image from $COMPOSE"; exit 1; }
           PY_ARG="$(dfarg PYTHON_TAG)";          [ -n "$PY_ARG" ]         || { echo "::error::could not scrape PYTHON_TAG from $DF"; exit 1; }
           WF_ARG="$(dfarg WAYFLOWCORE_VERSION)"; [ -n "$WF_ARG" ]         || { echo "::error::could not scrape WAYFLOWCORE_VERSION from $DF"; exit 1; }
@@ -276,9 +275,17 @@ jobs:
             # otherwise reconstruct `neo4j:<tag>` and pull whatever that tag floats
             # to). No override → the repo's full digest-pinned ref (NEO_IMG). A
             # dispatch tag override (a bare tag, no digest) → repo:tag (an
-            # intentionally unpinned manual run). Mirrors GRAPHITI_IMAGE.
+            # intentionally unpinned manual run).
             echo "NEO4J_IMAGE=${IN_NEO4J:+$(repo_of "$NEO_IMG"):}${IN_NEO4J:-$NEO_IMG}"
-            echo "GRAPHITI_IMAGE=${IN_GRAPHITI:-$GR_IMG}"
+            # GRAPHITI_IMAGE: unlike neo4j/redis/postgres, graphiti's compose
+            # `image:` is a LOCAL build tag, not something published anywhere to
+            # pull — so this workflow only exports GRAPHITI_IMAGE when the
+            # dispatch input explicitly names a genuinely external image to test
+            # against; with no override, graphiti.sh's own default (build from
+            # docker/graphiti) applies, the same as the unexported KG_EMBEDDER_IMAGE.
+            if [ -n "$IN_GRAPHITI" ]; then
+              echo "GRAPHITI_IMAGE=${IN_GRAPHITI}"
+            fi
             echo "NANGO_SERVER_IMAGE=${IN_NANGO_IMG:-$NANGO_IMG}"
             echo "NANGO_DB_TAG=${IN_NANGO_DB:-$NDB_HEAD}"
             echo "NANGO_DB_FROM_TAG=${IN_NANGO_DB:-$NDB_FROM_DEF}"
@@ -289,7 +296,7 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Derived candidate pins (override-aware):"
           echo "  redis=${IN_REDIS:-$(tag_of "$REDIS_IMG")} pg=${IN_PG_FROM:-$PG_FROM_DEF}->${IN_PG_TO:-$PG_TO_DEF} neo4j=${IN_NEO4J:+$(repo_of "$NEO_IMG"):}${IN_NEO4J:-$NEO_IMG} verdaccio=${IN_VERDACCIO:-$(tag_of "$VC_IMG")} python=${IN_PYTHON:-$PY_ARG}"
-          echo "  graphiti=${IN_GRAPHITI:-$GR_IMG}"
+          echo "  graphiti=${IN_GRAPHITI:-built from docker/graphiti}"
           echo "  nango-server=${IN_NANGO_IMG:-$NANGO_IMG}  nango-db=${IN_NANGO_DB:-$NDB_FROM_DEF}->${IN_NANGO_DB:-$NDB_HEAD}"
 
       - name: Set up pnpm
