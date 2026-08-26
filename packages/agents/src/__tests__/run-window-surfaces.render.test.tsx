@@ -28,7 +28,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
@@ -49,26 +49,33 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
+/**
+ * The window's own send, captured from the field the shared panel renders.
+ *
+ * A test drives the REAL submit path through it rather than through a control
+ * of its own: the stub adds no element to click, so nothing here can pass a
+ * design-system rule's judgement on markup this suite invented.
+ */
+const promptField = vi.hoisted(() => ({
+  submit: null as null | ((value: string) => unknown),
+}));
+
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
   // The real PromptField pulls browser-only deps jsdom cannot load. The stub
-  // surfaces the placeholder as text and exposes the send, so a test can put a
-  // question into a window the way a reader does. A <div>, not a raw <input>:
-  // the design-system lint gate forbids the bare element.
+  // surfaces the placeholder as text and hands its send to the holder above. A
+  // <div>, not a raw <input>: the design-system lint gate forbids the bare
+  // element in favour of the shadcn <Input>.
   PromptField: ({
     placeholder,
     onSubmit,
   }: {
     placeholder?: string;
-    onSubmit?: (v: string) => unknown;
-  }) => (
-    <div data-testid="run-window-prompt">
-      {placeholder}
-      <button type="button" onClick={() => onSubmit?.("reschedule to 9 on weekdays")}>
-        send-run-window-turn
-      </button>
-    </div>
-  ),
+    onSubmit?: (value: string) => unknown;
+  }) => {
+    promptField.submit = onSubmit ?? null;
+    return <div data-testid="run-window-prompt">{placeholder}</div>;
+  },
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -201,6 +208,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   document.body.innerHTML = "";
+  promptField.submit = null;
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -339,7 +347,9 @@ describe("a form fill that fails is still said out loud", () => {
       />,
     );
     await settle();
-    fireEvent.click(screen.getByText("send-run-window-turn"));
+    await act(async () => {
+      await promptField.submit?.("reschedule to 9 on weekdays");
+    });
     const notice = await screen.findByText(/Could not fetch suggestions/i);
     expect(notice).not.toBeNull();
   });
@@ -370,7 +380,9 @@ describe("a form fill that fails is still said out loud", () => {
       />,
     );
     await settle();
-    fireEvent.click(screen.getByText("send-run-window-turn"));
+    await act(async () => {
+      await promptField.submit?.("reschedule to 9 on weekdays");
+    });
     await waitFor(() => expect(resolved).toBe(true));
     await settle();
     expect(assist).toHaveBeenCalled();
