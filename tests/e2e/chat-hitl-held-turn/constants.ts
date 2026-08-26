@@ -89,9 +89,9 @@ export const HELD_TURN_PAUSED_TEXT =
  * it, which is the whole of what this constant is for.
  *
  * It is EVENT TENSE (cinatra#2935, lifecycle-b W5d) because the platform now
- * writes it and an assistant says it back after polling the run: a present-tense
- * "the agent is running" would be a claim about a moment that has already
- * passed by the time a person reads the line.
+ * writes it and the card beside it goes on re-reading the run after the turn is
+ * written: a present-tense "the agent is running" would be a claim about a
+ * moment that has already passed by the time a person reads the line.
  */
 export const HELD_TURN_RUNNING_TEXT = "The run started.";
 

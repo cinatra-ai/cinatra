@@ -29,7 +29,12 @@ vi.mock("@cinatra-ai/mcp-client", () => ({
   invokePrimitive: vi.fn(),
 }));
 
-import { handleNamedAgentStart } from "../named-agent-start-mcp";
+import { RUN_START_REPLY_RULE } from "@cinatra-ai/agents/run-status";
+
+import {
+  NAMED_AGENT_START_TOOL_DESCRIPTION,
+  handleNamedAgentStart,
+} from "../named-agent-start-mcp";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 const PERSON = { userId: "usr_1", orgId: "org_1" };
@@ -144,5 +149,32 @@ describe("the platform's refusal, relayed", () => {
     expect(whole).not.toContain("not_project_member");
     expect(whole).not.toContain("80d761cd-a8eb-4ad0-81e4-288244b79727");
     expect(whole).not.toContain(DIAGNOSTIC);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE REPLY RULE, THE SAME BYTES ON BOTH DOORS (cinatra#2935, lifecycle-b W5d).
+// ---------------------------------------------------------------------------
+// The widget's door landed the platform's sentence every time and the chat
+// host's did not, and the difference was in the words each door gives the model:
+// this one carried the reply rule ALONE, while `agent_run` carried it beside an
+// order to poll the run afterwards — and the poll took the last word. The rule
+// is now ONE exported string and both doors carry it, so a divergence between
+// the hosts' instructions is impossible rather than merely unlikely.
+// ---------------------------------------------------------------------------
+
+describe("the words the widget's door gives the model", () => {
+  it("are the platform's one reply rule, byte for byte", () => {
+    expect(NAMED_AGENT_START_TOOL_DESCRIPTION).toContain(RUN_START_REPLY_RULE);
+  });
+
+  it("END on that rule — nothing is said after it", () => {
+    expect(NAMED_AGENT_START_TOOL_DESCRIPTION.endsWith(RUN_START_REPLY_RULE)).toBe(true);
+  });
+
+  it("order no poll, and never name the read primitive as a follow-up", () => {
+    expect(NAMED_AGENT_START_TOOL_DESCRIPTION).not.toMatch(/MUST be followed by/i);
+    expect(NAMED_AGENT_START_TOOL_DESCRIPTION).not.toMatch(/\bpoll(ing)?\b[^.]*\buntil\b/i);
+    expect(NAMED_AGENT_START_TOOL_DESCRIPTION).not.toContain("agent_run_get");
   });
 });

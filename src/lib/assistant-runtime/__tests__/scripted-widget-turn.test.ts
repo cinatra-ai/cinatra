@@ -635,6 +635,49 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat agent-start br
     expect(text).not.toContain(HELD_TURN_PAUSED_TEXT);
   });
 
+  it("THE CARD REPORTS THE RUN, NOT A POLL: the turn ends on the platform's report and never reads the run back", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    // From the plan (PLAN: Agents Lifecycle (B), "The card is the visible
+    // truth"): "the card re-reads its state from the server and settles in
+    // place. The assistant's line reports what came back and adds nothing."
+    // So a start turn is exactly TWO things — the start, and the platform's
+    // sentence — and a read of the run afterwards is not one of them.
+    chatDispatchScript.answers = { [AGENT_RUN_TOOL]: QUEUED_ANSWER };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    const toolCalls = frames
+      .filter((f) => f.event === "tool_call")
+      .map((f) => (f.data as { name: string }).name);
+    expect(toolCalls).toEqual([AGENT_RUN_TOOL]);
+    expect(toolCalls).not.toContain("agent_run_get");
+    expect(chatDispatchScript.calls.map((c) => c.name)).toEqual([AGENT_RUN_TOOL]);
+
+    // The turn ENDS on the platform's own sentence — the whole of it, byte for
+    // byte, with nothing said after it. (What comes before is this stand-in's
+    // fixed sentinel, which every scripted turn carries and no real model does;
+    // the subject here is what follows the start.)
+    const report = describeStartedRun({
+      packageName: HELD_TURN_AGENT_PACKAGE,
+      runId: STARTED_RUN_ID,
+      status: "queued",
+    });
+    const text = frames
+      .filter((f) => f.event === "text")
+      .map((f) => (f.data as { content: string }).content)
+      .join("");
+    expect(text.endsWith(report)).toBe(true);
+    // And it is said ONCE — a turn that read the run back would have a second
+    // account of the same run somewhere in this string.
+    expect(text.split(STARTED_RUN_ID)).toHaveLength(2);
+  });
+
   it("THE REFUSAL TRAVELS: a start the primitive refused is relayed in the platform's own words, and no run id is claimed", async () => {
     process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
     process.env.CINATRA_RUNTIME_MODE = "development";

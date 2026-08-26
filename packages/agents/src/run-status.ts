@@ -415,8 +415,8 @@ export function deriveProducedOutputTitle(input: {
 // parked is described as parked, a run that did not is described as running.
 //
 // EVENT TENSE, deliberately, in BOTH clauses: this line is persisted with the
-// turn and re-read long after the card beside it has settled, and the assistant
-// that says it back is required to poll the run to a terminal status first.
+// turn and re-read long after the card beside it has settled, while the run it
+// names goes on changing under both of them.
 // "The run paused" and "The run started" record what happened; "the run is
 // paused" or "the agent is running" would keep asserting a state that stopped
 // being true the moment somebody decided, or the moment the run finished.
@@ -425,6 +425,43 @@ export function deriveProducedOutputTitle(input: {
 // makes the turn readable beside it — and a turn that never names the run it
 // started cannot be read back later without the card.
 // ---------------------------------------------------------------------------
+
+/**
+ * THE ONE REPLY RULE A START ANSWERS WITH — the same bytes on every door.
+ *
+ * From the plan (PLAN: Agents Lifecycle (B), "The card is the visible truth"):
+ *
+ *   "After the action fires, the card re-reads its state from the server and
+ *    settles in place. The assistant's line reports what came back and adds
+ *    nothing. Where the sentence and the card could disagree, the card is
+ *    right."
+ *
+ * IT IS ONE RULE, AND THAT IS THE WHOLE POINT. `agent_run`'s description used to
+ * carry two: say the platform's sentence back exactly, AND follow the start with
+ * `agent_run_get` polling until a terminal status. A model given two rules obeys
+ * the one it read last — the final W5d pictures show it: the widget's door, which
+ * carried the reply rule ALONE, relayed the platform's sentence word for word on
+ * every capture, while the chat host, whose door carried both, polled the run and
+ * then wrote prose of its own about what it had found. Same platform, same
+ * sentence on the wire, two sets of instructions, two answers.
+ *
+ * SO THE PROGRESS IS THE CARD'S JOB, SAID OUTRIGHT. The card re-reads the run and
+ * settles in place; a model chasing the same run in the same turn can only
+ * produce a second, staler account of it beside the card that is right. The read
+ * primitive is still there for a person who asks how a run is doing — what is
+ * gone is the ORDER to call it after a start.
+ *
+ * IT LIVES BESIDE THE SENTENCE IT GOVERNS, in this leaf that imports nothing, so
+ * the primitive's own schema and the widget's narrower door can both carry the
+ * identical bytes without either pulling a graph.
+ */
+export const RUN_START_REPLY_RULE =
+  "The run's own card in the conversation re-reads the run's state and shows its progress, " +
+  "so do not poll the run after a start and do not describe its progress yourself. " +
+  "The answer carries `message` — the platform's own sentence about what happened — and that " +
+  "sentence is your reply: say it back exactly as it is written, add nothing to it, and never " +
+  "print the answer itself. When it refuses, relay the refusal the same way and do not try " +
+  "another way.";
 
 /** The clause for a start that parked on its recommendation checkpoint. */
 export const RUN_START_PARKED_CLAUSE =
@@ -435,8 +472,8 @@ export const RUN_START_PARKED_CLAUSE =
  *
  * IT REPORTS THE EVENT, NOT A STATE, and that is what makes it safe to say
  * back later. "The agent is running" is a claim about NOW: the answer names a
- * status the moment the start returned, the assistant is required to poll the
- * run to a terminal status before it replies, and a run can also come back
+ * status the moment the start returned, the card beside the line goes on
+ * re-reading the run after the turn is written, and a run can also come back
  * already settled when a concurrent writer won the dispatch. Any of those makes
  * a present-tense claim false by the time a person reads it. "The run started"
  * is true from the moment it happens and stays true; the status the answer

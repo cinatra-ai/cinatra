@@ -76,6 +76,8 @@ import {
   type PrimitiveActorContext,
 } from "@cinatra-ai/mcp-client";
 
+import { RUN_START_REPLY_RULE } from "@cinatra-ai/agents/run-status";
+
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
 
 // THE START PATH IS IMPORTED LAZILY, AND THAT IS A MEASUREMENT, NOT A STYLE
@@ -162,15 +164,21 @@ const inputSchema = z
   })
   .strict();
 
+/**
+ * THE WORDS THIS DOOR GIVES THE MODEL.
+ *
+ * Its own half says what the door is for; the reply half is `RUN_START_REPLY_RULE`
+ * — the platform's ONE rule, imported rather than re-typed, so this door and
+ * `agent_run` cannot drift into telling two hosts two different things. That
+ * drift is not hypothetical: it is what the final W5d captures caught.
+ */
 export const NAMED_AGENT_START_TOOL_DESCRIPTION =
   "Start the agent the person named, as that person, with their permissions. " +
   "Use it when the person asks to use, run, start or dispatch an agent and names its package " +
   "(the canonical scoped form looks like '@cinatra-ai/<slug>'). " +
   "Pass the inputs they gave you in `inputParams` as a stringified JSON object; leave it out when they gave none. " +
-  "It starts at most one run. The answer carries `message` — the platform's own sentence about " +
-  "what happened — and that sentence is your reply: say it back exactly as it is written, add nothing " +
-  "to it and never print the answer itself. When it refuses, relay the refusal the same way and do " +
-  "not try another way.";
+  "It starts at most one run. " +
+  RUN_START_REPLY_RULE;
 
 type McpToolResult = {
   content: { type: "text"; text: string }[];
