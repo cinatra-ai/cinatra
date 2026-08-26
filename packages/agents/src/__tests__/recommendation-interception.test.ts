@@ -22,6 +22,10 @@ vi.mock("../lifecycle-policy-store", () => ({
 }));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
   writeRunSelectedSkillRevisions: (...a: unknown[]) => writeRunSelectedSkillRevisions(...a),
+  writeRunRejectedRecommendations: vi.fn(),
+  // cinatra#2906 — with NO recorded offer the confirm keeps its pre-#2906 path,
+  // which is what this suite has always exercised.
+  readRunRecommendationOfferedSet: vi.fn(async () => []),
 }));
 
 import {
@@ -121,6 +125,8 @@ describe("confirmRunSkillSelection (AC-6)", () => {
       intent: { promptText: "write a blog" },
       confirmedSkillIds: ["a"],
     });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
     expect(out.written).toBe(1);
     expect(out.selection).toEqual([
       { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },
