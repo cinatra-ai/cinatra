@@ -153,8 +153,28 @@ export const LOCAL_EMBEDDER_DIMENSIONS = "384";
  *  published to a host interface). This is a placeholder, not a credential. */
 export const LOCAL_EMBEDDER_PLACEHOLDER_KEY = "cinatra-local-embedder";
 
-const HOSTED_EMBEDDER_MODEL = "text-embedding-3-small";
-const HOSTED_EMBEDDER_DIMENSIONS = "1536";
+/** The HOSTED embedder — cinatra#2591 deliverable 3's "configured provider
+ *  embeddings where available". OpenAI publishes an embeddings API, so a keyed
+ *  OpenAI install ranks on its own key and the local floor stays what it is
+ *  named: a floor for installs that have no embeddings vendor (keyless, and
+ *  Anthropic, which publishes none).
+ *
+ *  THE URL IS NOT OPTIONAL. config.yaml defaults the embedder base URL to the
+ *  no-egress LOCAL address for the same reason it defaults the LLM one — an
+ *  un-generated `docker compose up` must boot and must not reach a vendor. So a
+ *  configured install has to put the real endpoint back EXPLICITLY, exactly as
+ *  the LLM half does. Omitting it does not fall back to something harmless: it
+ *  asks for `text-embedding-3-small` at 1536 wide and is served
+ *  `bge-small-en-v1.5` at 384 by the local service, which ignores the requested
+ *  model name. graphiti declares the width up front, so the mismatch is compared
+ *  silently wrongly rather than refused loudly.
+ *
+ *  MODEL, WIDTH and URL are therefore one decision, and the generator's tests
+ *  assert them as one across every arm. */
+export const HOSTED_LLM_API_URL = "https://api.openai.com/v1";
+export const HOSTED_EMBEDDER_API_URL = HOSTED_LLM_API_URL;
+export const HOSTED_EMBEDDER_MODEL = "text-embedding-3-small";
+export const HOSTED_EMBEDDER_DIMENSIONS = "1536";
 
 // Parse a dotenv file into a flat object. Mirrors gen-nango-env.mjs /
 // gen-wayflow-env.mjs (same regex) so the parsers never drift.
@@ -238,17 +258,20 @@ export function buildGraphitiEnv(apiKey, provider = "openai") {
     };
   }
 
-  // KEYED, OPENAI. Extraction and embeddings both ride the configured key.
+  // KEYED, OPENAI. Extraction and embeddings both ride the configured key, and
+  // BOTH base URLs are restated. config.yaml defaults each of them to the
+  // no-egress local address so a bare `docker compose up` (no generated file)
+  // cannot talk to a vendor; a configured install must put the real endpoint
+  // back explicitly, on both halves. Restating only the LLM half would leave the
+  // embedder pointed at the local 384-wide service under a 1536 declaration.
   const env = {};
   for (const name of GRAPHITI_KEY_NAMES) env[name] = usable;
   env.LLM__PROVIDER = "openai";
-  // config.yaml defaults the LLM base URL to the no-egress local address so a
-  // bare `docker compose up` (no generated file) cannot talk to a vendor. A
-  // configured install must put the real endpoint back explicitly.
-  env.LLM__PROVIDERS__OPENAI__API_URL = "https://api.openai.com/v1";
+  env.LLM__PROVIDERS__OPENAI__API_URL = HOSTED_LLM_API_URL;
   env.EMBEDDER__PROVIDER = "openai";
   env.EMBEDDER__MODEL = HOSTED_EMBEDDER_MODEL;
   env.EMBEDDER__DIMENSIONS = HOSTED_EMBEDDER_DIMENSIONS;
+  env.EMBEDDER__PROVIDERS__OPENAI__API_URL = HOSTED_EMBEDDER_API_URL;
   return { env, hasKey: true, embedder: "openai", rejected: null };
 }
 

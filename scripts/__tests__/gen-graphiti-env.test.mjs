@@ -26,8 +26,12 @@ import {
   GRAPHITI_ANTHROPIC_KEY_NAME,
   GRAPHITI_KEY_NAMES,
   GRAPHITI_NO_LLM_SENTINEL,
+  HOSTED_EMBEDDER_API_URL,
+  HOSTED_EMBEDDER_DIMENSIONS,
+  HOSTED_EMBEDDER_MODEL,
   LOCAL_EMBEDDER_API_URL,
   LOCAL_EMBEDDER_DIMENSIONS,
+  LOCAL_EMBEDDER_MODEL,
   LOCAL_EMBEDDER_PLACEHOLDER_KEY,
   buildGraphitiEnv,
   parseDotenv,
@@ -68,16 +72,68 @@ describe("buildGraphitiEnv (pure)", () => {
     const { env, hasKey, embedder } = buildGraphitiEnv(FAKE_KEY);
     expect(hasKey).toBe(true);
     for (const name of GRAPHITI_KEY_NAMES) expect(env[name]).toBe(FAKE_KEY);
-    // cinatra#2591: a keyed install embeds on the SAME provider key (the
-    // configured-provider branch of the embedder floor), so no second vendor and
-    // no local service is involved.
+    // cinatra#2591 deliverable 3: "configured provider embeddings WHERE
+    // AVAILABLE, local Sentence-Transformers as the default FLOOR". OpenAI
+    // publishes an embeddings API, so a keyed OpenAI install embeds on its own
+    // key — no second vendor, and the local service is not involved.
+    //
+    // THE ENDPOINT MUST BE RESTATED. config.yaml defaults the embedder base URL
+    // to the no-egress local address (`http://kg-embedder:8080/v1`) so an
+    // un-generated bring-up cannot reach a vendor — the same trap the LLM half
+    // undoes one line above. Leaving it defaulted here would ask for
+    // text-embedding-3-small at 1536 wide and be SERVED bge-small-en-v1.5 at 384
+    // by the local service, which ignores the requested model name. graphiti
+    // declares the width up front, so that mismatch is compared silently wrongly
+    // rather than refused loudly. This assertion is the only thing standing
+    // between the declaration and the service.
     expect(embedder).toBe("openai");
     expect(env.EMBEDDER__PROVIDER).toBe("openai");
-    expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).toBeUndefined();
+    expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).toBe(HOSTED_EMBEDDER_API_URL);
+    expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).not.toBe(LOCAL_EMBEDDER_API_URL);
+    expect(env.EMBEDDER__MODEL).toBe(HOSTED_EMBEDDER_MODEL);
+    expect(env.EMBEDDER__DIMENSIONS).toBe(HOSTED_EMBEDDER_DIMENSIONS);
     // The ONLY values in the file are the resolved key plus non-secret
     // selection metadata — never a second credential.
     const secretish = Object.entries(env).filter(([, v]) => v === FAKE_KEY).map(([k]) => k);
     expect(secretish.sort()).toEqual([...GRAPHITI_KEY_NAMES].sort());
+  });
+
+  // cinatra#2591 — THE WIDTH INVARIANT, asserted across EVERY arm at once.
+  //
+  // The keyed-OpenAI defect this pins was a declaration and an endpoint that
+  // disagreed: 1536 declared, a 384-wide local service serving it. A per-arm
+  // assertion catches that arm; this one catches the NEXT arm too, because the
+  // rule is not "the keyed branch is right", it is "the width you declare must
+  // be the width the endpoint you name actually serves".
+  it("declares the width the endpoint it names actually serves — every arm", () => {
+    const arms = [
+      { label: "keyless", built: buildGraphitiEnv("") },
+      { label: "keyed-openai", built: buildGraphitiEnv(FAKE_KEY) },
+      { label: "keyed-anthropic", built: buildGraphitiEnv(FAKE_ANTHROPIC_KEY, "anthropic") },
+    ];
+    // The two endpoints this product can name, and the width each one serves.
+    // LOCAL is baked into docker/kg-embedder; HOSTED is OpenAI's published width
+    // for the model named alongside it.
+    const servedWidth = {
+      [LOCAL_EMBEDDER_API_URL]: { dimensions: LOCAL_EMBEDDER_DIMENSIONS, model: LOCAL_EMBEDDER_MODEL },
+      [HOSTED_EMBEDDER_API_URL]: { dimensions: HOSTED_EMBEDDER_DIMENSIONS, model: HOSTED_EMBEDDER_MODEL },
+    };
+
+    for (const { label, built } of arms) {
+      const url = built.env.EMBEDDER__PROVIDERS__OPENAI__API_URL;
+      // Never left to the config.yaml default: that default is the no-egress
+      // local address, so an arm that omits the URL silently inherits the local
+      // service whatever it declares.
+      expect(url, `${label}: names no embedder endpoint`).toBeTruthy();
+      const served = servedWidth[url];
+      expect(served, `${label}: names an endpoint of unknown width (${url})`).toBeTruthy();
+      expect(built.env.EMBEDDER__DIMENSIONS, `${label}: declared width`).toBe(served.dimensions);
+      expect(built.env.EMBEDDER__MODEL, `${label}: declared model`).toBe(served.model);
+      // And the `embedder` label the caller LOGS must agree with the wire.
+      expect(built.embedder, `${label}: reported embedder`).toBe(
+        url === LOCAL_EMBEDDER_API_URL ? "local" : "openai",
+      );
+    }
   });
 
   // cinatra#2591 deliverable 2 — MULTI-PROVIDER EXTRACTION.
