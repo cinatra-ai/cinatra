@@ -14,8 +14,10 @@
 // can only be observed on a screen belongs to a project of that same config.
 // `state-rules.test.ts` beside this file is the precedent.
 //
-// WHAT IS COVERED HERE, AND WHAT IS NOT. Four clauses, each of which had no
-// fixture running in CI before this file:
+// WHAT IS COVERED HERE, AND WHAT IS NOT. Six sections. A–D are the four clauses
+// nothing on `main` was checking when this file landed; E and F were added when
+// the waves they belong to reached `main`, and are the pins rather than the
+// proofs — see E's own header for what a pin has to establish before it counts:
 //
 //   A. "A waiting run's row states its moment, card kind and card reference …
 //      and no screen re-derives a moment" (§6 The runner).
@@ -35,6 +37,15 @@
 //      next root tier that arrives unwired anywhere. D's arm below now asserts
 //      the guarantee rather than the gap: the correction the arm asked for, in
 //      the place it asked for it.
+//   E. The four clauses whose piece reached `main` after this file did — W5b's
+//      three (the per-run window's exchange on the five surfaces outside the
+//      chat, the run's access per window, the five readings of the window's
+//      copy) and W3's `agent_hitl_screen` row of "one fixture per host and per
+//      card kind". Each is pinned to the fixtures that carry it, counted the way
+//      the clause counts them, and to a tier a workflow really runs.
+//   F. The clauses whose piece is STILL in an open PR — named against that head
+//      so nothing has to be rediscovered, and skipped here so this suite is
+//      truthful at every head it runs on.
 //
 // C is a RECORDED GAP, in the shape this repo already uses for owed work
 // (`UNROUTED_PRODUCERS`, the host-parity ratchet's `owed` rows): a LIVE arm that
@@ -49,7 +60,7 @@
 // unmodelled spelling costs a MISSED violation a wider arm can add later, never
 // a false green about something it did check. None of them replaces the
 // behavioural coverage they cite.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -555,4 +566,708 @@ describe("§6 — the plan's fixtures run in CI", () => {
       ),
     ).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// E. THE CLAUSES WHOSE PIECE REACHED `main` AFTER PART 1.
+//
+// When this file landed, four §6 "One road" clauses had no fixture here because
+// their piece was still in an open PR: the three W5b brought (the per-run
+// window's exchange on the five surfaces outside the chat, the run's access per
+// window, and the five readings of the window's copy) and the `agent_hitl_screen`
+// row of "one fixture per host and per card kind", which W3 owed. All four
+// pieces are on `main` now, with their own suites. This file does not RE-PROVE
+// their behaviour — those suites do — it pins the plan's own sentence to the
+// fixtures that carry it, counted the way the sentence counts them, and to a
+// tier a workflow really runs.
+//
+// WHY THAT SECOND HALF IS PART OF THE CLAIM, and it is this file's own finding
+// (section D): a fixture wired to a config nothing invokes proves nothing. A
+// clause pinned to a suite that runs nowhere would read as covered while being
+// exactly as unproven as no fixture at all. So every fixture named below is
+// asserted (a) to EXIST, by path, and (b) to be SELECTED by a tier whose
+// wholesale invocation a workflow really carries.
+//
+// A TITLE MATCH IS NOT ENOUGH, and neither is a table match. Four ways a named
+// fixture stops proving its clause while every string a naive scan looks for is
+// still there, each closed below:
+//   · the case is PARKED — `it.skip`, a `describe.only` above it, `it.todo`. So
+//     every cited file is asserted to park nothing, except the one tier whose
+//     suite self-skips by design, where what is asserted instead is the flag
+//     that turns that skip into a throw;
+//   · the table is EDITED — a sixth row, a repeated row, a dropped one. So the
+//     rows are read UNDEDUPLICATED and compared as a whole multiset, which a
+//     set of known surfaces cannot see;
+//   · the case is expanded over LESS THAN the table — `it.each(TABLE)` rewritten
+//     `it.each(TABLE.filter(…))` keeps both the title and the table intact. So
+//     the expansion itself is pinned, by its literal and by how many times it
+//     occurs;
+//   · the evidence is COMMENTED OUT and a mention of it left behind. So every
+//     read below is comment-stripped first.
+//
+// RESIDUALS, NAMED. (b) reaches each tier's own config literals with comments
+// stripped, and its invocation as a workflow `run:` STEP LINE — or, for the
+// tier section D already pins, through that section's own resolver. What it
+// still does not reach: vitest's own resolver (a file selected by some route
+// those literals do not spell reads as unselected, which is the missed-gap
+// direction), and whether the step is REACHABLE — a `continue-on-error` step, an
+// `if:` that never holds, a job that never fires all read as run. That last one
+// is not this arm's to model: it is what `scripts/audit/ci-pinned-tests-exist.mjs`
+// decides, fail-closed, as a required gate, and it credits every tier named here.
+//
+// PARKING RESIDUAL, NAMED. The park scan reads the STATIC markers
+// (`.skip`/`.only`/`.todo`/`.fails`/`.skipIf`/`.runIf`, `xit`, `xdescribe`). A
+// body that returns early, or a runtime `ctx.skip()`, is not modelled — a missed
+// gap, never a false claim about a marker it did check.
+//
+// COMMENT-STRIPPING RESIDUAL, NAMED: a mention inside a STRING literal still
+// counts. Reaching past that needs a parse, which this tier does not carry and
+// which would make one clause's pin the only parsed claim in a file whose every
+// other arm is a bounded scan. What stands behind that floor is not this arm but
+// the cited suites themselves, which run in CI and go red if the coverage leaves.
+//
+// None of it can make a MISSING fixture read as present: (a) is a file-system
+// check, and deleting or renaming a named fixture is the mutation every arm
+// below was proved against.
+// ---------------------------------------------------------------------------
+
+/**
+ * Text with its comments removed, by one pass over the characters.
+ *
+ * WHY A SCANNER AND NOT A REGEX OR A LINE FILTER — both were tried here and both
+ * are wrong, in opposite directions. A block-comment regex sweep eats the very
+ * text this reads: a vitest config is full of glob literals that contain the two
+ * characters a block comment opens with, so the globs themselves disappear. A
+ * line filter that drops lines STARTING with a comment marker keeps the body of
+ * an ordinary block comment whose lines start with anything else — which is the
+ * false green it was added to close, wearing a different hat.
+ *
+ * So this carries state across the characters: inside a quote (single, double or
+ * template, with backslash escapes honoured), inside a line comment, inside a
+ * block comment. A comment opener inside a quote is not an opener, which is what
+ * keeps the globs; a block comment is removed wherever it starts and however its
+ * body lines begin.
+ *
+ * RESIDUALS, NAMED. A regular-expression literal is not one of the states, so a
+ * regex whose body spells a comment opener is mis-read and text after it is
+ * dropped; a template literal holding a nested template is read to the first
+ * backtick that closes it. BOTH over-remove, which reds an arm loudly for a
+ * person to fix — never a silent green — and no file read below contains either
+ * today.
+ */
+function withoutComments(text: string): string {
+  let out = "";
+  let index = 0;
+  let quote: string | null = null;
+  while (index < text.length) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quote !== null) {
+      out += char;
+      if (char === "\\") {
+        out += next ?? "";
+        index += 2;
+        continue;
+      }
+      if (char === quote) quote = null;
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      out += char;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (
+        index < text.length &&
+        !(text[index] === "*" && text[index + 1] === "/")
+      ) {
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+/**
+ * A file's CODE — comments removed once and remembered.
+ *
+ * EVERY read below goes through this, not through `read`, and that is the whole
+ * point: a scan over raw text credits a commented-out expansion, a commented-out
+ * table and a title that survives only in a note. Each of those is an edit that
+ * removes coverage while leaving every string a naive scan looks for in place.
+ * Stripped once per file, because the arms below read the same files between
+ * them.
+ */
+const CODE_CACHE = new Map<string, string>();
+const codeOf = (relative: string): string => {
+  const cached = CODE_CACHE.get(relative);
+  if (cached !== undefined) return cached;
+  const code = withoutComments(read(relative));
+  CODE_CACHE.set(relative, code);
+  return code;
+};
+
+/**
+ * Every workflow's lines with whole-line YAML comments dropped, so a commented
+ * command cannot answer for a step that runs.
+ */
+const WORKFLOW_RUN_LINES = readdirSync(WORKFLOWS_DIR)
+  .filter((f) => /\.ya?ml$/.test(f))
+  .flatMap((f) => readFileSync(path.join(WORKFLOWS_DIR, f), "utf8").split("\n"))
+  .filter((line) => !/^\s*#/.test(line))
+  .join("\n");
+
+/** A test this file cites may not be parked; a parked fixture proves nothing. */
+const PARKED =
+  /\b(?:it|test|describe)\.(?:skip|only|todo|fails|skipIf|runIf)\b|\bxit\(|\bxdescribe\(/;
+
+/** How many times `literal` occurs in `text`. */
+function occurrences(text: string, literal: string): number {
+  return text.split(literal).length - 1;
+}
+
+/** A tier that runs test files wholesale, and how a workflow reaches it. */
+type FixtureRunner = {
+  /** How the tier is named in a failure a person has to act on. */
+  readonly tier: string;
+  /** The config that decides what the tier selects. */
+  readonly config: string;
+  /** Literals that must be in that config, comments stripped. */
+  readonly configLiterals: readonly string[];
+  /** Does a workflow really invoke this tier? */
+  readonly invoked: () => boolean;
+  /** Does that config reach this repo-relative path? */
+  readonly selects: (relative: string) => boolean;
+  /**
+   * For a tier whose suite SELF-SKIPS without its dependency: the config literal
+   * that turns that skip into a throw. `null` for a tier whose fixtures may not
+   * park at all.
+   */
+  readonly selfSkipGuard: string | null;
+};
+
+const ROOT_TIER: FixtureRunner = {
+  tier: "the root vitest suite (`pnpm test:root`, the wholesale gate of record)",
+  config: "vitest.config.ts",
+  configLiterals: [
+    '"src/**/__tests__/**/*.test.{ts,tsx}"',
+    '"**/*.integration.test.ts"',
+  ],
+  invoked: () =>
+    /^\s*run: (?:pnpm|npm|yarn) (?:run )?test:root\s*$/m.test(WORKFLOW_RUN_LINES),
+  selects: (relative) =>
+    /^src\/(?:.*\/)?__tests__\/(?:.*\/)?[^/]+\.test\.tsx?$/.test(relative) &&
+    !/\.integration\.test\.tsx?$/.test(relative),
+  selfSkipGuard: null,
+};
+
+const AGENTS_TIER: FixtureRunner = {
+  tier: "the packages/agents unit tier (`cd packages/agents && pnpm test`)",
+  config: "packages/agents/vitest.config.ts",
+  configLiterals: [
+    'include: ["src/**/__tests__/**/*.test.{ts,tsx}"]',
+    'exclude: ["**/*.integration.test.ts"]',
+  ],
+  invoked: () =>
+    /^\s*run: cd packages\/agents && pnpm test\s*$/m.test(WORKFLOW_RUN_LINES),
+  selects: (relative) =>
+    /^packages\/agents\/src\/(?:.*\/)?__tests__\/(?:.*\/)?[^/]+\.test\.tsx?$/.test(
+      relative,
+    ) && !/\.integration\.test\.tsx?$/.test(relative),
+  selfSkipGuard: null,
+};
+
+const CHAT_TIER: FixtureRunner = {
+  tier: "the packages/chat unit tier (`cd packages/chat && pnpm test`)",
+  config: "packages/chat/vitest.config.ts",
+  configLiterals: [
+    'include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"]',
+  ],
+  invoked: () =>
+    /^\s*run: cd packages\/chat && pnpm test\s*$/m.test(WORKFLOW_RUN_LINES),
+  selects: (relative) =>
+    /^packages\/chat\/src\/(?:.*\/)?__tests__\/(?:.*\/)?[^/]+\.test\.tsx?$/.test(
+      relative,
+    ),
+  selfSkipGuard: null,
+};
+
+/**
+ * W5b's own tier — the per-run window's exchange against a real database.
+ *
+ * Section D pins that this tier is invoked at all, so its invocation is read
+ * through D's own resolver rather than by a second spelling of the same claim.
+ * What is added here is the two things D does not say: that the tier's ONE
+ * include is the file this clause names, and that the flag which turns its
+ * self-skip into a throw is set — because a suite whose only failure mode is
+ * "skipped" reports success by doing nothing, and that is the shape of vacuity
+ * this whole section exists to refuse.
+ */
+const RUN_WINDOW_DB_FIXTURE =
+  "src/lib/lifecycle/__tests__/run-window-conversation.integration.test.ts";
+const RUN_WINDOW_TIER: FixtureRunner = {
+  tier: "W5b's real-database tier (`pnpm test:run-window`)",
+  config: "vitest.integration-2933.config.ts",
+  configLiterals: [`"${RUN_WINDOW_DB_FIXTURE}"`],
+  invoked: () =>
+    invokedByAWorkflow("test:run-window", "vitest.integration-2933.config.ts"),
+  selects: (relative) => relative === RUN_WINDOW_DB_FIXTURE,
+  selfSkipGuard: 'CINATRA_RUN_WINDOW_REALDB: "1"',
+};
+
+/**
+ * A §6 clause's fixture: it is on `main`, a tier a workflow runs selects it, it
+ * parks nothing it should not, and it still carries the titles this clause is
+ * pinned to.
+ *
+ * Every failure NAMES the file, because that is what a reader has to go and
+ * look at — a bare `expected false to be true` on a renamed fixture would send
+ * them to this line instead of to the one that moved.
+ */
+function expectFixture(
+  relative: string,
+  runner: FixtureRunner,
+  titles: readonly string[],
+): void {
+  expect(
+    existsSync(path.join(REPO_ROOT, relative)),
+    `${relative} — the fixture this §6 clause is pinned to is not on \`main\``,
+  ).toBe(true);
+  expect(
+    runner.selects(relative),
+    `${relative} is not selected by ${runner.tier}`,
+  ).toBe(true);
+  const config = codeOf(runner.config);
+  for (const literal of runner.configLiterals) {
+    expect(
+      config,
+      `${runner.config} no longer states — outside a comment — \`${literal}\`, so ${relative}'s tier is not the one this arm checked`,
+    ).toContain(literal);
+  }
+  expect(
+    runner.invoked(),
+    `${runner.tier} is invoked by no workflow step, so ${relative} proves nothing`,
+  ).toBe(true);
+  const source = codeOf(relative);
+  if (runner.selfSkipGuard === null) {
+    expect(
+      PARKED.test(source),
+      `${relative} parks a test — a skipped, focused or todo case cannot pin a §6 clause`,
+    ).toBe(false);
+  } else {
+    expect(
+      config,
+      `${runner.config} no longer sets \`${runner.selfSkipGuard}\`, so ${relative} may report success by skipping`,
+    ).toContain(runner.selfSkipGuard);
+  }
+  for (const title of titles) {
+    expect(
+      source,
+      `${relative} no longer carries the fixture "${title}"`,
+    ).toContain(title);
+  }
+}
+
+/**
+ * A cited `it.each`/`for` really expands over the WHOLE table.
+ *
+ * Without this, `it.each(TABLE.filter(…))` keeps the case's title and keeps the
+ * table intact while quietly dropping a surface — the one edit that defeats a
+ * title check and a table check at the same time. The COUNT is part of the
+ * claim: a suite with four such loops that drops to three has lost a block.
+ */
+function expectExpandedOverWholeTable(
+  relative: string,
+  literal: string,
+  times: number,
+): void {
+  expect(
+    occurrences(codeOf(relative), literal),
+    `${relative} no longer expands \`${literal}\` over the whole table ${times} time(s)`,
+  ).toBe(times);
+}
+
+/**
+ * The rows a table in `relative` really carries, read between two markers.
+ *
+ * NOT DEDUPLICATED, and NOT filtered to the surfaces this file knows: a repeated
+ * row and a sixth row of an unmodelled spelling are exactly the two edits a
+ * known-token set would swallow, and both change what the suite covers. The
+ * caller sorts and compares the whole multiset, so the claim is "these rows and
+ * no others" rather than "these rows appear somewhere".
+ *
+ * A bounded token scan rather than a parse, because the four tables read here
+ * have three shapes (a bare string list, two object lists keyed `surface:`, a
+ * pair list) and each caller passes the row pattern its own table uses.
+ */
+function tableRows(
+  relative: string,
+  from: string,
+  to: string,
+  row: RegExp,
+): readonly string[] {
+  const source = codeOf(relative);
+  const start = source.indexOf(from);
+  expect(start, `${relative} no longer declares \`${from}\``).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(to, start + from.length);
+  expect(end, `${relative} — \`${from}\` is not closed by \`${to}\``).toBeGreaterThan(start);
+  return [...source.slice(start, end).matchAll(row)].map((m) => m[1]);
+}
+
+/** Rows of a bare string list — every quoted string, whatever it spells. */
+const STRING_ROW = /"([^"\n]*)"/g;
+/** Rows of an object list — the `surface:` value of each row. */
+const SURFACE_ROW = /surface: "([^"\n]*)"/g;
+/** Rows of a `[surface, sentence]` pair list — the first element of each pair. */
+const PAIR_ROW = /\[\s*"([^"\n]*)"\s*,/g;
+
+/** Sorted, undeduplicated — so a repeat and a sixth both change the answer. */
+const rowsSorted = (rows: readonly string[]) => [...rows].sort();
+
+/** The five windows §6 names, sorted; a table's order is not the claim. */
+const ALL_FIVE = [
+  "armed-trigger",
+  "review",
+  "run-page",
+  "schedule",
+  "step-by-step",
+] as const;
+
+/** The four of them a package-tier render can mount; the fifth is under the app. */
+const FOUR_UNDER_THE_PACKAGE = [
+  "armed-trigger",
+  "run-page",
+  "schedule",
+  "step-by-step",
+] as const;
+
+const TURN = "src/lib/lifecycle/__tests__/run-window-turn.test.ts";
+const WINDOW_SOURCE = "packages/agents/src/__tests__/run-window-surfaces.test.ts";
+const WINDOW_RENDER =
+  "packages/agents/src/__tests__/run-window-surfaces.render.test.tsx";
+const WINDOW_STORE =
+  "packages/agents/src/__tests__/run-window-conversation-store.test.ts";
+const RUN_PAGE_RENDER =
+  "packages/agents/src/__tests__/run-page-window-render.test.tsx";
+const REVIEW_RENDER =
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-prompt-window.render.test.tsx";
+
+describe("§6 One road — the prompt window's exchange is stored with the run", () => {
+  it("is answered by the conversation's assistant on all five surfaces the clause names, readable beside the run, kept on it and there after a reload", () => {
+    // THE CLAUSE, verbatim: "Outside the chat, the prompt window's exchange is
+    // stored with the run: it is there after a reload, readable beside the run,
+    // and answered by the conversation's assistant — fixtures on the run page,
+    // the step-by-step screen, the schedule screen, the armed-trigger tab and
+    // the review page."
+    //
+    // FIVE, because the clause counts five. "Answered by the conversation's
+    // assistant" is one road with five mounts, so its fixture is one `it.each`
+    // over the surface list — pinned by the case's title, by the list, and by
+    // the expansion really being over that list.
+    expectFixture(TURN, ROOT_TIER, [
+      "the window hands the assistant the run it sits under",
+      "the %s mount's turn carries the run's id, status, gate and gate fields",
+      "the window's turn is answered by the conversation's assistant",
+      "stores the person's message and the assistant's answer with the run, per turn",
+      "records WHICH message the answer answered, rather than leaving it to adjacency",
+    ]);
+    expect(
+      rowsSorted(tableRows(TURN, "const FIVE_SURFACES = [", "] as const", STRING_ROW)),
+      `${TURN}'s surface table is no longer exactly the five windows`,
+    ).toEqual([...ALL_FIVE]);
+    expectExpandedOverWholeTable(TURN, "it.each(FIVE_SURFACES)(", 1);
+
+    // "READABLE BESIDE THE RUN" — what each of the five windows opens is the
+    // RUN's conversation, one fixture per window, over that suite's own table.
+    expectFixture(WINDOW_SOURCE, AGENTS_TIER, [
+      "each of the five windows outside the chat is a per-run conversation",
+      "opens the run's conversation as",
+      "holds no window transcript of its own",
+      "names all five surfaces, and only those five",
+    ]);
+    expect(
+      rowsSorted(tableRows(WINDOW_SOURCE, "const WINDOWS: Array<{", "\n];", SURFACE_ROW)),
+      `${WINDOW_SOURCE}'s window table is no longer exactly the five windows`,
+    ).toEqual([...ALL_FIVE]);
+    expectExpandedOverWholeTable(WINDOW_SOURCE, "for (const w of WINDOWS) {", 1);
+
+    // "STORED WITH THE RUN" — appended in order onto the RUN and read back, one
+    // row per turn, with the window rows kept out of the run's replay thread so
+    // the second use of the table cannot disturb the first.
+    expectFixture(WINDOW_STORE, AGENTS_TIER, [
+      "the run's window conversation is kept with the run",
+      "appends the person's message and the assistant's answer in order, and reads them back",
+      "keeps every window's turns on the run, and can narrow to one window",
+      "writes ONE row per turn and never re-writes an existing one",
+      "marks every row with the window discriminator the replay reader excludes",
+    ]);
+
+    // "THERE AFTER A RELOAD" — and this half is not the store idiom above. What
+    // the plan's word means is that a SECOND connection reading the run sees
+    // what the first wrote, which only a real database can say. That is W5b's
+    // own tier, and part 1 could only record it as owed because no workflow
+    // invoked it; the tiers change of this same slice wired all four, so the
+    // clause is pinned here rather than skipped.
+    expectFixture(RUN_WINDOW_DB_FIXTURE, RUN_WINDOW_TIER, [
+      "holds the exchange so a RELOAD — a fresh read — finds it",
+      "refuses a second row on one sequence, which is what the retry detects",
+      "keeps the window rows OUT of the run's own replay thread",
+    ]);
+  });
+});
+
+describe("§6 One road — every window takes the run's access", () => {
+  it("is pinned per window, and the windows are the five the clause means", () => {
+    // THE CLAUSE, verbatim: "Every window takes the run's access: a run owner
+    // who is not a platform administrator types and is answered; a person
+    // without respond access never sees the box — fixtures per window."
+    //
+    // TWO HALVES, PINNED WHERE EACH IS DECIDED. "types and is answered" is a
+    // SERVER answer taken once on the one road, so it is pinned once, there;
+    // "never sees the box" is a DRAWING and is pinned per window — four of the
+    // five in the package tier's own render table, the fifth under the host app,
+    // because the review window imports the host's artifact types and cannot
+    // mount in the package tier.
+    expectFixture(TURN, ROOT_TIER, [
+      "every window takes the run's access",
+      "answers a run owner who is NOT a platform administrator",
+      "asks with the person's LIVE standing, teams and project grants included",
+      "refuses, and answers NO to the box, for a person without respond access",
+      "gives a person without respond access no frame and no window",
+    ]);
+
+    // Windows 1–4, on real DOM.
+    expectFixture(WINDOW_RENDER, AGENTS_TIER, [
+      "AC3 — a person the run would refuse is shown no box",
+      "draws NO window without respond access",
+      "answers differently with and without access",
+    ]);
+    expect(
+      rowsSorted(
+        tableRows(WINDOW_RENDER, "const SURFACES: Surface[] = [", "\n];", SURFACE_ROW),
+      ),
+      `${WINDOW_RENDER}'s mount table is no longer exactly the four package-tier windows`,
+    ).toEqual([...FOUR_UNDER_THE_PACKAGE]);
+    // FOUR LOOPS over that table — AC1, AC3, §X and the refusal control. A block
+    // that stops looping, or starts looping over a filter, is a surface this
+    // suite no longer covers.
+    expectExpandedOverWholeTable(WINDOW_RENDER, "for (const s of SURFACES) {", 4);
+
+    // Window 5, and the run page's PRODUCTION mount, which is a different mount
+    // from the one the table above renders and was the one that shipped without
+    // the prop at all.
+    expectFixture(REVIEW_RENDER, ROOT_TIER, [
+      "AC3 — draws NO window for a reader the gate would refuse",
+      "the refusal is the gate's answer, not an accident of the mount",
+    ]);
+    expectFixture(RUN_PAGE_RENDER, AGENTS_TIER, [
+      "shows NO window to a person the run would refuse (AC3)",
+      "carries the run's own access answer down to the panel, not a default",
+    ]);
+
+    // …and the screen that mounts them resolves the run's answer ONCE and hands
+    // it to every window, so a window cannot quietly fall back to a default.
+    expectFixture(WINDOW_SOURCE, AGENTS_TIER, [
+      "the window is drawn only for a person the run would answer",
+      "the run's own access answer is resolved on the server, once",
+      "the screen hands BOTH values to every window it mounts — five, not four",
+    ]);
+  });
+});
+
+describe("§6 One road — the window's copy names what it does on each surface", () => {
+  it("is pinned to five readings, one per surface, in the ratified drawing's own words", () => {
+    // THE CLAUSE, verbatim (the second half of its §6 bullet): "…the window's
+    // copy names what it does on each surface."
+    //
+    // FIVE READINGS OF ONE WINDOW, not five windows: the sentence in the empty
+    // field is the one thing that changes from surface to surface, so the map is
+    // pinned in SOURCE — one place, five entries, no sixth — and each reading is
+    // pinned again on the rendered DOM, which is where a person meets it.
+    expectFixture(WINDOW_SOURCE, AGENTS_TIER, [
+      "§X — one window, five readings: the sentence in the empty field",
+      "lives in ONE place — the shared panel's per-surface map, not five mounts",
+      "reading is §X's own sentence",
+      "has exactly one sentence per surface, and no sixth",
+    ]);
+    expect(
+      rowsSorted(
+        tableRows(
+          WINDOW_SOURCE,
+          "const READINGS: Array<[string, string]> = [",
+          "\n  ];",
+          PAIR_ROW,
+        ),
+      ),
+      `${WINDOW_SOURCE}'s readings table is no longer exactly one reading per surface`,
+    ).toEqual([...ALL_FIVE]);
+    expectExpandedOverWholeTable(
+      WINDOW_SOURCE,
+      "for (const [surface, sentence] of READINGS) {",
+      1,
+    );
+
+    // The rendered readings: four in the package tier's table, and the two
+    // mounts that live elsewhere named by their own sentence — quoted without
+    // the possessive, because the source spells those titles in single quotes
+    // and an apostrophe is escaped there.
+    expectFixture(WINDOW_RENDER, AGENTS_TIER, [
+      "§X — the sentence in the empty field names what the window does where it stands",
+      "no longer reads any other reading's sentence",
+    ]);
+    expect(
+      rowsSorted(
+        tableRows(WINDOW_RENDER, "const SURFACES: Surface[] = [", "\n];", SURFACE_ROW),
+      ),
+      `${WINDOW_RENDER} no longer reads a sentence for all four package-tier windows`,
+    ).toEqual([...FOUR_UNDER_THE_PACKAGE]);
+    expectFixture(REVIEW_RENDER, ROOT_TIER, [
+      'reading is "Ask Cinatra about this review, or ask for changes to the work…"',
+    ]);
+    expectFixture(RUN_PAGE_RENDER, AGENTS_TIER, [
+      'reading is "Ask Cinatra to fill the fields above, or ask about this step…"',
+    ]);
+  });
+
+  it.skip(
+    "THE FIRST HALF OF THIS §6 BULLET LANDS WITH cinatra#2998 — on the review page a typed question is answered and files nothing; a typed request for changes is filed through the card's Comment control and the work goes back for repair — two fixtures",
+    () => {
+      // Named against that PR's head so the fixture is not left for a later
+      // reader to find, and skipped because on `main` the file does not exist:
+      //   src/lib/lifecycle/__tests__/w5c-fill-road.test.ts
+      //     › "the review page's typed road"
+      //       › "files the PERSON'S OWN WORDS through the card's Comment control, and the work goes back"
+      //       › "a turn that presses nothing files nothing at all"
+      // It is an ordinary unit file under `src/lib/lifecycle/__tests__/`, so the
+      // root tier selects it the day it lands and un-skipping is one edit.
+    },
+  );
+});
+
+describe("§6 The runner — the card kind that owed its mounts", () => {
+  it("agent_hitl_screen has its fixture per host and per card kind, and the ratchet owes nothing", () => {
+    // THE CLAUSE, verbatim: "A run at a moment shows its card on every host —
+    // the run parked for the skills question, the schedule, the HITL screen and
+    // the review, not parked for the audit — … one fixture per host and per card
+    // kind". Part 1 found every kind covered EXCEPT `agent_hitl_screen`, whose
+    // cells the host-parity ratchet carried as OWED. W3 landed them.
+    expectFixture(
+      "src/lib/lifecycle/__tests__/injected-cards-reach-every-host.test.ts",
+      ROOT_TIER,
+      [
+        "the kind that owed its mounts",
+        "OWES NOTHING NOW — the cells are recorded, on every host that draws it",
+        "mounts on the substrate the earlier wave left it",
+        "the ratchet still covers every kind",
+        "has a row per kind, and no kind is nowhere",
+      ],
+    );
+    // The kind is drawn in the chat's real view, per kind, like the other four…
+    expectFixture(
+      "packages/chat/src/__tests__/lifecycle-chat-carriage-matrix.test.tsx",
+      CHAT_TIER,
+      [
+        "the five-kind chat_thread carriage matrix, in the REAL view",
+        "covers the protocol's closed kind set, once each, with no kind added or dropped",
+        "the OBSERVED unmounted set is exactly the ruled obligation list",
+      ],
+    );
+    // …and the answer it takes reaches the shipped core as the person, with the
+    // refusals that keep it from being a second road into the gate.
+    expectFixture(
+      "packages/agents/src/__tests__/agent-hitl-screen-submit.test.ts",
+      AGENTS_TIER,
+      [
+        "the answer reaches the shipped core, as this actor",
+        "hands the gate, the values and the VERIFIED ACTOR to approveReviewTaskInternal",
+        "the refusals, and they are all the same refusal",
+        "a gate id that is NOT the run's own gate is refused, and nothing is written",
+      ],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F. THE CLAUSES WHOSE PIECE IS STILL IN AN OPEN PR.
+//
+// Written against that head so the fixture each clause will be pinned to is
+// NAMED here rather than rediscovered later, and SKIPPED so this suite is
+// truthful at every head it runs on: on `main` the named files do not exist, and
+// an arm asserting them would be red for a reason that is not the code's — the
+// failure mode this file exists to refuse. Un-skipping is the follow-up when the
+// PR merges, and it is one edit per arm: the body already names the file.
+// ---------------------------------------------------------------------------
+
+describe("§6 One road — the clauses whose piece is still in an open PR", () => {
+  it.skip(
+    "LANDS WITH cinatra#2998 — an agent's HITL screen is filled and, when asked in so many words, submitted by the assistant",
+    () => {
+      //   src/lib/lifecycle/__tests__/w5c-fill-road.test.ts
+      //     › "the fill places values in the screen's own fields and submits nothing"
+      //       › "records the values on the run and WRITES NOTHING to the gate"
+      //       › "keeps only the fields the form declares, and never the reserved ones"
+      //     › "the submit sends what the screen was shown holding"
+      //       › "a waiting screen mints the submit control for a typed message"
+      //       › "presses the gate's own resume entry with the RECORDED fill, not the model's words"
+    },
+  );
+
+  it.skip(
+    "LANDS WITH cinatra#2998 — on the review page a question is answered as a question and only an explicit request for changes decides",
+    () => {
+      //   src/lib/lifecycle/__tests__/w5c-fill-road.test.ts
+      //     › "the review page's typed road"
+      //       › "a turn that presses nothing files nothing at all"
+      //       › "files the PERSON'S OWN WORDS through the card's Comment control, and the work goes back"
+      //     › "the fill places values in the screen's own fields and submits nothing"
+      //       › "a REVIEW lends no fill, and an absent card lends nothing"
+    },
+  );
+
+  it.skip(
+    "LANDS WITH cinatra#2998 — on the run and schedule screens a described change lands in the visible fields and nothing is submitted until the person presses the button",
+    () => {
+      //   packages/agents/src/__tests__/w5c-fill-road-surfaces.test.ts
+      //     › "the fill road is what fills the fields now"
+      //       › "each form window writes the turn's own fill into its own fields"
+      //     › "the four form windows are bound to the run's own waiting screen"
+      //       › "the turn names the run and the server mints the screen's ref"
+      //   src/lib/lifecycle/__tests__/w5c-fill-road.test.ts
+      //     › "the fill places values in the screen's own fields and submits nothing"
+      //       › "records the values on the run and WRITES NOTHING to the gate"
+    },
+  );
+
+  it.skip(
+    "LANDS WITH cinatra#2998 — Attachments beside a message reach the waiting run; a half-typed message survives a reload in every window that keeps one today",
+    () => {
+      //   packages/agents/src/__tests__/w5c-fill-road-surfaces.test.ts
+      //     › "a file attached beside a message still reaches the run"
+      //       › "the two windows that offer a paperclip still offer it"
+      //       › "they keep them for their own Continue AND send them with the message"
+      //       › "the turn records them on the person's own row, and the submit reads them back"
+      //     › "drafts survive a reload in every window"
+      //       › "all five windows give the field a persistence key"
+      //       › "the panel hands that key to the field that persists it"
+      //       › "and the field really writes and re-reads it"
+      // THE REAL-DATABASE HALF of the attachment claim is
+      // `src/lib/lifecycle/__tests__/screen-fill.integration.test.ts` ›
+      // "the files stay on the person's own row and read back whole", reached on
+      // that head through `vitest.integration-2934.config.ts` — a FIFTH private
+      // tier. It joins PLAN_PROOF_TIERS when it lands, or it arrives already
+      // wired; either way section D's arm is the one that says so, not this one.
+    },
+  );
 });
