@@ -410,7 +410,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     composes: [],
     body: {
       // A typed INTERRUPT, so its authorized state comes from the hold's own
-      // cookie-bound read rather than the data-part resolve seam.
+      // read rather than from the data-part resolve seam.
+      //
+      // THAT READ HAS TWO TRANSPORTS AND ONE AUTHORITY (cinatra#2790, S9f), and
+      // this line said "cookie-bound" after the second one landed. A cookie host
+      // calls the server action; a credential-declaring host posts to the broker
+      // route with its own proof and cookies omitted. Both land in the same
+      // resolver, so the validator named below is unchanged — but a gate that
+      // certifies this kind must not describe a road the widget cannot take.
       //
       // UNCHANGED BY #2870, and checked rather than assumed: the owner still
       // calls this reader (`run-recommendation-chip-row.tsx:633`), and this row
