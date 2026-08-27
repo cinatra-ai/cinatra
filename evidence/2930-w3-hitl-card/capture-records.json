@@ -1,1705 +1,304 @@
 {
-  "$comment": [
-    "THE LANE-LOCAL CAPTURE INDEX for cinatra#2930 W3 (PR #3014).",
-    "Written by scripts/audit/lib/chat-hitl-capture-driver.mjs --walk. Every field below the",
-    "cell name is a MEASUREMENT read off the live page by the recorder, never a submission.",
-    "It is kept beside the pictures rather than merged into scripts/ci/chat-hitl-capture-index.json;",
-    "README.md states what the gates were read to say about that."
-  ],
-  "schemaVersion": 1,
-  "recorder": "chat-hitl-capture-recorder",
   "records": [
     {
-      "cell": "HC-light__chat_thread__hitl-screen-asking",
+      "cell": "HC-decided__hitl-card__chat_thread__decided",
       "declaredHost": "chat_thread",
       "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__light.png",
-      "sha256": "c5a32f8777064be3fe1f66bfe2605068ba0c3142b3521b1ce85a034f935007ec",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "framing": "window",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "27aed1a0397fcb57833f02f26b5c95ff9b55d79707dad8016d24c674a96a13dc",
+      "capturedAt": "2026-08-27T09:24:31.411Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
+          "scope": "frame",
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
+          "count": 1,
+          "visible": 1,
+          "expect": "present",
+          "frame": "main"
         }
       ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:37:39.060Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane shot — the SHIPPED recorder refuses a `decided` record of this kind; see the header of this driver and README.md)",
+      "registered": false,
+      "refusal": "a chat_thread record must carry the `instance` its card-scoped counts were read from — without it the counts describe whichever card led the DOM",
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
       "theme": {
         "declared": "light",
         "resolved": "light"
       },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
       "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": "hitl",
-        "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "input_params": "{}",
-        "read_at": "2026-08-26T23:37:39.202Z"
-      },
-      "requires": "the pause screen drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region with the field the step asks for; the control that answers it; and the inline run panel standing down beside it.",
-      "note": null
-    },
-    {
-      "cell": "HC-dark__chat_thread__hitl-screen-asking",
-      "declaredHost": "chat_thread",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__dark.png",
-      "sha256": "c84bd7ee75fc53de2519f23d8abdf498c36a79d2216433a7a70f4421d0c00a09",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:37:50.792Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "dark",
-        "resolved": "dark"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": "hitl",
-        "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "input_params": "{}",
-        "read_at": "2026-08-26T23:37:50.957Z"
-      },
-      "requires": "the pause screen drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region with the field the step asks for; the control that answers it; and the inline run panel standing down beside it.",
-      "note": null
-    },
-    {
-      "cell": "HR-light__run_card__hitl-screen-asking",
-      "declaredHost": "run_card",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__light.png",
-      "sha256": "d67efd0cccbb406a3502f9c4d4c4b8ed7d70444af182edd28289c872b973e4cc",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:37:59.819Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "light",
-        "resolved": "light"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": "hitl",
-        "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "input_params": "{}",
-        "read_at": "2026-08-26T23:37:59.993Z"
-      },
-      "requires": "the same pause screen on the run page for the same run at the same moment, inside the card's root declaring host run_card — the screen the run page has always drawn, now with an identity.",
-      "note": null
-    },
-    {
-      "cell": "HR-dark__run_card__hitl-screen-asking",
-      "declaredHost": "run_card",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__dark.png",
-      "sha256": "5411d96fdeff447966d27c72f0d69da259d445fb07819002757bf4b9b326b44d",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:38:09.011Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "dark",
-        "resolved": "dark"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": "hitl",
-        "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "input_params": "{}",
-        "read_at": "2026-08-26T23:38:09.107Z"
-      },
-      "requires": "the same pause screen on the run page for the same run at the same moment, inside the card's root declaring host run_card — the screen the run page has always drawn, now with an identity.",
-      "note": null
-    },
-    {
-      "cell": "HCS-light__chat_thread__hitl-screen-none",
-      "declaredHost": "chat_thread",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "none",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-settled__chat_thread__light.png",
-      "sha256": "8e465452d1821e610434a69c0dabe578765c603a1c4d6c161c2b06677328abbf",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:44:36.253Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "light",
-        "resolved": "light"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
         "status": "pending_trigger",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "schedule",
         "lifecycle_card_kind": "trigger_schedule_proposal",
-        "lifecycle_card_ref": null,
         "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:44:36.393Z"
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T09:24:31.527Z"
       },
-      "requires": "the SAME conversation after the question was answered in the card: the card settled and gone (the kind's  state is NO DOM at all), the transcript otherwise unchanged, and the run moved on in the database.",
-      "note": null
+      "requires": null
     },
     {
-      "cell": "HCS-dark__chat_thread__hitl-screen-none",
+      "cell": "HC-decided__hitl-card__chat_thread__decided__dark",
       "declaredHost": "chat_thread",
       "declaredKind": "agent_hitl_screen",
-      "declaredState": "none",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-settled__chat_thread__dark.png",
-      "sha256": "aab50a2668e82cb964762cea065948c59ff8db76faa7e5a1f9a17512bc7679c5",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "framing": "window",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "c84dcc9a19f649bf2af07b351329c77017c9defd8a7e85c990d835c031f335f8",
+      "capturedAt": "2026-08-27T09:24:43.069Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
           "scope": "frame",
-          "count": 0
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
           "scope": "frame",
-          "count": 0
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
           "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 0
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
+          "scope": "frame",
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
+          "count": 1,
+          "visible": 1,
+          "expect": "present",
+          "frame": "main"
         }
       ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:44:47.309Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane shot — the SHIPPED recorder refuses a `decided` record of this kind; see the header of this driver and README.md)",
+      "registered": false,
+      "refusal": "a chat_thread record must carry the `instance` its card-scoped counts were read from — without it the counts describe whichever card led the DOM",
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
       "theme": {
         "declared": "dark",
         "resolved": "dark"
       },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
       "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
         "status": "pending_trigger",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "schedule",
         "lifecycle_card_kind": "trigger_schedule_proposal",
-        "lifecycle_card_ref": null,
         "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:44:47.432Z"
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T09:24:43.192Z"
       },
-      "requires": "the SAME conversation after the question was answered in the card: the card settled and gone (the kind's  state is NO DOM at all), the transcript otherwise unchanged, and the run moved on in the database.",
-      "note": null
+      "requires": null
     },
     {
-      "cell": "HCM-light__chat_thread__hitl-screen-asking-midrun",
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided",
       "declaredHost": "chat_thread",
       "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun__chat_thread__light.png",
-      "sha256": "2a8b2215e5721271ece02b31b8ac1395f7cee7f26bfbabb272921ac38745ba77",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "framing": "window",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "2b506320bfd09062315b3a9286ef7fa620706b8f6099a71036bd8c447254ace0",
+      "capturedAt": "2026-08-27T09:30:43.929Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 1
+          "scope": "frame",
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
+          "count": 1,
+          "visible": 1,
+          "expect": "present",
+          "frame": "main"
         }
       ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:56:45.409Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane shot — the SHIPPED recorder refuses a `decided` record of this kind; see the header of this driver and README.md)",
+      "registered": false,
+      "refusal": "a chat_thread record must carry the `instance` its card-scoped counts were read from — without it the counts describe whichever card led the DOM",
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
       "theme": {
         "declared": "light",
         "resolved": "light"
       },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
       "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
         "started_at": null,
-        "completed_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
         "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:56:45.544Z"
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:30:44.062Z"
       },
-      "requires": "the question an agent stopped in the MIDDLE of its run to ask, drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region the step asks for; and the card's own Continue that answers them.",
-      "note": null
+      "requires": null
     },
     {
-      "cell": "HCM-dark__chat_thread__hitl-screen-asking-midrun",
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided__dark",
       "declaredHost": "chat_thread",
       "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun__chat_thread__dark.png",
-      "sha256": "853773dd9a0451defd2b373596454d0904b88858313cd520716bf47ea51f5871",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "framing": "window",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "1dd4340505024d23c06551010bd21f3b2edb345de493a8263822d644ad1293e3",
+      "capturedAt": "2026-08-27T09:30:56.405Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
           "scope": "frame",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 1
+          "scope": "frame",
+          "count": 0,
+          "visible": 0,
+          "expect": "absent",
+          "frame": "main"
         },
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
+          "count": 1,
+          "visible": 1,
+          "expect": "present",
+          "frame": "main"
         }
       ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:57:00.551Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane shot — the SHIPPED recorder refuses a `decided` record of this kind; see the header of this driver and README.md)",
+      "registered": false,
+      "refusal": "a chat_thread record must carry the `instance` its card-scoped counts were read from — without it the counts describe whichever card led the DOM",
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
       "theme": {
         "declared": "dark",
         "resolved": "dark"
       },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
       "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": null,
-        "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:57:00.726Z"
-      },
-      "requires": "the question an agent stopped in the MIDDLE of its run to ask, drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region the step asks for; and the card's own Continue that answers them.",
-      "note": null
-    },
-    {
-      "cell": "HRM-light__run_card__hitl-screen-asking-midrun",
-      "declaredHost": "run_card",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun__run_card__light.png",
-      "sha256": "1c43c202fd3e5d6373ffd79e92d20972c0c23f13714b96653d753d92562335bd",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:53:47.780Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "light",
-        "resolved": "light"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": null,
-        "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:53:47.886Z"
-      },
-      "requires": "the same mid-run question on the run page for the same run at the same moment, inside the card's root declaring host run_card.",
-      "note": null
-    },
-    {
-      "cell": "HRM-dark__run_card__hitl-screen-asking-midrun",
-      "declaredHost": "run_card",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "asking",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun__run_card__dark.png",
-      "sha256": "cdc8cfad46142dbc12b7d00b502a71e5ebb5ee3ac37938997df580657b16a5ce",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 0
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 0
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-26T23:53:57.652Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "dark",
-        "resolved": "dark"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "pending_approval",
-        "started_at": null,
-        "completed_at": null,
-        "lifecycle_moment": null,
-        "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-26T23:53:57.751Z"
-      },
-      "requires": "the same mid-run question on the run page for the same run at the same moment, inside the card's root declaring host run_card.",
-      "note": null
-    },
-    {
-      "cell": "HP-light__page_gate_region__hitl-screen-none",
-      "declaredHost": "page_gate_region",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "none",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4/review/lifecycle-review%3A046e55ca9f1b8ff97f21c61d658f15990a01412dd38c8147955a9d7e5b0375a9",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HP__page_gate_region__light.png",
-      "sha256": "ae30481c8c67d8150ff6a8492e7786c9776dbb939b078fcdba7ca91451f71fa9",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 1
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 1
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-27T00:05:52.052Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "light",
-        "resolved": "light"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
         "status": "completed",
         "started_at": null,
-        "completed_at": "2026-08-27T00:03:34.767Z",
+        "completed_at": "2026-08-27T09:29:35.715Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
         "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-27T00:05:52.262Z"
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:30:56.526Z"
       },
-      "requires": "the review page's gate region for the same run: whether the HITL screen card is drawn there. The card is keyed by the run and self-gating, so this cell records what the region actually holds at a real review moment rather than asserting a mount.",
-      "note": null
-    },
-    {
-      "cell": "HP-dark__page_gate_region__hitl-screen-none",
-      "declaredHost": "page_gate_region",
-      "declaredKind": "agent_hitl_screen",
-      "declaredState": "none",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4/review/lifecycle-review%3A046e55ca9f1b8ff97f21c61d658f15990a01412dd38c8147955a9d7e5b0375a9",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HP__page_gate_region__dark.png",
-      "sha256": "8c16ac7d8cccc5ca5483ba7deaa5b9533541d73e6c2ff6d37187a702f33233e6",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 1
-        }
-      ],
-      "paintedCounts": [
-        {
-          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "painted": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-action=\"submit-hitl-screen\"]",
-          "scope": "root",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-conformance-id=\"agentic-run-progress\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "painted": 0
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "painted": 1
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1 (lane-local; see README.md — the shipped recorder refuses this kind)",
-      "recordedAt": "2026-08-27T00:06:08.285Z",
-      "runtime": "DEV runtime — pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the bundled dev package registry and the WayFlow runtime from this checkout; a real model provider configured through the app's own setup form",
-      "theme": {
-        "declared": "dark",
-        "resolved": "dark"
-      },
-      "viewport": {
-        "width": 1440,
-        "height": 900,
-        "deviceScaleFactor": 2
-      },
-      "framing": "window",
-      "build": "development",
-      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "dbAt": {
-        "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-        "status": "completed",
-        "started_at": null,
-        "completed_at": "2026-08-27T00:03:34.767Z",
-        "lifecycle_moment": null,
-        "lifecycle_card_kind": null,
-        "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "read_at": "2026-08-27T00:06:08.433Z"
-      },
-      "requires": "the review page's gate region for the same run: whether the HITL screen card is drawn there. The card is keyed by the run and self-gating, so this cell records what the region actually holds at a real review moment rather than asserting a mount.",
-      "note": null
+      "requires": null
     }
   ]
 }

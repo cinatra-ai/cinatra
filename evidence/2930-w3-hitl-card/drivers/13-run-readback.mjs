@@ -27,8 +27,15 @@ out.negativeScreens = {
   scriptedRuntimeLines: count(/CINATRA_TEST_LLM_PROVIDER|scripted provider|scripted-llm/gi),
   noProviderRefusals: count(/no (model )?provider (is )?configured/gi),
   mcpToolListFailures: count(/MCP tool enumeration failed/gi),
-  publicMcpRefusals: count(/public MCP URL .* is not reachable/gi),
-  bridgeRunSelects: count(/llm-bridge.*select .* from cinatra\.agent_runs/gi),
+  // THE SHIPPED SPELLINGS, corrected. The server writes "is unreachable"
+  // (src/.../assistant-runtime, cinatra#1699) while the message it STORES on the
+  // refused turn reads "is not reachable" — the earlier regex matched the stored
+  // wording and therefore counted ZERO on a session that really did refuse four
+  // turns. A negative screen that cannot see its own subject is worse than none,
+  // so both spellings are counted and the positive callback line is counted too.
+  publicMcpRefusals: count(/public MCP URL .* is (?:not reachable|unreachable)/gi),
+  publicMcpCallbacks: count(/POST \/api\/mcp 200/g),
+  bridgeRunSelects: count(/\[llm-bridge-run-select\]/g),
   sessionLogBytes: log.length,
 };
 // The flag, read one hop above the listening process from the process table.

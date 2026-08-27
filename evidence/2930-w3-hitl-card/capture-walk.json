@@ -1,32 +1,19 @@
 {
   "slice": "2930-w3-hitl-card",
   "note": [
-    "THE PLAN THE SHIPPED RECORDER REFUSED, kept as the record of the refusal (cinatra#2930, PR #3014).",
-    "",
-    "This is the branch's own walk format for scripts/audit/lib/chat-hitl-capture-driver.mjs --walk.",
-    "It was driven at the parked run and REFUSED, in the two places the vocabulary is closed:",
-    "  cell \"...\": kind \"agent_hitl_screen\" is not one of artifact_review_gate/recommendation_hold/",
-    "    trigger_schedule_proposal/verification_summary",
-    "  cell \"...\": state \"asking\" is not one of pending/decided",
-    "and, with kind and state omitted from the cells:",
-    "  record \"...\": a chat_thread record must declare the lifecycle `declaredKind` it photographed",
-    "    (one of artifact_review_gate/recommendation_hold/trigger_schedule_proposal/verification_summary)",
-    "    -- it declares \"undefined\"",
-    "",
-    "scripts/ci/lib/capture-record-contract.mjs:161 CARD_KINDS carries four kinds and no",
-    "`agent_hitl_screen`; chat-hitl-capture-recorder.mjs:232 derives LIFECYCLE_KINDS from it, :247 fixes",
-    "CAPTURE_STATES to pending/decided, :1063 makes a declared kind mandatory for a chat_thread record",
-    "and :1470-:1474 refuse a plan naming either outside those lists. This slice draws a fifth kind and",
-    "a third state and edits neither file. NOTHING WAS CHANGED to get past it: the canonical index is",
-    "untouched, and the pictures were taken by drivers/07-capture-cells.mjs, which writes the same",
-    "record shape beside them. README.md carries the finding.",
+    "THE WALK, at PR #3014's head, driven through the SHIPPED recorder",
+    "(scripts/audit/lib/chat-hitl-capture-driver.mjs --walk), which admits `agent_hitl_screen`",
+    "as its fifth kind at this head. Six cells, light and dark, on the two hosts a real run can",
+    "reach; `site_widget` and `page_gate_region` are composition-only in the contract itself and",
+    "no picture of them is asked for here.",
     "",
     "  export WALK_BASE=http://127.0.0.1:<port>",
     "  export WALK_COOKIE=<the lane session>   WALK_COOKIE_DOMAIN=127.0.0.1",
     "  export WALK_THREAD_URL=/chat/<vendor>/<assistant>/<threadId>",
-    "  export WALK_RUN_URL=/agents/<vendor>/<slug>/<runId>",
+    "  export WALK_RUN_PAGE=/agents/<vendor>/<slug>/<runId>",
+    "  export WALK_ANSWER=<the reader's own answer to the setup question>",
     "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2930-w3-hitl-card/capture-walk.json \\",
-    "    --out evidence/2930-w3-hitl-card/capture-records.json    # exits non-zero, by design, on this head"
+    "    --out evidence/2930-w3-hitl-card/capture-records.json --steps <stepIds>"
   ],
   "contexts": {
     "light": {
@@ -48,11 +35,12 @@
       "theme": "dark"
     }
   },
+  "retires": [],
   "steps": [
     {
-      "id": "hc-light",
+      "id": "hc-pending-light",
       "context": "light",
-      "why": "The conversation the run was started from, while the run is parked at the question.",
+      "why": "The conversation the run was started from, while the run is parked at the SETUP question.",
       "actions": [
         {
           "action": "goto",
@@ -64,24 +52,35 @@
         },
         {
           "action": "waitForTimeout",
-          "ms": 6000
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
         }
       ],
       "cells": [
         {
-          "cell": "HC-light__chat_thread__hitl-screen-asking",
+          "cell": "HC-pending__hitl-card__chat_thread__pending",
           "declaredHost": "chat_thread",
-          "theme": "light",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
           "framing": "window",
-          "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__light.png",
-          "requires": "the pause screen as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state, the fields region the step asks for, and the control that answers it \u2014 with the inline run panel standing down beside it."
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, verbatim: 'A card takes that content slot, at the column's full width, exactly where prose would otherwise sit.'; \"The assistant's turn is left-aligned and carries no bubble\"; and THE INPUT RULE \u2014 'Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. ... No box of its own, no fill, no send. A ruled baseline under a mono label'. Plus PLAN: Agents Lifecycle (B) \u2014 \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus the pull request's own words. Anchors: the card root, the host declaration, the owner anchor, the fields region, and data-field-presentation=\"subordinate\" on the fields region."
         }
       ]
     },
     {
-      "id": "hc-dark",
+      "id": "hc-pending-dark",
       "context": "dark",
-      "why": "The same conversation, dark.",
+      "why": "The same screen in the dark palette.",
       "actions": [
         {
           "action": "goto",
@@ -93,28 +92,39 @@
         },
         {
           "action": "waitForTimeout",
-          "ms": 6000
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
         }
       ],
       "cells": [
         {
-          "cell": "HC-dark__chat_thread__hitl-screen-asking",
+          "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
           "declaredHost": "chat_thread",
-          "theme": "dark",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
           "framing": "window",
-          "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__dark.png",
-          "requires": "the same card in the same place, dark."
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, verbatim: 'A card takes that content slot, at the column's full width, exactly where prose would otherwise sit.'; \"The assistant's turn is left-aligned and carries no bubble\"; and THE INPUT RULE \u2014 'Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. ... No box of its own, no fill, no send. A ruled baseline under a mono label'. Plus PLAN: Agents Lifecycle (B) \u2014 \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus the pull request's own words. Anchors: the card root, the host declaration, the owner anchor, the fields region, and data-field-presentation=\"subordinate\" on the fields region."
         }
       ]
     },
     {
-      "id": "hr-light",
+      "id": "hr-pending-light",
       "context": "light",
-      "why": "The run page for the same run at the same moment: the panel's own block, wrapped as the card.",
+      "why": "The run page for the same run at the same moment.",
       "actions": [
         {
           "action": "goto",
-          "url": "${WALK_RUN_URL}"
+          "url": "${WALK_RUN_PAGE}"
         },
         {
           "action": "waitForSelector",
@@ -122,28 +132,39 @@
         },
         {
           "action": "waitForTimeout",
-          "ms": 6000
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
         }
       ],
       "cells": [
         {
-          "cell": "HR-light__run_card__hitl-screen-asking",
+          "cell": "HR-pending__hitl-card__run_card__pending",
           "declaredHost": "run_card",
-          "theme": "light",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
           "framing": "window",
-          "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__light.png",
-          "requires": "the same pause screen on the run page, inside the card's root declaring host run_card \u2014 the screen the run page has always drawn, now with an identity."
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
+          "requires": "SECTION I's run-page half, verbatim: 'Where there is no chat box to be subordinate to \u2014 the run page and the review page \u2014 the card's field is the only input there is and takes the primary treatment instead.' Plus \u00a7IX's 'it is the same card wherever it appears ... only the frame changes', the plan's 'A run at a moment shows its card on every host', and the pull request's 'on the run page'. Anchors as above with host run_card and data-field-presentation=\"primary\"."
         }
       ]
     },
     {
-      "id": "hr-dark",
+      "id": "hr-pending-dark",
       "context": "dark",
-      "why": "The same run page, dark.",
+      "why": "The same run page in the dark palette.",
       "actions": [
         {
           "action": "goto",
-          "url": "${WALK_RUN_URL}"
+          "url": "${WALK_RUN_PAGE}"
         },
         {
           "action": "waitForSelector",
@@ -151,17 +172,362 @@
         },
         {
           "action": "waitForTimeout",
-          "ms": 6000
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
         }
       ],
       "cells": [
         {
-          "cell": "HR-dark__run_card__hitl-screen-asking",
+          "cell": "HR-pending__hitl-card__run_card__pending__dark",
           "declaredHost": "run_card",
-          "theme": "dark",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
           "framing": "window",
-          "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__dark.png",
-          "requires": "the same card on the run page, dark."
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
+          "requires": "SECTION I's run-page half, verbatim: 'Where there is no chat box to be subordinate to \u2014 the run page and the review page \u2014 the card's field is the only input there is and takes the primary treatment instead.' Plus \u00a7IX's 'it is the same card wherever it appears ... only the frame changes', the plan's 'A run at a moment shows its card on every host', and the pull request's 'on the run page'. Anchors as above with host run_card and data-field-presentation=\"primary\"."
+        }
+      ]
+    },
+    {
+      "id": "hc-answer-light",
+      "context": "light",
+      "why": "The reader answers the setup question IN THE CARD'S OWN FIELD and the run moves on.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "fill",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"] textarea",
+          "value": "${WALK_ANSWER}"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 1500
+        },
+        {
+          "action": "click",
+          "selector": "[data-conformance-id=\"agent-hitl-screen-card\"] button:has-text(\"Continue\")"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 25000
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 4000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-decided__hitl-card__chat_thread__decided",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+          "requires": "The pull request's 'a Continue that answers them', and this kind's own settled reading: the card returns null once the question is answered, so a decided capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact."
+        }
+      ]
+    },
+    {
+      "id": "hc-decided-dark",
+      "context": "dark",
+      "why": "The same settled conversation in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-decided__hitl-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+          "requires": "The pull request's 'a Continue that answers them', and this kind's own settled reading: the card returns null once the question is answered, so a decided capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-pending-light",
+      "context": "light",
+      "why": "The MID-RUN question the agent stopped in the middle of its run to ask, in the same conversation.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, verbatim: 'A card takes that content slot, at the column's full width, exactly where prose would otherwise sit.'; \"The assistant's turn is left-aligned and carries no bubble\"; and THE INPUT RULE \u2014 'Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. ... No box of its own, no fill, no send. A ruled baseline under a mono label'. Plus PLAN: Agents Lifecycle (B) \u2014 \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus the pull request's own words. Anchors: the card root, the host declaration, the owner anchor, the fields region, and data-field-presentation=\"subordinate\" on the fields region."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-pending-dark",
+      "context": "dark",
+      "why": "The same mid-run question in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, verbatim: 'A card takes that content slot, at the column's full width, exactly where prose would otherwise sit.'; \"The assistant's turn is left-aligned and carries no bubble\"; and THE INPUT RULE \u2014 'Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. ... No box of its own, no fill, no send. A ruled baseline under a mono label'. Plus PLAN: Agents Lifecycle (B) \u2014 \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus the pull request's own words. Anchors: the card root, the host declaration, the owner anchor, the fields region, and data-field-presentation=\"subordinate\" on the fields region."
+        }
+      ]
+    },
+    {
+      "id": "hr-midrun-pending-light",
+      "context": "light",
+      "why": "The run page at the mid-run gate.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-midrun-pending__hitl-card__run_card__pending",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
+          "requires": "SECTION I's run-page half, verbatim: 'Where there is no chat box to be subordinate to \u2014 the run page and the review page \u2014 the card's field is the only input there is and takes the primary treatment instead.' Plus \u00a7IX's 'it is the same card wherever it appears ... only the frame changes', the plan's 'A run at a moment shows its card on every host', and the pull request's 'on the run page'. Anchors as above with host run_card and data-field-presentation=\"primary\"."
+        }
+      ]
+    },
+    {
+      "id": "hr-midrun-pending-dark",
+      "context": "dark",
+      "why": "The same run page at the mid-run gate, dark.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
+          "requires": "SECTION I's run-page half, verbatim: 'Where there is no chat box to be subordinate to \u2014 the run page and the review page \u2014 the card's field is the only input there is and takes the primary treatment instead.' Plus \u00a7IX's 'it is the same card wherever it appears ... only the frame changes', the plan's 'A run at a moment shows its card on every host', and the pull request's 'on the run page'. Anchors as above with host run_card and data-field-presentation=\"primary\"."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-answer-light",
+      "context": "light",
+      "why": "The card's OWN Continue is pressed in the conversation and the run resumes.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 1500
+        },
+        {
+          "action": "click",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 30000
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 4000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-decided__hitl-card__chat_thread__decided",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+          "requires": "The pull request's 'a Continue that answers them', and this kind's own settled reading: the card returns null once the question is answered, so a decided capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-decided-dark",
+      "context": "dark",
+      "why": "The same settled conversation in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-decided__hitl-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+          "requires": "The pull request's 'a Continue that answers them', and this kind's own settled reading: the card returns null once the question is answered, so a decided capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact."
         }
       ]
     }

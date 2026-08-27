@@ -1,71 +1,77 @@
 # TIMELINE — the shutters beside the database's own clock
 
-Every row marked **db** is a database column, named where it is read from. Every
-row marked **shutter** is `recordedAt` in `capture-records.json`, taken by the
-capture driver at the moment it wrote the image. Every row marked **driver** is a
-driver's own clock at the instant it acted on the page. All times UTC.
+One lane, one instance, one agent, two runs. Every timestamp is UTC and comes from the
+row or from the recorder, never from prose. The run every cell stands on is
+`0998c3fb-facd-4881-acfe-f372decc73f5`; the first run is on the record because it failed and
+why it failed matters.
 
-## The run, from the sentence to the review gate
+## The lane, before any picture
 
-| at | source | what |
+| at | what |
+|---|---|
+| — | the worktree was checked out at the pull request's head; the pinned extension tree (112 packages) was synced |
+| — | the app booted on a **dedicated lane database** on the verify Postgres (5634) and the verify Redis (6579), loopback-only, with this checkout's own package registry and agent runtime container beside it |
+| — | the lane account signed up through the app's own `/api/auth/sign-up/email`; org created and set active through the app's own endpoints |
+| — | `/setup/name` provisioned the instance namespace **through the app's own step** |
+| — | the wizard's Secrets step was completed **through the app's own form** (lane-local placeholder; disclosed in README.md) |
+| — | `/setup/model` sealed a REAL provider connection **through the app's own form**; `cinatra.metadata` holds one `openai_connection` row |
+| — | `/configuration/development?tab=tunnel` set the public origin **through the app's own UI**; `/api/mcp-settings` read it back as the one just saved |
+| — | the lane account joined the organization the instance's boot stamped every agent template with |
+| — | the run package and its two dependencies were published to the instance's own registry; the agent and its agent dependency were installed through `/configuration/extensions/upload` — both rows `owner_level: organization`, `status: active` |
+
+## Run 1 — `0f99ca1c-c81f-4170-83ea-dd6940d893d7`, on the record because it FAILED
+
+| at | what |
+|---|---|
+| `2026-08-27T08:50:58.671Z` | the app's own dispatch created the run out of the chat turn |
+| `2026-08-27T08:50:59.819Z` | the setup gate materialised — `setup-0f99ca1c…`, renderer `@cinatra-ai/agent-builder:schema-field-fallback`, field `idea` |
+| `2026-08-27T09:07:37.442Z` | readback before the answer — `pending_approval`, `input_params {}` |
+| `2026-08-27T09:08:21.415Z` | readback after the answer in the card — `pending_trigger`, `input_params {"idea": {"title": "How small teams keep their customer research organised"}}` |
+| `2026-08-27T09:11:06.695Z` | the trigger was released from the run's own step (`immediate`) |
+| `2026-08-27T09:11:10.651Z` | the mid-run gate materialised — `wayflow-f39d7511…`, renderer `@cinatra-ai/context-selection-agent:context-selector` |
+| `2026-08-27T09:15:40.744Z` | after the card's own Continue: the run RESUMED, ran the flow, wrote the draft — and then **failed** at artifact materialisation: *"failed to load the run package's artifact bindings: 404 Not Found … no such package available"*. The package had been installed by upload, which writes no tarball to the instance's registry. |
+
+The three packages were then published to that registry, and the whole leg was driven again.
+
+## Run 2 — `0998c3fb-facd-4881-acfe-f372decc73f5`, the run every cell stands on
+
+| at | what | cell |
 |---|---|---|
-| 2026-08-26T23:20:24.434Z | db · `assistant_threads.created_at` | the conversation is minted by the product |
-| 2026-08-26T23:20:39.650Z | db · `usage_events.first_at` | the first real model call of the measured sequence (`openai` / `gpt-5.5`, streamed) |
-| ~2026-08-26T23:20:4x | driver | the person asks, in their own words: *"Please run the Blog Draft Writer Agent for me now."* |
-| 2026-08-26T23:20:52.007Z | db · `agent_runs.created_at` | the app's own dispatch creates the run `d7086390-20bb-425c-9bfd-a12e68d404f4` |
-| 2026-08-26T23:20:53.058Z | db · `agent_run_hitl_gates.materialized_at` | the SETUP gate is materialised: `setup-d7086390…`, renderer `@cinatra-ai/agent-builder:schema-field-fallback`, field `idea` |
-| 2026-08-26T23:20:53.064Z | db · `agent_run_hitl_gates.created_at` | the durable row for that gate |
-| 2026-08-26T23:21:00.778Z | db · `usage_events.last_at` (stream) | the assistant's own turn finishes |
-| **2026-08-26T23:37:39.060Z** | **shutter** | `HC-light__chat_thread__hitl-screen-asking` — db at the shutter: `pending_approval`, moment `hitl` |
-| **2026-08-26T23:37:50.792Z** | **shutter** | `HC-dark__chat_thread__hitl-screen-asking` |
-| **2026-08-26T23:37:59.819Z** | **shutter** | `HR-light__run_card__hitl-screen-asking` |
-| **2026-08-26T23:38:09.011Z** | **shutter** | `HR-dark__run_card__hitl-screen-asking` |
-| 2026-08-26T23:42:34.643Z | db · readback | before the press: `pending_approval`, `input_params` `{}` |
-| 2026-08-26T23:42:46.796Z | driver | the answer is typed into the field the card draws |
-| **2026-08-26T23:42:46.802Z** | **driver** | **`Continue` is pressed INSIDE the card**, in the conversation (the cookie host) |
-| 2026-08-26T23:42:47.829Z | db · readback | after the press: `pending_trigger`, `input_params` `{"idea": {"title": "How small teams keep their customer research organised"}}` |
-| **2026-08-26T23:44:36.253Z** | **shutter** | `HCS-light__chat_thread__hitl-screen-none` — every card anchor 0 |
-| **2026-08-26T23:44:47.309Z** | **shutter** | `HCS-dark__chat_thread__hitl-screen-none` |
-| 2026-08-26T23:51:47.809Z | db · readback | before the dispatch: `pending_trigger`, no trigger row |
-| 2026-08-26T23:51:51.742Z | driver | *Run right after setup* + `Continue` pressed on the run's own trigger step |
-| 2026-08-26T23:51:54.014Z | db · readback | the run is `running` |
-| 2026-08-26T23:52:31.658Z | db · `agent_run_hitl_gates.materialized_at` | the MID-RUN gate is materialised: `wayflow-c8a1367a-22bb-4f6f-8200-2f8c8d8335bd`, renderer `@cinatra-ai/context-selection-agent:context-selector` |
-| 2026-08-26T23:52:32.171Z | db · readback | the run is `pending_approval` again, on that gate |
-| **2026-08-26T23:53:47.780Z** | **shutter** | `HRM-light__run_card__hitl-screen-asking-midrun` — the card's own Continue counted 1 |
-| **2026-08-26T23:53:57.652Z** | **shutter** | `HRM-dark__run_card__hitl-screen-asking-midrun` |
-| **2026-08-26T23:56:45.409Z** | **shutter** | `HCM-light__chat_thread__hitl-screen-asking-midrun` |
-| **2026-08-26T23:57:00.551Z** | **shutter** | `HCM-dark__chat_thread__hitl-screen-asking-midrun` |
-| 2026-08-27T00:01:55.740Z | db · readback | before the second press: `pending_approval` |
-| **2026-08-27T00:02:06.956Z** | **driver** | **the card's OWN `Continue` — `[data-action="submit-hitl-screen"]` — is pressed in the conversation** |
-| 2026-08-27T00:03:31.922Z | db · `usage_events.first_at` (generate) | the run's own model work begins (`openai` / `gpt-5.5-2026-04-23`) |
-| 2026-08-27T00:03:34.767Z | db · `agent_runs.completed_at` | the run completes |
-| 2026-08-27T00:04:14.428Z | db · `usage_events.last_at` (generate) | the last model call of the run |
-| **2026-08-27T00:05:52.052Z** | **shutter** | `HP-light__page_gate_region__hitl-screen-none` — the region holds the review card, not this one |
-| **2026-08-27T00:06:08.285Z** | **shutter** | `HP-dark__page_gate_region__hitl-screen-none` |
+| `2026-08-27T09:19:08.659Z` | the thread was opened — `0ae6d363-2081-48cc-91f5-2113b949c5cf` | |
+| `2026-08-27T09:19:2x` | a warm-up turn was sent and answered before the measured turn | |
+| `2026-08-27T09:19:37.051Z` | **the app's own dispatch created the run** out of *"Please run the Blog Draft Writer Agent for me now."* | |
+| `2026-08-27T09:19:38.010Z` | the setup gate materialised — `setup-0998c3fb…`, field `idea` | |
+| `2026-08-27T09:19:39.483Z` | the last streamed chat call of that turn (`openai` / `gpt-5.5`) | |
+| `2026-08-27T09:20:38.588Z` | shutter — the conversation at the setup screen, light | `HC-pending…__pending` |
+| `2026-08-27T09:20:55.670Z` | shutter — the same, dark | `HC-pending…__pending__dark` |
+| `2026-08-27T09:21:08.095Z` | shutter — the run page at the same moment, light | `HR-pending…__pending` |
+| `2026-08-27T09:21:20.040Z` | shutter — the same, dark | `HR-pending…__pending__dark` |
+| `2026-08-27T09:23:09.393Z` | readback before the answer — `pending_approval`, `input_params {}`, moment `hitl` | |
+| `2026-08-27T09:23:3x` | **the answer was typed into the field the card draws and Continue was pressed INSIDE the card** | |
+| `2026-08-27T09:23:53.927Z` | readback after — `pending_trigger`, `input_params {"idea": {"title": "How small teams keep their customer research organised"}}`, moment `schedule` | |
+| `2026-08-27T09:24:31.411Z` | shutter — the settled conversation, light | `HC-decided…__decided` |
+| `2026-08-27T09:24:43.069Z` | shutter — the same, dark | `HC-decided…__decided__dark` |
+| `2026-08-27T09:25:07.920Z` | the trigger was released from the run's own step (`immediate`, `Europe/Berlin`) | |
+| `2026-08-27T09:25:09.577Z` | **the mid-run gate materialised** — `wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4`, renderer `@cinatra-ai/context-selection-agent:context-selector` | |
+| `2026-08-27T09:26:08.741Z` | shutter — the mid-run question in the conversation, light | `HC-midrun-pending…__pending` |
+| `2026-08-27T09:26:24.803Z` | shutter — the same, dark | `HC-midrun-pending…__pending__dark` |
+| `2026-08-27T09:26:37.222Z` | shutter — the run page at the mid-run gate, light | `HR-midrun-pending…__pending` |
+| `2026-08-27T09:26:50.145Z` | shutter — the same, dark | `HR-midrun-pending…__pending__dark` |
+| `2026-08-27T09:27:5x` | the occlusion probe: the card's Continue is topmost at the resting scroll AND after scrolling to the end | |
+| `2026-08-27T09:28:50.101Z` | readback before the press — `pending_approval`, `completed_at` null, `a2a_task_id` `6a85b4cd…` | |
+| `2026-08-27T09:28:5x` | **`[data-action="submit-hitl-screen"]` was pressed INSIDE the card, in the conversation** | |
+| `2026-08-27T09:29:35.715Z` | the run **completed** | |
+| `2026-08-27T09:29:39.569Z` | readback after — `completed` | |
+| `2026-08-27T09:29:46.801Z` | the artifact was updated — *How Small Teams Keep Customer Research Organised*, `@cinatra-ai/blog-post-artifact:post` | |
+| `2026-08-27T09:30:01.351Z` | **the run's own review gate opened** — `cinatra.artifact_review_gates`, 1 row, `lifecycle-review:15259f72…`, `pending` | |
+| `2026-08-27T09:30:12.440Z` | the last generate call of the session (`openai` / `gpt-5.5-2026-04-23`) | |
+| `2026-08-27T09:30:43.929Z` | shutter — the settled conversation with the review card in the slot, light | `HC-midrun-decided…__decided` |
+| `2026-08-27T09:30:56.405Z` | shutter — the same, dark | `HC-midrun-decided…__decided__dark` |
 
-## What the gap between a shutter and its state means
+## After the shutters
 
-The four `HC`/`HR` shutters stand about sixteen minutes after the park. That is a
-lane fact, not a product one: a parked run stays parked until somebody answers it,
-and the two host cells and their two themes were shot from four separate browser
-contexts in one pass. The database readback carried on every record
-(`dbAt.read_at`) is taken at the shutter itself, so each picture states the row it
-was taken against rather than inheriting an earlier reading.
-
-The two mid-run run-page shutters precede the two chat ones by three minutes for
-the same reason, and the run was parked on the same gate throughout: one gate row,
-materialised once at `23:52:31.658Z`, and one `pending_approval` interval that
-ends at the press at `00:02:06.956Z`.
-
-## The one fallback in this lane, named
-
-The model's hosted MCP connector fetches this instance's tool list over the public
-origin, and on the FIRST turn of a cold path that fetch can exceed the runtime's
-2.5 s budget; the app then refuses the turn outright with *"Cinatra tools are
-unavailable: the public MCP URL … is not reachable (no response within 2500ms)"*.
-That happened on an earlier attempt of this lane, before the origin's route had
-ever been compiled — the refusal is in that attempt's own assistant turn and its
-run count is zero, which is why no run exists for it. The measured sequence above
-was driven after the route was warmed, and it sends a **warm-up turn first**; the
-negative screens in `RUN-READBACK.md` §3 are read from the log offset taken after
-that warm-up was answered.
+| at | what |
+|---|---|
+| — | the run page was probed once more with the run `completed`: `[data-lifecycle-card="agent_hitl_screen"]` **0**, the surface draws `artifact_review_gate`. No HR-decided cell is claimed. |
+| — | the five drawings were rendered from the two spec files fetched read-only at `design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f` |
+| — | `chat-hitl-acceptance-gate`, `chat-hitl-evidence-gate`, `chat-hitl-one-card-gate` (bare and `--audit`) and `file-size-ratchet` all exit 0; the anchor digest reads `recorded == recomputed == fa31fa2f…` |

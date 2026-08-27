@@ -91,7 +91,7 @@ for (let i = 0; i < 240; i += 1) {
 stamp("the run reached its status", { runId: run.id, status: parked?.status ?? null, moment: parked?.lifecycle_moment ?? null });
 
 const gate = (await db.query(
-  `SELECT review_task_id, x_renderer, field_name, created_at FROM cinatra.agent_run_hitl_gate_artifacts WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1`, [run.id])).rows[0] ?? null;
+  `SELECT review_task_id, x_renderer, field_name, created_at FROM cinatra.agent_run_hitl_gates WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1`, [run.id])).rows[0] ?? null;
 const threadUrl = page.url();
 const out = {
   run: parked ?? run,

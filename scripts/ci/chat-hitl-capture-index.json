@@ -8854,6 +8854,1014 @@
           "Approve"
         ]
       }
+    },
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
+      "sha256": "394b793c42ec7ecfa6fe74789e56510074d07e19f50a3b3639e70229fdf71a41",
+      "capturedAt": "2026-08-27T09:20:38.588Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
+      "sha256": "d37603f98a3173a94d68468b347cbaaab75afd06fddc5c13eafe523f2f8f98a0",
+      "capturedAt": "2026-08-27T09:20:55.670Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
+      "sha256": "abc466af8f3cff92c9615cf905fcd1b5a05b71b64a71a88f4673d3a820310733",
+      "capturedAt": "2026-08-27T09:21:08.095Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
+      "sha256": "9f4044b7568f28c03813eca777229696f35b8ac0b3b1745334d12249d42012b6",
+      "capturedAt": "2026-08-27T09:21:20.040Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
+      "sha256": "cca28e16d33fd62ddf1830d5c8e525c6e8fd251dcea9c4db519f9e2c3a0f0de3",
+      "capturedAt": "2026-08-27T09:26:08.741Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
+      "sha256": "b5f8e3c42895765ed7ab1105ee62145a2e995815fb3373b5dafe1fe6825bac9b",
+      "capturedAt": "2026-08-27T09:26:24.803Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
+      "sha256": "7f84aefd96130e22ffd5a0cca00eac253e85cd887b5fdc4b86fc8f57565e977c",
+      "capturedAt": "2026-08-27T09:26:37.222Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
+      "sha256": "50fc956b1601938ba2088363383a7aee7a1fea4ebb3f9d4f85f97e2c2b68bcf8",
+      "capturedAt": "2026-08-27T09:26:50.145Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
+      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "dbAt": {
+        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "status": "completed",
+        "created_at": "2026-08-27T09:19:37.051Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T09:29:35.715Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
+        "read_at": "2026-08-27T09:51:14.000Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T09:19:38.010Z"
+        },
+        {
+          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T09:25:09.578Z"
+        }
+      ],
+      "providerEvidence": {
+        "serverLog": "the app server's own log for this session",
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpToolListFailures": 0,
+        "publicMcpRefusals": 4,
+        "publicMcpCallbacks": 26,
+        "bridgeRunSelects": 2,
+        "driverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvTokensSeen": 0,
+        "serverEnvAvailable": false,
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "operation": "stream",
+            "calls": 6,
+            "inputTokens": 128545,
+            "outputTokens": 1324
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "operation": "generate",
+            "calls": 12,
+            "inputTokens": 94135,
+            "outputTokens": 4018
+          }
+        ]
+      },
+      "note": null
     }
   ]
 }

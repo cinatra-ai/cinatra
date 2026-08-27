@@ -1,12 +1,26 @@
 {
   "runs": [
     {
-      "id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "status": "completed",
-      "created_at": "2026-08-26T23:20:52.006Z",
+      "id": "0f99ca1c-c81f-4170-83ea-dd6940d893d7",
+      "status": "failed",
+      "created_at": "2026-08-27T08:50:58.671Z",
       "started_at": null,
-      "completed_at": "2026-08-27T00:03:34.767Z",
-      "a2a_task_id": "3704d385-ee9d-42f8-b188-478e9330d340",
+      "completed_at": "2026-08-27T09:15:40.744Z",
+      "a2a_task_id": "6637daaa-9142-4a4a-b451-f41c34db776e",
+      "lifecycle_moment": null,
+      "lifecycle_card_kind": null,
+      "lifecycle_card_ref": null,
+      "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
+      "human_present": true,
+      "source_type": "agent_builder"
+    },
+    {
+      "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "status": "completed",
+      "created_at": "2026-08-27T09:19:37.051Z",
+      "started_at": null,
+      "completed_at": "2026-08-27T09:29:35.715Z",
+      "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
       "lifecycle_moment": null,
       "lifecycle_card_kind": null,
       "lifecycle_card_ref": null,
@@ -17,12 +31,12 @@
   ],
   "hitlGates": [
     {
-      "run_id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "review_task_id": "setup-d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "run_id": "0f99ca1c-c81f-4170-83ea-dd6940d893d7",
+      "review_task_id": "setup-0f99ca1c-c81f-4170-83ea-dd6940d893d7",
       "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
       "field_name": "idea",
-      "materialized_at": "2026-08-26T23:20:53.058Z",
-      "created_at": "2026-08-26T23:20:53.063Z",
+      "materialized_at": "2026-08-27T08:50:59.820Z",
+      "created_at": "2026-08-27T08:50:59.819Z",
       "input_schema": {
         "type": "object",
         "title": "idea",
@@ -50,12 +64,74 @@
       "gate_values": {}
     },
     {
-      "run_id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "review_task_id": "wayflow-c8a1367a-22bb-4f6f-8200-2f8c8d8335bd",
+      "run_id": "0f99ca1c-c81f-4170-83ea-dd6940d893d7",
+      "review_task_id": "wayflow-f39d7511-1321-453f-8764-50f2131982e2",
       "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
       "field_name": null,
-      "materialized_at": "2026-08-26T23:52:31.658Z",
-      "created_at": "2026-08-26T23:52:31.655Z",
+      "materialized_at": "2026-08-27T09:11:10.652Z",
+      "created_at": "2026-08-27T09:11:10.651Z",
+      "input_schema": {},
+      "gate_values": {
+        "idea": {
+          "title": "How small teams keep their customer research organised"
+        },
+        "output": "{\"candidates\":[],\"slotMeta\":{\"slotId\": \"draftContext\", \"resolutionMode\": \"accumulate\", \"selectionMode\": \"interactive\", \"minItems\": 0, \"maxItems\": 5, \"readableOnly\": false, \"acceptedArtifactExtensions\": [\"@cinatra-ai/brand-voice-artifact\", \"@cinatra-ai/blog-idea-artifact\"]},\"selectedRefs\":[]}",
+        "slotMeta": {
+          "slotId": "draftContext",
+          "maxItems": 5,
+          "minItems": 0,
+          "readableOnly": false,
+          "selectionMode": "interactive",
+          "resolutionMode": "accumulate",
+          "acceptedArtifactExtensions": [
+            "@cinatra-ai/brand-voice-artifact",
+            "@cinatra-ai/blog-idea-artifact"
+          ]
+        },
+        "candidates": [],
+        "selectedRefs": []
+      }
+    },
+    {
+      "run_id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+      "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+      "field_name": "idea",
+      "materialized_at": "2026-08-27T09:19:38.010Z",
+      "created_at": "2026-08-27T09:19:38.010Z",
+      "input_schema": {
+        "type": "object",
+        "title": "idea",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "outline": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "x-multiline": true,
+        "x-placeholder": "What should this post be about?",
+        "x-object-text-property": "title"
+      },
+      "gate_values": {}
+    },
+    {
+      "run_id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+      "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+      "field_name": null,
+      "materialized_at": "2026-08-27T09:25:09.578Z",
+      "created_at": "2026-08-27T09:25:09.577Z",
       "input_schema": {},
       "gate_values": {
         "idea": {
@@ -81,21 +157,29 @@
   ],
   "reviewGates": [
     {
-      "id": "9486766b-f29b-4462-9b6b-09c05b42f029",
-      "run_id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
-      "review_task_id": "lifecycle-review:046e55ca9f1b8ff97f21c61d658f15990a01412dd38c8147955a9d7e5b0375a9",
+      "id": "a328c215-94d4-4a31-8f17-1628838757ac",
+      "run_id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "review_task_id": "lifecycle-review:15259f72a7e4b00ec2da917c4e5b69b40a65518c354cf3ab7555ce87ed14530a",
       "status": "pending",
-      "created_at": "2026-08-27T00:04:01.967Z"
+      "created_at": "2026-08-27T09:30:01.351Z"
     }
   ],
   "triggers": [
     {
-      "run_id": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "run_id": "0f99ca1c-c81f-4170-83ea-dd6940d893d7",
       "trigger_type": "immediate",
       "scheduled_at": null,
       "timezone": "Europe/Berlin",
-      "released_at": "2026-08-26T23:51:52.068Z",
-      "created_at": "2026-08-26T23:51:52.059Z"
+      "released_at": "2026-08-27T09:11:06.695Z",
+      "created_at": "2026-08-27T09:11:06.691Z"
+    },
+    {
+      "run_id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "trigger_type": "immediate",
+      "scheduled_at": null,
+      "timezone": "Europe/Berlin",
+      "released_at": "2026-08-27T09:25:07.920Z",
+      "created_at": "2026-08-27T09:25:07.915Z"
     }
   ],
   "usageEvents": [
@@ -104,94 +188,198 @@
       "model": "gpt-5.5-2026-04-23",
       "source": "llm",
       "operation": "generate",
-      "calls": 11,
-      "input_tokens": 57544,
-      "output_tokens": 2573,
-      "first_at": "2026-08-27T00:03:31.922Z",
-      "last_at": "2026-08-27T00:04:14.428Z"
+      "calls": 12,
+      "input_tokens": 94135,
+      "output_tokens": 4018,
+      "first_at": "2026-08-27T09:15:40.059Z",
+      "last_at": "2026-08-27T09:30:12.440Z"
     },
     {
       "provider": "openai",
       "model": "gpt-5.5",
       "source": "llm",
       "operation": "stream",
-      "calls": 2,
-      "input_tokens": 43919,
-      "output_tokens": 370,
-      "first_at": "2026-08-26T23:20:39.650Z",
-      "last_at": "2026-08-26T23:21:00.778Z"
+      "calls": 6,
+      "input_tokens": 128545,
+      "output_tokens": 1324,
+      "first_at": "2026-08-27T08:29:10.136Z",
+      "last_at": "2026-08-27T09:19:39.483Z"
     }
   ],
   "transcriptToolCalls": [
+    {
+      "tool": "agent_list",
+      "kind": "tool_call"
+    },
     {
       "tool": "agent_run",
       "kind": "tool_call"
     },
     {
-      "tool": "skill_file_read",
+      "tool": "agent_list",
       "kind": "tool_call"
     },
     {
-      "tool": "agent_run_get",
+      "tool": "agent_run",
+      "kind": "tool_call"
+    },
+    {
+      "tool": "agent_run",
       "kind": "tool_call"
     }
   ],
   "assistantTurns": [
     {
       "role": "user",
-      "created_at": "2026-08-26T23:17:17.266Z"
+      "created_at": "2026-08-27T08:21:15.838Z"
     },
     {
       "role": "assistant",
-      "created_at": "2026-08-26T23:17:34.720Z"
+      "created_at": "2026-08-27T08:21:17.678Z"
     },
     {
       "role": "assistant",
-      "created_at": "2026-08-26T23:17:51.809Z"
+      "created_at": "2026-08-27T08:21:25.307Z"
     },
     {
       "role": "user",
-      "created_at": "2026-08-26T23:20:24.542Z"
+      "created_at": "2026-08-27T08:21:30.411Z"
     },
     {
       "role": "assistant",
-      "created_at": "2026-08-26T23:20:26.433Z"
+      "created_at": "2026-08-27T08:21:31.202Z"
     },
     {
       "role": "assistant",
-      "created_at": "2026-08-26T23:20:39.867Z"
+      "created_at": "2026-08-27T08:21:33.995Z"
     },
     {
       "role": "user",
-      "created_at": "2026-08-26T23:20:40.495Z"
+      "created_at": "2026-08-27T08:28:55.050Z"
     },
     {
       "role": "assistant",
-      "created_at": "2026-08-26T23:20:41.376Z"
+      "created_at": "2026-08-27T08:28:55.532Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:29:10.286Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T08:29:10.861Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:29:11.565Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:29:26.501Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T08:42:43.755Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:42:44.339Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:42:49.407Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T08:42:58.311Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:42:59.157Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:43:01.676Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T08:50:29.628Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:50:30.481Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:50:40.098Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T08:50:44.229Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T08:50:45.053Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T09:19:09.110Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T09:19:09.697Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T09:19:18.664Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T09:19:23.386Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T09:19:24.396Z"
     }
   ],
   "threads": [
     {
-      "id": "9e2ba649-4c05-4a59-a370-6150434f2acf",
+      "id": "55c81484-8aee-40aa-ab3a-74b4153f898f",
       "title": "Hello — are your platform tools available?",
-      "created_at": "2026-08-26T23:17:11.090Z"
+      "created_at": "2026-08-27T08:21:15.716Z"
     },
     {
-      "id": "c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "id": "7e232ad8-f3b8-4c8a-bf72-927821f4fe16",
       "title": "Hello — are your platform tools available?",
-      "created_at": "2026-08-26T23:20:24.434Z"
+      "created_at": "2026-08-27T08:28:54.901Z"
+    },
+    {
+      "id": "35f16b5a-60fa-45c9-a594-7be47e2c084b",
+      "title": "Hello — are your platform tools available?",
+      "created_at": "2026-08-27T08:42:43.613Z"
+    },
+    {
+      "id": "0cec5893-6829-44a1-8375-e9359a6c19d9",
+      "title": "Hello — are your platform tools available?",
+      "created_at": "2026-08-27T08:50:29.483Z"
+    },
+    {
+      "id": "0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "title": "Hello — are your platform tools available?",
+      "created_at": "2026-08-27T09:19:08.659Z"
     }
   ],
   "negativeScreens": {
     "scriptedRuntimeLines": 0,
     "noProviderRefusals": 0,
     "mcpToolListFailures": 0,
-    "publicMcpRefusals": 0,
-    "bridgeRunSelects": 0,
-    "sessionLogBytes": 371613
+    "publicMcpRefusals": 4,
+    "publicMcpCallbacks": 26,
+    "bridgeRunSelects": 2,
+    "sessionLogBytes": 831569
   },
   "serverScriptedProviderEnv": {
-    "pid": "86188",
+    "pid": "53587",
     "readFrom": "process-table",
     "tokensSeen": 0,
     "scriptedProviderTokens": 0,
