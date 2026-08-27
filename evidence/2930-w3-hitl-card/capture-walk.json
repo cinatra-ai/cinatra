@@ -1,0 +1,561 @@
+{
+  "slice": "2930-w3-hitl-card",
+  "note": [
+    "THE WALK, re-driven at PR #3014's head after the card's own Continue landed on a SETUP gate in a",
+    "conversation and after the shipped recorder learned to write a `decided` record of this kind as an",
+    "ABSENCE instance. Twelve cells, light and dark, on the two hosts a real run can reach; `site_widget`",
+    "and `page_gate_region` are composition-only in the contract itself and no picture of them is asked for.",
+    "",
+    "WHAT CHANGED IN THE PLAN AT THIS HEAD, and why:",
+    "  · the setup answer presses [data-action=\"submit-hitl-screen\"] — THE CARD'S OWN Continue — because",
+    "    the renderer's own submit is no longer drawn inside the fields region on a conversation host;",
+    "  · the mid-run chat steps can no longer wait on the card's own Continue to tell the two gates apart,",
+    "    because the setup gate draws one too. They wait on the region that does NOT declare",
+    "    `data-send-affordance=\"card\"`, which is exactly the mid-run gate (`cardOwnsTheSetupSend` excludes it).",
+    "",
+    "  export WALK_BASE=http://127.0.0.1:<port>",
+    "  export WALK_COOKIE=<the lane session>   WALK_COOKIE_DOMAIN=127.0.0.1",
+    "  export WALK_THREAD_URL=/chat/<vendor>/<assistant>/<threadId>",
+    "  export WALK_RUN_PAGE=/agents/<vendor>/<slug>/<runId>",
+    "  export WALK_ANSWER=<the reader's own answer to the setup question>",
+    "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2930-w3-hitl-card/capture-walk.json \\",
+    "    --out evidence/2930-w3-hitl-card/capture-records.json --steps <stepIds>"
+  ],
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "retires": [],
+  "steps": [
+    {
+      "id": "hc-pending-light",
+      "context": "light",
+      "why": "The conversation the run was started from, while the run is parked at the SETUP question.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"][data-send-affordance=\"card\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-pending__hitl-card__chat_thread__pending",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the card in the conversation the run was started from, at the SETUP gate (setup-<runId>, field `idea`, @cinatra-ai/agent-builder:schema-field-fallback). The fields region is SUBORDINATE — no enclosing box, no fill, no raised ground, a ruled baseline under a mono label — it carries NO button at all, and the card's own [data-action=\"submit-hitl-screen\"] is drawn OUTSIDE it. One primary input in the conversation, and it is the chat box."
+        }
+      ]
+    },
+    {
+      "id": "hc-pending-dark",
+      "context": "dark",
+      "why": "The same screen in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"][data-send-affordance=\"card\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the card in the conversation the run was started from, at the SETUP gate (setup-<runId>, field `idea`, @cinatra-ai/agent-builder:schema-field-fallback). The fields region is SUBORDINATE — no enclosing box, no fill, no raised ground, a ruled baseline under a mono label — it carries NO button at all, and the card's own [data-action=\"submit-hitl-screen\"] is drawn OUTSIDE it. One primary input in the conversation, and it is the chat box."
+        }
+      ]
+    },
+    {
+      "id": "hr-pending-light",
+      "context": "light",
+      "why": "The run page for the same run at the same moment.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-pending__hitl-card__run_card__pending",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the run page for the same run at the same setup gate. There is no chat box to be subordinate to, so the fields region takes the PRIMARY treatment — its own bordered, radiused, filled box on the raised ground — and the renderer's OWN Continue is inside the region while the card draws none of its own."
+        }
+      ]
+    },
+    {
+      "id": "hr-pending-dark",
+      "context": "dark",
+      "why": "The same run page in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-pending__hitl-card__run_card__pending__dark",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the run page for the same run at the same setup gate. There is no chat box to be subordinate to, so the fields region takes the PRIMARY treatment — its own bordered, radiused, filled box on the raised ground — and the renderer's OWN Continue is inside the region while the card draws none of its own."
+        }
+      ]
+    },
+    {
+      "id": "hc-answer-light",
+      "context": "light",
+      "why": "The reader answers the setup question IN THE CARD'S OWN FIELD and presses THE CARD'S OWN Continue ([data-action=\"submit-hitl-screen\"]), which at this head is the only send on a conversation host.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"][data-send-affordance=\"card\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "fill",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"] textarea",
+          "value": "${WALK_ANSWER}"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 1500
+        },
+        {
+          "action": "click",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 25000
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 4000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-decided__hitl-card__chat_thread__decided",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: after the setup question was answered by typing into the card's own field and pressing THE CARD'S OWN Continue. This kind's settled reading draws nothing at all (settledIsAbsence), so the capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact, and the decided record pins that absence."
+        }
+      ]
+    },
+    {
+      "id": "hc-decided-dark",
+      "context": "dark",
+      "why": "The same settled conversation in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-decided__hitl-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: after the setup question was answered by typing into the card's own field and pressing THE CARD'S OWN Continue. This kind's settled reading draws nothing at all (settledIsAbsence), so the capture owes the ABSENCE of the card root and of the fields region while the transcript itself is intact, and the decided record pins that absence."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-pending-light",
+      "context": "light",
+      "why": "The MID-RUN question the agent stopped in the middle of its run to ask, in the same conversation.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]:not([data-send-affordance])"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the question the agent stopped MID-RUN to ask, in the same conversation (wayflow-<a2aTaskId>, @cinatra-ai/context-selection-agent:context-selector). The mid-run gate is UNCHANGED by this head's fix: the region is subordinate and carries no data-send-affordance, and the card's own Continue is drawn and live outside it."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-pending-dark",
+      "context": "dark",
+      "why": "The same mid-run question in the dark palette.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]:not([data-send-affordance])"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the question the agent stopped MID-RUN to ask, in the same conversation (wayflow-<a2aTaskId>, @cinatra-ai/context-selection-agent:context-selector). The mid-run gate is UNCHANGED by this head's fix: the region is subordinate and carries no data-send-affordance, and the card's own Continue is drawn and live outside it."
+        }
+      ]
+    },
+    {
+      "id": "hr-midrun-pending-light",
+      "context": "light",
+      "why": "The run page at the mid-run gate.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-midrun-pending__hitl-card__run_card__pending",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the run page at the mid-run gate. The fields region takes the PRIMARY treatment, and the card's own Continue is the mid-run control the run page has always drawn."
+        }
+      ]
+    },
+    {
+      "id": "hr-midrun-pending-dark",
+      "context": "dark",
+      "why": "The same run page at the mid-run gate, dark.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
+          "declaredHost": "run_card",
+          "kind": "agent_hitl_screen",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: the run page at the mid-run gate. The fields region takes the PRIMARY treatment, and the card's own Continue is the mid-run control the run page has always drawn."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-answer",
+      "context": "light",
+      "why": "THE PRESS, on its own. The reader presses THE CARD'S OWN Continue ([data-action=\"submit-hitl-screen\"]) on the mid-run gate. It observes NO cell, because the settled reading is not instantaneous: the run resumes, materialises its artifact and completes, and only then does the card leave the transcript. A step that shot at a fixed delay after the press photographed a card that was still on screen, and the recorder refused the record for it — correctly. So the press and the reading are two steps, and the reading waits on the card that takes the slot.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]:not([data-send-affordance])"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 8000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-action=\"submit-hitl-screen\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 1500
+        },
+        {
+          "action": "click",
+          "selector": "[data-action=\"submit-hitl-screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 30000
+        }
+      ],
+      "cells": []
+    },
+    {
+      "id": "hc-midrun-decided-light",
+      "context": "light",
+      "why": "The settled reading of the mid-run gate: the run has resumed and completed, this kind draws nothing at all, and the review gate's card has taken the slot in the same turn. The step waits on THAT card rather than on a clock.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-decided__hitl-card__chat_thread__decided",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: after the card's OWN Continue was pressed on the mid-run gate. The run resumes and this kind settles to no DOM, so the capture owes the ABSENCE of the card root and of the fields region, and the decided record pins that absence."
+        }
+      ]
+    },
+    {
+      "id": "hc-midrun-decided-dark",
+      "context": "dark",
+      "why": "The settled reading of the mid-run gate: the run has resumed and completed, this kind draws nothing at all, and the review gate's card has taken the slot in the same turn. The step waits on THAT card rather than on a clock.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conversation-list]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-midrun-decided__hitl-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "agent_hitl_screen",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+          "requires": "SECTION I of the ratified base page at the contract's pin, THE INPUT RULE, verbatim: 'The rule, wherever a card meets a chat box — Exactly one primary input is drawn per conversation, and it is the chat box. Any field a card carries is drawn subordinate to it. Where there is no chat box to be subordinate to — the run page and the review page — the card's field is the only input there is and takes the primary treatment instead. The hierarchy is between the two inputs, not a fixed look for either one.' and 'No box of its own, no fill, no send. A ruled baseline under a mono label — it reads as a field on the card, not as somewhere to start typing.' Plus PLAN: Agents Lifecycle (B) — \"an agent's HITL screen is fields with a Continue button\" and 'A run at a moment shows its card on every host'. Plus The pull request's own words — 'the fields the step asks for and a Continue that answers them' — and its newest section: on chat_thread the setup gate's fields region holds NO button and the card's OWN Continue stands outside it (cardOwnsTheSetupSend, data-send-affordance=\"card\"). For THIS cell: after the card's OWN Continue was pressed on the mid-run gate. The run resumes and this kind settles to no DOM, so the capture owes the ABSENCE of the card root and of the fields region, and the decided record pins that absence."
+        }
+      ]
+    }
+  ]
+}

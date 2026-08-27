@@ -528,8 +528,33 @@ export type ListObjectsFilter = {
   // `compileDataEqualsClause`; the VALUE is always parameterized. Multiple
   // entries AND together (e.g. contact view = connectorId AND contactId).
   dataEquals?: ReadonlyArray<{ key: string; value: string }>;
+  // cinatra#1378: BATCH equality over `data->>'externalId'`, the memory-sync
+  // preflight. One statement answers "which of these N concepts already have a
+  // row", instead of N round trips or a full type scan the client filters
+  // itself. Compiles to `data->>'externalId' = ANY($n::text[])` with the array
+  // parameterized (the key is a fixed literal here, not caller-supplied, so
+  // the dataEquals interpolation guard does not apply). Bounded by
+  // MAX_EXTERNAL_IDS_BATCH. It is a FILTER, never an authorization bypass: the
+  // per-actor ownership fragment below and the caller's per-row `object.read`
+  // probe still decide what comes back, so a row the caller cannot read is
+  // absent from the answer exactly as a non-existent one is.
+  externalIds?: ReadonlyArray<string>;
   // cursor pagination not yet implemented — omitted intentionally
 };
+
+/**
+ * Cap on one `externalIds` batch.
+ *
+ * Matches `objects_list`'s own `limit` maximum: a batch larger than the number
+ * of rows the call could return would silently look like "those rows do not
+ * exist", which is the single misreading that turns a sync skip into a
+ * duplicate write. The two bounds are pinned equal rather than left to agree
+ * by coincidence: `objects-store-postgres-primary.test.ts` asserts this
+ * constant equals BOTH of `objectsListSchema`'s ceilings, discovering them by
+ * probing rather than restating them, so raising one number in isolation
+ * fails.
+ */
+export const MAX_EXTERNAL_IDS_BATCH = 500;
 
 /**
  * Allow-list of `data.<key>` fields the indexed `dataEquals` filter may target
@@ -706,6 +731,23 @@ export function listObjectsByFilter(
     const { clauses, nextIndex } = compileDataEqualsClause(filter.dataEquals, values, pIdx);
     for (const clause of clauses) where.push(clause);
     pIdx = nextIndex;
+  }
+
+  // cinatra#1378: the memory-sync preflight's batch key lookup. Same placement
+  // rule as dataEquals — BEFORE the per-actor ownership filter, so it can only
+  // ever narrow the read. An empty array is treated as "no filter supplied"
+  // rather than compiled to `= ANY('{}')`, which would match nothing and read
+  // as an empty result; a caller with nothing to look up should not issue the
+  // call at all, and the handler refuses an empty batch outright.
+  if (filter.externalIds && filter.externalIds.length > 0) {
+    if (filter.externalIds.length > MAX_EXTERNAL_IDS_BATCH) {
+      throw new Error(
+        `listObjectsByFilter: externalIds batch of ${filter.externalIds.length} exceeds the ${MAX_EXTERNAL_IDS_BATCH} cap`,
+      );
+    }
+    where.push(`data->>'externalId' = ANY($${pIdx}::text[])`);
+    values.push([...filter.externalIds]);
+    pIdx += 1;
   }
 
   // Splice buildOwnershipFilter into WHERE when actor present.

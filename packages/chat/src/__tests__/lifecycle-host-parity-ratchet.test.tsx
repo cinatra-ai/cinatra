@@ -65,6 +65,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
   skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: vi.fn(async () => []),
   getSkillsForAgentAction: vi.fn(async () => []),
@@ -115,6 +128,7 @@ import { ReviewGateCard } from "../../../agents/src/review-gate-card";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
 import { VerificationSummaryCard } from "../../../agents/src/verification-summary-card";
 import { ScheduleProposalCard } from "../../../agents/src/schedule-proposal-card";
+import { AgentHitlScreenCard } from "../../../agents/src/agent-hitl-screen-card";
 import { LifecycleCard } from "../renderable-views/lifecycle-card";
 import {
   LIFECYCLE_RESOLVE_ANSWERS,
@@ -146,6 +160,20 @@ if (typeof window !== "undefined" && typeof window.localStorage?.getItem !== "fu
   });
 }
 
+/** The ASKING answer — the one state that makes the HITL screen card draw. */
+const ASKING = {
+  state: "asking",
+  runId: "run-held-2826",
+  screenRef: "hitl-screen-ref-2930",
+  gate: {
+    reviewTaskId: "task-2930",
+    xRenderer: "cinatra.schema-field:output",
+    inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+    currentValues: {},
+    fieldName: "answer",
+  },
+};
+
 /** The HELD answer — the one state that makes the hold card draw at all. */
 const HELD = {
   state: "held",
@@ -173,6 +201,10 @@ function installResolve() {
     // from the SAME mock the cookie arm resolves, so neither arm is fed a
     // different truth.
     recommendationHold: () => holdStateMock(),
+    // The HITL screen's own broker read, for the same reason: on the widget arm
+    // the card reads THERE rather than through the cookie action, and from the
+    // SAME mock the cookie arm resolves, so neither arm is fed a different truth.
+    hitlScreen: () => hitlScreenStateMock(),
   });
   return stub;
 }
@@ -202,8 +234,14 @@ async function observedByTranscript(
   if (!arm) throw new Error(`no conversation arm for host "${host}"`);
   installResolve();
   holdStateMock.mockImplementation(async () => (kind === "recommendation_hold" ? HELD : { state: "none" }));
+  hitlScreenStateMock.mockImplementation(async () =>
+    kind === "agent_hitl_screen" ? ASKING : { state: "none" },
+  );
+  // BOTH INTERRUPT KINDS are carried by the run's own dispatch part rather than
+  // by a DATA_PART, so both are observed from the transcript a parked dispatch
+  // really leaves behind (cinatra#2930 for the HITL screen, S9b for the hold).
   const messages =
-    kind === "recommendation_hold"
+    kind === "recommendation_hold" || kind === "agent_hitl_screen"
       ? lifecycleHeldTranscript()
       : lifecycleDataPartTranscript(kind, `ref-${kind}`);
   const mounted = await mountSurface(arm, { messages });
@@ -235,6 +273,9 @@ const OWNER_COMPONENTS: Record<string, React.ComponentType<never>> = {
   // (cinatra#2788) and is composed on the same two direct-mount hosts — the run
   // screen and the review page's gate region — for the same reason.
   ScheduleProposalCard: ScheduleProposalCard as unknown as React.ComponentType<never>,
+  // The HITL screen's own card (cinatra#2930, lifecycle-b W3), composed on both
+  // direct-mount hosts — the run panel and the review page's gate region.
+  AgentHitlScreenCard: AgentHitlScreenCard as unknown as React.ComponentType<never>,
   LifecycleCard: LifecycleCard as unknown as React.ComponentType<never>,
 };
 
@@ -248,7 +289,9 @@ function renderOwnerUnderHost(tag: string, host: LifecycleCardHost, kind: Lifecy
     );
   }
   const props =
-    tag === "RecommendationHoldCard"
+    tag === "AgentHitlScreenCard"
+      ? { runId: "run-held-2826" }
+      : tag === "RecommendationHoldCard"
       ? { runId: "run-2826", agentPackageName: "@cinatra-ai/proof-agent" }
       : {
           view: { viewType: kind, schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: `ref-${kind}` },
@@ -278,6 +321,9 @@ async function observedByComposition(
 
   installResolve();
   holdStateMock.mockImplementation(async () => (kind === "recommendation_hold" ? HELD : { state: "none" }));
+  hitlScreenStateMock.mockImplementation(async () =>
+    kind === "agent_hitl_screen" ? ASKING : { state: "none" },
+  );
   let drawn = false;
   for (const tag of candidates) {
     const mounted = renderOwnerUnderHost(tag, host, kind);
@@ -319,6 +365,7 @@ let OBSERVED: ObservedHostParity = {};
 
 beforeEach(() => {
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
+  hitlScreenStateMock.mockImplementation(async () => ({ state: "none" }));
 });
 
 afterEach(() => {
@@ -347,9 +394,11 @@ describe("the host set of every kind, read off rendered cards", () => {
       // A kind that RECORDS no host and owes all of them has no card yet, so
       // "rendered nowhere" is what the ratchet already says about it — asking
       // for a host here would demand the very mount the owed cells defer.
-      // cinatra#2928 registered `agent_hitl_screen` in exactly that state; W3
-      // (cinatra#2930) lands its hosts, and the row above turns red the moment
-      // one is observed without being recorded.
+      // cinatra#2928 registered `agent_hitl_screen` in exactly that state and W3
+      // (cinatra#2930) landed its hosts, so NO kind takes this branch today. It
+      // is kept rather than deleted because it is the honest reading for the
+      // next net-new kind, and because deleting it would make the arm below
+      // demand a mount from a kind that has not been drawn yet.
       if (Object.keys(LIFECYCLE_HOST_PARITY_RATCHET[kind].hosts).length === 0) {
         expect(
           Object.keys(OBSERVED[kind] ?? {}).length,
@@ -403,30 +452,26 @@ describe("an edited array or a bare provider changes nothing", () => {
     expect(scanHostCompositionOwners(source, "run_card")).toEqual([]);
   });
 
-  // The claimed cell must be one the product really does NOT produce, or the
-  // discriminator proves nothing — and the subject has moved three times for
-  // exactly that reason. `verification_summary` stopped being the example when
-  // S9e (cinatra#2789) landed its run-card mount; `trigger_schedule_proposal`
-  // stopped being it when S9d (cinatra#2788) landed its two composition mounts;
-  // `recommendation_hold` stopped being it when S9f (cinatra#2790) landed the
-  // gate-region mount, which this slice both records and renders.
-  // `agent_hitl_screen` on `page_gate_region` is what is left, and it is the
-  // only cell in the whole grid that still qualifies: cinatra#2928 registered
-  // the kind with no mount at all, the three hosts the ruling gives it are OWED,
-  // and `page_gate_region` is neither recorded nor owed — so a claim on that
-  // cell is a claim on nothing.
+  // THE SUBJECT HAS MOVED FOR THE LAST TIME, and how it is built moved with it.
+  // The discriminator needs a cell the ratchet claims and the product does not
+  // render — and since W3 (cinatra#2930) landed the HITL screen's four mounts
+  // there is no unrendered cell left anywhere in the grid to borrow. It used to
+  // be `agent_hitl_screen@page_gate_region`, which is now recorded AND observed.
+  //
+  // So the case is built the other way round and proves exactly the same thing:
+  // the ratchet's own array is left standing and the OBSERVATION has the cell
+  // taken out of it. That is precisely the state an array-edited claim would be
+  // in — a row that says a card draws somewhere no card was seen — and it is red.
   it("claiming a host in the ratchet that nothing renders FAILS — the array is not the evidence", () => {
-    const edited = {
-      ...LIFECYCLE_HOST_PARITY_RATCHET,
-      agent_hitl_screen: {
-        hosts: {
-          ...LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.hosts,
-          page_gate_region: "composition" as HostObservationMethod,
-        },
-        owed: LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.owed,
-      },
+    const unrendered: ObservedHostParity = {
+      ...OBSERVED,
+      agent_hitl_screen: Object.fromEntries(
+        Object.entries(OBSERVED.agent_hitl_screen ?? {}).filter(
+          ([host]) => host !== "page_gate_region",
+        ),
+      ) as Record<LifecycleCardHost, HostObservationMethod>,
     };
-    const violations = evaluateHostParity({ observed: OBSERVED, ratchet: edited });
+    const violations = evaluateHostParity({ observed: unrendered });
     expect(violations.map((v) => v.code)).toContain("host-lost");
     // …and it is the CLAIMED cell that is lost, not a neighbour's.
     expect(
@@ -494,23 +539,25 @@ describe("the ratchet goes red in every direction it claims to", () => {
     );
   });
 
-  // Same reason as the claimed-cell discriminator above: the grown cell must be
-  // one the ratchet neither records NOR owes — an owed cell that starts drawing
-  // is `owed-cell-observed`, a different direction with its own arm below. All
-  // four DRAWN kinds record all four hosts since S9e (cinatra#2789), S9d
-  // (cinatra#2788) and S9f (cinatra#2790), so the subject is `agent_hitl_screen`
-  // on `page_gate_region`: cinatra#2928 registered the kind owing `chat_thread`,
-  // `site_widget` and `run_card` and leaving the gate region unclaimed, so
-  // observing it is growth nobody wrote down rather than an owed row coming due.
+  // Built the same way round as the claimed-cell arm above, and for the same
+  // reason: every cell in the grid is now recorded, so growth is demonstrated
+  // against a RATCHET with the cell taken out of it rather than against an
+  // observation with a cell invented into it. The observation is the REAL one —
+  // the card really does draw on the review page's gate region — and a ratchet
+  // that has not written that down is exactly the silent growth this refuses.
   it("a NEW host that nobody recorded fails — growth is not silent either", () => {
-    const grown: ObservedHostParity = {
-      ...OBSERVED,
+    const unwritten = {
+      ...LIFECYCLE_HOST_PARITY_RATCHET,
       agent_hitl_screen: {
-        ...(OBSERVED.agent_hitl_screen ?? {}),
-        page_gate_region: "composition",
+        hosts: Object.fromEntries(
+          Object.entries(LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.hosts).filter(
+            ([host]) => host !== "page_gate_region",
+          ),
+        ),
+        owed: LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen.owed,
       },
     };
-    const violations = evaluateHostParity({ observed: grown });
+    const violations = evaluateHostParity({ observed: OBSERVED, ratchet: unwritten });
     expect(violations.some((v) => v.code === "host-unratcheted")).toBe(true);
     // …and it is the GROWN cell that is unratcheted, not a neighbour's.
     expect(

@@ -1,0 +1,252 @@
+{
+  "runs": [
+    {
+      "id": "9dc2d652-4d09-480c-97e5-184a99cc3466",
+      "status": "failed",
+      "created_at": "2026-08-27T13:50:58.272Z",
+      "started_at": null,
+      "completed_at": "2026-08-27T14:02:26.557Z",
+      "a2a_task_id": "a2d51aff-f16d-4bf2-a439-9db36c51d334",
+      "lifecycle_moment": null,
+      "lifecycle_card_kind": null,
+      "lifecycle_card_ref": null,
+      "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+      "human_present": true,
+      "source_type": "agent_builder"
+    },
+    {
+      "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "status": "completed",
+      "created_at": "2026-08-27T14:11:03.562Z",
+      "started_at": null,
+      "completed_at": "2026-08-27T14:20:19.843Z",
+      "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+      "lifecycle_moment": null,
+      "lifecycle_card_kind": null,
+      "lifecycle_card_ref": null,
+      "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+      "human_present": true,
+      "source_type": "agent_builder"
+    }
+  ],
+  "hitlGates": [
+    {
+      "run_id": "9dc2d652-4d09-480c-97e5-184a99cc3466",
+      "review_task_id": "setup-9dc2d652-4d09-480c-97e5-184a99cc3466",
+      "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+      "field_name": "idea",
+      "materialized_at": "2026-08-27T13:50:59.335Z",
+      "created_at": "2026-08-27T13:50:59.334Z",
+      "input_schema": {
+        "type": "object",
+        "title": "idea",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "outline": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "x-multiline": true,
+        "x-placeholder": "What should this post be about?",
+        "x-object-text-property": "title"
+      },
+      "gate_values": {}
+    },
+    {
+      "run_id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+      "field_name": "idea",
+      "materialized_at": "2026-08-27T14:11:04.554Z",
+      "created_at": "2026-08-27T14:11:04.553Z",
+      "input_schema": {
+        "type": "object",
+        "title": "idea",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "outline": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "x-multiline": true,
+        "x-placeholder": "What should this post be about?",
+        "x-object-text-property": "title"
+      },
+      "gate_values": {}
+    },
+    {
+      "run_id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+      "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+      "field_name": null,
+      "materialized_at": "2026-08-27T14:16:19.412Z",
+      "created_at": "2026-08-27T14:16:19.411Z",
+      "input_schema": {},
+      "gate_values": {
+        "idea": {
+          "title": "How small teams keep customer research organised"
+        },
+        "output": "{\"candidates\":[],\"slotMeta\":{\"slotId\": \"draftContext\", \"resolutionMode\": \"accumulate\", \"selectionMode\": \"interactive\", \"minItems\": 0, \"maxItems\": 5, \"readableOnly\": false, \"acceptedArtifactExtensions\": [\"@cinatra-ai/brand-voice-artifact\", \"@cinatra-ai/blog-idea-artifact\"]},\"selectedRefs\":[]}",
+        "slotMeta": {
+          "slotId": "draftContext",
+          "maxItems": 5,
+          "minItems": 0,
+          "readableOnly": false,
+          "selectionMode": "interactive",
+          "resolutionMode": "accumulate",
+          "acceptedArtifactExtensions": [
+            "@cinatra-ai/brand-voice-artifact",
+            "@cinatra-ai/blog-idea-artifact"
+          ]
+        },
+        "candidates": [],
+        "selectedRefs": []
+      }
+    }
+  ],
+  "reviewGates": [
+    {
+      "id": "777841e8-81fd-4a73-a5a0-ad814e7cb83e",
+      "run_id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "review_task_id": "lifecycle-review:b61c5e70ae488125c0c4ea3dd2a73a400825339650744fa1117affb9c5b31887",
+      "status": "pending",
+      "created_at": "2026-08-27T14:20:22.929Z"
+    }
+  ],
+  "triggers": [
+    {
+      "run_id": "9dc2d652-4d09-480c-97e5-184a99cc3466",
+      "trigger_type": "immediate",
+      "scheduled_at": null,
+      "timezone": "Europe/Berlin",
+      "released_at": "2026-08-27T14:02:23.656Z",
+      "created_at": "2026-08-27T14:02:23.653Z"
+    },
+    {
+      "run_id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "trigger_type": "immediate",
+      "scheduled_at": null,
+      "timezone": "Europe/Berlin",
+      "released_at": "2026-08-27T14:16:17.443Z",
+      "created_at": "2026-08-27T14:16:17.440Z"
+    }
+  ],
+  "usageEvents": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.5-2026-04-23",
+      "source": "llm",
+      "operation": "generate",
+      "calls": 11,
+      "input_tokens": 59004,
+      "output_tokens": 2752,
+      "first_at": "2026-08-27T14:20:18.347Z",
+      "last_at": "2026-08-27T14:20:58.407Z"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "source": "llm",
+      "operation": "stream",
+      "calls": 3,
+      "input_tokens": 64520,
+      "output_tokens": 802,
+      "first_at": "2026-08-27T13:50:45.276Z",
+      "last_at": "2026-08-27T14:11:05.974Z"
+    }
+  ],
+  "transcriptToolCalls": [
+    {
+      "tool": "agent_run",
+      "kind": "tool_call"
+    },
+    {
+      "tool": "agent_list",
+      "kind": "tool_call"
+    },
+    {
+      "tool": "agent_run",
+      "kind": "tool_call"
+    }
+  ],
+  "assistantTurns": [
+    {
+      "role": "user",
+      "created_at": "2026-08-27T13:50:31.302Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T13:50:32.206Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T13:50:45.450Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T13:50:46.070Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T13:50:46.794Z"
+    },
+    {
+      "role": "user",
+      "created_at": "2026-08-27T14:10:46.211Z"
+    },
+    {
+      "role": "assistant",
+      "created_at": "2026-08-27T14:10:47.007Z"
+    }
+  ],
+  "threads": [
+    {
+      "id": "4ca2006a-f5fe-44c7-8d2a-4aec5ed8460e",
+      "title": "Hello — are your platform tools available?",
+      "created_at": "2026-08-27T13:50:31.131Z"
+    },
+    {
+      "id": "e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "title": "Please run the Blog Draft Writer Agent for me now.",
+      "created_at": "2026-08-27T14:10:46.033Z"
+    }
+  ],
+  "negativeScreens": {
+    "scriptedRuntimeLines": 0,
+    "noProviderRefusals": 0,
+    "mcpToolListFailures": 0,
+    "publicMcpRefusals": 0,
+    "publicMcpCallbacks": 12,
+    "bridgeRunSelects": 1,
+    "sessionLogBytes": 590974
+  },
+  "serverScriptedProviderEnv": {
+    "pid": "86964",
+    "readFrom": "process-table",
+    "tokensSeen": 0,
+    "scriptedProviderTokens": 0,
+    "value": null
+  }
+}

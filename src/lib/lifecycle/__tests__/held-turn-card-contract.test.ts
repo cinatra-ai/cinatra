@@ -633,16 +633,17 @@ describe("the positive arm is the DEFAULT, and the obligation list is its only e
     ).toContain("card_not_mounted");
   });
 
-  it("exempts exactly the kind that declared its own row, and no other", () => {
-    // The list is the ONLY ruled reason a held turn may show no card, and it
-    // was emptied by S9b. A future kind arriving unmounted therefore has to add
-    // its OWN row deliberately rather than inherit an exemption — which is
-    // exactly what cinatra#2928 did when it registered `agent_hitl_screen`
-    // without drawing it. W3 (cinatra#2930) lands the mount and strikes the
-    // row; this assertion turns red the day either half moves alone.
-    expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual(["agent_hitl_screen"]);
+  it("exempts NO kind at all — the list is empty and every kind is asserted", () => {
+    // The list is the ONLY ruled reason a held turn may show no card, and it is
+    // EMPTY AGAIN. `recommendation_hold` was struck by S9b (cinatra#2786);
+    // `agent_hitl_screen`, which cinatra#2928 registered without drawing, was
+    // struck by W3 (cinatra#2930) in the change that landed its production
+    // chat_thread mount. A future kind arriving unmounted has to add its OWN
+    // row deliberately rather than inherit an exemption, and this assertion
+    // turns red the day a row is added or a mount is taken away.
+    expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual([]);
     for (const kind of RULED_KINDS) {
-      expect(heldTurnMountIsOwed(kind)).toBe(kind === "agent_hitl_screen");
+      expect(heldTurnMountIsOwed(kind)).toBe(false);
     }
   });
 
