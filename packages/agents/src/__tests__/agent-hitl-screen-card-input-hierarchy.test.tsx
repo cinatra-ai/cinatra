@@ -54,6 +54,7 @@ vi.mock("../hitl-actions", () => ({
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
+import { Textarea } from "@/components/ui/textarea";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
@@ -117,7 +118,7 @@ function registerFieldFixture(): void {
             its own field is deliberately left alone by the scope, because the
             mono treatment would inherit into the field it wraps. */}
         <label htmlFor="field-idea">Idea (optional)</label>
-        <textarea
+        <Textarea
           id="field-idea"
           className="rounded-control border border-line bg-surface-strong"
         />
