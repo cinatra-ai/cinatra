@@ -73,6 +73,13 @@ export default defineConfig({
       // bridge at import. Route to a no-teams stub so every handler test loads;
       // the recall test vi.mocks it locally to assert the entitled lane set.
       "@/lib/better-auth-db": path.join(__dirname, "src/__tests__/__stubs__/better-auth-db.ts"),
+      // Canonical project-grant assembly (cinatra#1377). `src/mcp/registry.ts`
+      // resolves `actor.projectGrants` for the request frame's identity pair
+      // through `resolveActorGrantsForUserInOrg` (dynamic import); the real
+      // module builds a better-auth + pg bridge at import. Route to a
+      // no-grants stub so every registry test loads; the grant-forwarding test
+      // vi.mocks it locally to supply the caller's real axis.
+      "@/lib/auth-session": path.join(__dirname, "src/__tests__/__stubs__/auth-session.ts"),
       // Alias the authz sub-files used by the objects handlers so vitest can
       // resolve them. The barrel (`@/lib/authz`) is also aliased for tests that
       // vi.mock it.

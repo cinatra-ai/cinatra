@@ -14,6 +14,30 @@ export const objectsSaveSchema = z.object({
   ownerLevel: z.enum(["user", "team", "organization", "workspace"]).optional(),
   ownerId: z.string().optional(),
   visibility: z.enum(["private", "team", "organization", "public"]).optional(),
+  // Explicit project binding for EXTERNAL callers (cinatra#1377, epic #1373).
+  //
+  // An external (CLI) writer reaches this primitive over the authenticated MCP
+  // transport and has NO ambient `projectContext` frame — the request-scoped
+  // frame only exists inside an agent-run/chat execution. Without this field
+  // such a caller can only ever write pan-project (ambient) rows.
+  //
+  // Three-state precedence, keyed on PRESENCE (JSON has no `undefined`, so the
+  // wire can express all three unambiguously):
+  //   - omitted        → ambient inheritance, unchanged (the frame's projectId,
+  //                      subject to the substrate-exclusion list).
+  //   - explicit null  → no project (substrate write); the ambient frame is
+  //                      IGNORED, not consulted.
+  //   - explicit id    → bind the row to that project, ambient frame IGNORED.
+  //
+  // A supplied id is NOT a grant: the handler authorizes it against the
+  // caller's own `projectGrants` (write tier) plus the archive gate via
+  // `assertProjectWritable`, fail-closed and 404-hidden for a project the
+  // caller cannot see. Blank strings are rejected here rather than silently
+  // read as ambient — an authorization-adjacent input must not be ambiguous.
+  //
+  // `orgId` remains actor-derived and is deliberately NOT accepted from the
+  // caller on this or any other objects primitive.
+  projectId: z.string().min(1).nullish(),
 }).strict();
 
 export const objectsListSchema = z.object({

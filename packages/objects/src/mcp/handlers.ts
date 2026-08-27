@@ -18,6 +18,16 @@ import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 // already gates entry to objects_update.
 import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove } from "@/lib/resource-project-move";
+// Substrate-exclusion predicate for the EXPLICIT project binding (cinatra#1377).
+// The SAME rule the ambient write-time inheritance applies inside the store —
+// imported here so an explicit binding of a substrate type is REFUSED rather
+// than silently dropped. No new route-graph edge: `@/lib/objects-store` (already
+// imported below, and reachable from every locked route these handlers serve)
+// already pulls this module in for the ambient path.
+import {
+  resolveProjectInheritanceForType,
+  shouldAutoTagProject,
+} from "@/lib/project-inheritance";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
@@ -67,6 +77,7 @@ import {
   upsertObjectAndEnqueue,
   getObjectById,
   listObjectsByFilter,
+  resolveObjectIdsByAnchorNodeUuids,
   softDeleteObject,
 } from "@/lib/objects-store";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
@@ -451,24 +462,35 @@ function mapRowToObject(row: ObjectRecord): {
 // Graphiti search_nodes -> objectId extraction
 // ---------------------------------------------------------------------------
 //
-// Reads cinatra_object_id off entity nodes returned by Graphiti's search_nodes
-// MCP tool. cinatra_object_id is a top-level field of the episode_body JSON so
-// that Graphiti's LLM extractor surfaces it on the resulting entity nodes.
+// DETERMINISTIC FIRST, incidental second (cinatra#2591 deliverable 4).
 //
-// Recovery chain for cinatra_object_id from Graphiti entity nodes (search_nodes
-// result). Graphiti's LLM extraction does NOT propagate custom JSON fields to
-// entity node attributes in knowledge-graph-mcp 1.0.x / Graphiti 0.28.2.
-// Four probes in order of reliability:
-//   1. node.attributes.cinatra_object_id — future-proof if Graphiti adds attribute propagation
-//   2. node.cinatra_object_id           — if Graphiti flattens episode body fields onto nodes
-//   3. [oid:<uuid>] tag in node.name    — if Graphiti preserves the tag (future version)
-//   4. node.name IS a bare UUID with label "Object" — confirmed Graphiti 0.28.2 behavior:
-//      the UUID value from cinatra_object_id in the episode body is extracted as a distinct
-//      Entity/Object node whose name IS the UUID string.
+// WHAT THIS USED TO BE. A chain of four probes that read a row id off whatever
+// Graphiti's extraction model happened to put on an entity node. Three of them
+// were measured INERT against Graphiti 0.28.2 (live verification 2026-04-30 —
+// custom episode-body fields do not reach node attributes, and the `[oid:…]`
+// name tag does not survive extraction). The fourth fired only when the model
+// incidentally emitted the row UUID as an entity-node name. So a recall could
+// report `no_ids_extracted` for a row that was definitely indexed, and the
+// planned `memory_recall` semantic path (cinatra#1380) would have inherited
+// that.
+//
+// WHAT IT IS NOW. Every projected row is seeded as a DETERMINISTIC anchor node
+// whose UUID is a pure function of the row id and the lane
+// (`graphiti-projector.ts` -> `anchorNodeUuidFor`), and the inverse map lives in
+// Postgres (`objects.graphiti_anchor_node_uuid`). Ranked node UUIDs resolve
+// through that column. Nothing depends on model whim.
+//
+// THE LEGACY PROBES ARE KEPT, DEMOTED. They are the ONLY recovery path for rows
+// projected before this change (their anchor column is null until the next
+// projection) and for adapter-owned rows that project through their own
+// episode. They run second and only add ids the deterministic pass did not
+// already produce. They are not the mechanism; they are the tail.
 const OID_RE = /\[oid:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function extractObjectIds(nodes: EntityNode[]): string[] {
+/** The pre-#2591 chain: ids read off model-produced node fields. Inert for most
+ *  nodes by measurement; retained for rows with no anchor yet. */
+function extractIncidentalObjectIds(nodes: EntityNode[]): string[] {
   const ids: string[] = [];
   for (const n of nodes) {
     const attrs = (n as unknown as { attributes?: Record<string, unknown> })
@@ -484,6 +506,38 @@ function extractObjectIds(nodes: EntityNode[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Ranked entity nodes -> canonical object ids, RANK PRESERVED.
+ *
+ * Walks the nodes in the order Graphiti ranked them and emits, per node, the
+ * deterministically-anchored row id when there is one, otherwise whatever the
+ * incidental probes can recover. De-duplicated, because two ranked nodes can
+ * legitimately resolve onto the same row (a merged anchor).
+ */
+function resolveObjectIds(nodes: EntityNode[], orgId: string | null): string[] {
+  const byAnchor = resolveObjectIdsByAnchorNodeUuids(
+    nodes.map((n) => n.uuid).filter((u): u is string => typeof u === "string"),
+    orgId,
+  );
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    // A merged anchor can name more than one row — take all of them.
+    const deterministic = node.uuid ? byAnchor.get(node.uuid) : undefined;
+    const candidates =
+      deterministic && deterministic.length > 0
+        ? deterministic
+        : extractIncidentalObjectIds([node]);
+    for (const id of candidates) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ordered.push(id);
+      }
+    }
+  }
+  return ordered;
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +865,18 @@ function enforceMemoryConceptEnvelope(
  *  code set only with a documented contract change (packages/objects/AGENTS.md). */
 const OBJECTS_TYPE_NOT_REGISTERED = "OBJECTS_TYPE_NOT_REGISTERED" as const;
 
+/** Stable codes for the explicit-project-binding refusals (cinatra#1377).
+ *  Same contract as OBJECTS_TYPE_NOT_REGISTERED above: machine-readable, carried
+ *  onto the run's tool result by normalizePrimitiveError, extended only with a
+ *  documented contract change (packages/objects/AGENTS.md). */
+const OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED =
+  "OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED" as const;
+const OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED =
+  "OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED" as const;
+const OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED =
+  "OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED" as const;
+const OBJECTS_COLLISION_ROW_DELETED = "OBJECTS_COLLISION_ROW_DELETED" as const;
+
 /**
  * Derive the DEFINING extension package of a namespaced object-type id
  * (`@scope/pkg:local` → `@scope/pkg`). Under the dependency model exactly one
@@ -872,6 +938,49 @@ function refuseUnregisteredWrite(attemptedType: string | null): never {
   });
 }
 
+/**
+ * Stable machine-readable code for a save whose write PRECONDITION failed
+ * (cinatra#1377): the writer's armed `collisionGuard` blocked the DO UPDATE arm
+ * rather than write a row nobody authorized.
+ *
+ * The code and its message are CAUSE-NEUTRAL on purpose. Two predicates block
+ * that arm — the collision guard (the row moved on since the handler's
+ * `object.update` probe) and the cross-tenant `org_id` guard — and they produce
+ * the same empty result. Nothing outside the failed statement can tell them
+ * apart, so neither this error nor its message asserts which one fired.
+ *
+ * TERMINAL for the same reason: neither cause permits replaying this invocation
+ * under the authorization it already carries. A caller that wants to try again
+ * re-reads the row and re-authorizes against what is actually there, which is a
+ * fresh save. Auto-retrying a write whose authorization could not be confirmed is
+ * the thing the guard exists to prevent.
+ */
+const OBJECTS_WRITE_PRECONDITION_FAILED = "OBJECTS_WRITE_PRECONDITION_FAILED" as const;
+
+/**
+ * `upsertObjectAndEnqueue` for the objects_save path, translating the writer's
+ * guard refusal into the structured primitive error. Any other failure
+ * propagates untouched.
+ */
+function runGuardedSaveUpsert(
+  input: Parameters<typeof upsertObjectAndEnqueue>[0],
+): ReturnType<typeof upsertObjectAndEnqueue> {
+  try {
+    return upsertObjectAndEnqueue(input);
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === OBJECTS_WRITE_PRECONDITION_FAILED) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_WRITE_PRECONDITION_FAILED,
+        message:
+          "the write precondition failed; nothing was written; re-read this object and re-authorize before saving again",
+        retryable: false,
+        details: { objectId: input.upsertInput.id ?? null },
+      });
+    }
+    throw err;
+  }
+}
+
 export function createObjectsPrimitiveHandlers() {
   return {
     "objects_save": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -903,13 +1012,65 @@ export function createObjectsPrimitiveHandlers() {
         },
         scopeDefault,
       );
-      // Project refinement the row will carry (frame-resolved, never client
-      // input), threaded into the create probe so the OBO project-axis ceiling
-      // evaluates against the REAL project this row lands in (#1885 C1: "the
-      // create probe carries real ownership + projectId"). The authoritative
-      // project_id write still happens in the store from the same frame.
-      const probeProjectId =
-        mcpRequestContextStorage.getStore()?.projectContext?.projectId ?? null;
+
+      // --- Explicit project binding (cinatra#1377, epic #1373) --------------
+      //
+      // An external (CLI) writer reaches this primitive over the authenticated
+      // MCP transport and carries NO ambient `projectContext` frame, so it can
+      // name the target project explicitly. Three-state precedence, keyed on
+      // PRESENCE of the field:
+      //   - omitted       → ambient inheritance, unchanged.
+      //   - explicit null → substrate write; the ambient frame is IGNORED.
+      //   - explicit id   → bind to that project; the ambient frame is IGNORED.
+      //
+      // The explicit path never reads the frame — that is what makes it usable
+      // from outside a run, and it also means a stray ambient frame cannot
+      // bleed into an explicitly-scoped write (AC4).
+      const hasExplicitProjectBinding = input.projectId !== undefined;
+      const explicitProjectId = input.projectId ?? null;
+
+      // A caller-supplied project id is a REQUEST, never a grant. Authorize it
+      // against the caller's own project axis before anything else, fail-closed
+      // and in this order:
+      //   1. `assertProjectReadAccess` — 404-hides a project the caller holds
+      //      no grant on, so the gate is not an existence oracle. (Calling
+      //      `assertProjectWritable` alone would answer 404 for an unknown
+      //      project and 403 for a known one the caller cannot reach.)
+      //   2. `assertProjectWritable(..., "write")` — existence, the archive
+      //      gate (sealed/archived projects reject new writes), and the write
+      //      role tier.
+      // An unresolved `projectGrants` axis means "no grants" in both helpers,
+      // so a legacy caller that never resolved the axis is denied, not passed.
+      if (hasExplicitProjectBinding && explicitProjectId !== null) {
+        const actorForProjectGate = request.actor as unknown as Parameters<
+          typeof assertProjectReadAccess
+        >[0];
+        assertProjectReadAccess(actorForProjectGate, explicitProjectId);
+        await assertProjectWritable(
+          request.actor as Parameters<typeof assertProjectWritable>[0],
+          explicitProjectId,
+          "write",
+        );
+      }
+
+      // Project refinement the row will carry, threaded into the create probe
+      // so the OBO project-axis ceiling evaluates against the REAL project this
+      // row lands in (#1885 C1: "the create probe carries real ownership +
+      // projectId"). On the EXPLICIT branch the store writes from the same
+      // resolution (the binding forwarded below), so probe and write cannot
+      // disagree there. On the ambient branch they can: the probe carries the
+      // frame's projectId unfiltered, while the writer runs the frame through
+      // `resolveProjectInheritanceForType`, which drops it for a substrate
+      // type — that row lands with `project_id` NULL after being probed
+      // against the frame's project. Pre-existing ambient behaviour, unchanged
+      // here.
+      //
+      // The frame is read INSIDE the ambient branch on purpose: on the explicit
+      // path this handler must not so much as touch the request-scoped frame, so
+      // no future edit can accidentally let it influence the outcome.
+      const probeProjectId = hasExplicitProjectBinding
+        ? explicitProjectId
+        : (mcpRequestContextStorage.getStore()?.projectContext?.projectId ?? null);
       // Dev bypass: when A2A_DEV_BYPASS is active and the actor is
       // a sessionless model caller (no userId — i.e. an LLM bridge call coming
       // from OpenAI's relay which has no user session), skip the authz gate.
@@ -1037,6 +1198,176 @@ export function createObjectsPrimitiveHandlers() {
         ? identityHashToUuid(identityHash, groupId)
         : randomUUID();
 
+      // --- Explicit binding vs substrate types (cinatra#1377) ---------------
+      //
+      // Substrate types (catalog / CRM rows) are NEVER project-scoped — the
+      // ambient path drops the tag silently through
+      // `resolveProjectInheritanceForType` because auto-tagging is an accident
+      // of whichever project happened to run the write. An EXPLICIT binding is
+      // not an accident, so silently dropping it would lie to the caller about
+      // where the row landed. Refuse instead; the substrate rule itself is
+      // unchanged and still enforced in the store for both paths.
+      if (
+        hasExplicitProjectBinding &&
+        explicitProjectId !== null &&
+        !shouldAutoTagProject(persistedType)
+      ) {
+        throw new PrimitiveInvocationError({
+          code: OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED,
+          message: `"${persistedType}" is pan-project substrate and cannot be bound to a project`,
+          retryable: false,
+          details: { attemptedType: persistedType },
+        });
+      }
+
+      // The project tag the WRITER will resolve on the ambient path: the frame
+      // value run through the same pure helper the store uses, so the collision
+      // rule below compares what the write actually does, not what the caller
+      // said. `null` on the explicit path — that branch is compared against the
+      // caller's own request instead.
+      const ambientResolvedProjectId = hasExplicitProjectBinding
+        ? null
+        : resolveProjectInheritanceForType(probeProjectId, persistedType);
+
+      // --- Collision semantics (cinatra#1377) -------------------------------
+      //
+      // Identity resolution can steer this save onto an EXISTING row (the
+      // upsert's ON CONFLICT arm). That is an update of someone's row, so the
+      // create probe above is not sufficient authorization on its own: probe
+      // `object.update` against the row as it actually is. The read is org-
+      // scoped but deliberately NOT ownership-filtered — a filtered read would
+      // return null for a row the caller cannot see and the write would then be
+      // authorized as a create against a row that does exist. `enforceResource
+      // Access` with a null resource is the 404-hidden envelope, identical to
+      // the shape `objects_update` uses, so nothing about the row leaks.
+      //
+      // A save with no identityKey mints a fresh random id and can never
+      // collide, so the probe read is skipped for it.
+      //
+      // `allowDeleted` is ON: the writer's `ON CONFLICT (id)` arm hits a
+      // SOFT-DELETED row too. It does NOT resurrect it — this writer's DO UPDATE
+      // arm never clears `deleted_at` (only the canonical twin writer does) — but
+      // it DOES rewrite the row's data, bump its version and re-evaluate its
+      // `project_id`. Probing without tombstones would read null there, so the
+      // write would be authorized as a CREATE against a row that does exist, and
+      // an explicit binding could re-tag a tombstone with no move authorization
+      // and no audit. Seeing the tombstone is what lets the refusals below fire.
+      const existingRow = identityHash
+        ? getObjectById(objectId, { orgId }, undefined, { allowDeleted: true })
+        : null;
+      if (existingRow && !isTrustedDevModelCall) {
+        await enforceResourceAccess(
+          buildObjectResourceCheck(existingRow),
+          request.actor,
+          "object.update",
+        );
+      }
+      if (existingRow) {
+        // A tombstoned row is refused outright. This writer's `ON CONFLICT` arm
+        // would rewrite its data, bump its version and emit the outbox + change
+        // events WITHOUT clearing `deleted_at`, so the caller would be told the
+        // save succeeded while every ordinary read still cannot see the row —
+        // an accept reported over a write that lands nowhere visible. Refuse
+        // instead; undeleting is not something `objects_save` does.
+        if (existingRow.deletedAt) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_ROW_DELETED,
+            message:
+              "this save resolves to a deleted object; objects_save does not undelete, so the write would not be visible",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // A collision that REQUESTS a different project than the row already
+        // carries is a project MOVE, and a move needs the move path's source-
+        // side authorization plus its `resource_project_moves` audit row —
+        // neither of which this handler runs. Refuse with the route to take.
+        // This covers "bind an ambient row into a project", "rebind to another
+        // project" and "explicit null on a project-tagged row" alike; the last
+        // one would otherwise be silently swallowed by the writer's
+        // `COALESCE(EXCLUDED.project_id, objects.project_id)` preserve arm.
+        //
+        // An OMITTED projectId requests nothing — but the writer's preserve arm
+        // is `COALESCE(EXCLUDED.project_id, objects.project_id)`, so a resolved
+        // ambient project does NOT preserve: it overwrites. The ambient half of
+        // the rule is below.
+        if (
+          hasExplicitProjectBinding &&
+          explicitProjectId !== (existingRow.projectId ?? null)
+        ) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
+            message:
+              "this save resolves to an existing object whose project differs from the requested projectId; move it with objects_update (projectId) instead",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // The AMBIENT half. A save with no `projectId`, made inside a frame that
+        // resolves to project P, lands on a row already bound to project Q: the
+        // COALESCE arm writes P over Q. That takes the row OUT of Q's sealed
+        // room — with none of the move path's source-side authorization on Q
+        // (which this caller may hold nothing on) and no `resource_project_moves`
+        // audit row. Same defect the explicit refusal above prevents, so it gets
+        // the same refusal and the same remedy.
+        //
+        // Deliberately NOT refused: an UNTAGGED row (`project_id` NULL) that
+        // inherits the active frame. That is the documented write-time
+        // inheritance, and it is purely additive — the row becomes visible in
+        // P's project-mode reads and is removed from nobody's, because a NULL
+        // tag was never inside any project's room. Only a change that DEPRIVES a
+        // project of a row it holds needs the audited move path.
+        if (
+          !hasExplicitProjectBinding &&
+          ambientResolvedProjectId !== null &&
+          existingRow.projectId != null &&
+          ambientResolvedProjectId !== existingRow.projectId
+        ) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
+            message:
+              "this save resolves to an existing object bound to a different project than the active project context; move it with objects_update (projectId) instead",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // Ownership/visibility are IMMUTABLE through this writer: the upsert's
+        // ON CONFLICT arm does not list owner_level / owner_id / visibility, so
+        // an existing row keeps its tuple and a default-scoped (user/private)
+        // save can never narrow a wider row. Refuse a request that asks for a
+        // DIFFERENT tuple rather than accepting it and silently not applying
+        // it — a caller that believes it just widened a row is exactly the
+        // false-accept this surface must not produce. Same-value fields, and
+        // omitted fields, pass through as the no-ops they are.
+        const requestedScopeChange =
+          (input.ownerLevel !== undefined &&
+            input.ownerLevel !== existingRow.ownerLevel) ||
+          (input.ownerId !== undefined && input.ownerId !== existingRow.ownerId) ||
+          (input.visibility !== undefined &&
+            input.visibility !== existingRow.visibility);
+        if (requestedScopeChange) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED,
+            message:
+              "this save resolves to an existing object; objects_save never changes an existing row's ownership or visibility",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+      }
+
+      // The tuple actually written. On a collision it is the EXISTING row's
+      // tuple (the refusal above guarantees the caller asked for nothing else),
+      // which states the preserve-the-wider-row intent in the handler instead
+      // of leaving it implicit in the writer's ON CONFLICT column list.
+      const ownershipForWrite: SaveOwnership = existingRow
+        ? {
+            ownerLevel: existingRow.ownerLevel,
+            ownerId: existingRow.ownerId,
+            visibility: existingRow.visibility,
+          }
+        : ownership;
+
       // --- Postgres-primary write -------------------------------------------
       // A single atomic call to upsertObjectAndEnqueue inserts or updates the
       // row in cinatra.objects AND emits a graphiti_projection_outbox row in
@@ -1070,7 +1401,7 @@ export function createObjectsPrimitiveHandlers() {
       // already-scheduled/published draft.
       await enforceDraftableLock(persistedType, orgId, objectId);
 
-      const record = upsertObjectAndEnqueue({
+      const record = runGuardedSaveUpsert({
         upsertInput: {
           id: objectId,
           type: persistedType,
@@ -1085,12 +1416,30 @@ export function createObjectsPrimitiveHandlers() {
           packageVersion: actorExt.packageVersion,
           agentSpecVersion: actorExt.agentSpecVersion,
           // Write the resolved ownership tuple.
-          ownerLevel: normalizeOwnerLevel(ownership.ownerLevel),
-          ownerId: ownership.ownerId,
-          visibility: ownership.visibility,
+          ownerLevel: normalizeOwnerLevel(ownershipForWrite.ownerLevel),
+          ownerId: ownershipForWrite.ownerId,
+          visibility: ownershipForWrite.visibility,
         },
         operation: "upsert",
         payloadHash: identityHash ?? undefined,
+        // Explicit project binding (cinatra#1377). Forwarded ONLY when the
+        // caller actually supplied the field: its absence is what tells the
+        // writer to fall back to ambient frame inheritance, so spreading an
+        // `undefined` key would be indistinguishable but a `null` key would
+        // not — pass the key or don't.
+        ...(hasExplicitProjectBinding
+          ? { explicitProjectBinding: explicitProjectId }
+          : {}),
+        // Make the collision authorization above BINDING rather than advisory.
+        // The probe and this write are separate statements, so without a guard a
+        // row inserted (or changed) in between would be written — and, with an
+        // explicit binding, re-tagged — under an authorization that was never
+        // evaluated against it. The guard pins the writer's DO UPDATE arm to the
+        // exact row state the probe authorized; anything else refuses.
+        collisionGuard: {
+          expectedVersion: existingRow?.version ?? null,
+          expectedProjectId: existingRow?.projectId ?? null,
+        },
       });
 
       // version === 1 means the INSERT path executed; version > 1 means the
@@ -1127,8 +1476,11 @@ export function createObjectsPrimitiveHandlers() {
 
       // Sealed-room read filter. When the caller supplies a projectId, 404-hide
       // if the actor has no read+ grant on it. The actor's projectGrants axis
-      // is routed through the MCP registries (A2A path) and read here via the
-      // ActorContext-shaped fields stamped on `request.actor`. Platform admins
+      // is stamped by this package's MCP registry for the transport-resolved
+      // identity pair (packages/objects/src/mcp/registry.ts) and by
+      // `actorContextToObjectsEnvelope` for the in-process session client, and
+      // is read here via the ActorContext-shaped fields stamped on
+      // `request.actor`. An unresolved axis is NO grants. Platform admins
       // bypass the grant check. The actual SQL `AND project_id = $projectId`
       // runs inside `listObjectsByFilter` (data layer); this preserves the
       // non-bypassable SQL re-filter.
@@ -1293,7 +1645,7 @@ export function createObjectsPrimitiveHandlers() {
           group_ids: searchGroupIds,
           max_nodes: input.limit ?? 50,
         });
-        objectIds = extractObjectIds(res.nodes);
+        objectIds = resolveObjectIds(res.nodes, orgId);
       } catch (err) {
         console.warn(
           "[objects_list] searchNodes failed; falling back to Postgres-only filter:",
@@ -1319,9 +1671,19 @@ export function createObjectsPrimitiveHandlers() {
         );
         const visible = await filterByAuthz(rows);
         const items = applyCategoryFilter(visible.map(mapRowToObject));
-        // Distinguish "Graphiti unavailable" from "Graphiti responded but
-        // extracted no cinatra_object_id from the entity nodes". The latter
-        // signals a field-path problem rather than a network error.
+        // Distinguish "Graphiti unavailable" from "Graphiti responded, and
+        // none of its ranked nodes named a row we hold".
+        //
+        // Since cinatra#2591 that second state means something much sharper
+        // than it used to. Recovery no longer depends on the extraction model
+        // emitting an id: every projected row is seeded as a deterministic
+        // anchor node and resolved through `objects.graphiti_anchor_node_uuid`.
+        // So `no_ids_extracted` now says the hits were genuinely other nodes
+        // (extracted entities from some row's episode, another tenant's lane
+        // filtered out, or rows projected before the anchor existed) — not that
+        // the id field path is broken. It stays classified as DEGRADATION
+        // rather than an empty search result, which is the contract
+        // cinatra#1380's `memory_recall` depends on.
         const meta = degraded
           ? { semanticSearch: "unavailable" as const, fallback: "postgres_filter" as const }
           : objectIds !== null && objectIds.length === 0

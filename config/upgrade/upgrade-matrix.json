@@ -226,10 +226,10 @@
       "migrationMechanism": "rebuild",
       "appManagedSchema": false,
       "upstreamDictated": false,
-      "baselinePin": { "image": "zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6", "major": "1.0.2-graphiti-0.28.2", "digest": "sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6" },
+      "baselinePin": { "image": "cinatra/knowledge-graph-mcp:upstream-425bf248-core-0.29.3", "major": "upstream-425bf248-core-0.29.3", "digest": null },
       "notes": "DERIVED state (owns NO volume — the graph lives in Neo4j). knowledge-graph-mcp fronts Neo4j over MCP and re-projects/extracts into it. An upgrade is a repin + rebuild (re-project from source), no backup/RPO of its own; coupled to the neo4j pin. Listed in the matrix as an explicit volume-less entry so the family is covered and a future major re-enters the lane paired with neo4j.",
       "transitions": [
-        { "from": "1.0.2-graphiti-0.28.2", "to": "1.0.2-graphiti-0.28.2", "supported": true, "mechanism": "rebuild", "skippedMajor": "n-a", "downgrade": false, "notes": "At newest stable upstream; only change is a digest re-pin. A published knowledge-graph-mcp major re-pairs with neo4j and re-runs the works-after round-trip." }
+        { "from": "1.0.2-graphiti-0.28.2", "to": "upstream-425bf248-core-0.29.3", "supported": true, "mechanism": "rebuild", "skippedMajor": "n-a", "downgrade": false, "notes": "cinatra#2591: leaves the stale published wrapper for a BUILD of the maintained upstream MCP server (docker/graphiti/Dockerfile). Zep publishes the same upstream source on the mcp-v* cadence, which lagged graphiti-core with no newer tag available, so there is no tag to re-pin to and no digest to record: the two build args ARE the pin. Derived state, so the transition is a rebuild — episodes re-project from Postgres and the anchors are re-seeded on the next projection cycle. Still paired with the neo4j pin; the works-after graphiti arm builds the same Dockerfile so the proof binds the shipped bytes." }
       ]
     },
     {

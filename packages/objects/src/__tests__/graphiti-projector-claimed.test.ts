@@ -23,6 +23,14 @@ vi.mock("@/lib/database", () => ({
   postgresSchema: "cinatra",
 }));
 vi.mock("../graphiti-client", () => ({
+  // cinatra#2591: the deterministic anchor seed. Echoes the proposed uuid back
+  // as the resolved node — which is what the real server does (measured on the
+  // wire) unless graphiti merges the node onto a near-duplicate.
+  addTriplet: vi.fn(async (input: { source_node_name: string; source_node_uuid?: string }) => ({
+    message: "ok",
+    nodes: [{ uuid: input.source_node_uuid, name: input.source_node_name }],
+    edges: [],
+  })),
   addEpisode: vi.fn(),
   deleteEpisode: vi.fn(),
   identityHashToUuid: (h: string) => h,
