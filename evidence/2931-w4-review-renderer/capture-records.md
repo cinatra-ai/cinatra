@@ -1,12 +1,12 @@
 # capture records — cinatra#2931 (W4)
 
-Head under proof: **`73c201854cecfe50c8036a32b5f7489111acb99c`** for **W9**,
-re-taken on this head; **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7**,
-**`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3** and **W5**, and
-**`1c3649503d511942538c626d4ebc964e50e1302c`** for **W0** and **W1**, whose files
+Head under proof: **`8e30992447054ef67dbca906ce92773d6c7b5e53`** for **W0** and
+**W1**, re-taken on this head; **`73c201854cecfe50c8036a32b5f7489111acb99c`** for
+**W9**, **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7** and
+**`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3** and **W5**, whose files
 are carried over **byte-identical** (their sha256 values below are unchanged from
 those commits, recomputed from the files in the tree, and their git blob ids are
-identical to `4f908562ef443d0af9681edccfa7862d04b2023a`).
+identical to `eaf87c2359319f06f781a1a82e7e858a85d3a491`).
 Runtime: Next.js dev on `http://localhost:3000`; the agent runtime container on
 `:3010`; a plain static server on a second origin for the third-party page of W7.
 Provider: **real** — `CINATRA_TEST_LLM_PROVIDER` unset. The provider key lives in
@@ -44,9 +44,131 @@ agent_runs
   completed_at  2026-08-27 00:51:48.217+00
 ```
 
-The runs behind the three standing cells are unchanged and are recorded in the
-commit those files came from: `579d0473-4b5d-40b9-9d79-8126560bbf06` (W0, W1) and
-`01437642-8900-4c12-9cfc-c9a5db44ca24` (W7).
+The runs behind the standing cells are unchanged and are recorded in the commit
+those files came from. The run behind **W0** and **W1** is this commit's own and is
+recorded in full below; `579d0473-4b5d-40b9-9d79-8126560bbf06`, the run the
+superseded W0/W1 pair was taken against, is retired and claims nothing here.
+
+## The run and gate behind W0 and W1, on this head
+
+Every value a `SELECT` readback from the instance database.
+
+```
+agent_runs
+  id            6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  status        completed
+  human_present t
+  created_at    2026-08-27 09:03:14.619345+00
+  completed_at  2026-08-27 09:08:24.246+00
+
+artifact_review_gates
+  id             d5eb4fa0-1b3c-42b4-918e-05c6b20ed2d6
+  run_id         6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  review_task_id lifecycle-review:fdb26d053b86748c52b041a77e8ac1c16bd69d1bcce3a0f039a826430c8a2c54
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  reopen_count   0
+  created_at     2026-08-27 09:08:51.418241+00
+  expires_at     2026-09-03 09:08:51.322+00
+  pinned_targets [{"artifactId": "16233c31-7fad-49a4-8d51-c73623bb55ba",
+                   "representationRevisionId": "b11361a6-354c-4354-b76f-f45291cca4ec"}]
+```
+
+The gate was read back as `pending` after the last of the four shutters. The
+revision it pins is the revision the W1 card prints.
+
+### The stored turn — the platform's sentence, and the parts
+
+The assistant turn the two cells picture, read back from `assistant_turns`
+(thread `f4b38c96-466e-4c03-a3e6-0a0b7e4679e0`, turn
+`7ef56418-d2ab-406d-a080-9349bc1efc07`), in the order the row holds them:
+
+```
+parts[0]  kind      text
+          content   Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+
+parts[1]  kind      tool_call
+          name      agent_run
+          runId     6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+          status    completed
+
+parts.length              2
+occurrences of agent_run_get      0
+occurrences of skill_file_read    0
+```
+
+Held against the platform's own `message` for this run — minted by the shipped
+`describeStartedRun` in `packages/agents/src/run-status.ts`, the function
+`agent_run` calls to build that field, given this run's package, id and status:
+
+```
+platform message  Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+stored turn text  Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+strict equality   true
+byte length       132   /   132
+```
+
+### The reviewed work behind W0 and W1
+
+```
+representation b11361a6-354c-4354-b76f-f45291cca4ec
+  artifact_id        16233c31-7fad-49a4-8d51-c73623bb55ba
+  resource_id        7d7c17b2-8837-41b7-949d-ea0f40d9a979
+  revision           1
+  created_by_run_id  6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  created_at         2026-08-27 09:08:23.83032+00
+
+resource 7d7c17b2-8837-41b7-949d-ea0f40d9a979
+  kind        blob
+  mime        text/markdown
+  size_bytes  5517
+  created_at  2026-08-27 09:08:22.627808+00
+
+artifact_blobs 44ace426-fcb5-4b99-8701-7c920b85d06c
+  sha256          8bda8e41fab010c445521ccdb7654da809d3fcede44559a9ac891b4cd8681cff
+  size_bytes      5517
+  mime_detected   text/markdown
+  storage_backend local-disk
+```
+
+Recomputed from the blob on disk: `sha256` matches, 5 517 bytes, first byte `#`,
+first line `## Where the Hours Actually Go`, and occurrences of the JSON-envelope
+key `"content":` → **0**. Prose, not an envelope.
+
+### The usage ledger for the W0/W1 run — the real model
+
+Every row a `SELECT` readback from `usage_events`, for the window this run
+occupied. `CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 09:03:18.331+00 llm    openai   gpt-5.5             stream    chat                     21 736   441
+2026-08-27 09:08:20.674+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  39 095 1 605
+2026-08-27 09:08:44.218+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 780    97
+2026-08-27 09:08:50.074+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 806   189
+2026-08-27 09:08:54.993+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 822    90
+2026-08-27 09:09:00.191+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 871    81
+2026-08-27 09:09:05.586+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 912    81
+2026-08-27 09:09:09.891+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 887   120
+2026-08-27 09:09:14.647+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 863   115
+2026-08-27 09:09:19.276+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 900   141
+2026-08-27 09:09:23.799+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 839    83
+2026-08-27 09:09:28.079+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 891   117
+```
+
+The one `chat` stream is the turn that dispatched the run; the draft-writing row
+carries `requested_provider = openai` and `effective_provider = openai`.
+
+### The diagnostic runs of this round, disclosed
+
+Three further runs were started on this head while the capture was being brought
+in, and **none of them appears in any picture**:
+`d7bad2d6-65eb-4114-8334-d7a5fa133145`, `e3722feb-dd16-40c7-9ec3-3beacafc62ea` and
+`4cb8afd2-60ab-4f47-8eea-e0fd97f942d4`. All three are real runs on the real
+provider; each carries the same platform sentence in its own stored turn. They are
+named here so the ledger and gate tables of this instance read straight.
 
 **One failed run, disclosed.** `49e4f31b-f87c-4b35-a2a9-36858614fbf2` is `failed`
 in `agent_runs` — a first attempt at the pending run, whose dispatch had no agent
@@ -334,23 +456,32 @@ occurred_at (UTC)          source provider model               operation agent_l
 The draft-writing row carries `requested_provider = openai` and
 `effective_provider = openai`.
 
-## The slot, as the page itself recorded it (W0, W1 — the standing cells)
+## The slot, as the two windows themselves recorded it (W0, W1 — re-taken)
 
-`MutationObserver` on `data-run-review-slot`; neither page reloaded after the turn.
+`MutationObserver` on `data-run-review-slot`, one per window. The conversation was
+open in **two windows** — light and dark, each in its own browser context — and
+**neither was reloaded after it was opened**: one `goto` each at `09:03:31`, and
+nothing after it.
 
 ```
-the conversation                      the run page
-16:45:44.432  (no slot)               16:46:36.596  (no slot)
-16:46:42.035  working                 16:46:42.390  working
-16:46:43.382  (no slot)               16:46:44.035  (no slot)
-16:49:30.322  working                 16:49:30.323  working
-16:49:46.823  review, card=0          16:49:47.114  review, card=0
-16:49:47.929  review, card=1          16:49:47.989  review, card=1
+the light window                      the dark window
+09:03:31.157  (no slot)               09:03:31.159  (no slot)
+09:04:02.815  working                 09:04:02.814  working
+09:04:03.957  (no slot)               09:04:03.957  (no slot)
+09:08:24.990  working                 09:08:24.990  working
+09:08:52.365  review, card=0          09:08:52.149  review, card=0
+09:08:54.269  review, card=1          09:08:53.989  review, card=1
 ```
 
-The first `working` flash is the run's own setup gate opening and closing; the
-captured placeholder is the second window, which ran from `16:49:30.322` to
-`16:49:46.823` — **16.5 s** — and began `520 ms` after the run row terminated.
+The first `working` flash is the run's own setup gate opening and closing (1.1 s).
+The captured placeholder is the second window, which ran from `09:08:24.990` to
+`09:08:52.365` — **27.4 s** — and began `744 ms` after the run row terminated at
+`09:08:24.246`. Page errors raised in either window across the whole run: **0**.
+
+**Reload accounting.** `goto` calls per window after the turn was typed: **1**, at
+`09:03:31`. Between that load and the `review, card=1` reading, the observer's
+series is unbroken on a single document — the swap is the document changing
+itself, not a new document arriving.
 
 ## W7 — the wire, per capture
 
@@ -374,28 +505,28 @@ cookie jar at capture time (name/attributes only; no value is recorded anywhere)
 
 ## The captures
 
-Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The two rows
-marked **re-take** were shot on `73c201854cecfe50c8036a32b5f7489111acb99c` and are
-the only two files this commit replaces; the other ten are the files already in
+Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The four rows
+marked **re-take** were shot on `8e30992447054ef67dbca906ce92773d6c7b5e53` and are
+the only four files this commit replaces; the other eight are the files already in
 the tree, **unchanged byte for byte** — each sha256 below was recomputed from the
 file in the tree and matches the value recorded when that file was taken, and each
-of those ten git blob ids is identical to the one at
-`4f908562ef443d0af9681edccfa7862d04b2023a`.
+of those eight git blob ids is identical to the one at
+`eaf87c2359319f06f781a1a82e7e858a85d3a491`.
 
 | file | sha256 | bytes |
 |---|---|---|
-| `captures/W0__placeholder__chat_thread__working__light.png` | `20a79cfb0e554af0d7441f7587487aa478c2e4cc8ce2c147c48c5c991fb4abf4` | 363 852 |
-| `captures/W0__placeholder__chat_thread__working__dark.png` | `38d368768dad138e0b3b22d3c29730cf60ce326fd243c10f27b183fea3e4268c` | 339 355 |
-| `captures/W1__review-card__chat_thread__pending__light.png` | `949b1332c9ae2fce007a09ca40df2878c992341e257e71b2b64bc31ade9dbec1` | 367 024 |
-| `captures/W1__review-card__chat_thread__pending__dark.png` | `69ea12575b17332b1df0264df9faeb76a2c67610aef5bab625c139207f7e6856` | 361 362 |
+| **re-take** `captures/W0__placeholder__chat_thread__working__light.png` | `45a39b0bd2d6b7fa2726ce2e4415a747c749373afaadb89b2e8a5fff2393634f` | 328 287 |
+| **re-take** `captures/W0__placeholder__chat_thread__working__dark.png` | `3fd0ea32b34f990263810479d5db51efd7b93117660734cf6a2d109db503b578` | 326 766 |
+| **re-take** `captures/W1__review-card__chat_thread__pending__light.png` | `cfea1830d577500e284374e6e2d0c651ff5c242ed1c1680eb0d0d86ef751330b` | 367 749 |
+| **re-take** `captures/W1__review-card__chat_thread__pending__dark.png` | `47fe52db2b202a4490af8583c3dc5e819ecd64a6e79fd7bbc186b00ee996c824` | 363 023 |
 | `captures/W3__review-card__run_page__pending__light.png` | `5fbf568b2d6037eaedfc894853117af8a2c3a74349b7dd71ab7ce14456a7c586` | 303 091 |
 | `captures/W3__review-card__run_page__pending__dark.png` | `367476221003d54c165475ff16ef619bbca4b601ccef73fefe98fbe326b678a5` | 291 093 |
 | `captures/W5__review-card__review_page__pending__light.png` | `d5298628add1b5b98b87e03737c2cf0a4a06a1232f78e36d9c136cfba704fd61` | 416 388 |
 | `captures/W5__review-card__review_page__pending__dark.png` | `31a6f05b3bc5f514398f76f42abbe73bf1bd16f6c437b3aff3bfe17fdb9d7141` | 412 720 |
 | `captures/W7__review-card__site_widget__pending__light.png` | `361a1bc3e6a94dc578e4db2db8883c49e82467f8a9a170271ad4cf0fb8d18034` | 213 057 |
 | `captures/W7__review-card__site_widget__pending__dark.png` | `92783e14c6afffe3e5314bdb09b6d6dc2310f00026babef3d08f452b0ce4090e` | 210 785 |
-| **re-take** `captures/W9__review-card__review_page__decided__light.png` | `53fec984fbc29521ac468618e0da202d1288701d9fbd21d7044cb7008969a9a8` | 382 458 |
-| **re-take** `captures/W9__review-card__review_page__decided__dark.png` | `f73e708168a7a536ac546b5fe74ecbf3df8843d73f4418c26251c5ae59278b74` | 378 255 |
+| `captures/W9__review-card__review_page__decided__light.png` | `53fec984fbc29521ac468618e0da202d1288701d9fbd21d7044cb7008969a9a8` | 382 458 |
+| `captures/W9__review-card__review_page__decided__dark.png` | `f73e708168a7a536ac546b5fe74ecbf3df8843d73f4418c26251c5ae59278b74` | 378 255 |
 
 ## The shutters, and what was true at each
 
@@ -420,11 +551,21 @@ W5 light  00:40:08   path=/agents/…/88634469-…/review/lifecycle-review%3A79a
                      island rendered=true rawsource=true  floor=0 preview=0 download=0
 W5 dark   00:40:22   the same readings, theme=dark
 
---- standing, unchanged (their own commits) ---
-W0 light  16:49:33.505  slot=working ph=1 cards=0 approve=0            after: true
-W0 dark   16:49:46.028  slot=working ph=1 cards=0 approve=0            after: true
-W1 light  16:50:04.945  slot=review  ph=0 cards=1 approve=1 island=1   after: true
-W1 dark   16:50:20.590  slot=review  ph=0 cards=1 approve=1 island=1   after: true
+--- re-taken on 8e3099244705, 2026-08-27 (UTC) ---
+W0 light  09:08:26.4   slot=working ph=1 cards=0 spinners=1 approve/reject/comment=0/0/0
+                       islands=0  runProgressHeading=false  openRunPage=false
+                       recheck=false  pendingApprovalPill=false        after: true
+                       sentence whole inside the frame = true
+                       framing sentence+card  union 249px  card 155px  viewport 900px
+W0 dark   09:08:27.4   the same readings, theme=dark                   after: true
+W1 light  09:09:32.9   slot=review  ph=0 cards=1 islands=1 iframes=1
+                       approve/reject/comment=1/1/1  rationale field=1
+                       rendered=true  replyingToReview=true  promptWindow=false
+                       openRunPage=false  island body=1 empty=0 targets=1
+                       island "content": occurrences = 0                after: true
+                       Approve clear of the composer = true
+                       framing sentence+card  union 791px  card 697px  viewport 900px
+W1 dark   09:09:33.9   the same readings, theme=dark                   after: true
 
 --- re-taken on f20bb3ff6372, 2026-08-27 (UTC) ---
 W7 light  02:30:52   host page http://127.0.0.1:8088 — a different origin AND site
