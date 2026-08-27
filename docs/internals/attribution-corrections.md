@@ -973,3 +973,49 @@ source-leak-gate` and `truthful-attribution-gate / truthful-attribution-gate`. T
 suite committed at the merged sha reads `cinatra-core@2026.07.7`. No *valid*
 verification record existed for this merge — the arm was intact, the record was not —
 and none is asserted here.
+
+---
+
+## Correction for `4e23061a1f113414116b6e1e25c8182ec77f55eb`
+
+```
+correction: verification record for 4e23061a1 (feat(mcp): replace ALLOWED_EXACT with version- and declaration-bound admission…)
+
+The record on 4e23061a1 ("feat(mcp): replace ALLOWED_EXACT with version- and declaration-bound
+admission (#2817) (#2914)") carries `Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz)`
+with no tier annotation. The change is high-risk, and a high-risk change requires the human arm at
+tier=maintainer; a Reviewed-by that names no tier is a malformed owned trailer, so the record
+carried no valid maintainer arm and the post-merge gate red-flagged it (no-record plus
+high-risk-without-maintainer). The omission is the record author's transcription error, nothing
+else.
+
+What was verified at the time is unchanged by any of this. PR #2914 was approved by @groganz at
+67a26413cda70560075d5b0cab9e976e65f2f777 on 2026-08-26T16:54:07Z — that login's latest
+non-dismissed review, APPROVED at the reviewed head, non-self (the pull request's author is
+@marcushorndt), and that login's repository permission is admin, which meets tier=maintainer. Both
+required contexts named by the suite concluded success at that reviewed head:
+`source-leak-gate / source-leak-gate` success (completed 2026-08-26T14:52:42Z);
+`truthful-attribution-gate / truthful-attribution-gate` failure then success (the freshest
+qualifying run completed success 2026-08-26T17:27:45Z; the engine reads the freshest qualifying
+run, so the earlier failure does not change the standing).
+
+The machine arm is restated here, and deliberately so: the suite committed at the merged sha reads
+cinatra-core@2026.08.4, and the suite at this correction reads the same version, so the equality
+the engine checks holds in both readings.
+
+The `Assisted-by` lines are this record's own assistants: the two the original record named,
+aggregated from the merged branch's commit trailers, together with the agent that produced this
+correction, deduplicated on name and model id. No assistant the original record named is dropped,
+and none is invented.
+
+The merged change itself is untouched — this repairs the RECORD only. This correction is submitted
+for the maintainer's approval, and that approval on the correction pull request is the human
+ratification of the record it states.
+
+Gate-suite: cinatra-core@2026.08.4
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 4e23061a1f113414116b6e1e25c8182ec77f55eb
+```

@@ -27,7 +27,24 @@ export function createDeterministicObjectsClient(input: {
   }
 
   return {
-    save: (inp: { rawData: Record<string, unknown>; typeHint?: string; parentId?: string }) =>
+    save: (inp: {
+      rawData: Record<string, unknown>;
+      typeHint?: string;
+      parentId?: string;
+      // Ownership + project fields, at PARITY with `objectsSaveSchema`
+      // (cinatra#1377). None of them is a grant: the handler re-derives the
+      // ownership defaults and re-authorizes every supplied value against the
+      // caller's own actor — an in-process caller reaches exactly the same
+      // gates an external MCP caller does.
+      ownerLevel?: "user" | "team" | "organization" | "workspace";
+      ownerId?: string;
+      visibility?: "private" | "team" | "organization" | "public";
+      // Explicit project binding, three-state and keyed on PRESENCE: omit for
+      // ambient inheritance, `null` for a substrate write, an id to bind.
+      // Declared `?: string | null` so an explicit `null` is expressible while
+      // omission stays distinct.
+      projectId?: string | null;
+    }) =>
       // changeSetId surfaced so create actions can offer Undo.
       invoke<{ objectId: string; type: string; isNew: boolean; wasMerged: boolean; confidence: number; changeSetId?: string }>(
         "objects_save",
