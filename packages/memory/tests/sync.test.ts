@@ -499,6 +499,28 @@ describe("item 12 — the local scan runs BEFORE the preflight", () => {
   });
 });
 
+describe("round-2 item 5 — planMemorySync has no public off switch", () => {
+  it("still blocks a credential-carrying concept when a caller hands in an empty override", () => {
+    // `blocked` is no longer part of the public `MemorySyncPlanInput` — the
+    // scan runs internally and fresh, every call. A caller reaching past the
+    // type system (a stale build, a hand-rolled input object) with an old-shape
+    // `blocked: new Map()` must have zero effect: the concept still blocks.
+    const root = bundleWith([
+      { path: "dirty.md", body: `The token is ${SHAPED_PAT}\n` },
+    ]);
+    const bundle = loadMemoryBundle(root);
+    const ledger = emptyMemorySyncLedger(bundle.config.bundleId);
+    const plan = planMemorySync({
+      bundle,
+      ledger,
+      remote: new Map(),
+      ...({ blocked: new Map() } as Record<string, unknown>),
+    } as never);
+    expect(plan.items[0]).toMatchObject({ path: "dirty.md", action: "blocked" });
+    expect(plan.diagnostics.some((d) => d.code === "secret-detected")).toBe(true);
+  });
+});
+
 describe("item 10 — the wire parsing does not fail open in either direction", () => {
   it("aborts rather than reading an unreadable preflight as \"no such row\"", async () => {
     // Read as "no such row", every concept classifies `create` and the run
@@ -524,7 +546,25 @@ describe("item 10 — the wire parsing does not fail open in either direction", 
       },
     };
     await expect(runMemorySync({ root, transport })).rejects.toThrow(
-      /without a readable `id` and `data.externalId`/,
+      /without a non-empty `id` and `data.externalId`/,
+    );
+  });
+
+  // Round-2 item 2: an EMPTY string satisfies `typeof x === "string"` and used
+  // to be accepted, keying the row into the remote map under `""` — the same
+  // shape as "no such row", one level below where the item-10 fix stopped.
+  it("aborts on a preflight row whose id or externalId is an empty string", async () => {
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") {
+          return { items: [{ id: "", data: { externalId: "" } }] };
+        }
+        throw new Error("no write may be attempted");
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /without a non-empty `id` and `data.externalId`/,
     );
   });
 
@@ -537,7 +577,22 @@ describe("item 10 — the wire parsing does not fail open in either direction", 
       },
     };
     await expect(runMemorySync({ root, transport })).rejects.toThrow(
-      /carried no `objectId`/,
+      /carried no non-empty `objectId`/,
+    );
+  });
+
+  // Round-2 item 2: a save answering `{ objectId: "" }` used to complete and
+  // write a ledger entry pointing at `""` — a row this run never saw.
+  it("aborts rather than counting a save answering an empty objectId as created", async () => {
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") return { items: [] };
+        return { objectId: "" };
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /carried no non-empty `objectId`/,
     );
   });
 

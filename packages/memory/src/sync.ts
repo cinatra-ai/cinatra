@@ -86,14 +86,6 @@ export interface MemorySyncPlanInput {
   ledger: MemorySyncLedger;
   /** `externalId` → the row the preflight found. Absent = no visible row. */
   remote: Map<string, PreflightRow>;
-  /**
-   * Per-concept local refusals, keyed by concept PATH, computed BEFORE the
-   * preflight (cinatra#1378 review item 12). Supplying it is what lets a
-   * blocked concept be kept out of the preflight batch entirely. Omitted, this
-   * function computes the same map itself, so it stays a pure function of the
-   * bundle for its own unit tests.
-   */
-  blocked?: Map<string, MemorySyncDiagnostic[]>;
 }
 
 /**
@@ -130,10 +122,34 @@ export function scanMemoryBundleLocally(
  * the local bundle and the preflight — are both handed in, so the whole
  * classification is a unit-testable function and `--dry-run` is exactly this
  * function with the write loop skipped.
+ *
+ * The local scan (cinatra#1378 review item 12) always runs fresh, computed
+ * from `input.bundle` alone. An earlier shape took the blocked-concept map as
+ * an optional PUBLIC field a caller could supply — including an empty one,
+ * which reclassified a credential-carrying concept as `create` with zero
+ * diagnostics (round-2 item 5). A fail-closed local guard whose result a
+ * caller can hand it is not fail-closed at the API boundary, so the
+ * computation moved inside the function, where nothing outside this module
+ * can override it. {@link runMemorySync} needs the same map a step earlier —
+ * to keep a blocked concept's key out of the preflight batch — and gets it
+ * from {@link scanMemoryBundleLocally} directly rather than through here.
  */
 export function planMemorySync(input: MemorySyncPlanInput): MemorySyncPlan {
+  return planMemorySyncClassified(input, scanMemoryBundleLocally(input.bundle));
+}
+
+/**
+ * {@link planMemorySync}'s classification, taking the local-scan result as a
+ * parameter instead of recomputing it. NOT exported: the only caller that may
+ * hand in a map computed elsewhere is {@link runMemorySync}, which needs the
+ * exact map it already used to build the preflight batch, and it is not a
+ * public seam a caller from outside this module can reach.
+ */
+function planMemorySyncClassified(
+  input: MemorySyncPlanInput,
+  blocked: Map<string, MemorySyncDiagnostic[]>,
+): MemorySyncPlan {
   const { bundle, ledger, remote } = input;
-  const blocked = input.blocked ?? scanMemoryBundleLocally(bundle);
   const bundleId = bundle.config.bundleId;
   const items: MemorySyncItem[] = [];
   const diagnostics: MemorySyncDiagnostic[] = [];
@@ -339,9 +355,19 @@ async function runMemorySyncPreflight(
         data !== null && typeof data === "object" && !Array.isArray(data)
           ? (data as Record<string, unknown>)["externalId"]
           : undefined;
-      if (typeof externalId !== "string" || typeof row["id"] !== "string") {
+      // NON-EMPTY, not just present (cinatra#1378 round-2 item 2): an empty
+      // string satisfies `typeof x === "string"` and used to be accepted,
+      // keying the row into the remote map under `""` — indistinguishable from
+      // no such row, so the concept it belonged to never matched and classified
+      // `create` instead of the update it should have been.
+      if (
+        typeof externalId !== "string" ||
+        externalId === "" ||
+        typeof row["id"] !== "string" ||
+        row["id"] === ""
+      ) {
         throw new MemorySyncError(
-          "objects_list: the preflight answer carried a row without a readable `id` and `data.externalId`",
+          "objects_list: the preflight answer carried a row without a non-empty `id` and `data.externalId`",
         );
       }
       out.set(externalId, {
@@ -450,7 +476,7 @@ export async function runMemorySync(
           externalIds,
           bundle.config.sync?.projectId,
         );
-  const plan = planMemorySync({ bundle, ledger, remote, blocked });
+  const plan = planMemorySyncClassified({ bundle, ledger, remote }, blocked);
 
   const result: MemorySyncResult = {
     plan,
@@ -512,15 +538,19 @@ export async function runMemorySync(
       // The ledger for the writes that DID land is flushed first (the `finally`
       // below), so an abort here never loses the bookkeeping for work already
       // done — a lost ledger entry is a duplicate write on the next run.
-      const objectId =
-        saved !== null &&
-        typeof saved === "object" &&
-        typeof (saved as Record<string, unknown>)["objectId"] === "string"
-          ? ((saved as Record<string, unknown>)["objectId"] as string)
+      // NON-EMPTY, not just present (cinatra#1378 round-2 item 2): a save
+      // answering `{ objectId: "" }` used to satisfy `typeof x === "string"`
+      // and complete, writing a ledger entry pointing at `""` — the exact
+      // "row this run never saw" outcome the comment below forbids.
+      const rawObjectId =
+        saved !== null && typeof saved === "object"
+          ? (saved as Record<string, unknown>)["objectId"]
           : undefined;
+      const objectId =
+        typeof rawObjectId === "string" && rawObjectId !== "" ? rawObjectId : undefined;
       if (objectId === undefined) {
         throw new MemorySyncError(
-          `objects_save: the answer for ${item.path} carried no \`objectId\`; the run was stopped rather than recording an unconfirmed write`,
+          `objects_save: the answer for ${item.path} carried no non-empty \`objectId\`; the run was stopped rather than recording an unconfirmed write`,
         );
       }
       if (item.action === "create") result.created += 1;
