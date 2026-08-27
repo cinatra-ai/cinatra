@@ -925,3 +925,146 @@ textarea:focus::placeholder {
   order: 10;
 }
 
+
+/* =====================================================================
+   §I INPUT HIERARCHY — a lifecycle card's fields, subordinate to the chat box.
+
+   The ratified drawing at the contract's pin, §I, "The rule, wherever a card
+   meets a chat box": exactly one primary input is drawn per conversation, and
+   it is the chat box; any field a card carries is drawn subordinate to it.
+   Where there is no chat box to be subordinate to — the run page and the
+   review page — the card's field is the only input there is and takes the
+   primary treatment instead, and never this class. The hierarchy is between
+   the two inputs, not a fixed look for either one.
+
+   The subordinate treatment, in the drawing's own words — "No box of its own,
+   no fill, no send. A ruled baseline under a mono label — it reads as a field
+   on the card, not as somewhere to start typing." — and in the drawing's own
+   rules, which these are: the note field's rule is border 0, a 1px dashed
+   bottom on the hairline, radius 0, transparent ground; its label is the mono
+   face, uppercase, badge-2xs, on the muted ink.
+
+   WHY THIS IS A SCOPE AND NOT A RULE ON A COMPONENT. A card that mounts a field
+   renderer mounts whatever the gate resolves to: a host-internal kind, a
+   manifest binding onto one, or an extension component this repository has
+   never read. A treatment each of those had to opt into would reach the ones
+   that were edited and silently miss the rest. A scope on the region they are
+   all drawn inside reaches every one of them by containment, which is why it is
+   declared ONCE, here, beside the other cross-package card chrome, and not in
+   any renderer.
+
+   NOTHING IS HIDDEN AND NOTHING IS DISABLED; only the weight moves. Every
+   colour is a token this file already defines, so light and dark are both
+   carried by the tokens rather than by a second rule set, and no new colour is
+   introduced.
+
+   The card decides which treatment a host takes, per host, in
+   packages/agents/src/agent-hitl-screen-card.tsx.
+   ===================================================================== */
+.lifecycle-fields-subordinate {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Every place a reader can type inside the region, whichever renderer drew it.
+
+   THE INPUT GROUP IS TREATED AS THE FIELD, not its child (convergence). The
+   shipped fallback draws a uri or an email field as an `InputGroup`: the WRAPPER
+   owns the box, the ground and the focus ring, and the control inside it owns
+   none of them. Restyling only the control would leave the box exactly where §I
+   takes it away, so the wrapper takes the treatment and its own control is
+   excluded from it — otherwise the group and the control inside it would each
+   draw a baseline and the field would read as two. The exclusion is on the
+   TEXTAREA and SELECT arms as well as the input one, because an input group can
+   hold any of the three. */
+.lifecycle-fields-subordinate textarea:not([data-slot="input-group-control"]),
+.lifecycle-fields-subordinate select:not([data-slot="input-group-control"]),
+.lifecycle-fields-subordinate [contenteditable="true"],
+.lifecycle-fields-subordinate [data-slot="select-trigger"],
+.lifecycle-fields-subordinate [data-slot="input-group"],
+.lifecycle-fields-subordinate
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([data-slot="input-group-control"]) {
+  border: 0 !important;
+  border-bottom: 1px dashed var(--line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* A BOX DRAWN ON FOCUS IS STILL A BOX, so the ring goes — and the focus still
+   has to be VISIBLE without one, which the rule itself carries: the baseline
+   turns solid where the reader is typing, on the same hairline token, so
+   nothing is hidden and no colour is added.
+
+   THE SAME EXCLUSIONS AS ABOVE, deliberately repeated. A checkbox, a radio, a
+   file picker, a range or a button-typed input is not a place a reader types,
+   takes none of the treatment above, and must keep the focus affordance the
+   platform gives it. */
+.lifecycle-fields-subordinate textarea:not([data-slot="input-group-control"]):focus-visible,
+.lifecycle-fields-subordinate select:not([data-slot="input-group-control"]):focus-visible,
+.lifecycle-fields-subordinate [contenteditable="true"]:focus-visible,
+.lifecycle-fields-subordinate [data-slot="select-trigger"]:focus-visible,
+.lifecycle-fields-subordinate [data-slot="input-group"]:focus-within,
+.lifecycle-fields-subordinate
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([data-slot="input-group-control"]):focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border-bottom-style: solid !important;
+}
+
+/* A disabled or settled field keeps the SAME rule at the platform's standard
+   disabled opacity — never the stock filled treatment, which would put back the
+   box §I has just taken out. The same exclusions again, so a disabled checkbox
+   keeps its own checked fill. */
+.lifecycle-fields-subordinate textarea:not([data-slot="input-group-control"]):disabled,
+.lifecycle-fields-subordinate select:not([data-slot="input-group-control"]):disabled,
+.lifecycle-fields-subordinate
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([data-slot="input-group-control"]):disabled {
+  background: transparent !important;
+}
+
+/* The mono label above the rule. A label that WRAPS its own control is left
+   alone: the treatment would inherit into the field it wraps and turn the
+   reader's own text into a kicker. */
+.lifecycle-fields-subordinate
+  label:not(:has(input)):not(:has(textarea)):not(:has(select)) {
+  font-family: var(--font-mono);
+  font-size: var(--badge-text-2xs);
+  letter-spacing: var(--badge-tracking);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* §I "NO SEND" — the third give-up, where the CARD has taken the send over.
+
+   The drawing's own words for the subordinate field are "No box of its own, no
+   fill, no send", and its example draws that field with no button at all. The
+   two rules above take the box and the fill; this is the send. It applies only
+   where the region DECLARES that the card owns it
+   (`data-send-affordance="card"`, written by the card on a conversation host
+   when it draws its own Continue outside the region), so the run page and the
+   review page — where the field is the primary input and its own control is the
+   only way forward — are never touched.
+
+   THE PROP CONTRACT IS THE MECHANISM; THIS IS THE BACKSTOP. The card carries the
+   rule to the renderer through `hideSubmit`, the shared field-renderer prop
+   whose own contract says a renderer drawing its own Continue must skip it, so
+   a renderer that honours the contract never draws the control at all and this
+   rule has nothing to hide. What it covers is a component this repository has
+   never read which ignores the prop.
+
+   IT HIDES AN UNAMBIGUOUS SEND AND NOTHING ELSE. A submit-typed control is a
+   send by declaration; any other button inside a field can BE the field — a
+   select trigger, an option row, a picker — and hiding those would take away
+   the input §I only re-weights. A renderer that both ignores the prop and draws
+   its send as a plain button is not reached, which is a limit stated here
+   rather than a claim not made. */
+.lifecycle-fields-subordinate[data-send-affordance="card"] button[type="submit"],
+.lifecycle-fields-subordinate[data-send-affordance="card"] input[type="submit"] {
+  display: none !important;
+}

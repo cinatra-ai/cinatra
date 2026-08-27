@@ -57,6 +57,7 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/ren
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
+import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import {
   encodeLifecycleGateRef,
@@ -324,6 +325,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   root of this region: a card is a `page_gate_region` mount because
                   THIS provider says so, per the anchor contract. */}
               <RecommendationHoldCard runId={runId} />
+              {/* THE QUESTION THE RUN IS PARKED ON, on the same host and by the
+                  same rule (cinatra#2930, lifecycle-b W3). Section IX's "every
+                  card appears on every host" is the epic's structural thesis,
+                  and this region is the fourth host: the card is keyed by the
+                  run and nothing else, and it owns whether it draws. A run that
+                  is not parked asking a question renders NOTHING here, which on
+                  this page is the usual reading — a review and a mid-flight
+                  question are different moments of the same run. What the mount
+                  buys is that a reviewer who arrives while the run IS waiting
+                  sees the question rather than a page that looks stalled. */}
+              <AgentHitlScreenCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard
                   view={{

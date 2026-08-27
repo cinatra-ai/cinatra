@@ -21,6 +21,8 @@ import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
+  WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+  WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
   WIDGET_CONVERSATION_WRITE_SCOPE,
   WIDGET_TOOL_CONFIRM_SCOPE,
@@ -120,6 +122,33 @@ describe("the mint", () => {
     expect(tokenSetHas(scope, WIDGET_LIFECYCLE_DECIDE_SCOPE)).toBe(true);
     expect(tokenSetHas(aud, WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH)).toBe(true);
     expect(WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH).toBe("/api/lifecycle-views/decide");
+  });
+
+  it("SEEING the question and ANSWERING it are different grants", () => {
+    // cinatra#2930 (lifecycle-b W3). The HITL screen has two audiences and they
+    // are deliberately under DIFFERENT scopes: the read shows you a question an
+    // agent paused to ask, the submit answers it and drives the run. A token
+    // that may show you the question must not thereby be a token that may
+    // answer it — the same split `lifecycle.read` / `lifecycle.decide` carries
+    // everywhere else.
+    const readAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]);
+    const decideAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(readAud, WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(readAud, WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH)).toBe(false);
+    expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH)).toBe(false);
+    // Two distinct audiences, so neither can be reached with the other's token.
+    expect(WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH).not.toBe(
+      WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+    );
+  });
+
+  it("the SUBMIT audience joined the decide grant WITH the sentence that admits to it", () => {
+    // The map's own rule: a grant may not gain a surface without gaining consent
+    // copy in the same edit. This pins the half a reader actually sees.
+    const entry = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
+    expect(entry.audiences).toContain(WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH);
+    expect(entry.consentCopy).toContain("answer a question an agent has paused to ask you");
   });
 
   it("a sign-in grants the whole set this build defines — nothing more, nothing less", () => {
