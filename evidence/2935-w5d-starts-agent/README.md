@@ -1,25 +1,43 @@
 # cinatra#2935 (lifecycle-b W5d) — the picture leg
 
-Head under proof: `39494751b81e9105b79a84be6759c8f9e49c5104`, plus this evidence
+Head under proof: `a8e81c9b6ffa26e9199ba9252124ac745417ae4b`, plus this evidence
 commit.
 
-**This set replaces the one taken at `74e10031c5371059888bc3b451cb69ba7f976e40`**
-— the same six file names, re-shot on the head above, after the platform began
-minting the assistant's report for a started run (`describeStartedRun`,
-`packages/agents/src/run-status.ts`) and the refusal sentence at the refusal's
-own source (`packages/agents/src/auth-policy.ts`). Nothing of the earlier set
-remains here. Every capture below was viewed before it was recorded.
+**The two chat captures were re-taken on this head.** The four third-party
+application captures — the two starts and the two refusals — **stand
+byte-identical**: nothing on this head changes the door they were taken through,
+and their bytes match both the previous evidence commit
+`a9ac9b3650a42c6a2c049fe4950aeb57c8be063e` and the SHA-256 table in
+`capture-records.md`.
+
+**Why the chat pair was owed again.** The pair before it was shot on
+`39494751b81e9105b79a84be6759c8f9e49c5104`, where the chat host answered a start
+in words of its own. Two things changed after it: `agent_run`'s description now
+carries ONE reply rule and no polling mandate (`RUN_START_REPLY_RULE`,
+`packages/agents/src/run-status.ts:478`), and the pinned assistant skill
+`@cinatra-ai/chat-assistant-core-skill` was re-pinned to
+`ec584587d06dc33ca904dff91e6e369a4a847def`, whose `chat-run-polling.md` now opens
+*"Step 6.1 — After a start, the reply is the platform's message"*. **This pair is
+what the two carriers changed.** Every capture below was viewed before it was
+recorded.
 
 ## The runtime, said first
 
 The branch's own dev server (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
 on the round's own database with the branch's own extension tree (112/112 packages
-at their lock SHAs). **A real provider key and a real model**: the organization's
-own configured provider and model — `openai` / `gpt-5.5` — with all four turns
-below recorded as real streams in `usage_events` (19:51:01.030Z, 19:56:40.315Z,
-19:57:06.808Z, 20:01:26.826Z). No credential was placed on the capture machine;
-the key lives encrypted in the database this round inherited from the template it
-was cloned from.
+at their lock SHAs, the assistant skill among them at its re-pinned SHA). **A real
+provider key and a real model**: the organization's own configured provider and
+model — `openai` / `gpt-5.5`. The key was never written to disk on the capture
+machine and never printed: it was typed into the product's own `/setup/model`
+form out of the operator's secret manager, and the app sealed it itself.
+
+**Verified on the instance before the pictured turn**, because the whole point of
+this pair is which text the model was handed: the lock pins
+`@cinatra-ai/chat-assistant-core-skill` at
+`ec584587d06dc33ca904dff91e6e369a4a847def`, `sync-dev-extensions --pinned` reports
+`112/112` and re-pins `b1b51c8c5af3 → ec584587d06d`, the package on disk reads
+`ec584587d06d` at `git rev-parse`, and its `chat-run-polling.md` first line is
+`### Step 6.1 — After a start, the reply is the platform's message`.
 
 **The signed-in person is an ordinary member.** `member` in `public.member` for
 the one organization, **no** row in `cinatra.role_grant`, **no** row in
@@ -55,9 +73,16 @@ timestamps.
 
 ## The drawing this is graded against
 
-`specs/app-lifecycle-cards.html` at `fe2182547d4a`, **§I The conversation**,
-**§IX Where each card appears** and **§XI The relayed refusal**, rendered headless
-at 1440 wide and read as pixels.
+`specs/app-lifecycle-cards.html` at `458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f`,
+**§I The conversation**, **§IX Where each card appears** and **§XI The relayed
+refusal**, rendered headless at 1440 wide and read as pixels.
+
+**The drawing the chat pair is graded against did not move.** Against
+`fe2182547d4a` — the commit the standing captures were graded on — **§I and §IX
+are byte-identical** (each section's markup hashes equal across the two commits).
+What differs elsewhere on the page is a rename of *prompt window* to *chat box*
+in §II/§IV/§XI, §II's own expansion, and the masthead version `v0.5.0 → v0.6.0`.
+None of that touches a clause graded here.
 
 **§I** — the thread is the frame; two turn shapes: a person's turn right-aligned
 with name and initials above, a filled bubble that hugs its text and the quiet
@@ -83,8 +108,8 @@ nothing: no card moves, no gate resolves, no schedule is armed."
 
 | capture | requires | shows | verdict |
 |---|---|---|---|
-| `chat__assistant-started-the-agent__light.png` | §I turn shapes, the card in the content slot at full width, one primary input; the line is the platform's report sentence | every §I clause holds; the line is the **model's own prose** | **FAIL** — the line clause (D2-chat); §I composition PASS |
-| `chat__assistant-started-the-agent__dark.png` | the same, in the app's dark palette | the same composition and the same prose, re-toned | **FAIL** — the same line clause |
+| `chat__assistant-started-the-agent__light.png` | §I turn shapes, the card in the content slot at full width, one primary input; the line is the platform's report sentence, said back exactly, nothing added | every §I clause holds; the line is the platform's `message` **word for word**, and the card sits beneath it | **PASS** |
+| `chat__assistant-started-the-agent__dark.png` | the same, in the app's dark palette | the same composition and the same sentence, re-toned | **PASS** |
 | `site-widget__assistant-started-the-agent__light.png` | §IX same card, frame changed; §I shapes inside the frame; the platform's report sentence | the sentence word for word, then the same card | **PASS** |
 | `site-widget__assistant-started-the-agent__dark.png` | the same, in dark | the same, dark | **PASS** |
 | `site-widget__refused__may-not-start__light.png` | §XI's sentence exactly, **no card** for the refused start, no second run row | the sentence exactly; one card, the first run's; no row written | **PASS** |
@@ -99,39 +124,41 @@ asked; the person's turn right-aligned with name and initials above, a filled
 bubble that hugs its text, the quiet copy and edit marks beneath; the assistant's
 turn left-aligned with **no bubble**, the Cinatra mark and name; the card in that
 content slot at the column's **full width**; **exactly one primary input**. And
-the plan's words: the assistant's line **is the platform's report sentence** —
-never a JSON literal, never the model's own prose.
+the plan's words — the assistant "reports what came back and adds nothing": the
+line **is the platform's report sentence**, said back exactly, never a JSON
+literal and never the model's own prose.
 
-**Shows** — the thread bar; `Ops Operator Two` + `OO` over a right-aligned filled
-bubble holding `use @cinatra-ai/blog-draft-writer-agent to draft a short post
-about retrieval augmented generation` verbatim, copy and pencil beneath;
-`Cinatra` mark and name, no bubble; the run card — `Agentic Run Progress`, the
-`Awaiting input` pill, `Idea (optional)`, `Continue`, `No messages yet.` —
+**Shows** — the thread bar `Chat › use @cinatra-ai/blog-draft-writer-agent to
+draft a short ...`; `Ops Operator Two` + `OO` over a right-aligned filled bubble
+holding `use @cinatra-ai/blog-draft-writer-agent to draft a short post about
+retrieval augmented generation` verbatim, the quiet copy and pencil marks
+beneath; `Cinatra` mark and name, **no bubble**; then, on the thread ground and
+word for word:
+
+> Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `48bf61fc-23a3-4339-9df0-ca18087edb2d`, status: `queued`). The run started.
+
+and **beneath it** the run card — `Agentic Run Progress`, the `Awaiting input`
+pill, `Idea (optional)` over its own field, `Continue`, `No messages yet.` —
 filling the content slot at the column's full width; one composer at the foot
-(`Type a message...`). The assistant's line beneath the card reads, word for word:
+(`Type a message...`).
 
-> The blog draft run is paused for human input before it starts.
->
-> **Run ID:** `abdf8e63-d120-4bf5-ba29-eba2cb5047e4`
->
-> Please review the approval/input card in this conversation. Once you respond
-> there, I can check the run again and show the draft.
+That sentence is the platform's own. Read out of the stored turn's `agent_run`
+tool result, `message` is byte-identical to the text part the assistant wrote and
+to the line on screen (`RUN-READBACK.md`: equal sha256; the on-screen line is the
+same string with its backticks rendered as code spans). Nothing was added to it.
 
-That is the model's own prose. The platform's sentence for this start —
-`Dispatched \`@cinatra-ai/blog-draft-writer-agent\` (runId: \`abdf8e63-…\`, status:
-\`pending_input\`). The run paused for a decision on the recommended skills.` —
-appears nowhere on screen.
-
-**Verdict — FAIL on the line clause; PASS on every §I composition clause**
-(deviations D1, D4, D7). Sent 19:50:32.275Z · tool call settled 19:51:04.463Z ·
-card attached 19:51:04.466Z · run `abdf8e63-d120-4bf5-ba29-eba2cb5047e4`.
+**Verdict — PASS**, on every §I clause and on the plan's line rule (deviations
+D1, D6, D7, D8). Sent 01:51:51.084Z · tool call settled 01:52:09.866Z · card
+attached 01:52:15.735Z · run `48bf61fc-23a3-4339-9df0-ca18087edb2d`.
 
 ![chat, the assistant started the agent, dark](chat__assistant-started-the-agent__dark.png)
 
 **Requires** — the same regions and shapes in the app's dark palette.
-**Shows** — the same composition, dark ground, dark bubble, the card's panel and
-pill re-toned; the same prose; nothing added, nothing dropped.
-**Verdict — FAIL on the line clause; composition PASS** (D1, D4, D5, D7).
+**Shows** — the same composition on a dark ground: the dark bubble, the card's
+panel and `Awaiting input` pill re-toned, the theme control drawn as the moon;
+the same sentence, in the same place, above the same card; nothing added, nothing
+dropped. Measured identical to the light capture on every anchor.
+**Verdict — PASS** (D1, D5, D6, D7, D8).
 
 ### The third-party application
 
@@ -194,33 +221,36 @@ one id, the first run's — and **no row was written** for the refused start
 
 ## What these pictures found
 
-**The chat host still does not say the platform's sentence.** It is minted, it is
-on the wire, and the widget host says it back word for word — so the mint and the
-relay are proven by the widget captures on this same head, in the same minute.
-The chat turn's own record shows why: it called `agent_run`, then
-`skill_file_read`, then `agent_run_get`, and answered from the poll in words of
-its own. `agent_run`'s description carries **both** rules in one text — "`message`
-… is your reply: say it back exactly as it is written, add nothing to it" **and**
-"MUST be followed by `agent_run_get` polling until a terminal status" — and on a
-real model the polling rule wins the last word. The widget's own door carries the
-reply rule and no polling rule, and it lands every time.
+**Both hosts now say the platform's sentence.** The half of D2 that the standing
+set left open is closed, and this pair is the picture of it closing. On the
+previous head the chat turn ran `agent_run` → `skill_file_read` → `agent_run_get`
+and answered from the poll in words of its own. On this head the stored turn is
+`agent_run` → the card part → the text, and the text IS the platform's `message`:
 
-Reproduced twice, in two fresh threads, with two different paraphrases:
+| looked for in the stored turn | found |
+|---|---|
+| `agent_run` tool call and its result | present |
+| the card part (`dataParts`, `kind: agent_run`) | present, naming the run |
+| the assistant's text | the platform's `message`, byte-identical |
+| `skill_file_read` of the polling reference | **absent** |
+| `agent_run_get` | **absent** |
+| a sentence of the model's own about the run's progress | **absent** |
 
-| thread | run | the line the person read |
-|---|---|---|
-| 19:50:32Z | `abdf8e63-d120-4bf5-ba29-eba2cb5047e4` | "The blog draft run is paused for human input before it starts. … Please review the approval/input card in this conversation." |
-| 20:01:02Z | `79152ddd-c06e-4166-a9a2-70cd1d7289fb` | "The blog draft run is paused for approval/input before execution. … Please review the approval card in this conversation." |
+`RUN-READBACK.md` carries the parts, the tool result verbatim and the three-way
+string comparison. The two carriers that changed are both in the picture: the
+in-tree reply rule reached the model through `agent_run`'s description, and the
+re-pinned skill's `chat-run-polling.md` no longer orders a poll after a start —
+both verified on the instance before the turn was driven, not assumed.
 
-Checked before the finding was written: the installed head is
-`39494751b81e9105b79a84be6759c8f9e49c5104` (`git rev-parse`); `agent_run` on that
-tree returns `message` from `describeStartedRun`; and the same tree's widget door
-relays that same mint, which the widget captures show verbatim.
+**What the composition change is.** On the standing capture the card sat ABOVE
+the assistant's line; here the line comes first and the card sits beneath it,
+which is the order §I's own worked example draws. That was D4, and it closes with
+the line clause — the same turn shape produced both.
 
 ## Deviations
 
 **D1 — the anchors an earlier recipe named are not the anchors either host
-publishes**, unchanged on this head and measured 0 on all six captures.
+publishes**, unchanged on this head and measured 0 on both re-taken captures.
 `[data-run-card]` is published in exactly one component,
 `packages/chat/src/renderer/ag-ui-interactive.tsx:352` — the decoupled AG-UI
 renderer, which neither host mounted here. `[data-inline-agent-run-card]` is
@@ -229,25 +259,26 @@ published by **no component at all**: it appears only as a selector literal in
 `[data-agent-run-slot]` (`packages/chat/src/chat-messages-view.tsx:271`) wrapping
 `[data-inline-run-card]` (`packages/chat/src/inline-agent-run-card.tsx:345`).
 
-**D2 — the two hosts still do not answer alike.** The widget says the platform's
-sentence; chat says its own. The half of D2 the earlier set found — a JSON
-envelope read out to a person inside a third-party application — is **fixed** and
-these captures show it fixed. The other half moved rather than closed: the
-wording still differs between the two hosts, and it is chat that deviates now.
+**D2 — CLOSED.** The two hosts now answer alike: each says the platform's own
+sentence back, word for word. The earlier half (a JSON envelope read out to a
+person inside a third-party application) was closed by the standing widget
+captures; the remaining half — chat answering in its own words — is closed by the
+pair above.
 
-**D3 — the relayed refusal is now plain words**, and this is the deviation the
-earlier set found being closed: `You can't start this agent. Nothing was started.`
-carries no template id, no machine reason and no scope level.
+**D3 — the relayed refusal is plain words**, and this is the deviation an earlier
+set found being closed: `You can't start this agent. Nothing was started.`
+carries no template id, no machine reason and no scope level. Unchanged on this
+head; the refusal captures stand.
 
-**D4 — in the chat turn the card sits ABOVE the assistant's line**, where §I's own
-worked example draws the prose first and the card beneath. The widget host draws
-it in §I's order. §I fixes the slot and the width, not the order — named rather
-than passed over.
+**D4 — CLOSED for the chat host.** The card no longer sits above the assistant's
+line: the line is drawn first and the card beneath it, which is §I's own order.
+Both hosts now draw it that way.
 
-**D5 — the drawing has one palette.** Rendered at the pinned commit with the dark
-colour scheme, §I and §IX each produce a **byte-identical** PNG to their light
-render (equal sha256, re-measured for this set), so the dark captures are graded
-against structure, not against colours the page does not draw.
+**D5 — the drawing has one palette.** Re-measured for this pair at
+`458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f`: rendered with the dark colour scheme,
+§I and §IX each produce a **byte-identical** PNG to their light render (equal
+sha256), so the dark capture is graded against structure, not against colours the
+page does not draw.
 
 **D6 — §IX's matrices do not enumerate the agent-run card** (they cover Review,
 Verification, Recommendation, Schedule proposal). Its interior is therefore graded
@@ -256,10 +287,21 @@ against §I's slot rule and §IX's constancy rule, not against a drawn interior.
 **D7 — the run card's own field is not drawn subordinate to the chat box.** §I
 takes the weight off a card's field by removing the enclosing box, the raised
 ground and the send affordance. The setup gate inside this card keeps an enclosing
-box and a filled primary `Continue`, so on both hosts a conversation carrying this
-card shows two places that read as somewhere to type. The chat box is still the
-one *conversation* input (measured: one composer on every capture); the weighting
-rule is what is not applied.
+box and a filled primary `Continue`, so a conversation carrying this card shows
+two places that read as somewhere to type. The chat box is still the one
+*conversation* input (measured: one composer on each capture); the weighting rule
+is what is not applied. Unchanged by this re-shoot.
+
+**D8 — NEW, and it is a deviation of the capture, not of the product: the dev
+server's own indicator is in the frame.** Both re-taken captures carry the
+Next.js dev-tools badge — the small dark circle at the bottom-right corner. It is
+injected by the dev server (`devIndicators: { position: "bottom-right" }`,
+`next.config.ts:148`, unchanged between this head and the head the standing
+captures were taken on) and it is not product chrome. The four standing captures
+do not carry it, so the set is not uniform in this one respect. It covers no
+region §I fixes and no clause graded above; it was left in rather than removed,
+because removing it would mean either editing the head under proof or retouching
+a picture. Named rather than hidden.
 
 ## How to re-take these
 

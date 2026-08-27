@@ -1,30 +1,34 @@
 # cinatra#2935 (lifecycle-b W5d) — capture records
 
 The measurements behind `README.md`. Head under proof
-`39494751b81e9105b79a84be6759c8f9e49c5104`; captures taken 2026-08-26.
+`a8e81c9b6ffa26e9199ba9252124ac745417ae4b`; the **chat pair re-taken 2026-08-27**,
+the four third-party-application captures **unchanged from 2026-08-26** and
+byte-identical to the previous evidence commit
+`a9ac9b3650a42c6a2c049fe4950aeb57c8be063e`.
 
 ## The files
 
 | file | sha256 | pixels |
 |---|---|---|
-| `chat__assistant-started-the-agent__light.png` | `61882d076767e8e181534995000059b1feb5edcf9064c39bc1a12abc5121952f` | 2880x1800 |
-| `chat__assistant-started-the-agent__dark.png` | `4e5e4ca834d1e99cd51b867425a151a206f85ffc4e5a4892220b3e749fadf277` | 2880x1800 |
+| `chat__assistant-started-the-agent__light.png` | `69ad9c4843230d01da76270c1572857f356e4cb63646c51d47b4d4262a19d3cd` | 2880x1800 |
+| `chat__assistant-started-the-agent__dark.png` | `820d6038facfdb54ce4ff64cce0395a3483f1efcda87ac4918e5a48d0439ebd9` | 2880x1800 |
 | `site-widget__assistant-started-the-agent__light.png` | `c6f58880edf0f59f6f14d6595daf92074e0296b3c877775e68283e84cc6d112f` | 2880x1800 |
 | `site-widget__assistant-started-the-agent__dark.png` | `3cebc29c045ecb4519c27083e8875f7a8b23dd62f2d5449922863077d41a3050` | 2880x1800 |
 | `site-widget__refused__may-not-start__light.png` | `8129ec4f0a60f384c93c06480c240f9f9e3056d45f459b5622e4c7c1f62872a9` | 2880x1800 |
 | `site-widget__refused__may-not-start__dark.png` | `28a1ab24a570b8a29bd7acbae1d47b3965753d6f6c3a42c37101730fa926a071` | 2880x1800 |
 
 1440x900 CSS at device scale 2. The same bytes were viewed before this record was
-written and hash-compared between the capture machine and the machine that
-committed them.
+written. The four unchanged rows are the same bytes as at
+`a9ac9b3650a42c6a2c049fe4950aeb57c8be063e`, checked three ways: the file hashes
+above, the git blob ids at both commits, and `git status` reporting only the two
+chat files modified.
 
 ## The runs
 
 | leg | run id | template | started by | status at answer | status in the row | created |
 |---|---|---|---|---|---|---|
-| chat (pictured) | `abdf8e63-d120-4bf5-ba29-eba2cb5047e4` | `@cinatra-ai/blog-draft-writer-agent` | the ordinary member | `pending_input` | `pending_approval` | 19:50:53.232Z |
+| chat (pictured, re-taken 2026-08-27) | `48bf61fc-23a3-4339-9df0-ca18087edb2d` | `@cinatra-ai/blog-draft-writer-agent` | the ordinary member | `queued` | `pending_approval` | 01:52:07.896Z |
 | widget (pictured) | `80fc7252-31c3-4688-ab82-1709cfa05cbd` | `@cinatra-ai/blog-draft-writer-agent` | the ordinary member | `queued` | `pending_approval` | 19:56:37.917Z |
-| chat (the repeat, not pictured) | `79152ddd-c06e-4166-a9a2-70cd1d7289fb` | `@cinatra-ai/blog-draft-writer-agent` | the ordinary member | `pending_input` | `pending_approval` | 20:01:17.595Z |
 | the refused start | **no row** | `@cinatra-ai/lint-policy-agent` | — | — | — | — |
 
 Every row carries `human_present = true` and the person's own organization. The
@@ -39,17 +43,16 @@ template> and created_at > <the round's start>` → **0**.
 
 | leg | sent | tool call settled | card attached |
 |---|---|---|---|
-| chat, pictured | 19:50:32.275Z | 19:51:04.463Z | 19:51:04.466Z |
+| chat, pictured (re-taken) | 01:51:51.084Z | 01:52:09.866Z | 01:52:15.735Z |
 | widget, the start | 19:56:23.188Z | 19:56:41.254Z | 19:56:41.263Z |
 | widget, the refused start | 19:56:51.910Z | 19:57:07.962Z | — (none drawn) |
-| chat, the repeat | 20:01:02.264Z | 20:01:26.428Z | 20:01:26.430Z |
 
 ## The anchors, per capture
 
 | capture | `[data-agent-run-slot]` | `[data-inline-run-card]` | `[data-run-card]` | `[data-inline-agent-run-card]` | composers |
 |---|---|---|---|---|---|
-| chat, light | 1 (`abdf8e63…`) | 1 (`abdf8e63…`) | 0 | 0 | 1 |
-| chat, dark | 1 (`abdf8e63…`) | 1 (`abdf8e63…`) | 0 | 0 | 1 |
+| chat, light | 1 (`48bf61fc…`) | 1 (`48bf61fc…`) | 0 | 0 | 1 |
+| chat, dark | 1 (`48bf61fc…`) | 1 (`48bf61fc…`) | 0 | 0 | 1 |
 | widget start, light | 1 (`80fc7252…`) | 1 (`80fc7252…`) | 0 | 0 | 1 |
 | widget start, dark | 1 (`80fc7252…`) | 1 (`80fc7252…`) | 0 | 0 | 1 |
 | widget refusal, light | 1 (`80fc7252…`) | 1 (`80fc7252…`) | 0 | 0 | 1 |
@@ -97,3 +100,30 @@ wide, light and dark:
 | §IX (first slice) | `e9fd6d14fdfdb33c9f511a92102bb61bb5e126bcd8647ad479b9315ffd4981a5` | `e9fd6d14fdfdb33c9f511a92102bb61bb5e126bcd8647ad479b9315ffd4981a5` |
 
 Equal, which is deviation D5: the page draws one palette.
+
+## The chat pair's own readback (2026-08-27)
+
+The stored turn behind the two re-taken captures is in `RUN-READBACK.md`: the
+parts in order (`agent_run` → the card part → the text), the `agent_run` tool
+result verbatim, and the three-way string comparison showing the platform's
+`message`, the stored text part and the line on screen are the same sentence.
+`skill_file_read`, `agent_run_get` and `agent_run_messages_list` are all absent
+from every turn of that thread.
+
+Pre-turn verification on the instance, before anything was driven:
+
+| check | reading |
+|---|---|
+| the lock's pin for `@cinatra-ai/chat-assistant-core-skill` | `ec584587d06dc33ca904dff91e6e369a4a847def` |
+| `sync-dev-extensions.mjs --pinned` | `112/112`, re-pinning `b1b51c8c5af3 → ec584587d06d` |
+| the package on disk (`git rev-parse`) | `ec584587d06dc33ca904dff91e6e369a4a847def` |
+| its `references/chat-run-polling.md`, first line | `### Step 6.1 — After a start, the reply is the platform's message` |
+| `agent_run`'s description | ends on `RUN_START_REPLY_RULE`; no polling mandate |
+
+The pictured run, read out of `cinatra.agent_runs`: `human_present = true`,
+`run_by` the ordinary member's own user id, the organization the templates are
+anchored to, `status` `pending_approval` in the row against `queued` in the
+answer — the status moved after the sentence was written, which is exactly what
+the report sentence's event tense ("The run started.") protects against.
+**One run row exists for this round in total**, and one `usage_events` row at
+01:52:10.394Z: the turn was a real model stream, not a fixture.
