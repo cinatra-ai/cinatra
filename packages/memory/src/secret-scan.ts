@@ -135,8 +135,9 @@ const WORD_SPLIT_RE = /[-_.]+/;
  *     shape and nothing in the string separates them, so this gate resolves the
  *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
  *     a false positive: the objects handler's envelope scan excludes
- *     `externalId`, `bundleId` and `cinatraAgentRunId` BY NAME as
- *     server-controlled identity fields (this local scan excludes nothing). A
+ *     `externalId`, `bundleId` and `cinatraAgentRunId` BY NAME — each is
+ *     either server-set or shape-constrained to something with no room for a
+ *     credential (this local scan excludes nothing). A
  *     digest an author writes into a body IS flagged, and the refusal names
  *     the shape and the location so they can act.
  *   - A token shorter than 24 characters is not entropy-scored at all. Short

@@ -382,6 +382,56 @@ describe("the negotiated protocol version rides every following request", () => 
   });
 });
 
+describe("the initialized notification's status", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("recovers when notifications/initialized answers 404 for a dead session", async () => {
+    // A 404 under a session id is the session-expiry signal, not a rejection:
+    // the one-shot re-initialize must reach it from this request too
+    // (round-4 item 1).
+    let handshakes = 0;
+    const calls = stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        handshakes += 1;
+        return {
+          sessionId: `s-${handshakes}`,
+          body: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }),
+        };
+      }
+      if (body.id === undefined) {
+        // The first session is already forgotten; the second is healthy.
+        return handshakes === 1 ? { status: 404, body: "{}" } : null;
+      }
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await expect(transport.callTool("objects_list", {})).resolves.toEqual({ items: [] });
+    expect(handshakes).toBe(2);
+    const toolCalls = calls.filter((c) => c.body.method === "tools/call");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.headers["mcp-session-id"]).toBe("s-2");
+  });
+
+  it("refuses a 2xx on notifications/initialized that is not 202", async () => {
+    // Streamable HTTP names 202 for an accepted notification; a 200 is a
+    // server this client should not assume it negotiated with.
+    const calls = stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        return { sessionId: "s-1", body: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }) };
+      }
+      if (body.id === undefined) return { status: 200, body: "" };
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(
+      /HTTP 200 on notifications\/initialized/,
+    );
+    expect(calls.some((c) => c.body.method === "tools/call")).toBe(false);
+  });
+});
+
 describe("an empty session header is not a session", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

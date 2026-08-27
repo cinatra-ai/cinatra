@@ -912,8 +912,9 @@ const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
  *     shape and nothing in the string separates them, so this gate resolves the
  *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
  *     a false positive: `externalId`, `bundleId` and `cinatraAgentRunId` are
- *     excluded from the scan BY NAME as server-controlled identity fields
- *     (see MEMORY_SCAN_EXCLUDED_KEYS).
+ *     excluded from the scan BY NAME — each is either server-set or
+ *     shape-constrained to something with no room for a credential (see
+ *     MEMORY_SCAN_EXCLUDED_KEYS for the per-key reasons).
  *   - A token shorter than 24 characters is not entropy-scored at all. Short
  *     credentials are covered by the prefix list, not by this branch.
  *   - Standard base64 (`+` and `/`) is not a charset class here: the token

@@ -378,8 +378,19 @@ export function createHttpMemorySyncTransport(
       });
       // A rejected `initialized` notification means the handshake did NOT
       // complete on the server's side; proceeding to tools/call anyway would
-      // run the session against a server that refused it.
-      if (initialized.status >= 400) {
+      // run the session against a server that refused it. TWO carve-outs from
+      // "refuse": a 404 under a session id is the session-expiry signal, not a
+      // rejection — the same rule `rpc` applies one request later — so it
+      // throws the recoverable error and the caller's one-shot re-initialize
+      // handles it (round-4 item 1). And the only success is 202, the status
+      // Streamable HTTP names for an accepted notification: a 2xx that is not
+      // 202 is a server this client should not assume it negotiated with.
+      if (initialized.status === 404 && sessionId !== undefined) {
+        throw new SessionExpiredError(
+          "notifications/initialized answered 404 for the current session",
+        );
+      }
+      if (initialized.status !== 202) {
         throw new MemorySyncError(
           `MCP endpoint ${safeUrl} answered HTTP ${initialized.status} on notifications/initialized; the handshake was not accepted`,
         );
