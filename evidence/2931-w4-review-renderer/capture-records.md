@@ -1,10 +1,12 @@
 # capture records — cinatra#2931 (W4)
 
-Head under proof: **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7**,
-re-taken on this head; **`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3**,
-**W5** and **W9**, and **`1c3649503d511942538c626d4ebc964e50e1302c`** for **W0**
-and **W1**, whose files are carried over **byte-identical** (their sha256 values
-below are unchanged from those commits, recomputed from the files in the tree).
+Head under proof: **`73c201854cecfe50c8036a32b5f7489111acb99c`** for **W9**,
+re-taken on this head; **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7**,
+**`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3** and **W5**, and
+**`1c3649503d511942538c626d4ebc964e50e1302c`** for **W0** and **W1**, whose files
+are carried over **byte-identical** (their sha256 values below are unchanged from
+those commits, recomputed from the files in the tree, and their git blob ids are
+identical to `4f908562ef443d0af9681edccfa7862d04b2023a`).
 Runtime: Next.js dev on `http://localhost:3000`; the agent runtime container on
 `:3010`; a plain static server on a second origin for the third-party page of W7.
 Provider: **real** — `CINATRA_TEST_LLM_PROVIDER` unset. The provider key lives in
@@ -86,6 +88,107 @@ artifact_review_gates
 **The pending gate was re-read after the decided run's Approve** and was still
 `pending`, `disposition` null: neither re-taken cell is staged from a state the
 other changed.
+
+## The run, gate and decision behind W9, on this head
+
+Every row below is a `SELECT` readback. Nothing here was inserted, updated or
+deleted by hand; the run was driven, and the gate decided, entirely by presses in a
+browser.
+
+```
+agent_runs
+  id            0770c32a-e1dc-4edb-884a-744dad88fdac   (decided — W9 light and dark)
+  status        completed
+  human_present t
+  created_at    2026-08-27 04:25:36.291574+00
+  completed_at  2026-08-27 04:45:07.703+00
+
+artifact_review_gates
+  id             f6f5c67e-8974-4fb0-a461-5c82efc6b3ca
+  run_id         0770c32a-e1dc-4edb-884a-744dad88fdac
+  status         resolved
+  disposition    approve
+  resolved_by    2660f48b-6a11-423a-afdd-a148139bf86d   (the signed-in reviewer)
+  resolved_at    2026-08-27 04:49:08.649939+00
+  created_at     2026-08-27 04:45:27.913822+00
+  reopen_count   0
+  review_task_id lifecycle-review:582f16f568fb991f2a4088a04ba589f8662b57ffb7c9f46fde4f2f6d5a7bb9f3
+  pinned_targets [{"artifactId":"7d24b246-acc4-46be-9cdc-a20689cf2ce5",
+                   "representationRevisionId":"a31b40a9-ca65-4994-9040-20dd83f8d859"}]
+
+artifact_review_audit
+  id                          ef880fa0-7796-4497-93c9-37671bdaecd2
+  gate_id                     f6f5c67e-8974-4fb0-a461-5c82efc6b3ca
+  run_id                      0770c32a-e1dc-4edb-884a-744dad88fdac
+  artifact_id                 7d24b246-acc4-46be-9cdc-a20689cf2ce5
+  representation_revision_id  a31b40a9-ca65-4994-9040-20dd83f8d859
+  disposition                 approve
+  renderer_kind               first-party
+  renderer_package            (null)
+  renderer_digest             (null)
+  created_at                  2026-08-27 04:49:08.649939+00
+```
+
+`Approve` was pressed in the browser at `04:49:07.753`, over a rationale typed into
+the card's own field. The audit row and the gate's `resolved_at` carry the same
+stamp, `04:49:08.649939+00`. This gate is minted **20.2 s after its run had already
+terminated** (`04:45:07.703` → `04:45:27.913`) — named in the README, not fixed
+here.
+
+**The pinned revision is the one the audit row records.** The gate froze
+`a31b40a9-ca65-4994-9040-20dd83f8d859`; the island printed that same id in the
+pending reading at `04:49:06` and in the decided reading at both shutters; the
+audit row the decision wrote carries it too.
+
+### The reviewed work behind W9
+
+```
+artifact_materializations
+  id                          4b696d42-e9b1-4500-ac29-8ff40c776c23
+  artifact_id                 7d24b246-acc4-46be-9cdc-a20689cf2ce5
+  representation_revision_id  a31b40a9-ca65-4994-9040-20dd83f8d859
+  phase                       finalized
+  created_at                  2026-08-27 04:45:06.670042+00
+
+artifact_blobs (local-disk)
+  id            d2d8d0b4-ee6a-4e12-897e-2190317352fd
+  sha256        fdf86ba84303bdb72d39250584e320eafa6ac10f96bc2acb110eb22c25b28610
+  size_bytes    6 493
+  mime_detected text/markdown
+  created_at    2026-08-27 04:45:07.063515+00
+```
+
+Read from the stored bytes themselves: the file's first byte is `#`, it begins
+`## Why a settled decision drifts back open`, and it contains **zero** occurrences
+of `"content":` — prose, not a JSON envelope. The island drew 12 874 characters of
+it as 35 paragraphs under 10 headings, in both readings.
+
+### The usage ledger for the W9 run — the real model
+
+`CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 04:25:45.737+00 llm    openai   gpt-5.5             stream    chat                     22 882   114
+2026-08-27 04:45:05.617+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38 733 1 746
+2026-08-27 04:45:16.665+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 968   100
+2026-08-27 04:45:21.474+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 994   159
+2026-08-27 04:45:25.978+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 010    73
+2026-08-27 04:45:29.918+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 059    92
+2026-08-27 04:45:33.616+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 100    77
+2026-08-27 04:45:38.271+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 075   110
+2026-08-27 04:45:41.651+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 051   106
+2026-08-27 04:45:45.051+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 088   125
+2026-08-27 04:45:48.619+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 027    96
+2026-08-27 04:45:52.010+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 079   104
+```
+
+**One failed run, disclosed.** `bc634422-3be9-4327-aa78-778b2c98fc9a` is `failed`
+in `agent_runs` — a first attempt at this run, whose dispatch had no agent runtime
+to reach (`[wayflow] dispatch failed … TypeError: fetch failed`) because the
+runtime container had stopped with the dev server it is bound to. The runtime was
+restarted (`/.health` → `200`) before the pictured run was driven. No picture shows
+it.
 
 ## The run and gate behind W7, on this head
 
@@ -272,12 +375,12 @@ cookie jar at capture time (name/attributes only; no value is recorded anywhere)
 ## The captures
 
 Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The two rows
-marked **re-take** were shot on `f20bb3ff6372fe3d6882f490a9289512a21a95f1` and are
+marked **re-take** were shot on `73c201854cecfe50c8036a32b5f7489111acb99c` and are
 the only two files this commit replaces; the other ten are the files already in
 the tree, **unchanged byte for byte** — each sha256 below was recomputed from the
 file in the tree and matches the value recorded when that file was taken, and each
 of those ten git blob ids is identical to the one at
-`f20bb3ff6372fe3d6882f490a9289512a21a95f1`.
+`4f908562ef443d0af9681edccfa7862d04b2023a`.
 
 | file | sha256 | bytes |
 |---|---|---|
@@ -289,10 +392,10 @@ of those ten git blob ids is identical to the one at
 | `captures/W3__review-card__run_page__pending__dark.png` | `367476221003d54c165475ff16ef619bbca4b601ccef73fefe98fbe326b678a5` | 291 093 |
 | `captures/W5__review-card__review_page__pending__light.png` | `d5298628add1b5b98b87e03737c2cf0a4a06a1232f78e36d9c136cfba704fd61` | 416 388 |
 | `captures/W5__review-card__review_page__pending__dark.png` | `31a6f05b3bc5f514398f76f42abbe73bf1bd16f6c437b3aff3bfe17fdb9d7141` | 412 720 |
-| **re-take** `captures/W7__review-card__site_widget__pending__light.png` | `361a1bc3e6a94dc578e4db2db8883c49e82467f8a9a170271ad4cf0fb8d18034` | 213 057 |
-| **re-take** `captures/W7__review-card__site_widget__pending__dark.png` | `92783e14c6afffe3e5314bdb09b6d6dc2310f00026babef3d08f452b0ce4090e` | 210 785 |
-| `captures/W9__review-card__review_page__decided__light.png` | `5834500d99d75d676206a71a218097395374f51047c69b21dd225e9b651ca0b3` | 153 325 |
-| `captures/W9__review-card__review_page__decided__dark.png` | `c64ae2b26d29c62195a26ed52f07a22c9debdc6732a5ff7d05970c47cfd0ce6f` | 152 520 |
+| `captures/W7__review-card__site_widget__pending__light.png` | `361a1bc3e6a94dc578e4db2db8883c49e82467f8a9a170271ad4cf0fb8d18034` | 213 057 |
+| `captures/W7__review-card__site_widget__pending__dark.png` | `92783e14c6afffe3e5314bdb09b6d6dc2310f00026babef3d08f452b0ce4090e` | 210 785 |
+| **re-take** `captures/W9__review-card__review_page__decided__light.png` | `53fec984fbc29521ac468618e0da202d1288701d9fbd21d7044cb7008969a9a8` | 382 458 |
+| **re-take** `captures/W9__review-card__review_page__decided__dark.png` | `f73e708168a7a536ac546b5fe74ecbf3df8843d73f4418c26251c5ae59278b74` | 378 255 |
 
 ## The shutters, and what was true at each
 
@@ -316,10 +419,6 @@ W5 light  00:40:08   path=/agents/…/88634469-…/review/lifecycle-review%3A79a
                      cards=1 islands=1 iframes=1 approve/reject/comment=1/1/1
                      island rendered=true rawsource=true  floor=0 preview=0 download=0
 W5 dark   00:40:22   the same readings, theme=dark
-W9 light  00:54:32   path=/agents/…/ef14a5dd-…/review/lifecycle-review%3A77e016c0…
-                     rail="1 | Schedule | 2 | Review"  settled-rail-rows=0
-                     cards=1 approve=0 reject=0 comment=0 resolved=true
-W9 dark   00:54:44   the same readings, theme=dark
 
 --- standing, unchanged (their own commits) ---
 W0 light  16:49:33.505  slot=working ph=1 cards=0 approve=0            after: true
@@ -339,8 +438,26 @@ W7 dark   02:32:29   the same readings, theme=dark
                      chip outline rgb(37,47,63) on ground rgb(13,24,42)   contrast 24
                      meta ink rgb(144,161,185)   Approve fill rgb(226,232,240)
 
-Approve was pressed on the decided run at 00:54:23.451; the gate row settled at
-00:54:24.54582 and both W9 frames were taken after that.
+--- re-taken on 73c201854cec, 2026-08-27 (UTC) ---
+W9 pending  04:49:06   the REFERENCE reading, before any press, same gate, same session
+                       island reading=pending targets=1 rev=a31b40a9-ca65-4994-9040-20dd83f8d859
+                       draft 12 874 chars / 35 p / 10 headings   looksJson=false
+                       approve/reject/comment=1/1/1  rationale=1  awaitingPill=true
+W9 light    04:49:19   path=/agents/…/0770c32a-…/review/lifecycle-review%3A582f16f5…
+                       rail column="1 | Schedule | 2 | Review"  settled-rail-rows=0
+                       island reading=decided targets=1 scheme=light island-controls=0
+                       rev=a31b40a9-ca65-4994-9040-20dd83f8d859  (identical to pending)
+                       draft 12 874 chars / 35 p / 10 headings   looksJson=false
+                       cards=1 islands=1 approve=0 reject=0 comment=0 rationale=0
+                       textareas-in-card=0  buttons-in-card=[Expand]
+                       awaitingPill=false  promptWindow=false
+                       decision line "Approved by Ops Operator Two"
+W9 dark     04:49:34   the same readings, theme=dark, island scheme=dark
+
+Approve was pressed on the decided run at 04:49:07.753; the gate row settled at
+04:49:08.649939 and both W9 frames were taken after that. The previous round's W9
+frames (`5834500d…` light, `c64ae2b2…` dark, from run `ef14a5dd-…`) are superseded
+by this pair and are replaced in place.
 ```
 
 ## The rail, read live on this head
@@ -367,9 +484,17 @@ trigger   /agents/…/ef14a5dd-…/trigger    (the setup rail of cinatra#2970/#2
                          indicator text EMPTY  → the completed circle in place of
                          the numeral, the title unhighlighted
 
-review    /agents/…/ef14a5dd-…/review/…   (the decided gate — W9's route)
-    [data-review-run-steps]                →  "2 | Review"
-    [data-run-surface-rail-settled="true"] →  0 elements
+review    /agents/…/0770c32a-…/review/…   (the decided gate — W9's route, this head)
+    [data-review-run-steps]                →  "2 | Review"     (the stepper alone)
+    its rail COLUMN                        →  "1 | Schedule | 2 | Review"
+    row  "1 Schedule"   button  action=open-schedule-step
+    row  "2 Review"     button  action=open-review-step   colour rgb(21,33,58) weight 500
+    [data-run-surface-rail-settled]        →  0 elements
+    [data-rail-kind] / [data-rail-status]  →  0 elements
+    the entry KEEPS ITS PLACE and stays selected; nothing on it records HOW the
+    gate was settled. The previous round read the stepper alone and recorded
+    "no longer lists Schedule" — that reading was short by one sibling and is
+    corrected here.
 ```
 
 ## The island's address and colour, read live on this head (W3's route)

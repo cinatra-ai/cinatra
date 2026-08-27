@@ -4,31 +4,31 @@ Every picture in this directory was taken on a live dev instance, against **real
 agent runs on the real provider** — `CINATRA_TEST_LLM_PROVIDER` unset, no stub, no
 scripted provider, no seeded row.
 
-**W7 is re-taken on `f20bb3ff6372fe3d6882f490a9289512a21a95f1`**, the head that
-completes the island's dark palette. The previous W7 dark frame carried one named
-defect — the target chip's **pill outline was not drawn** inside a third-party
-application in dark — and this head's newest commit is its fix. The new pair comes
-from **one fresh real run** started on this head and left **pending** at its
-review.
+**W9 is re-taken on `73c201854cecfe50c8036a32b5f7489111acb99c`**, the head whose
+newest commit makes the decided reading keep the reviewed target. The previous W9
+pair carried a named deviation — *the reviewed target is not kept beside the
+decision* — and that deviation is exactly what this head's commit fixes. The new
+pair comes from **one fresh real run**, brought to its review and then **Approved
+for real in the browser**, over a rationale typed into the card's own field.
 
-**The other five cells stand byte-identical.** W3, W5 and W9 were re-taken on
-`d0db4293d72b4554bf1c4b00fc7d5363c82375b3` for the merged setup rail; W0 and W1
-have stood since `1c3649503d511942538c626d4ebc964e50e1302c`. Checked three ways
-before anything was written: `git status` reports exactly the two W7 files
-modified, the git blob ids of the other ten are identical to
-`f20bb3ff6372fe3d6882f490a9289512a21a95f1`, and their `sha256` values recomputed
-from the files on disk equal the values already recorded in
-[`capture-records.md`](capture-records.md).
+**The other five cells stand byte-identical.** W7 was re-taken on
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1`; W3 and W5 on
+`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`; W0 and W1 have stood since
+`1c3649503d511942538c626d4ebc964e50e1302c`. Checked three ways before anything was
+written: `git status` reports exactly the two W9 files modified, the git blob ids
+of the other ten are identical to `4f908562ef443d0af9681edccfa7862d04b2023a`, and
+their `sha256` values recomputed from the files on disk equal the values already
+recorded in [`capture-records.md`](capture-records.md).
 
-**Carrying the first-party cells forward is measured, not assumed.** The fix
-re-declares nine alias tokens inside `.dark`, and each line is textually the
-`:root` declaration it completes — so on a document root, where both blocks match
-the same element, nothing moves. That is checked against the surface rather than
-argued: the target chip's outline on the **first-party run page in dark** measures
-`rgb(37,47,63)` on this head, the **identical** value recorded for that same
-reading before the fix. The one host whose reading changes is the one whose palette
-class sits below its document root, which is the third-party application — W7, and
-only W7.
+**What changed on the screen, and what did not.** The decided card is now the
+pending card with the decision taken out of it and the decision itself put in its
+place. Held against its own pending reading — taken from the **same gate**, three
+minutes earlier, in the same browser session: the target panel, its type chip, its
+pinned revision and the draft drawn as prose are **the same**; the `Awaiting your
+decision` pill, the `DECISION RATIONALE` field, `Comment` / `Reject` / `Approve`
+and the composer are **gone**; and a line naming who decided stands where the floor
+was. The pinned revision reads `a31b40a9-ca65-4994-9040-20dd83f8d859` in **both**
+readings — the frozen revision the decision was taken on, never a later one.
 
 ## The pin, checked before a single picture was taken
 
@@ -60,22 +60,34 @@ resource ace23d46-7efb-472a-91ac-37ea9fa41626   text/markdown   5 734 bytes
 
 **No JSON envelope appears in any target in this set.**
 
-## The two runs behind the re-taken cells
+## The run behind W9, on this head
 
-The re-taken cells are not staged from one another. **One run is left pending**
-and carries both pending readings; **a second run is decided** and carries the
-decided one. Both were started by **one** turn typed into the chat, both carry
-`human_present = t`, and every gate either one paused on was answered by a press
-in the browser.
+**W9's pair is its own run**, started on
+`73c201854cecfe50c8036a32b5f7489111acb99c`, brought to its review and **decided in
+the browser**. It claims nothing from the runs behind the other five cells, and
+they claim nothing from it.
 
 | | run | gate | what it carries |
 |---|---|---|---|
-| **pending** | `88634469-a0d1-47be-94a4-473cbb25bf75` | `534ca557-f45e-4ff0-9d7a-468cb0e1ef27` — still `pending` as this is written | **W3**, **W5** |
-| **decided** | `ef14a5dd-1d1a-4a1f-8762-d55b55e985c0` | `f079f282-7bf8-4105-ba01-db115dc89326` — `resolved` / `approve` | **W9** |
+| **decided** | `0770c32a-e1dc-4edb-884a-744dad88fdac` — `completed`, `human_present = t` | `f6f5c67e-8974-4fb0-a461-5c82efc6b3ca` — `resolved` / `approve`, `reopen_count 0` | **W9** light and dark |
 
-The pending run's gate was **still `pending` after the second run's Approve was
-pressed** — re-read from the row afterwards — so no cell in this pair was staged
-from a state the other changed.
+Both W9 frames were taken against **this one resolved gate**, and the row was read
+back as `resolved` / `approve` before either shutter. The reviewed work is
+`text/markdown`, 6 493 bytes, and its first byte is `#`: prose, with **zero**
+occurrences of `"content":` — no JSON envelope reached the target. The draft was
+written by the pinned agent on the real provider (`openai` /
+`gpt-5.5-2026-04-23`, 38 733 input / 1 746 output tokens, `agent_label =
+blog-draft-writer-agent`).
+
+## The runs behind the cells carried forward
+
+Each cell carried forward keeps the run it was taken against, recorded in the
+commit its files came from: `88634469-a0d1-47be-94a4-473cbb25bf75` with gate
+`534ca557-f45e-4ff0-9d7a-468cb0e1ef27` (**W3**, **W5**),
+`4dfd78f9-4d4e-43a5-8d9e-9f334908efd3` with gate
+`fb69f4b6-c086-4e51-abdb-8531776a8005` (**W7**), and
+`579d0473-4b5d-40b9-9d79-8126560bbf06` (**W0**, **W1**). Nothing in this commit
+re-reads or re-claims them; their sections below are left as they were written.
 
 ## The run behind W7, on this head
 
@@ -128,10 +140,12 @@ it would stand in that record as a third reading. It does not.
 **What this head changes** is that the slot *holds* the placeholder across the
 minting window instead of flipping to a completion notice.
 
-## The two re-taken runs, measured
+## The two review-page runs, measured
 
 Every timestamp below is either a row read back from the instance database or a
-line the driver wrote as it pressed a control. Nothing is estimated.
+line the driver wrote as it pressed a control. Nothing is estimated. The first run
+is the one W3 and W5 were taken against and is carried forward unchanged; the
+second is this commit's own, and is the run W9 is re-taken from.
 
 ### The pending run — `88634469-a0d1-47be-94a4-473cbb25bf75` (W3, W5)
 
@@ -150,27 +164,28 @@ line the driver wrote as it pressed a control. Nothing is estimated.
 | `00:36:33` / `00:36:47` | **W3** light / dark | shutter |
 | `00:40:08` / `00:40:22` | **W5** light / dark | shutter |
 
-### The decided run — `ef14a5dd-1d1a-4a1f-8762-d55b55e985c0` (W9)
+### The decided run — `0770c32a-e1dc-4edb-884a-744dad88fdac` (W9, this head)
 
 | when (UTC) | what | source |
 |---|---|---|
-| `00:39:39.530` | the ONE turn is typed into the conversation | driver |
-| `00:39:59.017` | the run row is created | row |
-| `00:40:04.757` · `00:40:05.855` | the run's own setup field is filled and `Continue` pressed | driver |
-| `00:44:42.736` · `00:44:44.938` | the schedule step is answered — **Run right after setup**, then `Continue` | driver |
-| `00:51:05.783` | the context gate is answered — `Continue` | driver |
-| `00:51:45.805` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 717 in / 1 701 out | ledger row |
-| `00:51:47.253` | the blob is written — 5 734 bytes, `text/markdown` | row |
-| `00:51:47.911` | representation revision **1** is written | row |
-| `00:51:48.217` | **the run terminates** | row |
-| `00:51:51.254` | the review gate is minted — **3.0 s after the run had already ended** | row |
-| `00:54:23.451` | **Approve** is pressed in the browser, over a typed rationale | driver |
-| `00:54:24.546` | the audit row is written and the gate reaches `resolved` | row |
-| `00:54:32` / `00:54:44` | **W9** light / dark | shutter |
+| `04:25:13.869` | the ONE turn is typed into the conversation | driver |
+| `04:25:36.291` | the run row is created | row |
+| `04:26:01.077` · `04:26:02.178` | the run's own setup field is filled and `Continue` pressed, in the chat card | driver |
+| `04:34:47.604` · `04:34:49.745` | the run page's schedule step is answered — **Run right after setup**, then `Continue` | driver |
+| `04:44:31.378` | the run's context gate is answered — `Continue`, no eligible context for `draftContext` | driver |
+| `04:45:05.617` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 733 in / 1 746 out | ledger row |
+| `04:45:06.670` | the materialization is finalized — representation revision `a31b40a9-ca6…` | row |
+| `04:45:07.063` | the blob is written — 6 493 bytes, `text/markdown` | row |
+| `04:45:07.703` | **the run terminates** | row |
+| `04:45:27.913` | the review gate is minted — **20.2 s after the run had already ended** | row |
+| `04:49:06.575` | the **pending** reading is measured, in the same session, as the reference the decided one is held against | driver |
+| `04:49:07.753` | **Approve** is pressed in the browser, over a rationale typed into the card's own field | driver |
+| `04:49:08.649` | the audit row is written and the gate reaches `resolved` | row |
+| `04:49:19.537` / `04:49:34.403` | **W9** light / dark | shutter |
 
 **The named limit stays, and is not fixed here.** The gate is still minted after
-the run terminates — 16.5 s and 3.0 s on these two runs. The minting order is
-upstream of this slice.
+the run terminates — 16.5 s on the pending run and 20.2 s on this one. The minting
+order is upstream of this slice.
 
 **One failed run is disclosed rather than dropped.** A first attempt at the
 pending run, `49e4f31b-f87c-4b35-a2a9-36858614fbf2`, is `failed` in
@@ -180,6 +195,15 @@ agent runtime container had been stopped by this instance's own `dev:stop` befor
 the run was armed, so the dispatch had nothing to reach. The runtime was restarted
 (`/.health` → `agents: 29, failed: 0`) and the two runs above were driven after
 that. Nothing about that failed run appears in any picture.
+
+**This round's own failed run is disclosed too.**
+`bc634422-3be9-4327-aa78-778b2c98fc9a` is `failed` in `agent_runs` — a first
+attempt at the decided run, with the same environmental cause read from the app's
+own log: `[wayflow] dispatch failed for run bc634422… : TypeError: fetch failed`.
+The agent runtime container had stopped when the dev server it is bound to was
+signalled, so the dispatch had nothing to reach. The runtime was restarted
+(`/.health` → `200`, `agents: 29, failed: 0`) and the pictured run was driven after
+that. No picture in this commit shows it.
 
 ## How the pictures were taken
 
@@ -503,6 +527,95 @@ automatic replacement is **not** claimed for the widget; what this cell proves i
 that the card renders, cross-site, in the host's own colour scheme, with no login
 prompt.
 
+### W9 — the review page, decided
+
+`captures/W9__review-card__review_page__decided__light.png` ·
+`captures/W9__review-card__review_page__decided__dark.png`
+
+**Re-taken on `73c201854cecfe50c8036a32b5f7489111acb99c`**, against this commit's
+own run, decided in the browser. Route:
+`/agents/cinatra-ai/blog-draft-writer-agent/0770c32a-…/review/lifecycle-review%3A582f16f5…`
+— asserted from `location.pathname` at each shutter, in both themes.
+
+**The plan says** — *"One card, one gate."*
+
+**§I requires** — *"A resolved gate stays on the rail as read-only history — its
+entry keeps its place and records how it was settled"*, and *"A resolved gate opens
+read-only: what was decided, and the reviewed target(s), kept for the run's audit
+trail."*
+
+**Shows** — the settled reading of the same card, drawn in this order: the gate
+header `Review requested` **without** the `Awaiting your decision` pill; the **same
+target panel** the pending reading drew — the title *Writing Down Decisions So They
+Aren't Argued Twice*, the `Blog Post Artifact` chip, and the pinned revision line
+`@cinatra-ai/blog-post-artifact:post · revision a31b40a9-ca6… · pinned ·
+Ownership: organization · Visibility: organization · text/markdown · updated
+2026-08-27T04:45:21.715Z` — with the draft drawn **as prose by its own renderer**
+inside the island (`RENDERED` beside `RAW SOURCE`, the raw pane opening `## Why a
+settled decision drifts back open`), and `Expand`; then the decision line
+**`Approved by Ops Operator Two`** over *"The gate is resolved and the run has been
+released to continue."*
+
+**Held against its own pending reading.** Both columns were counted in the live DOM
+in the same browser session, three minutes apart, on the same gate — the left at
+`04:49:06`, before `Approve`, the right at each shutter after it.
+
+| reading | pending, `04:49:06` | decided, at the shutter |
+|---|---|---|
+| island present | `1` | **`1`** |
+| island `data-review-reading` | `pending` | **`decided`** |
+| island `data-target-count` | `1` | **`1`** |
+| pinned revision, full, from the panel's own `title` | `a31b40a9-ca65-4994-9040-20dd83f8d859` | **`a31b40a9-ca65-4994-9040-20dd83f8d859`** |
+| the draft, drawn by its renderer | 12 874 chars · 35 `<p>` · 10 headings | **12 874 chars · 35 `<p>` · 10 headings** |
+| a JSON envelope anywhere in the target | none | **none** |
+| `Awaiting your decision` pill | present | **absent** |
+| `Approve` / `Reject` / `Comment` | `1` / `1` / `1` | **`0` / `0` / `0`** |
+| rationale field (`DECISION RATIONALE`) | `1` | **`0`** |
+| `<textarea>` anywhere in the card | `1` | **`0`** |
+| controls anywhere inside the island | `0` | **`0`** |
+| buttons left in the card | `Expand`, `Comment`, `Reject`, `Approve` | **`Expand`** |
+| the prompt window at the foot | present | **absent** |
+| decision line | — | **`Approved by Ops Operator Two`** |
+
+**The revision drawn is the frozen one, three ways.** The gate's `pinned_targets`
+holds `representationRevisionId a31b40a9-ca65-4994-9040-20dd83f8d859`; the island
+printed that same id in **both** readings; and the audit row the decision itself
+wrote records `representation_revision_id a31b40a9-ca65-4994-9040-20dd83f8d859`
+with `renderer_kind first-party`. What was approved is what was shown.
+
+**The island follows the host's scheme.** `data-island-color-scheme` reads `light`
+at the light shutter and `dark` at the dark one, and the target panel, its chip and
+both panes paint the dark palette in the dark frame.
+
+**Deviation, named — this route's rail records no settlement.** §I asks a resolved
+gate's entry to *"keep its place and record how it was settled."* Half of that
+clause holds here and half does not, and both halves are read from the rail's own
+anchors on this page **after** the decision: the rail column reads `1 Schedule` ·
+`2 Review`, so the Review entry **keeps its place** and stays selected — but
+`[data-run-surface-rail-settled]` matches **0** elements, and no row carries a
+settled state or a disposition. That is the route's own stepper
+(`review-run-steps.tsx`), which derives only `completed` / `active` / `disabled`
+from the active step index and has **no settled reading at all**. It is untouched
+by this head's commit and is not fixed here. The `/trigger` route's rail does carry
+`settled="true"`, and the run page's rail records `status=resolved`.
+
+**A correction to the previous round's record.** That round named a second
+deviation for this cell — *"the rail … no longer lists Schedule"*. It does list it:
+that reading was taken from the stepper element alone
+(`[data-review-run-steps]` → `2 | Review`), while the schedule entry is a sibling
+drawn beside it in the same rail column. Read from the column on this head, after
+the decision: `1 Schedule` (`data-action="open-schedule-step"`) above `2 Review`
+(`data-action="open-review-step"`). **That deviation is withdrawn**; the
+settled-state one stands.
+
+**Verdict: PASS — the decided reading keeps the reviewed target read-only under a
+gate header with no awaiting pill, drawn by the target's own renderer from the same
+frozen revision the decision was taken on, with nothing left to press and no
+rationale field. The previous round's deviation — the reviewed target not kept
+beside the decision — is resolved, and its second deviation is withdrawn as
+mis-measured. One deviation stands, named: this route's rail records no
+settlement.**
+
 ## The grading table
 
 | Cell | Host | Light | Dark | Verdict |
@@ -512,18 +625,21 @@ prompt.
 | **W3** review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder, the two-column frame, the merged gate entry and the gate opened in place; the rail reads `Step 1 / Review` and not the setup rail's three rows, the paused step is not highlighted (measured: same ink, weight and ground as the passed step), the work step is named by position, no prompt window (**4 deviations, named**) |
 | **W5** review card | the review page, pending | ✔ | ✔ | **PASS** — the same run surface with the review step selected, never a standalone document, rendered beside raw source; the box under the review is today's decision box rather than the drawing's prompt window (**cinatra#2995**), rail treatment, prompt copy (**3 deviations, named**) |
 | **W7** review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and in dark the island renders dark with the chip's **pill outline drawn**: `rgb(37,47,63)` on ground `rgb(13,24,42)`, the same reading as the first-party run page in dark, against `rgb(14,25,44)` (the ground) in the superseded frame; the meta line's `text-muted-foreground` measures `rgb(144,161,185)` on both hosts (**the previous round's 1 deviation is resolved; 0 open**) |
-| **W9** decided | the review page, decided | ✔ | ✔ | **PASS** on the plan's words — one card, one gate, floor closed, `renderer_kind = first-party` in the row; the reviewed target is not kept beside the decision, and this route's rail records no settled state while `/trigger` (`settled="true"`, empty indicator) and the run page (`status=resolved`, `ReviewAPPROVE`) both do (**2 deviations, named**) |
+| **W9** decided | the review page, decided | ✔ | ✔ | **PASS** — the reviewed target is **kept read-only** under the gate header (no awaiting pill), drawn by its own renderer from the **same** frozen revision `a31b40a9-ca6…` the pending reading pinned, then the decision line `Approved by Ops Operator Two`; `0`/`0`/`0` Approve/Reject/Comment, `0` rationale fields, `0` `<textarea>`, `0` controls inside the island, `renderer_kind = first-party` in the audit row (**the previous round's “target not kept” deviation is resolved and its “rail no longer lists Schedule” one is withdrawn as mis-measured — the column reads `1 Schedule · 2 Review`; 1 deviation stands: this route's rail records no settled state**) |
 
 ## What this round does NOT claim
 
 1. **That the gate is minted before the run terminates.** It is not — 16.5 s and
-   3.0 s after, on the two runs measured here. Stated, not fixed here.
+   20.2 s after, on the two runs measured here. Stated, not fixed here.
 2. **That the setup rail of cinatra#2970 appears on the run page.** It does not;
    it is the `/trigger` route's rail. W3 names where each rail is drawn and what
    each one reads, from live anchors.
-3. **That the resolved gate reads as history on every route.** It does not — the
-   review page's own rail has no settled reading. W9 names the two routes that do
-   and the one that does not.
+3. **That the resolved gate reads as history *on the rail* on every route.** It
+   does not — the review page's own stepper has no settled reading at all, so its
+   Review entry keeps its place but records nothing about how the gate was
+   settled. W9 names the routes that do and the one that does not. The *other*
+   half of that clause — a resolved gate opening read-only with the reviewed
+   target kept — is what this commit adds, and W9 does claim it.
 4. **The automatic swap on the widget host.** The run panel withholds it there by
    design; W7 claims the render and the absence of a login prompt, nothing more.
 5. **That the box under the review is the drawing's prompt window.** It is not —
