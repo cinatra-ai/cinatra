@@ -24,6 +24,7 @@ import {
 } from "./concept.ts";
 import { exclusiveWriteMemoryFile } from "./fs-safe.ts";
 import { generateMemoryIndexMarkdown } from "./index-file.ts";
+import { parseMemorySyncBinding } from "./sync-binding.ts";
 import {
   DEFAULT_MEMORY_CAPS,
   MemoryError,
@@ -165,9 +166,17 @@ export function loadMemoryBundleConfig(root: string): MemoryBundleConfig {
     );
   }
   const name = typeof doc["name"] === "string" ? doc["name"] : undefined;
+  // Strict on purpose: the block that decides WHERE a sync run writes is not
+  // read tolerantly. A malformed or forged `sync:` block fails the load rather
+  // than degrading to a default the author never asked for.
+  const sync = parseMemorySyncBinding(
+    doc,
+    `invalid ${MEMORY_BUNDLE_CONFIG_FILENAME}`,
+  );
   return {
     bundleId,
     ...(name === undefined ? {} : { name }),
+    ...(sync === undefined ? {} : { sync }),
     caps: {
       maxConceptFileBytes: readCap(
         doc,
