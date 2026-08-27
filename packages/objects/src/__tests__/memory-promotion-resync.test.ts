@@ -40,7 +40,7 @@ vi.mock("../graphiti-client", () => ({
   deleteEpisode: vi.fn(async () => ({ ok: true })),
   searchNodes: vi.fn(async () => ({ nodes: [] })),
   getEpisodes: vi.fn(async () => ({ episodes: [] })),
-  identityHashToUuid: (h: string, _g: string) => `uuid-${h}`,
+  identityHashToUuid: (h: string) => `uuid-${h}`,
 }));
 
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
