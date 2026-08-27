@@ -21,7 +21,11 @@ import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conver
 // This panel's pause screen is the drawing; the card is its identity root,
 // so the same screen the run page has always shown is now a lifecycle card
 // with a kind, a host and a state a capture can read.
-import { AgentHitlScreenCard } from "./agent-hitl-screen-card";
+import {
+  AgentHitlScreenCard,
+  HITL_FIELDS_REGION_CLASS,
+  hitlFieldPresentationFor,
+} from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -1728,8 +1732,14 @@ export function AgenticRunPanel({
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
           {hitlRendererEntry?.entry || hitlPresentationHint ? (
             <div
-              className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4"
+              className={HITL_FIELDS_REGION_CLASS[hitlFieldPresentationFor("run_card")]}
               data-conformance-id="hitl-screen-fields"
+              // §I: the run page has no chat box for a field to be subordinate
+              // to, so this screen's field IS the primary input and keeps the
+              // treatment it already has. Declared through the card's own map
+              // rather than restated here, so the two surfaces cannot hold a
+              // different opinion about the same host.
+              data-field-presentation={hitlFieldPresentationFor("run_card")}
             >
               {(() => {
                 // Presentation-first branch. When the gate embedded a

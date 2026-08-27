@@ -166,6 +166,77 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   page_gate_region: "flex w-full min-w-0 flex-col gap-3",
 };
 
+/**
+ * §I INPUT HIERARCHY — WHICH TREATMENT THE CARD'S FIELDS TAKE, PER HOST.
+ *
+ * The ratified drawing at the contract's pin, §I, under "The rule, wherever a
+ * card meets a chat box", verbatim:
+ *
+ *   "Exactly one primary input is drawn per conversation, and it is the chat
+ *    box. Any field a card carries is drawn subordinate to it. Where there is
+ *    no chat box to be subordinate to — the run page and the review page — the
+ *    card's field is the only input there is and takes the primary treatment
+ *    instead. The hierarchy is between the two inputs, not a fixed look for
+ *    either one."
+ *
+ * A TOTAL MAP, so a host cannot be added to the epic without deciding which
+ * side of that rule it is on. The two conversation hosts have a chat box below
+ * them; the run page and the review page do not.
+ */
+const FIELD_PRESENTATION: Record<LifecycleCardHost, HitlFieldPresentation> = {
+  chat_thread: "subordinate",
+  site_widget: "subordinate",
+  run_card: "primary",
+  page_gate_region: "primary",
+};
+
+export type HitlFieldPresentation = "subordinate" | "primary";
+
+/**
+ * THE ONE PLACE THE TREATMENT IS APPLIED — the card's FIELDS REGION, which is
+ * the single element every field renderer this card can mount is drawn inside.
+ *
+ * WHY HERE AND NOT PER RENDERER. The card mounts whatever the gate's renderer
+ * resolves to: a host-internal kind, a manifest binding onto a host kind, an
+ * extension binding loading a component this repository has never read, the
+ * grouped-setup form that resolves its own children, or the generic dispatch
+ * renderer a presentation hint short-circuits to. A rule that each of those had
+ * to opt into would reach the ones that were edited and silently miss the rest,
+ * and could not reach an extension component at all. A scope on the REGION
+ * reaches every one of them by containment, so a renderer that has never heard
+ * of §I is still drawn subordinate inside a conversation.
+ *
+ * WHAT IT CANNOT REACH, stated rather than implied: anything a renderer draws
+ * OUTSIDE this subtree — a popover or dialog portalled to `document.body`, or a
+ * field inside a nested browsing context or a shadow root. Nothing shipped in
+ * this repository draws a HITL field that way; an extension could, and that
+ * would be its own work.
+ *
+ * The subordinate rules themselves live in the app stylesheet beside the other
+ * cross-package card chrome (`src/app/globals.css`,
+ * `.lifecycle-fields-subordinate`) — the same place `soft-panel` is defined,
+ * which this region has always used.
+ */
+export const HITL_FIELDS_REGION_CLASS: Record<HitlFieldPresentation, string> = {
+  // PRIMARY — byte-for-byte what the run page and the review page draw today.
+  // §I asks for the primary treatment there and they already carry it, so
+  // nothing moves: the region keeps its own box, its ground and its inset.
+  primary: "soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4",
+  // SUBORDINATE — the region gives up the box and the fill (the class carries
+  // the same give-ups down to every field inside it), and the card's own frame
+  // around it is unchanged: §I takes the weight off the FIELD, not off the card.
+  subordinate: "lifecycle-fields-subordinate flex w-full min-w-0 flex-col gap-4",
+};
+
+/**
+ * The §I treatment this host's fields take. Exported so the run panel's own
+ * host-supplied screen declares the SAME answer for the host it draws on rather
+ * than a second opinion about it.
+ */
+export function hitlFieldPresentationFor(host: LifecycleCardHost): HitlFieldPresentation {
+  return FIELD_PRESENTATION[host];
+}
+
 /** One shared empty buffer, so "nothing typed yet" is one identity rather than
  *  a fresh object every render. */
 const EMPTY_BUFFER: Record<string, unknown> = Object.freeze({});
@@ -442,6 +513,7 @@ function gateRendererIsSessionFree(runId: string, gate: AgentHitlScreenGate): bo
 
 export function AgentHitlScreenFields({
   runId,
+  host,
   gate,
   buffered,
   onBuffer,
@@ -451,6 +523,10 @@ export function AgentHitlScreenFields({
   rendererContext,
 }: {
   runId: string;
+  /** THE HOST THIS REGION IS DRAWN ON — §I's hierarchy is a fact about the
+   *  surface, not about the field, so the card hands its host to the field it
+   *  mounts and the region decides the treatment once, for every renderer. */
+  host: LifecycleCardHost;
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   onBuffer: (next: Record<string, unknown>) => void;
@@ -489,10 +565,16 @@ export function AgentHitlScreenFields({
   void _xr;
   const Renderer = entry?.renderer ?? null;
 
+  const presentation = hitlFieldPresentationFor(host);
+
   return (
     <div
-      className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4"
+      className={HITL_FIELDS_REGION_CLASS[presentation]}
       data-conformance-id="hitl-screen-fields"
+      // §I, READABLE OFF THE DOM. A capture is graded on what the picture shows,
+      // so the region says which side of the hierarchy it is on rather than
+      // leaving a reader to infer it from a class list.
+      data-field-presentation={presentation}
     >
       {withholdRenderer === true ? (
         // WITHHELD, not broken: the region is the anchor a capture is graded
@@ -768,7 +850,9 @@ export function AgentHitlScreenCard({
 
   const body = useMemo<ReactNode>(() => {
     if (hostSuppliesScreen) return screen;
-    if (!gate) return null;
+    // No declared host, no fields region: the treatment §I asks for is a fact
+    // about the surface, and there is no surface to read it off.
+    if (host === null || !gate) return null;
     // THE CONTINUE IS DRAWN WHERE THE PANEL DRAWS IT: on a mid-run gate that is
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
@@ -783,6 +867,7 @@ export function AgentHitlScreenCard({
       <>
         <AgentHitlScreenFields
           runId={runId}
+          host={host}
           gate={gate}
           buffered={activeBuffered}
           onBuffer={onBuffer}
@@ -807,6 +892,7 @@ export function AgentHitlScreenCard({
     screen,
     gate,
     runId,
+    host,
     activeBuffered,
     onBuffer,
     submit,
