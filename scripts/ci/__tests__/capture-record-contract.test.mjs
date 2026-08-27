@@ -9,19 +9,28 @@
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
+  CANONICAL_CAPTURE_STATES,
+  CAPTURE_HOSTS,
+  CAPTURE_INDEX_PATH,
+  CARD_KINDS,
+  KIND_CAPTURE_STATES,
   RECORDER_ID,
   URL_CLASSES,
   bindEvidenceCells,
+  captureStatesFor,
   parseCellName,
   requiredAssertionsFor,
   validateCaptureIndex,
   validateCaptureRecord,
 } from "../lib/capture-record-contract.mjs";
+
+/** The tree the committed index's screenshots are resolved against. */
+const REPO_ROOT = join(dirname(CAPTURE_INDEX_PATH), "..", "..");
 
 let repoRoot;
 const IMAGE_A = "evidence/fixture/C1__review-card__chat_thread__pending.png";
@@ -399,5 +408,186 @@ describe("bindEvidenceCells", () => {
     expect(codes(bindEvidenceCells(cited, result))).toEqual([
       "evidence/invalid-record",
     ]);
+  });
+});
+
+describe("the advisory state — one kind's vocabulary, not every kind's", () => {
+  // §VII's audit card resolves `advisory` and nothing else that DRAWS:
+  // "TWO STATES DRAW, AND ONLY TWO … `advisory` — the reading — or `absent`,
+  // which draws NO DOM AT ALL" (packages/agents/src/verification-summary-card.tsx).
+  // Two advisory records of it already stand in the committed index, on
+  // `run_card` and on `page_gate_region`; the third was driven on `chat_thread`
+  // and refused by the audit tier's state list rather than by the screen
+  // (evidence/2791-s9g-conformance/capture-results.json).
+  function advisoryAudit(over = {}) {
+    return {
+      cell: "G7__audit-card__chat_thread__advisory",
+      recorder: RECORDER_ID,
+      declaredHost: "chat_thread",
+      declaredKind: "verification_summary",
+      declaredState: "advisory",
+      finalUrl: "http://localhost:3000/chat/1f0c",
+      screenshot: IMAGE_A,
+      sha256: hashA,
+      assertions: [
+        { selector: "[data-conversation-list]", scope: "frame", count: 1 },
+        {
+          selector: '[data-lifecycle-card-host="chat_thread"]',
+          scope: "frame",
+          count: 1,
+        },
+        {
+          selector: '[data-lifecycle-card="verification_summary"]',
+          scope: "frame",
+          count: 1,
+        },
+      ],
+      ...over,
+    };
+  }
+
+  it("reads `advisory` off the name the driven capture already carried", () => {
+    expect(parseCellName("G7__audit-card__chat_thread__advisory.png")).toMatchObject({
+      host: "chat_thread",
+      kind: "verification_summary",
+      state: "advisory",
+    });
+  });
+
+  it("ACCEPTS the audit card's advisory record on chat_thread", () => {
+    expect(validateCaptureRecord(advisoryAudit(), { repoRoot })).toEqual([]);
+  });
+
+  it("REFUSES `advisory` on a kind that never resolves it", () => {
+    const v = validateCaptureRecord(
+      honestChatPending({
+        cell: "X1__review-card__chat_thread__advisory",
+        declaredState: "advisory",
+      }),
+      { repoRoot },
+    );
+    expect(codes(v)).toContain("record/state-not-in-kind-vocabulary");
+  });
+
+  it("is EXACT per kind: the audit card resolves advisory and nothing else", () => {
+    // Not "the two, plus advisory". A `pending` audit card would be a reading
+    // asking for a decision it has no floor to take, and a `decided` one a
+    // verdict the resolver never issues; the card draws neither.
+    expect(captureStatesFor("verification_summary")).toEqual(["advisory"]);
+    for (const kind of [
+      "artifact_review_gate",
+      "recommendation_hold",
+      "trigger_schedule_proposal",
+      "agent_hitl_screen",
+    ]) {
+      expect(captureStatesFor(kind)).toEqual(CANONICAL_CAPTURE_STATES);
+    }
+  });
+
+  it("names EVERY card kind, so a new one cannot inherit a vocabulary silently", () => {
+    expect(Object.keys(KIND_CAPTURE_STATES).sort()).toEqual(Object.keys(CARD_KINDS).sort());
+  });
+
+  it("REFUSES the audit card declaring a state its card never draws", () => {
+    for (const state of ["pending", "decided"]) {
+      const v = validateCaptureRecord(advisoryAudit({ declaredState: state }), { repoRoot });
+      expect(codes(v)).toContain("record/state-not-in-kind-vocabulary");
+    }
+  });
+
+  it("REFUSES an empty declaration rather than reading it as no claim", () => {
+    // `""` is not nullish, so it survived `?? claim.state` and then skipped
+    // every truthiness-guarded arm — a blank field that switched off the checks
+    // the claim owes.
+    expect(
+      codes(
+        validateCaptureRecord(
+          honestChatPending({
+            cell: "X2__review-card__run_card__advisory",
+            declaredHost: "run_card",
+            declaredState: "",
+            finalUrl:
+              "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5",
+            assertions: [
+              {
+                selector: '[data-lifecycle-card-host="run_card"]',
+                scope: "frame",
+                count: 1,
+              },
+              {
+                selector: '[data-lifecycle-card="artifact_review_gate"]',
+                scope: "frame",
+                count: 1,
+              },
+            ],
+          }),
+          { repoRoot },
+        ),
+      ),
+    ).toContain("record/empty-declaration");
+    expect(
+      codes(validateCaptureRecord(advisoryAudit({ declaredKind: "" }), { repoRoot })),
+    ).toContain("record/empty-declaration");
+  });
+
+  it("adds NO ANCHOR — the advisory set is the one both ratified sets are built from", () => {
+    // This is what lets the vocabulary widen without the anchor digest moving:
+    // every selector an advisory capture owes is already a ratified input under
+    // this kind's `pending` and `decided` entries.
+    const key = (r) => `${r.scope}::${r.selector}`;
+    for (const host of CAPTURE_HOSTS) {
+      const kind = "verification_summary";
+      const advisory = requiredAssertionsFor({ host, kind, state: "advisory" });
+      const pending = requiredAssertionsFor({ host, kind, state: "pending" });
+      const decided = requiredAssertionsFor({ host, kind, state: "decided" });
+      expect(advisory.forbidden).toEqual([]);
+      for (const r of advisory.required) {
+        expect(pending.required.map(key)).toContain(key(r));
+        expect(decided.required.map(key)).toContain(key(r));
+      }
+    }
+  });
+
+  it("the committed index still validates, record for record", () => {
+    const index = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
+    const { byCell, violations } = validateCaptureIndex(index, { repoRoot: REPO_ROOT });
+    expect(violations).toEqual([]);
+    expect(byCell.size).toBe(index.records.length);
+  });
+
+  it("RATCHET: the committed index's kind × host × state census", () => {
+    // The census, not merely the count: a vocabulary that started admitting
+    // something new would move a cell from one bucket to another without
+    // changing the total, and this is where that shows.
+    const index = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
+    const census = {};
+    for (const r of index.records) {
+      const k = `${r.declaredKind} | ${r.declaredHost} | ${r.declaredState}`;
+      census[k] = (census[k] ?? 0) + 1;
+    }
+    expect(census).toEqual({
+      "agent_hitl_screen | chat_thread | decided": 4,
+      "agent_hitl_screen | chat_thread | pending": 4,
+      "agent_hitl_screen | run_card | pending": 4,
+      "artifact_review_gate | chat_thread | decided": 3,
+      "artifact_review_gate | chat_thread | pending": 10,
+      "artifact_review_gate | page_gate_region | decided": 4,
+      "artifact_review_gate | page_gate_region | pending": 5,
+      "artifact_review_gate | run_card | pending": 4,
+      "artifact_review_gate | site_widget | pending": 5,
+      "recommendation_hold | chat_thread | decided": 4,
+      "recommendation_hold | chat_thread | pending": 5,
+      "recommendation_hold | page_gate_region | decided": 4,
+      "recommendation_hold | run_card | decided": 8,
+      "recommendation_hold | run_card | pending": 10,
+      "recommendation_hold | site_widget | decided": 2,
+      "recommendation_hold | site_widget | pending": 5,
+      "trigger_schedule_proposal | chat_thread | decided": 4,
+      "trigger_schedule_proposal | chat_thread | pending": 4,
+      "trigger_schedule_proposal | run_card | decided": 2,
+      "verification_summary | page_gate_region | advisory": 1,
+      "verification_summary | run_card | advisory": 1,
+    });
+    expect(index.records.length).toBe(93);
   });
 });
