@@ -10,11 +10,15 @@
 // the recommendation hold's core serves its two entries. One core, two doors —
 // so a surface cannot be answered a different truth by the door it came in.
 //
-// THE TRUTH IS THE RUN'S OWN ROW. W2a registered the kind; W3's carriage record
-// states its canonical carriage is `run_state`. So this reader asks the row —
-// `lifecycleMoment === "hitl"` with the card kind the moment maps to — and never
-// pattern-matches the shape of a pause. A run that is paused for some OTHER
-// reason states a different moment and answers `none` here.
+// THE CARRIAGE IS THE RUN'S OWN ROW. W2a registered the kind; W3's carriage
+// record states its canonical carriage is `run_state`, so the reference this
+// reader hands back is the row's own. It is read through `runStatesHitlMoment`,
+// the ONE helper that compares the recorded moment and card kind against the
+// kind's exported constants, and that comparison is never re-spelled here or on
+// any screen — a second module deciding what a moment means is how two answers
+// drift apart. What the recorded moment is NOT is the condition for drawing:
+// that is the run panel's own derived gate, for the reason set out at the
+// reader below.
 //
 // THE GATE ITSELF IS NOT RE-DERIVED. `deriveRunHitlContext` is the SINGLE
 // existing derivation the run page's own poll surfaces already use (the REST
