@@ -1,0 +1,81 @@
+{
+  "slice": "2930-w3-hitl-card",
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "cells": [
+    {
+      "cell": "HC-light__chat_thread__hitl-screen-asking",
+      "declaredHost": "chat_thread",
+      "context": "light",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__light.png",
+      "requires": "the pause screen drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region with the field the step asks for; the control that answers it; and the inline run panel standing down beside it.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 7000
+    },
+    {
+      "cell": "HC-dark__chat_thread__hitl-screen-asking",
+      "declaredHost": "chat_thread",
+      "context": "dark",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__dark.png",
+      "requires": "the pause screen drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region with the field the step asks for; the control that answers it; and the inline run panel standing down beside it.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 7000
+    },
+    {
+      "cell": "HR-light__run_card__hitl-screen-asking",
+      "declaredHost": "run_card",
+      "context": "light",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__light.png",
+      "requires": "the same pause screen on the run page for the same run at the same moment, inside the card's root declaring host run_card \u2014 the screen the run page has always drawn, now with an identity.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 7000
+    },
+    {
+      "cell": "HR-dark__run_card__hitl-screen-asking",
+      "declaredHost": "run_card",
+      "context": "dark",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__dark.png",
+      "requires": "the same pause screen on the run page for the same run at the same moment, inside the card's root declaring host run_card \u2014 the screen the run page has always drawn, now with an identity.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 7000
+    }
+  ]
+}

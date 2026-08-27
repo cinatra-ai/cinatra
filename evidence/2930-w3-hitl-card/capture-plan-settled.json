@@ -1,0 +1,53 @@
+{
+  "slice": "2930-w3-hitl-card",
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "cells": [
+    {
+      "cell": "HCS-light__chat_thread__hitl-screen-none",
+      "declaredHost": "chat_thread",
+      "context": "light",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-settled__chat_thread__light.png",
+      "requires": "the SAME conversation after the question was answered in the card: the card settled and gone (the kind's  state is NO DOM at all), the transcript otherwise unchanged, and the run moved on in the database.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-conversation-list]"
+      ],
+      "settleMs": 9000,
+      "declaredState": "none"
+    },
+    {
+      "cell": "HCS-dark__chat_thread__hitl-screen-none",
+      "declaredHost": "chat_thread",
+      "context": "dark",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-settled__chat_thread__dark.png",
+      "requires": "the SAME conversation after the question was answered in the card: the card settled and gone (the kind's  state is NO DOM at all), the transcript otherwise unchanged, and the run moved on in the database.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-conversation-list]"
+      ],
+      "settleMs": 9000,
+      "declaredState": "none"
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "slice": "2930-w3-hitl-card",
+  "note": [
+    "THE PLAN THE SHIPPED RECORDER REFUSED, kept as the record of the refusal (cinatra#2930, PR #3014).",
+    "",
+    "This is the branch's own walk format for scripts/audit/lib/chat-hitl-capture-driver.mjs --walk.",
+    "It was driven at the parked run and REFUSED, in the two places the vocabulary is closed:",
+    "  cell \"...\": kind \"agent_hitl_screen\" is not one of artifact_review_gate/recommendation_hold/",
+    "    trigger_schedule_proposal/verification_summary",
+    "  cell \"...\": state \"asking\" is not one of pending/decided",
+    "and, with kind and state omitted from the cells:",
+    "  record \"...\": a chat_thread record must declare the lifecycle `declaredKind` it photographed",
+    "    (one of artifact_review_gate/recommendation_hold/trigger_schedule_proposal/verification_summary)",
+    "    -- it declares \"undefined\"",
+    "",
+    "scripts/ci/lib/capture-record-contract.mjs:161 CARD_KINDS carries four kinds and no",
+    "`agent_hitl_screen`; chat-hitl-capture-recorder.mjs:232 derives LIFECYCLE_KINDS from it, :247 fixes",
+    "CAPTURE_STATES to pending/decided, :1063 makes a declared kind mandatory for a chat_thread record",
+    "and :1470-:1474 refuse a plan naming either outside those lists. This slice draws a fifth kind and",
+    "a third state and edits neither file. NOTHING WAS CHANGED to get past it: the canonical index is",
+    "untouched, and the pictures were taken by drivers/07-capture-cells.mjs, which writes the same",
+    "record shape beside them. README.md carries the finding.",
+    "",
+    "  export WALK_BASE=http://127.0.0.1:<port>",
+    "  export WALK_COOKIE=<the lane session>   WALK_COOKIE_DOMAIN=127.0.0.1",
+    "  export WALK_THREAD_URL=/chat/<vendor>/<assistant>/<threadId>",
+    "  export WALK_RUN_URL=/agents/<vendor>/<slug>/<runId>",
+    "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2930-w3-hitl-card/capture-walk.json \\",
+    "    --out evidence/2930-w3-hitl-card/capture-records.json    # exits non-zero, by design, on this head"
+  ],
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "steps": [
+    {
+      "id": "hc-light",
+      "context": "light",
+      "why": "The conversation the run was started from, while the run is parked at the question.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 6000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-light__chat_thread__hitl-screen-asking",
+          "declaredHost": "chat_thread",
+          "theme": "light",
+          "framing": "window",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__light.png",
+          "requires": "the pause screen as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state, the fields region the step asks for, and the control that answers it \u2014 with the inline run panel standing down beside it."
+        }
+      ]
+    },
+    {
+      "id": "hc-dark",
+      "context": "dark",
+      "why": "The same conversation, dark.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 6000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HC-dark__chat_thread__hitl-screen-asking",
+          "declaredHost": "chat_thread",
+          "theme": "dark",
+          "framing": "window",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HC__chat_thread__dark.png",
+          "requires": "the same card in the same place, dark."
+        }
+      ]
+    },
+    {
+      "id": "hr-light",
+      "context": "light",
+      "why": "The run page for the same run at the same moment: the panel's own block, wrapped as the card.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 6000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-light__run_card__hitl-screen-asking",
+          "declaredHost": "run_card",
+          "theme": "light",
+          "framing": "window",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__light.png",
+          "requires": "the same pause screen on the run page, inside the card's root declaring host run_card \u2014 the screen the run page has always drawn, now with an identity."
+        }
+      ]
+    },
+    {
+      "id": "hr-dark",
+      "context": "dark",
+      "why": "The same run page, dark.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 6000
+        }
+      ],
+      "cells": [
+        {
+          "cell": "HR-dark__run_card__hitl-screen-asking",
+          "declaredHost": "run_card",
+          "theme": "dark",
+          "framing": "window",
+          "screenshot": "evidence/2930-w3-hitl-card/cells/HR__run_card__dark.png",
+          "requires": "the same card on the run page, dark."
+        }
+      ]
+    }
+  ]
+}

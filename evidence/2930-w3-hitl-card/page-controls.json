@@ -1,0 +1,456 @@
+{
+  "records": [
+    {
+      "cell": "HC-light__chat_thread__hitl-screen-asking",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 665,
+        "width": 736,
+        "height": 184
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "role": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HC-dark__chat_thread__hitl-screen-asking",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 665,
+        "width": 736,
+        "height": 184
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "role": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    },
+    {
+      "cell": "HR-light__run_card__hitl-screen-asking",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 166
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "role": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HR-dark__run_card__hitl-screen-asking",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 166
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "role": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    },
+    {
+      "cell": "HCS-light__chat_thread__hitl-screen-none",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [],
+      "cardRect": null,
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [],
+      "cardText": null,
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HCS-dark__chat_thread__hitl-screen-none",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [],
+      "cardRect": null,
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [],
+      "cardText": null,
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    },
+    {
+      "cell": "HCM-light__chat_thread__hitl-screen-asking-midrun",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 286,
+        "width": 736,
+        "height": 225
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HCM-dark__chat_thread__hitl-screen-asking-midrun",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 286,
+        "width": 736,
+        "height": 225
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    },
+    {
+      "cell": "HRM-light__run_card__hitl-screen-asking-midrun",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 211
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HRM-dark__run_card__hitl-screen-asking-midrun",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 211
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    },
+    {
+      "cell": "HP-light__page_gate_region__hitl-screen-none",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4/review/lifecycle-review%3A046e55ca9f1b8ff97f21c61d658f15990a01412dd38c8147955a9d7e5b0375a9",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full flex-col gap-3",
+            "data-lifecycle-card": "artifact_review_gate",
+            "data-lifecycle-card-state": "pending",
+            "data-lifecycle-card-host": "page_gate_region",
+            "data-conformance-id": "review-gate-card"
+          },
+          "text": "Review requestedAwaiting your decisionExpandDecision rationale (optional on approve, expected on reject)CommentRejectApprove",
+          "painted": true
+        }
+      ],
+      "cardRect": null,
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [],
+      "cardText": null,
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "light"
+    },
+    {
+      "cell": "HP-dark__page_gate_region__hitl-screen-none",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/d7086390-20bb-425c-9bfd-a12e68d404f4/review/lifecycle-review%3A046e55ca9f1b8ff97f21c61d658f15990a01412dd38c8147955a9d7e5b0375a9",
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full flex-col gap-3",
+            "data-lifecycle-card": "artifact_review_gate",
+            "data-lifecycle-card-state": "pending",
+            "data-lifecycle-card-host": "page_gate_region",
+            "data-conformance-id": "review-gate-card"
+          },
+          "text": "Review requestedAwaiting your decisionExpandDecision rationale (optional on approve, expected on reject)CommentRejectApprove",
+          "painted": true
+        }
+      ],
+      "cardRect": null,
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [],
+      "cardText": null,
+      "lifecycleToolCallsInTranscript": [],
+      "resolvedTheme": "dark"
+    }
+  ],
+  "schemaVersion": 1,
+  "recorder": "cinatra-lifecycle-page-controls@1"
+}

@@ -1,0 +1,57 @@
+{
+  "slice": "2930-w3-hitl-card",
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "cells": [
+    {
+      "cell": "HCM-light__chat_thread__hitl-screen-asking-midrun",
+      "declaredHost": "chat_thread",
+      "declaredState": "asking",
+      "context": "light",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun__chat_thread__light.png",
+      "requires": "the question an agent stopped in the MIDDLE of its run to ask, drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region the step asks for; and the card's own Continue that answers them.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 8000,
+      "scrollTo": "[data-action=\"submit-hitl-screen\"]"
+    },
+    {
+      "cell": "HCM-dark__chat_thread__hitl-screen-asking-midrun",
+      "declaredHost": "chat_thread",
+      "declaredState": "asking",
+      "context": "dark",
+      "url": "/chat/cinatra-ai/cinatra-assistant/c391fbdd-1641-48de-81be-c0119ee83bd3",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun__chat_thread__dark.png",
+      "requires": "the question an agent stopped in the MIDDLE of its run to ask, drawn as ONE card in the conversation the run was started from: the card's own root carrying the kind, the host and the state; the fields region the step asks for; and the card's own Continue that answers them.",
+      "runId": "d7086390-20bb-425c-9bfd-a12e68d404f4",
+      "waitFor": [
+        "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "[data-conformance-id=\"hitl-screen-fields\"]"
+      ],
+      "settleMs": 8000,
+      "scrollTo": "[data-action=\"submit-hitl-screen\"]"
+    }
+  ]
+}
