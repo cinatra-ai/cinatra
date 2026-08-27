@@ -116,6 +116,8 @@ import {
 // Refuses writes when the creation pin is active and required catalog skills
 // are not synced. No-ops when the pin is inactive.
 import { preflightAgentCreation, type AgentCreationPreflightResult } from "../preflight-agent-creation";
+import { refuseIfCreationPreflightFails } from "../run-start-creation-preflight";
+import { roleHintsFromActorEnvelope, type FrameRoleHintsEnvelope } from "../frame-role-hints";
 import { resolveRequiredCreationSkillIds } from "../resolve-required-creation-skill-ids";
 // packageName alias resolver for agent_run.
 import { aliasPackageNameToCanonicalScope } from "../package-name-alias";
@@ -277,8 +279,9 @@ import {
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
-import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling } from "../auth-policy";
+import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
+import { describeStartedRun } from "../run-status";
 // Removed `getActorContext` / `getActorContextOrThrow` imports.
 // LLM-reachable paths are now fail-closed at the orchestration entry points
 // (requireActorFrame in packages/llm/src/index.ts).
@@ -393,7 +396,13 @@ export function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: st
 // user row?" probe is no longer needed.
 
 // ---------------------------------------------------------------------------
-export async function resolveRoleHintsFromSession(): Promise<ActorRoleHints | undefined> {
+export async function resolveRoleHintsFromSession(
+  /** The primitive actor envelope, when the caller has one. PREFERRED over the
+   *  cookie session — a correctness fix; see `../frame-role-hints`. */
+  actor?: FrameRoleHintsEnvelope | null | undefined,
+): Promise<ActorRoleHints | undefined> {
+  const fromFrame = roleHintsFromActorEnvelope(actor);
+  if (fromFrame) return fromFrame; // the frame placed the caller; no cookie read
   try {
     const session = await getAuthSession();
     if (!session) return undefined;
@@ -894,7 +903,10 @@ async function handleAgentBuilderRun(
   const actor = request.actor as PrimitiveActorContext;
   const notConfigured = await (await import("@/lib/agent-run-readiness")).assertAgentRunReadyByPackage(template.packageName, identifierForError, { userId: actor.userId ?? null });
   if (notConfigured) return notConfigured;
-  const roles = await resolveRoleHintsFromSession();
+  // cinatra#2935 (lifecycle-b W5d): the agent-creation preflight used to run ONLY on the removed chat sentence-matcher; it now guards EVERY start, and the role hints are the FRAME's own standing when it has one (never a cookie that may belong to somebody else).
+  const creationRefusal = await refuseIfCreationPreflightFails(template.packageName, identifierForError);
+  if (creationRefusal) return creationRefusal;
+  const roles = await resolveRoleHintsFromSession(actor);
   const probeRun = {
     id: "probe",
     runBy: actor.userId ?? null,
@@ -1118,10 +1130,9 @@ async function handleAgentBuilderRun(
       runId: run.id,
     });
 
-    return { runId: run.id, status: launched.status };
+    return { runId: run.id, status: launched.status, message: describeStartedRun({ packageName: template.packageName ?? identifierForError, runId: run.id, status: launched.status }) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: `Run failed: ${message}` };
+    return startFailureAnswer(err, identifierForError);
   }
 }
 

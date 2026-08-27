@@ -190,6 +190,26 @@ export type AgUiSinkAdapter = {
   durableContent(): AgUiTurnDurableContent | null;
 };
 
+/**
+ * The tool names whose result may carry a started run's id (cinatra#2935,
+ * lifecycle-b W5d).
+ *
+ * DUPLICATED FROM `packages/chat/src/run-start-tool-names.ts` ON PURPOSE, and
+ * machine-compared rather than trusted: this module lives in the app tree and
+ * the two renderers that read the same list live in the chat package, and
+ * neither vitest root resolves the other's specifier. The same dependency-free
+ * doctrine the delegated tool policies use for their allowlists — a duplicated
+ * literal that a test pins EQUAL in both directions cannot drift, while an
+ * import only some roots can resolve fails at collection time rather than at
+ * review. The pin is
+ * `packages/chat/src/__tests__/run-start-tool-names.test.ts`.
+ */
+const RUN_START_TOOL_NAMES: readonly string[] = ["agent_run", "agent_named_start"];
+
+function isRunStartToolName(name: unknown): boolean {
+  return typeof name === "string" && RUN_START_TOOL_NAMES.includes(name);
+}
+
 /** Parse an `agent_run` tool result for the runId to pin on the run card.
  *  Mirrors the legacy client's `extractAgentRunId` (defensive: silent null). */
 export function extractAgentRunIdFromResult(result: unknown): string | null {
@@ -399,7 +419,11 @@ export function createAgUiSinkAdapter(params: {
         // agent_run results carry the spawned run's id — pinned client-side on
         // the tool_call part via DATA_PART (the reducer contract's only
         // sanctioned source for the inline-run-card runId).
-        if (d.name === "agent_run") {
+        // BOTH START DOORS, not one literal (cinatra#2935, lifecycle-b W5d).
+        // The widget's `agent_named_start` produces the SAME run through the
+        // SAME primitive; comparing against `agent_run` alone meant a widget
+        // start that succeeded and drew nothing — silence with a run behind it.
+        if (isRunStartToolName(d.name)) {
           const agentRunId = extractAgentRunIdFromResult(d.result);
           if (agentRunId) {
             emitDurableDataPart({ kind: "agent_run", toolCallId: id, runId: agentRunId });

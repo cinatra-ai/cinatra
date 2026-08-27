@@ -8,11 +8,15 @@
  * must run on a throwaway database with no keys.
  *
  * WHAT THE SHAPE BUYS:
- *  · a DEV runtime, which is what the capture ruling labels and what the hard
- *    pre-router path is exercised under;
- *  · the deterministic scripted provider — offline, key-free, no model call in the
- *    turn at all, so the dispatch is decided by the pre-router regex rather than by
- *    whatever a model felt like doing;
+ *  · a DEV runtime, which is what the capture ruling labels and the only runtime
+ *    the deterministic provider is allowed to serve;
+ *  · the deterministic scripted provider — offline, key-free, no model call over
+ *    the wire at all, so WHICH tool the assistant calls is fixed rather than left
+ *    to whatever a model felt like doing. Since cinatra#2935 (lifecycle-b W5d)
+ *    nothing dispatches before the model, so the start IS the assistant's own
+ *    `agent_run` call and everything under it — the authorization ladder, the
+ *    creation preflight, the recommendation checkpoint, the park — is shipped
+ *    code;
  *  · its own port and its own server, never reused, so a run can never be
  *    attributed to a server carrying different env.
  */

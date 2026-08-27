@@ -1568,9 +1568,99 @@ export type AgentTemplateScopeDecision =
     };
 
 /**
+ * THE PLATFORM'S OWN SENTENCE for a start this scope refuses (cinatra#2935,
+ * lifecycle-b W5d).
+ *
+ * The plan (PLAN: Agents Lifecycle (B), "A refusal is the platform's own,
+ * relayed"): "the platform refuses in its own words and the assistant says
+ * those words back. It never decides in place of a refusal and never re-writes
+ * one." The words have to exist for that to be possible. Until this change the
+ * only string a refused start produced was the diagnostic below — the stage,
+ * the template's id, the machine reason and the scope level — and a person in a
+ * conversation was handed it verbatim.
+ *
+ * ONE SENTENCE FOR EVERY REASON, and that is a rule rather than a shortcut. A
+ * refusal that named WHICH scope refused would tell a caller about standing
+ * they do not hold, and the mere fact of a scope refusal already discloses that
+ * the template exists; the two other surfaces that translate this error make
+ * the same choice for the same reason, and the schedule card's single
+ * authorization refusal states it outright. So a caller cannot use this door to
+ * tell one denial from another.
+ *
+ * IT SAYS THAT NOTHING HAPPENED. A refused act settles nothing, and the drawing
+ * asks for a refusal to say so rather than leave a reader guessing whether a
+ * run is somewhere. It is the same shape the two fixed refusals on the widget's
+ * own door already use.
+ *
+ * THE DIAGNOSTIC IS NOT REPLACED — it is kept where a diagnostic belongs. The
+ * error below still carries the whole of it for the log and the error record;
+ * only what a PERSON reads changes.
+ */
+export const AGENT_TEMPLATE_SCOPE_START_REFUSAL =
+  "You can't start this agent. Nothing was started.";
+
+/**
+ * The person-facing sentence for a thrown start refusal, or null when the
+ * failure is not one.
+ *
+ * BRANCHES ON THE CODE, never on `instanceof`, so a refusal is recognized
+ * across the dynamic import boundaries the start path crosses — the same rule
+ * the two existing translations of this error already follow, and for the same
+ * reason.
+ *
+ * Anything that is NOT a scope denial answers null: a transport or store fault
+ * is not a decision, and this function may not invent a reason for one.
+ */
+export function agentStartRefusalSentence(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null | undefined)?.code;
+  return code === "AGENT_TEMPLATE_SCOPE_DENIED" ? AGENT_TEMPLATE_SCOPE_START_REFUSAL : null;
+}
+
+/**
+ * What a start that threw answers with — the caller-facing half of the refusal
+ * above (cinatra#2935, lifecycle-b W5d).
+ *
+ * IT LIVES HERE, BESIDE THE REFUSAL IT TRANSLATES, and not at the call site, for
+ * the same reason `authzErrorToResponse` does: turning this module's own refusal
+ * into somebody else's answer shape is this module's job, and a call site that
+ * did it inline would be the third place the rule is written down.
+ *
+ * TWO OUTCOMES, and the difference between them is a decision versus a fault.
+ * A SCOPE DENIAL is a decision the platform made, so it answers in the
+ * platform's own sentence and keeps its stable code for a caller that branches;
+ * the diagnostic goes to the log, which is the only place it was ever for. It
+ * used to go to the person instead — a conversation inside a third-party
+ * application read out the enforcement stage, the template's id, the machine
+ * reason and the scope level, because every thrown message was put on the wire
+ * unchanged.
+ *
+ * ANYTHING ELSE is a fault — a transport or store failure — and keeps the
+ * answer it has always had, because this module may not invent a reason for one
+ * or dress it up as a decision.
+ */
+export function startFailureAnswer(
+  err: unknown,
+  identifierForError: string,
+): { error: string; code?: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  const refusal = agentStartRefusalSentence(err);
+  if (!refusal) return { error: `Run failed: ${message}` };
+  console.warn(
+    `[agent_run] start refused for ${identifierForError} — the agent's own scope ` +
+      `does not authorize it: ${message}`,
+  );
+  return { error: refusal, code: "AGENT_TEMPLATE_SCOPE_DENIED" };
+}
+
+/**
  * Thrown by {@link assertActorWithinAgentTemplateScope}. Carries the machine-
  * readable reason so a caller can map it to its own refusal shape (a run
  * failure, an MCP error payload, an action result) without string matching.
+ *
+ * ITS MESSAGE IS A DIAGNOSTIC, NOT A SENTENCE. It names the stage, the template
+ * and the refusal reason because a log and an error record need all three; it
+ * is never what a person reads. {@link AGENT_TEMPLATE_SCOPE_START_REFUSAL} is
+ * what a person reads.
  */
 export class AgentTemplateScopeError extends Error {
   readonly code = "AGENT_TEMPLATE_SCOPE_DENIED" as const;
