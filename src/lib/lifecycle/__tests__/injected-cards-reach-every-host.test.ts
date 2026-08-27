@@ -71,27 +71,31 @@ describe("the run-carried kinds", () => {
   });
 });
 
-describe("the one kind with no mount yet", () => {
-  it("is recorded as OWED, on every host the ruling gives it", () => {
-    // Truthful record, not a waiver: this wave landed the kind's substrate — its
-    // canonical carriage, the outbox feed and its delivery record — and did NOT
-    // draw the card, because no ratified drawing covers it at the pinned design
-    // commit and the anchor contract is digest-pinned to that commit.
+describe("the kind that owed its mounts", () => {
+  it("OWES NOTHING NOW — the cells are recorded, on every host that draws it", () => {
+    // The record moved in the change that made the observation flip, which is
+    // the only moment an owed row may be struck: the earlier wave landed this
+    // kind's substrate — its canonical carriage, the outbox feed and its
+    // delivery record — and drew no card, so all three ruled cells stood owed.
+    // W3 (cinatra#2930) draws `AgentHitlScreenCard` and mounts it, so the row
+    // records its hosts and owes none.
     const row = LIFECYCLE_HOST_PARITY_RATCHET.agent_hitl_screen;
-    expect(row.hosts).toEqual({});
-    expect(row.owed.map((o) => o.host).sort()).toEqual([
+    expect(Object.keys(row.hosts).sort()).toEqual([
       "chat_thread",
+      "page_gate_region",
       "run_card",
       "site_widget",
     ]);
-    for (const owed of row.owed) {
-      expect(owed.tracking).toContain("cinatra#2930");
-    }
+    expect(row.owed).toEqual([]);
   });
 
-  it("still has the substrate a drawing slice would mount on", () => {
+  it("mounts on the substrate the earlier wave left it", () => {
     expect(canonicalCarriageForKind("agent_hitl_screen")).toBe("run_state");
     expect(carriageRowFor("agent_hitl_screen").deliveries).toEqual(["platform_injected"]);
+    // The two INTERRUPT kinds are read the same way: the card is drawn at the
+    // run's own dispatch part and resolves from the run, which is why it comes
+    // back after a reload with no envelope of its own.
+    expect(carriageRowFor("agent_hitl_screen").carriage).toBe("interrupt");
   });
 });
 

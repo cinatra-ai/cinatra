@@ -1,0 +1,1584 @@
+{
+  "schemaVersion": 1,
+  "recorder": "cinatra-lifecycle-page-controls@1",
+  "records": [
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending",
+      "at": "2026-08-27T14:13:44.270Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "resolvedTheme": "light",
+      "fieldPresentation": "subordinate",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "none",
+        "borderBottomColor": "rgb(21, 33, 58)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "lifecycle-fields-subordinate",
+          "flex",
+          "w-full",
+          "min-w-0",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 495,
+          "y": 320,
+          "width": 706,
+          "height": 82
+        }
+      },
+      "fieldControl": {
+        "tag": "textarea",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "dashed",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "placeholder": "What should this post be about?",
+        "rect": {
+          "x": 495,
+          "y": 337,
+          "width": 706,
+          "height": 64
+        }
+      },
+      "fieldLabel": {
+        "tag": "label",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "\"JetBrains Mono\", \"JetBrains Mono Fallback\", SFMono-Regular, \"IBM Plex Mono\", Menlo, monospace",
+        "fontSize": "9.5px",
+        "text": "Idea(optional)",
+        "letterSpacing": "1.33px",
+        "textTransform": "uppercase"
+      },
+      "chatBox": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "chatBoxContainer": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": "card",
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 422,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 305,
+        "width": 736,
+        "height": 161
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "assistantSentenceUnderCard": "Agentic Run ProgressAwaiting inputNo messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": "hitl",
+        "lifecycle_card_kind": "agent_hitl_screen",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "input_params": "{}",
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T14:13:44.266Z"
+      }
+    },
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
+      "at": "2026-08-27T14:13:57.920Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "resolvedTheme": "dark",
+      "fieldPresentation": "subordinate",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "none",
+        "borderBottomColor": "lab(98.1434 -0.369519 -1.05966)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "lifecycle-fields-subordinate",
+          "flex",
+          "w-full",
+          "min-w-0",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 495,
+          "y": 320,
+          "width": 706,
+          "height": 82
+        }
+      },
+      "fieldControl": {
+        "tag": "textarea",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "dashed",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "placeholder": "What should this post be about?",
+        "rect": {
+          "x": 495,
+          "y": 337,
+          "width": 706,
+          "height": 64
+        }
+      },
+      "fieldLabel": {
+        "tag": "label",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "\"JetBrains Mono\", \"JetBrains Mono Fallback\", SFMono-Regular, \"IBM Plex Mono\", Menlo, monospace",
+        "fontSize": "9.5px",
+        "text": "Idea(optional)",
+        "letterSpacing": "1.33px",
+        "textTransform": "uppercase"
+      },
+      "chatBox": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "chatBoxContainer": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": "card",
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 422,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 305,
+        "width": 736,
+        "height": 161
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "assistantSentenceUnderCard": "Agentic Run ProgressAwaiting inputNo messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": "hitl",
+        "lifecycle_card_kind": "agent_hitl_screen",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "input_params": "{}",
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T14:13:57.918Z"
+      }
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending",
+      "at": "2026-08-27T14:14:08.458Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "resolvedTheme": "light",
+      "fieldPresentation": "primary",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgb(247, 247, 243)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "14px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "soft-panel",
+          "rounded-panel",
+          "p-4",
+          "bg-surface-muted",
+          "flex",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 489,
+          "y": 293,
+          "width": 718,
+          "height": 154
+        }
+      },
+      "fieldControl": {
+        "tag": "textarea",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgb(255, 255, 255)",
+        "backgroundImage": "none",
+        "boxShadow": "rgba(255, 255, 255, 0.8) 0px 1px 0px 0px inset",
+        "borderRadius": "7px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "placeholder": "What should this post be about?",
+        "rect": {
+          "x": 506,
+          "y": 330,
+          "width": 684,
+          "height": 64
+        }
+      },
+      "fieldLabel": {
+        "tag": "label",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "12px",
+        "text": "Idea(optional)",
+        "letterSpacing": "normal",
+        "textTransform": "none"
+      },
+      "chatBox": null,
+      "chatBoxContainer": null,
+      "sendAffordanceInFields": [
+        {
+          "text": "Continue",
+          "dataAction": null
+        }
+      ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 0,
+        "sendText": null,
+        "sendDisabled": null,
+        "sendBox": null,
+        "primaryInputsInConversation": 0
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 166
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "assistantSentenceUnderCard": "Agentic Run ProgressAwaiting input No messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": "hitl",
+        "lifecycle_card_kind": "agent_hitl_screen",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "input_params": "{}",
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T14:14:08.454Z"
+      }
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending__dark",
+      "at": "2026-08-27T14:14:18.952Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "resolvedTheme": "dark",
+      "fieldPresentation": "primary",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "lab(3.87463 0.500388 -12.2712)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "14px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "soft-panel",
+          "rounded-panel",
+          "p-4",
+          "bg-surface-muted",
+          "flex",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 489,
+          "y": 293,
+          "width": 718,
+          "height": 154
+        }
+      },
+      "fieldControl": {
+        "tag": "textarea",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "oklab(0.999994 0.0000455677 0.0000200868 / 0.0305882)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "7px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "placeholder": "What should this post be about?",
+        "rect": {
+          "x": 506,
+          "y": 330,
+          "width": 684,
+          "height": 64
+        }
+      },
+      "fieldLabel": {
+        "tag": "label",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "12px",
+        "text": "Idea(optional)",
+        "letterSpacing": "normal",
+        "textTransform": "none"
+      },
+      "chatBox": null,
+      "chatBoxContainer": null,
+      "sendAffordanceInFields": [
+        {
+          "text": "Continue",
+          "dataAction": null
+        }
+      ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 0,
+        "sendText": null,
+        "sendDisabled": null,
+        "sendBox": null,
+        "primaryInputsInConversation": 0
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Idea(optional)Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 166
+      },
+      "cardHeadings": [],
+      "cardLabels": [
+        "Idea(optional)"
+      ],
+      "cardControls": [
+        {
+          "tag": "textarea",
+          "type": null,
+          "text": "",
+          "placeholder": "What should this post be about?",
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": null,
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Idea(optional)Continue",
+      "assistantSentenceUnderCard": "Agentic Run ProgressAwaiting input No messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": "hitl",
+        "lifecycle_card_kind": "agent_hitl_screen",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "input_params": "{}",
+        "a2a_task_id": null,
+        "read_at": "2026-08-27T14:14:18.948Z"
+      }
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
+      "at": "2026-08-27T14:18:12.330Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "resolvedTheme": "light",
+      "fieldPresentation": "subordinate",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "none",
+        "borderBottomColor": "rgb(21, 33, 58)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "lifecycle-fields-subordinate",
+          "flex",
+          "w-full",
+          "min-w-0",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 495,
+          "y": 320,
+          "width": 706,
+          "height": 92
+        }
+      },
+      "fieldControl": null,
+      "fieldLabel": null,
+      "chatBox": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "chatBoxContainer": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 433,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 305,
+        "width": 736,
+        "height": 171
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "assistantSentenceUnderCard": "Agentic Run Progresspending approvalNo messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "lifecycle_card_ref": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:12.323Z"
+      }
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
+      "at": "2026-08-27T14:18:26.158Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "resolvedTheme": "dark",
+      "fieldPresentation": "subordinate",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "none",
+        "borderBottomColor": "lab(98.1434 -0.369519 -1.05966)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "lifecycle-fields-subordinate",
+          "flex",
+          "w-full",
+          "min-w-0",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 495,
+          "y": 320,
+          "width": 706,
+          "height": 92
+        }
+      },
+      "fieldControl": null,
+      "fieldLabel": null,
+      "chatBox": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "14px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "chatBoxContainer": {
+        "tag": "div",
+        "borderTopWidth": "0px",
+        "borderRightWidth": "0px",
+        "borderBottomWidth": "0px",
+        "borderLeftWidth": "0px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "0px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "rect": {
+          "x": 525,
+          "y": 839,
+          "width": 690,
+          "height": 48
+        }
+      },
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 433,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "chat_thread",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 480,
+        "y": 305,
+        "width": 736,
+        "height": 171
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "assistantSentenceUnderCard": "Agentic Run Progresspending approvalNo messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "lifecycle_card_ref": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:26.151Z"
+      }
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending",
+      "at": "2026-08-27T14:18:37.015Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "resolvedTheme": "light",
+      "fieldPresentation": "primary",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(21, 33, 58, 0.14)",
+        "backgroundColor": "rgb(247, 247, 243)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "14px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "soft-panel",
+          "rounded-panel",
+          "p-4",
+          "bg-surface-muted",
+          "flex",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 489,
+          "y": 293,
+          "width": 718,
+          "height": 199
+        }
+      },
+      "fieldControl": null,
+      "fieldLabel": null,
+      "chatBox": null,
+      "chatBoxContainer": null,
+      "sendAffordanceInFields": [
+        {
+          "text": "Continue",
+          "dataAction": "submit-hitl-screen"
+        }
+      ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 1,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1093,
+          "y": 447,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 0
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 211
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "assistantSentenceUnderCard": "Agentic Run Progresspending approval No messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "lifecycle_card_ref": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:37.009Z"
+      }
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
+      "at": "2026-08-27T14:18:47.568Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "resolvedTheme": "dark",
+      "fieldPresentation": "primary",
+      "fieldsRegion": {
+        "tag": "div",
+        "borderTopWidth": "1px",
+        "borderRightWidth": "1px",
+        "borderBottomWidth": "1px",
+        "borderLeftWidth": "1px",
+        "borderBottomStyle": "solid",
+        "borderBottomColor": "rgba(255, 255, 255, 0.1)",
+        "backgroundColor": "lab(3.87463 0.500388 -12.2712)",
+        "backgroundImage": "none",
+        "boxShadow": "none",
+        "borderRadius": "14px",
+        "fontFamily": "Inter, \"Inter Fallback\", ui-sans-serif, system-ui, sans-serif",
+        "fontSize": "16px",
+        "classList": [
+          "soft-panel",
+          "rounded-panel",
+          "p-4",
+          "bg-surface-muted",
+          "flex",
+          "flex-col",
+          "gap-4"
+        ],
+        "rect": {
+          "x": 489,
+          "y": 293,
+          "width": 718,
+          "height": 199
+        }
+      },
+      "fieldControl": null,
+      "fieldLabel": null,
+      "chatBox": null,
+      "chatBoxContainer": null,
+      "sendAffordanceInFields": [
+        {
+          "text": "Continue",
+          "dataAction": "submit-hitl-screen"
+        }
+      ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 1,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1093,
+          "y": 447,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 0
+      },
+      "cards": [
+        {
+          "tag": "div",
+          "attributes": {
+            "class": "flex w-full min-w-0 flex-col gap-3",
+            "data-lifecycle-card": "agent_hitl_screen",
+            "data-lifecycle-card-state": "asking",
+            "data-lifecycle-card-host": "run_card",
+            "data-conformance-id": "agent-hitl-screen-card"
+          },
+          "text": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+          "painted": true
+        }
+      ],
+      "cardRect": {
+        "x": 489,
+        "y": 281,
+        "width": 718,
+        "height": 211
+      },
+      "cardHeadings": [],
+      "cardLabels": [],
+      "cardControls": [
+        {
+          "tag": "button",
+          "type": null,
+          "text": "Continue",
+          "placeholder": null,
+          "dataAction": "submit-hitl-screen",
+          "disabled": false,
+          "painted": true
+        }
+      ],
+      "cardText": "Draft ContextNo eligible context artifacts available for this slot. The agent will run without context for draftContext.Continue",
+      "assistantSentenceUnderCard": "Agentic Run Progresspending approval No messages yet.",
+      "contractAnchors": {
+        "[data-lifecycle-card=\"agent_hitl_screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-host]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"agent-hitl-screen-card\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conformance-id=\"hitl-screen-fields\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-field-presentation]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-action=\"submit-hitl-screen\"]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-lifecycle-card-state]": {
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
+        },
+        "[data-conversation-list]": {
+          "frame": 0,
+          "framePainted": 0,
+          "root": 0
+        }
+      },
+      "assistantTurnText": null,
+      "toolNamesInTranscript": [],
+      "stepRailPresent": 0,
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "pending_approval",
+        "started_at": null,
+        "completed_at": null,
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "lifecycle_card_ref": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:47.564Z"
+      }
+    }
+  ]
+}

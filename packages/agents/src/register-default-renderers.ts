@@ -88,6 +88,14 @@ const RENDERER_KIND_TABLE: Record<
     renderer: ComponentType<FieldRendererProps>;
     bareAliases?: readonly string[];
     /**
+     * Safe to mount where the reader has no cookie session — see
+     * `FieldRendererEntry.credentialSafe`. ABSENT MEANS UNSAFE: a kind earns
+     * this only when its component neither calls a server action of its own nor
+     * resolves further renderers out of the registry, and a test pins every
+     * one of them against the component's source.
+     */
+    credentialSafe?: true;
+    /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
      * field-name whitelist heuristic). Receives the full match-ID set
@@ -104,7 +112,7 @@ const RENDERER_KIND_TABLE: Record<
   // (blog-pipeline-agent#40). Both the former inline chooser and the
   // reviewer-output dispatcher it lived in are now gone (#1796 teardown); this
   // dedicated binding is the only path to the chooser.
-  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer },
+  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer, credentialSafe: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -112,6 +120,7 @@ const RENDERER_KIND_TABLE: Record<
   "context-selector": {
     renderer: ContextSelectorRenderer,
     bareAliases: ["context-selector"],
+    credentialSafe: true,
   },
   cta: { renderer: CtaRenderer, bareAliases: ["cta"] },
   "email-drafts-review": {
@@ -126,7 +135,7 @@ const RENDERER_KIND_TABLE: Record<
   // (hasFieldRendererComponent → makeExtensionFieldRenderer), and a NOT-in-build
   // binding of this kind (runtime-installed absent from the map) degrades to the
   // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
-  "final-list-review": { renderer: SchemaOnlyFloorRenderer },
+  "final-list-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
   // MIGRATED (cinatra#1625): the follow-up-cadence component moved into
   // @cinatra-ai/email-artifacts (the pack now declares BOTH cadence bindings —
   // email-drafting-agent + email-follow-up-agent — with declaredBy=email-artifacts).
@@ -139,9 +148,10 @@ const RENDERER_KIND_TABLE: Record<
   // may carry (it is in the frozen parity contract). BOTH cadence bindings load
   // the SAME pack component, so the first-registration arbitration of the bare
   // alias between them is harmless and preserves stored-interrupt compat
-  // (cinatra#1625, codex-converged 2026-07-21).
+  // (cinatra#1625, convergence-converged 2026-07-21).
   "follow-up-cadence": {
     renderer: SchemaOnlyFloorRenderer,
+    credentialSafe: true,
     bareAliases: ["follow-up-cadence"],
   },
   // MIGRATED (cinatra#1625): the gmail-sender COMPONENT moved into
@@ -152,6 +162,7 @@ const RENDERER_KIND_TABLE: Record<
   // heuristic. A not-in-build binding of this kind degrades to the floor here.
   "gmail-sender": {
     renderer: SchemaOnlyFloorRenderer,
+    credentialSafe: true,
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },
@@ -162,11 +173,11 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
-  "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer },
+  "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
-  "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer },
+  "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
   // MIGRATED (cinatra#1961, S8 successor of #1625): the send-confirmation SHELL
   // COMPONENT moved into @cinatra-ai/email-artifacts (src/renderers/send-confirmation.tsx),
   // which cross-declares BOTH email-delivery-agent bindings (:output +
@@ -185,6 +196,7 @@ const RENDERER_KIND_TABLE: Record<
   // the host renderer is deleted, unlike the reviewer-coupled email-drafts-review.
   "send-confirmation": {
     renderer: SchemaOnlyFloorRenderer,
+    credentialSafe: true,
     bareAliases: ["send-confirmation"],
   },
   // MIGRATED (cinatra#1958, S8 successor of #1625): the pure snapshot->onChange
@@ -196,7 +208,7 @@ const RENDERER_KIND_TABLE: Record<
   // -> makeExtensionFieldRenderer), and a not-in-build binding of this kind
   // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape
   // as final-list-review above.
-  "test-delivery-input": { renderer: SchemaOnlyFloorRenderer },
+  "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
   // moved into @cinatra-ai/blog-wordpress-publish-agent. The KIND stays (the
@@ -205,7 +217,7 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review / linkedin-draft-review above.
-  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer },
+  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
 };
 
 /** Pinned by the kind-vocabulary set-equality test. */
@@ -297,6 +309,12 @@ export function registerFieldRendererBindings(
       priority: b.priority,
       condition: conditionFor(b.id, b.kind),
       renderer: withBindingParams(kindEntry.renderer, b.params),
+      // The KIND's answer, inherited by every binding of it (convergence,
+      // finding 1): a binding id says nothing about which component is mounted,
+      // so the id is never what this is decided by. The extension branch above
+      // declares nothing and is therefore unsafe, which is right — its
+      // component is loaded from a package this repository has not read.
+      credentialSafe: kindEntry.credentialSafe === true,
       midRunHitl: b.midRunHitl === true,
     });
   }
@@ -356,8 +374,11 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     // Bypass floor: a registered renderer that resolves back through the registry
     // must NOT be the registry-first SchemaFieldRenderer, or matching its own
     // fallback xRenderer re-resolves this entry forever. SchemaOnlyFloorRenderer
-    // renders the schema-driven fallback directly (cinatra#1625, codex 2026-07-20).
+    // renders the schema-driven fallback directly (cinatra#1625, convergence 2026-07-20).
     renderer: SchemaOnlyFloorRenderer,
+    // …and the same bypass is what makes it safe without a session: it reaches
+    // no server action of its own and re-enters no registry.
+    credentialSafe: true,
   });
 
   // -------------------------------------------------------------------------
