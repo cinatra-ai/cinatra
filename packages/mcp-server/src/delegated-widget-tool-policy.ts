@@ -100,6 +100,35 @@ const WIDGET_CONTENT_EDITOR_TOOLS: Readonly<Record<WidgetDelegationKind, string>
  */
 export const DELEGATED_WIDGET_BOUND_CARD_ACTION = "lifecycle_bound_card_decide";
 
+/**
+ * The ONE narrowly scoped START a widget delegation may reach (cinatra#2935,
+ * lifecycle-b W5d).
+ *
+ * WHY IT IS HERE. Until this slice the widget's only way to start an agent was
+ * the server-side sentence-matcher that ran BEFORE the model read the message —
+ * the defect the plan removes. Removing it without this entry would take a real
+ * capability away from a person inside a third-party application, which the plan
+ * forbids: "Once the matcher is gone the widget keeps the capability the right
+ * way: its assistant gets one narrowly scoped start, authorized afresh from the
+ * widget's own credential at the call and fenced to the agents the signed-in
+ * person may start."
+ *
+ * IT IS NOT `agent_run`, AND THAT IS THE POINT. The chat allowlist holds
+ * `agent_run` with its template ids, timeouts and polling surface; this closed
+ * allowlist deliberately does not (cinatra#2790 pins that), and it still does
+ * not. What is added is one door: a package name and the inputs the person gave.
+ * The handler resolves the person's own LIVE standing at the call and starts the
+ * run as them through `agent_run`'s own execute gate, so an agent they may not
+ * start is REFUSED and the platform's own refusal is relayed. Nothing is offered
+ * here that the widget's own credential cannot do.
+ *
+ * ITS NAME CARRIES `start`, which the backstop below now denies, so it needs
+ * this entry AND the exact-name exception in `isDelegatedWidgetMcpToolAllowed`
+ * AND its typed `CarveOut` twin to be reachable at all — the same disclosure
+ * shape the lent action has, for the same reason.
+ */
+export const DELEGATED_WIDGET_NAMED_AGENT_START = "agent_named_start";
+
 export const DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS: readonly string[] = [
   "artifact_review_gates_list",
   "artifact_review_gate_render",
@@ -126,11 +155,13 @@ const DELEGATED_WIDGET_ALLOWLIST: Readonly<
     WIDGET_CONTENT_EDITOR_TOOLS.wordpress,
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
     DELEGATED_WIDGET_BOUND_CARD_ACTION,
+    DELEGATED_WIDGET_NAMED_AGENT_START,
   ]),
   drupal: new Set<string>([
     WIDGET_CONTENT_EDITOR_TOOLS.drupal,
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
     DELEGATED_WIDGET_BOUND_CARD_ACTION,
+    DELEGATED_WIDGET_NAMED_AGENT_START,
   ]),
 };
 
@@ -179,6 +210,15 @@ const DELEGATED_WIDGET_DENIED_VERB_TOKENS: ReadonlySet<string> = new Set<string>
   "restore",
   "upsert",
   "trigger",
+  // cinatra#2935 (lifecycle-b W5d). Starting a run is a mutation, so the token
+  // joins the class the backstop makes unreachable BY CONSTRUCTION — which is
+  // what forces the one start this slice adds to be an exact-name exception
+  // somebody can find rather than a quiet allowlist line. Whole-token matching
+  // keeps every allowed name intact: the ONLY name on either delegated policy
+  // that carries `start` as a token is the one narrow start added above, which is
+  // admitted by exact name ABOVE this backstop — so this token denies nothing
+  // that works, and everything that is not that one disclosed entry.
+  "start",
 ]);
 
 /**
@@ -241,6 +281,12 @@ export function isDelegatedWidgetMcpToolAllowed(
   // case-folded: a differently-cased name is a DIFFERENT primitive and falls
   // through to the backstop, which denies it.
   if (name === DELEGATED_WIDGET_BOUND_CARD_ACTION && allowed.has(name)) return true;
+  // THE SECOND DISCLOSED EXCEPTION (cinatra#2935, lifecycle-b W5d). The one
+  // narrow start's name carries `start`, which the backstop below now denies; it
+  // is admitted here, by exact name, ABOVE the backstop, exactly as the lent
+  // action is. Exact match, never case-folded: a differently-cased name is a
+  // DIFFERENT primitive and falls through to the backstop, which denies it.
+  if (name === DELEGATED_WIDGET_NAMED_AGENT_START && allowed.has(name)) return true;
   if (carriesDelegatedWidgetDeniedVerb(name.toLowerCase())) return false;
   return allowed.has(name);
 }

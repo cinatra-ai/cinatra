@@ -62,10 +62,13 @@
 //
 // NO REAL CREDENTIAL IS READ, USED OR STORED. The OpenAI row is a PRESENCE
 // placeholder: generation is served by `CINATRA_TEST_LLM_PROVIDER=scripted`, and
-// the placeholder exists only because the assistant runtime falls into
-// `conversationOnly` without a bound provider adapter — and a conversation-only
-// turn NULLS the explicit-dispatch package, so the hard pre-router never fires and
-// no run is created at all.
+// the placeholder is written for the OTHER turns on the instance, not for this
+// flow's own. Under the scripted flag `describeLlmRuntimeUnavailability()`
+// returns null outright (`packages/llm/src/registry.ts`) and the assistant's
+// start runs before any adapter is resolved, so this flow's turn is answered
+// with or without the row. It is still written and still restored, because the
+// fixture's contract is to leave the instance as it found it and a row it stops
+// writing is a row it must stop putting back.
 //
 // Usage (from the repo root, with .env.local pointing at the lane stack):
 //   node --conditions=react-server --env-file-if-exists=.env.local --import tsx \
@@ -291,9 +294,9 @@ if (MODE === "apply") {
   mkdirSync(dirname(SNAPSHOT_PATH), { recursive: true });
   writeFileSync(SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, 2)}\n`);
 
-  // (1) The provider PRESENCE placeholder. Without it `runAssistantTurn` answers
-  //     "No LLM provider configured." and returns BEFORE the pre-router line, so
-  //     `agent_runs` stays empty and the flow fails with no card and no diagnosis.
+  // (1) The provider PRESENCE placeholder — world for the instance, and no
+  //     longer load-bearing for THIS flow's turn: see the header. It is written
+  //     and restored so the instance is left as it was found.
   //
   //     A row that ALREADY holds a key satisfies presence, so it is left exactly
   //     as it is — see the header. Otherwise the placeholder is written OVER the

@@ -19,6 +19,7 @@
 // the four identical embed/citation adjunct blocks are factored into local
 // components that emit byte-identical DOM.
 
+import { isRunStartToolName } from "./run-start-tool-names";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
@@ -485,7 +486,9 @@ function OrderedPartsSection({
         // gates (URL pickers, list pickers, reviewer approvals) from within
         // the chat thread instead of navigating to /agents/<v>/<s>/<runId>.
         // The card resolves to its own panel chrome — no extra Card wrapper here.
-        if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
+        // BOTH START DOORS (cinatra#2935, lifecycle-b W5d) — the widget's
+        // `agent_named_start` produces the SAME run through the SAME primitive.
+        if (part.kind === "tool_call" && isRunStartToolName(part.name) && part.runId) {
           return (
             <AgentRunTurnSlot
               key={`agent-run-${part.runId}`}

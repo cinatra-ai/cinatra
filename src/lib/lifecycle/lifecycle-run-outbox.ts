@@ -187,6 +187,28 @@ export function restoredTurnSlotForRun(
  * instead of the slot; that is the card's availability, the same availability an
  * injected part would depend on, and not something a placement rule can repair.
  */
+/**
+ * THE CLOSED SET OF NAMES THAT START A RUN (cinatra#2935, lifecycle-b W5d).
+ *
+ * Duplicated here rather than imported for the same reason the sink duplicates
+ * it: this module and `packages/chat` sit under vitest roots that do not resolve
+ * each other's specifiers, so an import only some roots can resolve fails at
+ * collection time rather than at review. The two copies are pinned EQUAL, in
+ * both directions, by `packages/chat/src/__tests__/run-start-tool-names.test.ts`
+ * — the same test that pins the sink's copy — so neither can drift.
+ *
+ * IT MUST BE THE SAME SET THE RENDERER USES. This predicate exists to answer
+ * "does this turn already draw the run's card", and the answer decides whether a
+ * review gate is injected beside it. A narrower set here than in the renderer
+ * means a run started under the other name is reported as drawing no card while
+ * the transcript draws one — and the reader gets the gate twice.
+ */
+const RUN_START_TOOL_NAMES: readonly string[] = ["agent_run", "agent_named_start"];
+
+function isRunStartToolName(name: unknown): boolean {
+  return typeof name === "string" && RUN_START_TOOL_NAMES.includes(name);
+}
+
 export function turnCarriesRunCardFor(
   content: Record<string, unknown> | null,
   runId: string,
@@ -205,12 +227,14 @@ export function turnCarriesRunCardFor(
   // entry would suppress the one card the reader has. A row is read as durable
   // or as the client's transcript, never as both.
   if (!isDurableAssistantTurnContent(content)) {
-    // THE CLIENT TRANSCRIPT'S OWN SHAPE — the renderer's condition, verbatim.
+    // THE CLIENT TRANSCRIPT'S OWN SHAPE — the renderer's condition, verbatim:
+    // the renderer mounts on the closed set of run-start names, not on one
+    // literal, so this reads the same set.
     return parts.some(
       (raw) =>
         isRecord(raw) &&
         raw.kind === "tool_call" &&
-        raw.name === "agent_run" &&
+        isRunStartToolName(raw.name) &&
         raw.runId === runId,
     );
   }
@@ -242,7 +266,7 @@ export function turnCarriesRunCardFor(
     target.pinned = pinned;
   }
   for (const call of calls.values()) {
-    if (call.name === "agent_run" && call.pinned === runId) return true;
+    if (isRunStartToolName(call.name) && call.pinned === runId) return true;
   }
   return false;
 }

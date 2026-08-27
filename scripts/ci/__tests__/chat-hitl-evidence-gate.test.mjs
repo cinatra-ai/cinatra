@@ -209,8 +209,12 @@ describe("extractStringLiterals", () => {
 describe("the real tree", () => {
   it("discovers the shipped chat dispatch sources", () => {
     const sources = discoverDispatchSources(REPO_ROOT);
-    expect(sources).toContain("src/app/api/chat/explicit-dispatch-server.ts");
-    expect(sources).toContain("src/app/api/chat/explicit-dispatch.ts");
+    // cinatra#2935 (lifecycle-b W5d): the two pre-router modules are gone. The
+    // pin that remains is the card, and the assertion is now that the removed
+    // pair is NOT silently re-pinned by a stale literal.
+    expect(sources).not.toContain("src/app/api/chat/explicit-dispatch-server.ts");
+    expect(sources).not.toContain("src/app/api/chat/explicit-dispatch.ts");
+    expect(sources).toContain("packages/chat/src/inline-agent-run-card.tsx");
   });
 
   it("finds no pointer prose in the shipped dispatch surface today", () => {
