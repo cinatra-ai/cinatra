@@ -1,0 +1,3 @@
+packages/memory/tests/secret-scan.test.ts
+packages/memory/tests/sync-transport.test.ts
+packages/objects/src/__tests__/handlers-memory-sync-ingest.test.ts
