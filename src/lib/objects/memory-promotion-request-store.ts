@@ -411,6 +411,37 @@ export function buildMemoryPromotionApproveClaim(input: {
   };
 }
 
+/**
+ * The TEAM-target containment assert, as a CO-COMMIT statement.
+ *
+ * Closes the residual the artifact sibling documents and leaves open: its
+ * containment check runs in its own read, so a team deleted or moved to another
+ * organization in the window between that read and the widen still ends up as
+ * the row's owner. Here the predicate rides INSIDE the apply transaction, so a
+ * team that is not in this organization AT COMMIT TIME aborts the widen, the
+ * claim, the history event and the outbox row together.
+ *
+ * It raises the same way every other in-transaction assert on this path does
+ * (division by zero on an empty match), so a race resolves as a stale snapshot:
+ * the destination the reviewer approved is not the destination that exists, and
+ * the request is void rather than applied to a different place.
+ *
+ * The pre-check in the decide ladder is NOT redundant. It runs first and gives
+ * the reviewer an actionable `invalid_state` message in the ordinary case; this
+ * statement is the guarantee for the window the pre-check cannot cover.
+ */
+export function buildMemoryPromotionTeamContainmentAssert(input: {
+  teamId: string;
+  orgId: string;
+}): { text: string; values: unknown[] } {
+  return {
+    text: `SELECT 1 / CASE WHEN EXISTS (
+             SELECT 1 FROM public."team" t WHERE t.id = $1 AND t."organizationId" = $2
+           ) THEN 1 ELSE 0 END AS ok`,
+    values: [input.teamId, input.orgId],
+  };
+}
+
 // ── advisory duplicate signal (memory-specific, cinatra#1381) ───────────────
 
 /**
@@ -424,11 +455,15 @@ export function buildMemoryPromotionApproveClaim(input: {
  *      never contributes, so the signal can never tell an approver that some
  *      other person holds a similar private note. This is the AC's "never
  *      inspect or signal another user's private row", written as a predicate.
- *   2. the audience predicate is the TARGET's, not the viewer's: for an
- *      organization target, org-visible rows; for a team target, rows the team
- *      actually owns plus the org-visible ones. A user-owned `visibility='team'`
- *      row is NOT team-readable (the same asymmetry `deriveScopeLane` documents)
- *      so it is excluded.
+ *   2. the audience predicate is the TARGET's, INTERSECTED with what the
+ *      VIEWER may already see. For an organization target that is the
+ *      org-visible rows. For a TEAM target the team's own rows are counted ONLY
+ *      when the viewer is a member of that team — an org admin reviewing a
+ *      promotion into a team they are not in would otherwise learn that the team
+ *      already holds a concept with this identity, which is an existence oracle
+ *      over content they cannot read (codex round 1, finding 2). A user-owned
+ *      `visibility='team'` row is NOT team-readable at all (the same asymmetry
+ *      `deriveScopeLane` documents), so it is never in the audience either.
  *   3. the comparison key is computed on BOTH sides in this one statement, from
  *      the subject row itself, so a caller cannot supply a probe key of its own
  *      choosing and use the count as an existence oracle.
@@ -443,6 +478,9 @@ export function countAudienceVisibleMemoryDuplicates(input: {
   toVisibility: MemoryPromotionVisibility;
   /** The target team id for a team target; ignored for an organization one. */
   toOwnerId: string;
+  /** The VIEWER the hint is being computed for. A team-owned row is counted
+   *  only when this user is a member of the target team. */
+  viewerId: string;
 }): number {
   ensurePostgresSchema();
   const schema = q();
@@ -450,7 +488,12 @@ export function countAudienceVisibleMemoryDuplicates(input: {
   let audience = `(other.visibility = 'organization' OR other.owner_level = 'organization')`;
   if (input.toVisibility === "team") {
     values.push(input.toOwnerId);
-    audience = `((other.owner_level = 'team' AND other.owner_id = $${values.length})
+    const teamParam = `$${values.length}`;
+    values.push(input.viewerId);
+    const viewerParam = `$${values.length}`;
+    audience = `((other.owner_level = 'team' AND other.owner_id = ${teamParam}
+                  AND EXISTS (SELECT 1 FROM public."teamMember" tm
+                              WHERE tm."teamId" = ${teamParam} AND tm."userId" = ${viewerParam}))
                  OR other.visibility = 'organization' OR other.owner_level = 'organization')`;
   }
   const key = (alias: string) =>

@@ -24,6 +24,7 @@ vi.mock("@/lib/postgres-config", () => ({
 
 import {
   buildMemoryPromotionApproveClaim,
+  buildMemoryPromotionTeamContainmentAssert,
   casRejectMemoryPromotionRequest,
   countAudienceVisibleMemoryDuplicates,
   countMemoryPromotionRequests,
@@ -93,6 +94,25 @@ describe("the approve claim statement (the atomic-apply half)", () => {
   });
 });
 
+describe("the team-containment assert (the co-committed one)", () => {
+  it("is BUILT, never run", () => {
+    buildMemoryPromotionTeamContainmentAssert({ teamId: "team-9", orgId: "org-1" });
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
+
+  it("asserts the team is in THIS organization and raises when it is not", () => {
+    const stmt = buildMemoryPromotionTeamContainmentAssert({ teamId: "team-9", orgId: "org-1" });
+    expect(stmt.text).toContain('FROM public."team" t WHERE t.id = $1 AND t."organizationId" = $2');
+    expect(stmt.text).toMatch(/1 \/ CASE WHEN EXISTS/);
+    expect(stmt.values).toEqual(["team-9", "org-1"]);
+  });
+
+  it("writes nothing — it is a predicate, not a mutation", () => {
+    const stmt = buildMemoryPromotionTeamContainmentAssert({ teamId: "team-9", orgId: "org-1" });
+    expect(stmt.text).not.toMatch(/UPDATE|INSERT|DELETE/);
+  });
+});
+
 describe("the request-only transitions", () => {
   it("reject CASes pending -> rejected and never names the objects table", () => {
     casRejectMemoryPromotionRequest({ id: "req-1", orgId: "org-1", decidedBy: "u-admin", note: "dup" });
@@ -142,6 +162,7 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       objectType: "@cinatra-ai/memory:concept",
       toVisibility: "organization",
       toOwnerId: "org-1",
+      viewerId: "u-admin",
     });
     expect(lastQuery().text).toContain("other.visibility <> 'private'");
   });
@@ -153,6 +174,7 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       objectType: "@cinatra-ai/memory:concept",
       toVisibility: "organization",
       toOwnerId: "org-1",
+      viewerId: "u-admin",
     });
     const q = lastQuery();
     expect(q.text).toContain("(other.visibility = 'organization' OR other.owner_level = 'organization')");
@@ -168,13 +190,33 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       objectType: "@cinatra-ai/memory:concept",
       toVisibility: "team",
       toOwnerId: "team-9",
+      viewerId: "u-admin",
     });
     const q = lastQuery();
-    expect(q.text).toContain("(other.owner_level = 'team' AND other.owner_id = $4)");
+    expect(q.text).toContain("other.owner_level = 'team' AND other.owner_id = $4");
     // The asymmetry deriveScopeLane documents: `visibility = 'team'` alone is
     // NOT team-readable, so it must not appear as an audience clause.
     expect(q.text).not.toContain("other.visibility = 'team'");
-    expect(q.values).toEqual(["org-1", "mem-1", "@cinatra-ai/memory:concept", "team-9"]);
+    expect(q.values).toEqual(["org-1", "mem-1", "@cinatra-ai/memory:concept", "team-9", "u-admin"]);
+  });
+
+  it("counts a TEAM's own rows only for a VIEWER who is a member of that team (codex round 1, finding 2)", () => {
+    countAudienceVisibleMemoryDuplicates({
+      orgId: "org-1",
+      objectId: "mem-1",
+      objectType: "@cinatra-ai/memory:concept",
+      toVisibility: "team",
+      toOwnerId: "team-9",
+      viewerId: "u-admin",
+    });
+    const q = lastQuery();
+    // The team clause is GATED on the viewer's own membership, so an org admin
+    // reviewing a promotion into a team they are not in cannot learn what that
+    // team already holds. The org-visible clause is unaffected — those rows are
+    // readable by the reviewer anyway.
+    expect(q.text).toMatch(
+      /EXISTS \(SELECT 1 FROM public\."teamMember" tm[\s\S]*tm\."teamId" = \$4 AND tm\."userId" = \$5\)/,
+    );
   });
 
   it("derives the comparison key on BOTH sides from the subject row — no caller-supplied probe key", () => {
@@ -184,6 +226,7 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       objectType: "@cinatra-ai/memory:concept",
       toVisibility: "organization",
       toOwnerId: "org-1",
+      viewerId: "u-admin",
     });
     const q = lastQuery();
     expect(q.text).toContain("JOIN \"cinatra\".\"objects\" subj");
@@ -201,6 +244,7 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       objectType: "@cinatra-ai/memory:concept",
       toVisibility: "organization",
       toOwnerId: "org-1",
+      viewerId: "u-admin",
     });
     const q = lastQuery();
     expect(q.text.trimStart().startsWith("SELECT COUNT(*)::int AS count")).toBe(true);

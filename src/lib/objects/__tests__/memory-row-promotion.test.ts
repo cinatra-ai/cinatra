@@ -94,6 +94,7 @@ function harness(
     rejectWins?: boolean;
     duplicates?: number;
     duplicatesThrow?: boolean;
+    supersedeWins?: boolean;
     createThrows?: Error;
   } = {},
 ) {
@@ -108,7 +109,7 @@ function harness(
     listRequests: vi.fn(() => requests),
     countRequests: vi.fn(() => requests.length),
     casReject: vi.fn(() => cfg.rejectWins ?? true),
-    markSuperseded: vi.fn(() => true),
+    markSuperseded: vi.fn(() => cfg.supersedeWins ?? true),
     createRequest: vi.fn((input: Parameters<MemoryPromotionDeps["createRequest"]>[0]) => {
       if (cfg.createThrows) throw cfg.createThrows;
       return requestRow({ id: "req-new", ...input });
@@ -430,6 +431,33 @@ describe("decide — the CAS version guard", () => {
   });
 });
 
+describe("decide — the supersede CAS is USED, not assumed (codex round 1, finding 3)", () => {
+  it("reports `conflict` when the pre-apply supersede LOSES its CAS — never a false 'was superseded'", async () => {
+    const { deps } = harness({ object: memObject({ version: 4 }), supersedeWins: false });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "conflict" });
+  });
+
+  it("reports `conflict` when the POST-apply supersede loses its CAS to a concurrent decider", async () => {
+    const { deps } = harness({
+      apply: { ok: false, reason: "cas_miss" },
+      requestAfterApply: requestRow(),
+      supersedeWins: false,
+    });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "conflict" });
+  });
+
+  it("still reports `stale_snapshot` when the supersede WINS", async () => {
+    const { deps } = harness({ object: memObject({ version: 4 }), supersedeWins: true });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "stale_snapshot" });
+  });
+});
+
 describe("decide — reject", () => {
   it("CAS-updates ONLY the request and never touches the row", async () => {
     const { deps, spies } = harness();
@@ -564,25 +592,26 @@ describe("decide — the atomic apply", () => {
 describe("the advisory duplicate signal", () => {
   it("asks ONLY about the requested target audience and the memory type", async () => {
     const { deps, spies } = harness({ duplicates: 2 });
-    const hint = await memoryDuplicateHint(requestRow({ toVisibility: "team", toOwnerLevel: "team", toOwnerId: "team-9" }), deps);
+    const hint = await memoryDuplicateHint(requestRow({ toVisibility: "team", toOwnerLevel: "team", toOwnerId: "team-9" }), "u-admin", deps);
     expect(spies.countAudienceDuplicates).toHaveBeenCalledWith({
       orgId: "org-1",
       objectId: "mem-1",
       objectType: MEMORY_CONCEPT_TYPE_ID,
       toVisibility: "team",
       toOwnerId: "team-9",
+      viewerId: "u-admin",
     });
     expect(hint).toBe("Advisory: 2 concepts with the same identity are already visible to the target audience.");
   });
 
   it("says NOTHING when there is nothing to say", async () => {
     const { deps } = harness({ duplicates: 0 });
-    expect(await memoryDuplicateHint(requestRow(), deps)).toBeNull();
+    expect(await memoryDuplicateHint(requestRow(), "u-admin", deps)).toBeNull();
   });
 
   it("carries a COUNT only — no title, id, owner, requester or excerpt", async () => {
     const { deps } = harness({ duplicates: 3 });
-    const hint = (await memoryDuplicateHint(requestRow(), deps))!;
+    const hint = (await memoryDuplicateHint(requestRow(), "u-admin", deps))!;
     for (const leak of ["mem-1", "u-member", "u-admin", "runbooks/deployment", "Deployment runbook", "org-1", "req-1"]) {
       expect(hint).not.toContain(leak);
     }
@@ -590,7 +619,7 @@ describe("the advisory duplicate signal", () => {
 
   it("is ADVISORY: a failure to compute it degrades to silence, never to an undecidable request", async () => {
     const { deps } = harness({ duplicatesThrow: true });
-    expect(await memoryDuplicateHint(requestRow(), deps)).toBeNull();
+    expect(await memoryDuplicateHint(requestRow(), "u-admin", deps)).toBeNull();
   });
 
   it("rides the reviewer INBOX read and is absent from the requester's own list", async () => {

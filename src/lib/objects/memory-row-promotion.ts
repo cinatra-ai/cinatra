@@ -140,10 +140,11 @@ export type ApplyOutcome =
   | { ok: true }
   | {
       ok: false;
-      /** `cas_miss` covers BOTH in-transaction CAS asserts — the request claim
-       *  and the row widen. They raise the same SQLSTATE, so the decide path
-       *  re-reads the request to say which fired; that read is sound precisely
-       *  because either way the transaction rolled back and nothing changed. */
+      /** `cas_miss` covers EVERY in-transaction assert on this path — the
+       *  request claim, the team-containment predicate and the row widen. They
+       *  raise the same SQLSTATE, so the decide path re-reads the request to
+       *  say which fired; that read is sound precisely because whichever it
+       *  was, the transaction rolled back and nothing changed. */
       reason: "cas_miss" | "not_found" | "transient" | "not_authorized";
     };
 
@@ -275,6 +276,9 @@ export interface MemoryPromotionDeps {
     objectType: string;
     toVisibility: MemoryPromotionVisibility;
     toOwnerId: string;
+    /** The viewer the hint is for — a team-owned row counts only for a member
+     *  of the target team (codex round 1, finding 2). */
+    viewerId: string;
   }): number;
   /** THE ATOMIC APPLY: ONE transaction containing the request's CAS transition
    *  to `approved`, the CAS widen of the row's ownership/visibility tuple, the
@@ -334,6 +338,21 @@ async function productionDeps(): Promise<MemoryPromotionDeps> {
             note: input.note,
             expectedRowVersion: input.request.rowVersion,
           });
+          // TEAM containment, INSIDE the transaction (codex round 1, finding
+          // 1). The decide ladder already pre-checked it for an actionable
+          // message; this closes the window between that read and the commit,
+          // so a team deleted or moved to another organization in between
+          // aborts the whole apply instead of becoming the row's owner.
+          const coCommit =
+            input.request.toOwnerLevel === "team"
+              ? [
+                  store.buildMemoryPromotionTeamContainmentAssert({
+                    teamId: input.request.toOwnerId,
+                    orgId: input.request.orgId,
+                  }),
+                  claim,
+                ]
+              : [claim];
           // PROJECT FRAME NEUTRALIZED. `historyAwareUpsert` auto-tags the row
           // with the ACTIVE project frame's project id, and the shared decide
           // path is reachable from the `approvals_*` MCP tools — which do run
@@ -364,7 +383,7 @@ async function productionDeps(): Promise<MemoryPromotionDeps> {
                 // THE ATOMIC APPLY: the claim rides INSIDE the same guarded
                 // transaction as the widen + the history event + the Graphiti
                 // outbox row. A lost claim raises and rolls all four back.
-                coCommitStatements: [claim],
+                coCommitStatements: coCommit,
               },
             );
           const ctx = mcpRequestContextStorage.getStore();
@@ -458,7 +477,7 @@ export async function listMemoryPromotionInbox(
   return Promise.all(
     requests.map(async (r) => ({
       ...toReviewRow(r),
-      duplicateHint: await memoryDuplicateHint(r, deps),
+      duplicateHint: await memoryDuplicateHint(r, input.reviewerId, deps),
     })),
   );
 }
@@ -509,12 +528,16 @@ export async function countMemoryPromotionMine(
  * It is a COUNT and nothing else — no title, no owner, no id, no excerpt — and
  * the store's query excludes every private row, so it can neither surface
  * another user's content nor answer "does person X hold a note like this?".
+ * For a TEAM target it counts the team's own rows only when THIS viewer is a
+ * member of that team, so an org admin reviewing a promotion into a team they
+ * are not in learns nothing about what that team already holds.
  *
  * ADVISORY: it never gates a decision. A failure to compute it is swallowed to
  * `null` on purpose: a broken hint must not make a promotion undecidable.
  */
 export async function memoryDuplicateHint(
   request: MemoryPromotionRequestRow,
+  viewerId: string,
   depsOverride?: MemoryPromotionDeps,
 ): Promise<string | null> {
   const deps = await resolveDeps(depsOverride);
@@ -526,6 +549,7 @@ export async function memoryDuplicateHint(
       objectType: MEMORY_CONCEPT_TYPE_ID,
       toVisibility: request.toVisibility,
       toOwnerId: request.toOwnerId,
+      viewerId,
     });
   } catch {
     return null;
@@ -745,7 +769,13 @@ export async function decideMemoryPromotion(
   // 5c. CAS: the reviewer's snapshot must match the request's captured version,
   // and the LIVE row must not have moved past it. Either mismatch supersedes.
   if (!Number.isFinite(expected) || expected !== request.rowVersion || object.version !== request.rowVersion) {
-    deps.markSuperseded({ id: request.id, orgId: viewer.orgId });
+    // The supersede is itself a CAS, and its answer is USED (codex round 1,
+    // finding 3): losing it means a concurrent decider already moved the
+    // request, so saying "the request was superseded" would be a false
+    // statement about what happened.
+    if (!deps.markSuperseded({ id: request.id, orgId: viewer.orgId })) {
+      return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
+    }
     return {
       ok: false,
       code: "stale_snapshot",
@@ -842,14 +872,24 @@ export async function decideMemoryPromotion(
     if (!now || now.status !== "pending") {
       return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
     }
-    deps.markSuperseded({ id: request.id, orgId: viewer.orgId });
+    // The re-read and this supersede are two statements, so the request can be
+    // decided between them. The supersede's own CAS is what settles it: a lost
+    // CAS means a concurrent decider won after all, and the honest answer is
+    // `conflict` rather than a claim that this call superseded anything (codex
+    // round 1, finding 3).
+    if (!deps.markSuperseded({ id: request.id, orgId: viewer.orgId })) {
+      return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
+    }
     return {
       ok: false,
       code: "stale_snapshot",
-      message: "The memory row changed during approval — the request was superseded.",
+      message:
+        "The memory row or its target team changed during approval — the request was superseded.",
     };
   }
   if (applied.reason === "not_found") {
+    // Best-effort void; the refusal below is true either way (the row is gone),
+    // so a lost CAS here changes nothing the caller is told.
     deps.markSuperseded({ id: request.id, orgId: viewer.orgId });
     return { ok: false, code: "not_found", message: `The memory row '${request.objectId}' no longer exists.` };
   }
