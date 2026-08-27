@@ -12,6 +12,11 @@
 //      test`, `pnpm -C packages/x exec vitest run`, `pnpm --filter <pkg> run
 //      test`) — or carry a machine-readable exception entry in
 //      scripts/audit/package-suite-runner-exceptions.json.
+//   4. ROOT TIER → RUNNER (cinatra#2936). Every root private proof tier —
+//      a `vitest.integration-*.config.ts` beside the root config, reached
+//      through a package script — MUST be invoked by a workflow that can turn
+//      a check red, or carry a machine-readable exception entry in
+//      scripts/audit/root-tier-runner-exceptions.json.
 //
 // Why (1) exists: `vitest run a.test.ts b.test.ts` treats positionals as
 // FILTERS. If one positional matches zero files, vitest SILENTLY ignores it as
@@ -19,6 +24,20 @@
 // renamed/lost (e.g. dropped in a rebase) leaves its pin behind and CI stays
 // green while advertising coverage it no longer has. This guard is the
 // secondary tripwire that turns that silent gap into a hard failure.
+//
+// Why (4) exists: the same hole, one door further out. A tier written as a
+// dedicated ROOT config plus a `"test:x": "vitest run --config
+// vitest.integration-N.config.ts"` package script is invisible to (1), (2) and
+// (3) alike: (1) reads file paths PINNED INSIDE a workflow and this tier pins
+// none; (2) governs `scripts/audit/__tests__`; (3) governs `packages/**`. So a
+// tier of this shape joins CI only when somebody adds a step, and — exactly as
+// (3) found for package suites — nothing said when nobody did. Measured on
+// `main` at the time of writing: of eleven such tiers, ONE was invoked by a
+// workflow. The other ten were fixtures whose failure mode was silence, three of
+// them the private proof tiers of the epic this direction was written for. A
+// tier's config is a DELIBERATE artifact — somebody wrote a whole file to say
+// "these suites need a real database and must never pass as skipped" — which is
+// what makes an unrun one worth failing over rather than shrugging at.
 //
 // Why (3) exists: (2)'s inventory sweep found the same hole one level out.
 // ~209 plain package unit suites — the whole of packages/llm, packages/chat,
@@ -2413,7 +2432,310 @@ export function auditPackageSuiteRunners(repoRoot = REPO_ROOT, workflowDir = WOR
   return { ungated, exempt, tierExcluded, staleExceptions, redundantExceptions, wholesale, packageFiles };
 }
 
-// Run as a CLI gate — all three directions, all findings reported before
+
+// ── Direction 4 — root integration tiers (cinatra#2936) ─────────────────────
+//
+// GOVERNED SET: every `vitest.integration-*.config.ts` FILE at the repository
+// root. The FILE and not the script is the unit, because the file is the
+// durable artifact — a tier whose script was renamed away is exactly as unrun
+// as one whose step was deleted, and keying on the script would make the first
+// case invisible.
+//
+// CREDITED only when a workflow segment that can ACTUALLY TURN A CHECK RED
+// (`enforcingRunnerSegments` — the same definition directions 2 and 3 use, so
+// the four cannot disagree about what a gate is) runs, at the repository root:
+//   a) a root package script whose body is a WHOLESALE `vitest run --config
+//      <that tier>` — `packageScriptIsWholesaleVitest`, so a script rewritten
+//      to `true`, narrowed with a positional, or masked with `;` / `|` / `||`
+//      / `&` stops being a runner; or
+//   b) a direct `pnpm exec vitest run --config <that tier> [safe flags]`; or
+//   c) an AGGREGATE script that reaches (a) — the closure below.
+//
+// The closure walks UPWARD from the tier: a script joins when its body is an
+// unconditional `&&` chain (the one separator under which a failure both stops
+// the chain and becomes the script's status) and one of its segments invokes a
+// script already in the set. npm's implicit `pre*` / `post*` lifecycle edges are
+// NOT modelled, and neither is a tier reached only through them — that direction
+// costs a false RED a human fixes, never a false green.
+//
+// RESIDUALS, named. A step whose invocation carries a forwarded argument
+// (`pnpm test:x --maxWorkers=2`) is NOT credited: `invokesRootSuite` requires
+// the script name to be the last token, because a forwarded positional narrows
+// the run and this walk cannot tell which is which. Again a false RED, fixed by
+// writing the step bare. Everything `enforcingRunnerSegments` already refuses —
+// a manual-only workflow, a `continue-on-error` step, a literal-`false` job, a
+// non-bash shell — is refused here unchanged.
+//
+// And it INHERITS that walk's one residual that leans the other way, stated
+// here rather than left to be rediscovered: a non-literal `if:` reads as
+// EXECUTING (see the file header). So a tier pointed at a job guarded by, say,
+// `if: github.event_name == 'workflow_dispatch'` inside a change-triggered
+// workflow would be credited though that job never fires on a PR. Refusing
+// non-literal `if:` instead would credit nothing at all — every gating job in
+// this repository carries the docs-only skip condition — which is why
+// directions 2 and 3 already read them this way, and why direction 4 does not
+// diverge. The stopping rule the header states applies: teach the parser when
+// the construct actually arrives in a reviewed workflow.
+//
+// THE LEDGER IS THE ONLY OTHER STATE. A tier with no runner must be named in
+// ROOT_TIER_EXCEPTIONS_FILE with the slice that owns it and a written reason.
+// The `slice` may well be a CLOSED issue, and that is precisely the shape this
+// records: the tier shipped and its runner did not. There is no third state —
+// and a ledger entry for a tier that IS run, or for a config that no longer
+// exists, is itself a failure, so the list can only shrink honestly.
+export const ROOT_TIER_EXCEPTIONS_FILE = "scripts/audit/root-tier-runner-exceptions.json";
+
+// The naming convention every root tier in this repository already follows.
+export const ROOT_TIER_CONFIG_RE = /^vitest\.integration-[A-Za-z0-9._-]+\.config\.ts$/;
+
+/** Every root tier config file on disk, sorted. */
+export function rootTierConfigs(repoRoot = REPO_ROOT) {
+  return readdirSync(repoRoot)
+    .filter((f) => ROOT_TIER_CONFIG_RE.test(f))
+    .sort();
+}
+
+/** The root package.json's scripts, or {} when it cannot be read. */
+export function rootPackageScripts(repoRoot = REPO_ROOT) {
+  try {
+    return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))?.scripts ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The `--config` / `-c` values a command line names, unquoted.
+ *
+ * Both spellings and both forms (`--config x`, `--config=x`, `-c x`, `-c=x`) —
+ * the same vocabulary `wholesaleVitestArgv` classifies, read here for the value
+ * rather than for the verdict.
+ */
+export function vitestConfigTokens(cmd) {
+  const toks = shellTokens(cmd);
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = unquoteWord(toks[i]);
+    if (!t.startsWith("-")) continue;
+    const eq = t.match(/^-{1,2}([\w.-]+)=(.*)$/);
+    const name = eq ? eq[1] : t.replace(/^-+/, "");
+    if (!VITEST_CONFIG_FLAGS.has(name)) continue;
+    out.push(unquoteWord(eq ? eq[2] : (toks[i + 1] ?? "")));
+  }
+  return out;
+}
+
+/**
+ * Does this argv name THIS tier's config explicitly?
+ *
+ * `wholesaleVitestArgv(argv, expected)` only checks a `--config` it FINDS: an
+ * argv carrying none is wholesale for the config vitest would pick by default,
+ * which for a repository-root run is `vitest.config.ts` — the root unit tier,
+ * not a private tier. Directions 2 and 3 can leave that implicit because the
+ * config they expect IS the default one; direction 4 cannot, so the flag must
+ * be there and must name this tier. Reading the ARGV and not the segment text
+ * also refuses a decoy — `echo --config <tier> && vitest run`, or an
+ * `X=--config <tier>` env assignment in front of a bare run — where the token
+ * appears beside an invocation that never receives it.
+ */
+export function argvNamesConfig(argv, config) {
+  for (let i = 0; i < argv.length; i++) {
+    const t = unquoteWord(argv[i]);
+    if (!t.startsWith("-")) continue;
+    const eq = t.match(/^-{1,2}([\w.-]+)=(.*)$/);
+    const name = eq ? eq[1] : t.replace(/^-+/, "");
+    if (!VITEST_CONFIG_FLAGS.has(name)) continue;
+    if (unquoteWord(eq ? eq[2] : (argv[i + 1] ?? "")) === config) return true;
+  }
+  return false;
+}
+
+/**
+ * A package script body as an unconditional `&&` chain of segments — or null
+ * when any part of it masks a status or moves execution somewhere this walk
+ * cannot follow. Same grammar as `packageScriptIsWholesaleVitest`, factored out
+ * so the aggregate-script closure and the wholesale check cannot drift apart.
+ */
+export function scriptChainSegments(cmd) {
+  if (typeof cmd !== "string") return null;
+  if (hasUnquotedExpansion(cmd) || /[()]/.test(cmd) || hasTopLevelBackground(cmd)) return null;
+  const commands = splitShellCommands(cmd);
+  if (
+    commands.some(
+      (c) =>
+        /^(exit|return|exec|trap|cd)\b/.test(stripEnvPrefix(c.text)) ||
+        errexitSetting(c.text) !== null ||
+        isShellControlCommand(c.text),
+    )
+  ) {
+    return null;
+  }
+  const segs = [];
+  for (const [i, { text, sep }] of commands.entries()) {
+    const isLast = i === commands.length - 1;
+    if (!(sep === "&&" || (isLast && sep === ""))) return null;
+    const seg = text.trim();
+    if (hasTopLevelRedirect(seg)) return null;
+    if (seg) segs.push(seg);
+  }
+  return segs;
+}
+
+/**
+ * Is THIS script a wholesale run of THIS tier?
+ *
+ * The chain rules are `scriptChainSegments`' (which are
+ * `packageScriptIsWholesaleVitest`'s), and the accepted invocation must itself
+ * name the tier config — see `argvNamesConfig` for why that is not implied.
+ */
+export function scriptRunsTierWholesale(repoRoot = REPO_ROOT, script, config, scripts) {
+  const all = scripts ?? rootPackageScripts(repoRoot);
+  const segs = scriptChainSegments(all[script]);
+  if (segs === null) return false;
+  return segs.some((seg) => {
+    const invocation = runnerArgv(seg);
+    return (
+      invocation?.runner === "vitest" &&
+      argvNamesConfig(invocation.argv, config) &&
+      wholesaleVitestArgv(invocation.argv, config)
+    );
+  });
+}
+
+/** Every root package script that REACHES a tier config, transitively. */
+export function scriptsReachingTier(repoRoot = REPO_ROOT, config, scripts) {
+  const all = scripts ?? rootPackageScripts(repoRoot);
+  const reaching = new Set();
+  for (const name of Object.keys(all)) {
+    if (scriptRunsTierWholesale(repoRoot, name, config, all)) reaching.add(name);
+  }
+  for (let grew = reaching.size > 0; grew; ) {
+    grew = false;
+    for (const [name, cmd] of Object.entries(all)) {
+      if (reaching.has(name)) continue;
+      const segs = scriptChainSegments(cmd);
+      if (segs === null) continue;
+      if (segs.some((seg) => [...reaching].some((member) => invokesRootSuite(seg, member)))) {
+        reaching.add(name);
+        grew = true;
+      }
+    }
+  }
+  return reaching;
+}
+
+/** Does some enforcing workflow segment run this tier? */
+export function rootTierIsEnforced(config, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const workflowDir = opts.workflowDir ?? WORKFLOW_DIR;
+  const reaching = opts.reaching ?? scriptsReachingTier(repoRoot, config, opts.scripts);
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  for (const { seg, cwd } of segments) {
+    // A run inside another package is another package's suite; an UNKNOWN cwd
+    // (`null`) is refused rather than assumed to be the root.
+    if (cwd !== "") continue;
+    for (const script of reaching) {
+      if (invokesRootSuite(seg, script)) return true;
+    }
+    const invocation = runnerArgv(seg);
+    if (
+      invocation?.runner === "vitest" &&
+      argvNamesConfig(invocation.argv, config) &&
+      wholesaleVitestArgv(invocation.argv, config)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Read + VALIDATE the root-tier ledger, on the same terms as direction 3's:
+// every field mandatory and checked, and a malformed ledger THROWS rather than
+// degrading to "no exceptions" (a loud, wrong failure) or to "everything is
+// excepted" (a silent, wrong pass).
+export function readRootTierExceptions(repoRoot = REPO_ROOT, text) {
+  const file = join(repoRoot, ROOT_TIER_EXCEPTIONS_FILE);
+  let raw = text;
+  if (raw === undefined) {
+    if (!existsSync(file)) return [];
+    raw = readFileSync(file, "utf8");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${ROOT_TIER_EXCEPTIONS_FILE}: not valid JSON — ${err.message}`);
+  }
+  if (!parsed || !Array.isArray(parsed.exceptions)) {
+    throw new Error(`${ROOT_TIER_EXCEPTIONS_FILE}: expected an object with an \`exceptions\` array.`);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const [i, entry] of parsed.exceptions.entries()) {
+    const at = `${ROOT_TIER_EXCEPTIONS_FILE}[${i}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${at}: expected an object.`);
+    }
+    const { config, slice, reason } = entry;
+    if (typeof config !== "string" || !ROOT_TIER_CONFIG_RE.test(config)) {
+      throw new Error(`${at}: \`config\` must be a root vitest.integration-*.config.ts, got ${JSON.stringify(config)}.`);
+    }
+    if (seen.has(config)) throw new Error(`${at}: duplicate entry for ${config}.`);
+    seen.add(config);
+    // The SLICE, not a follow-up: the issue whose work the tier is, and where
+    // wiring it belongs. It may be closed — that is the state this records.
+    if (typeof slice !== "string" || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(slice)) {
+      throw new Error(`${at}: \`slice\` must be a GitHub issue URL, got ${JSON.stringify(slice)}.`);
+    }
+    if (typeof reason !== "string" || reason.trim().length < 20) {
+      throw new Error(`${at}: \`reason\` must be a written sentence (>= 20 chars).`);
+    }
+    out.push({ config, slice, reason });
+  }
+  return out;
+}
+
+// Direction 4's verdict for every root tier config.
+//
+// `ungated`   — no runner, no ledger entry. HARD FAILURE.
+// `exempt`    — no runner, named in the ledger with its slice and a reason.
+// `stale…`    — a ledger entry whose config file is gone.
+// `redundant…`— a ledger entry for a tier a workflow DOES run: the ledger
+//               describes a state CI is not in.
+export function auditRootIntegrationTiers(repoRoot = REPO_ROOT, workflowDir = WORKFLOW_DIR, opts = {}) {
+  const configs = opts.configs ?? rootTierConfigs(repoRoot);
+  const scripts = opts.scripts ?? rootPackageScripts(repoRoot);
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  const exceptions = opts.exceptions ?? readRootTierExceptions(repoRoot);
+  const byConfig = new Map(exceptions.map((e) => [e.config, e]));
+
+  const enforced = [];
+  const ungated = [];
+  const exempt = [];
+  for (const config of configs) {
+    const reaching = [...scriptsReachingTier(repoRoot, config, scripts)].sort();
+    if (rootTierIsEnforced(config, { repoRoot, workflowDir, scripts, segments, reaching: new Set(reaching) })) {
+      enforced.push({ config, scripts: reaching });
+      continue;
+    }
+    const entry = byConfig.get(config);
+    if (entry) exempt.push(entry);
+    else ungated.push({ config, scripts: reaching });
+  }
+
+  const present = new Set(configs);
+  const enforcedSet = new Set(enforced.map((e) => e.config));
+  return {
+    tiers: configs,
+    enforced,
+    ungated,
+    exempt,
+    staleExceptions: exceptions.filter((e) => !present.has(e.config)),
+    redundantExceptions: exceptions.filter((e) => enforcedSet.has(e.config)),
+  };
+}
+
+// Run as a CLI gate — all four directions, all findings reported before
 // exiting so one run tells the whole truth.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let failed = false;
@@ -2535,6 +2857,51 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       "\nThe entry describes a state CI is not in, so the ledger no longer reads as\n" +
         "the truth it claims to be. Delete the entry (and close its follow-up issue if\n" +
         "the suite is genuinely repaired).",
+    );
+  }
+
+  // ── Direction 4 — root integration tiers (cinatra#2936) ─────────────────
+  // The enforcing-segment scan is shared with direction 3's view of the same
+  // workflows, for the same reason: one definition of "a gate", four
+  // directions reading it.
+  const tier = auditRootIntegrationTiers();
+  if (tier.ungated.length > 0) {
+    failed = true;
+    console.error("\n✗ root integration tiers that NO CI runner executes:");
+    for (const t of tier.ungated) {
+      const how = t.scripts.length > 0 ? `reached by \`pnpm ${t.scripts.join("` / `pnpm ")}\`` : "reached by NO package script";
+      console.error(`  - ${t.config} (${how})`);
+    }
+    console.error(
+      "\nEach tier above is a dedicated root config — somebody wrote a whole file to\n" +
+        "say these suites need a real database and must never pass as skipped — and\n" +
+        "no workflow runs it, so its suites run NOWHERE. Fix by EITHER adding a step\n" +
+        "to a job with the services that tier needs (`pnpm <its script>`, bare: a\n" +
+        "forwarded argument is not credited, because this gate cannot tell a flag\n" +
+        `from a filter) OR adding an entry to ${ROOT_TIER_EXCEPTIONS_FILE} naming\n` +
+        "the config, the SLICE that owns it, and the reason. Those are the only two\n" +
+        "states; there is no third.",
+    );
+  } else {
+    console.log(
+      `✓ every root integration tier is executed by a CI runner ` +
+        `(${tier.tiers.length} tiers, ${tier.enforced.length} wired, ${tier.exempt.length} recorded as unwired)`,
+    );
+  }
+
+  if (tier.staleExceptions.length > 0) {
+    failed = true;
+    console.error(`\n✗ ${ROOT_TIER_EXCEPTIONS_FILE} names configs that do not exist:`);
+    for (const e of tier.staleExceptions) console.error(`  - ${e.config} (${e.slice})`);
+    console.error("\nRemove the stale entry — it records a gap for a tier that is gone.");
+  }
+  if (tier.redundantExceptions.length > 0) {
+    failed = true;
+    console.error(`\n✗ ${ROOT_TIER_EXCEPTIONS_FILE} records tiers a CI runner DOES execute:`);
+    for (const e of tier.redundantExceptions) console.error(`  - ${e.config} (${e.slice})`);
+    console.error(
+      "\nThe entry describes a state CI is not in, so the ledger no longer reads as\n" +
+        "the truth it claims to be. Delete the entry — the tier is wired.",
     );
   }
 
