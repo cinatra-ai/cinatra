@@ -89,6 +89,36 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
   },
 };
 
+/**
+ * Resolve the caller's project grants for the frame's OWN identity pair.
+ *
+ * `resolveActorGrantsForUserInOrg` is the single canonical assembly (org role →
+ * teams → `readProjectGrantsForUser`), the same one the widget and session
+ * lineages call, so an objects primitive and an in-app read of the same row
+ * cannot disagree because one of them resolved the axis differently. It is
+ * called with the ids this frame resolved, never with an id from another
+ * source, so no identity is crossed.
+ *
+ * Imported dynamically: the host module pulls better-auth + the Postgres
+ * bridge, and this registry is loaded by the extension host at boot. Any
+ * failure (no ids, module unavailable, query error) returns `undefined` — the
+ * "not resolved" state both gates read as NO grants, so the failure direction
+ * is a refusal, never a widening.
+ */
+async function resolveFrameProjectGrants(
+  userId: string | null,
+  orgId: string | null,
+): Promise<Array<{ projectId: string }> | undefined> {
+  if (!userId || !orgId) return undefined;
+  try {
+    const { resolveActorGrantsForUserInOrg } = await import("@/lib/auth-session");
+    const { projectGrants } = await resolveActorGrantsForUserInOrg(userId, orgId);
+    return projectGrants;
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
   const handlers = {
     ...createObjectsPrimitiveHandlers(),
@@ -152,6 +182,34 @@ export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
         // objects kernel `enforceResourceAccess` consults `actor.oboCeiling` to
         // confine the delegated run to its anchored scope (W2/#1051).
         if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
+        // Forward the canonical PROJECT-GRANT axis, resolved for the SAME
+        // identity pair this frame carries (userId + orgId read above). Two
+        // objects surfaces read `actor.projectGrants` directly and treat an
+        // unresolved axis as "no grants":
+        //   - `assertProjectReadAccess` (@/lib/sealed-room) — the 404-hidden
+        //     gate on an explicit `objects_save` projectId (cinatra#1377) and
+        //     on a project-filtered `objects_list`;
+        //   - `assertProjectWritable` (@/lib/project-writable) — the write-tier
+        //     gate on that same explicit binding.
+        // Without this stamp both refuse EVERY non-platform-admin caller over
+        // this transport, including one holding `write` on the target project.
+        // Sibling registries forward the same axis off their own frame —
+        // packages/projects/src/mcp/registry.ts:202 (session lineage),
+        // packages/agents/src/mcp/registry.ts:67 and src/lib/artifacts/mcp.ts:229
+        // (A2A carrier lineage). This registry has no A2A branch (identity is
+        // the transport-resolved pair only), so it resolves the axis for that
+        // pair through the canonical assembly instead of a carrier.
+        const projectGrants = await resolveFrameProjectGrants(userId, orgId);
+        if (projectGrants) {
+          actorBase.projectGrants = projectGrants;
+          // Single canonical derivation (sorted), never set independently of
+          // the grants — mirrors `buildActorContextFromPrimitive`
+          // (src/lib/authz/build-actor-context.ts:181-187) so a back-compat
+          // consumer reading the binary list cannot disagree with the grants.
+          actorBase.projectIds = projectGrants
+            .map((g) => g.projectId)
+            .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        }
 
         const result = await handler({
           primitiveName: name,

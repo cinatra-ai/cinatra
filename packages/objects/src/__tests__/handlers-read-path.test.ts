@@ -21,6 +21,10 @@ vi.mock("@/lib/objects-store", () => ({
   upsertObjectAndEnqueue: vi.fn(),
   getObjectById: vi.fn(),
   listObjectsByFilter: vi.fn(),
+  // cinatra#2591: node-uuid -> row-id resolution through the DETERMINISTIC
+  // anchor column. Default: resolves nothing, so the tests below that assert the
+  // LEGACY incidental probes keep exercising exactly those probes.
+  resolveObjectIdsByAnchorNodeUuids: vi.fn(() => new Map<string, string[]>()),
   softDeleteObject: vi.fn(),
 }));
 
@@ -41,13 +45,18 @@ vi.mock("../graphiti-client", () => ({
 }));
 
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
-import { getObjectById, listObjectsByFilter } from "@/lib/objects-store";
+import {
+  getObjectById,
+  listObjectsByFilter,
+  resolveObjectIdsByAnchorNodeUuids,
+} from "@/lib/objects-store";
 import { searchNodes, getEpisodes } from "../graphiti-client";
 
 const mockGet = getObjectById as unknown as ReturnType<typeof vi.fn>;
 const mockList = listObjectsByFilter as unknown as ReturnType<typeof vi.fn>;
 const mockSearch = searchNodes as unknown as ReturnType<typeof vi.fn>;
 const mockGetEpisodes = getEpisodes as unknown as ReturnType<typeof vi.fn>;
+const mockAnchors = resolveObjectIdsByAnchorNodeUuids as unknown as ReturnType<typeof vi.fn>;
 
 const ACTOR = {
   actorType: "model",
@@ -189,6 +198,60 @@ describe("objects_list with query — semantic", () => {
     const lastListCall = mockList.mock.calls[mockList.mock.calls.length - 1][0];
     expect(lastListCall.ids).toEqual(["a", "b"]);
     expect(lastListCall.orgId).toBe("org-1");
+  });
+
+  it("Test 4b: resolves ranked nodes through the DETERMINISTIC anchor column", async () => {
+    // cinatra#2591. The nodes carry NO incidental id — no attributes, no
+    // `[oid:…]` tag, no bare-UUID name — which is what real extracted entities
+    // look like (measured: custom episode-body fields never reach node
+    // attributes). Recovery works anyway, because the anchor column names the
+    // row. This is the case the old four-probe chain answered `no_ids_extracted`
+    // for.
+    mockSearch.mockResolvedValue({
+      nodes: [
+        { uuid: "anchor-1", name: "Northwind retrospective", summary: "", labels: ["Entity"], group_id: "g", attributes: {} },
+        { uuid: "anchor-2", name: "Contoso onboarding", summary: "", labels: ["Entity"], group_id: "g", attributes: {} },
+      ],
+    });
+    mockAnchors.mockReturnValue(new Map([["anchor-1", ["a"]], ["anchor-2", ["b"]]]));
+    mockList.mockReturnValue([fakeRow("a"), fakeRow("b")]);
+    const handlers = createObjectsPrimitiveHandlers();
+    const res = await handlers.objects_list({
+      primitiveName: "objects_list",
+      input: { query: "retrospective", type: "test" },
+      actor: ACTOR,
+      mode: "deterministic",
+    });
+    const lastListCall = mockList.mock.calls[mockList.mock.calls.length - 1][0];
+    expect(lastListCall.ids).toEqual(["a", "b"]);
+    // NOT degraded: the ids came back, so this is a real ranked answer.
+    expect((res as { meta?: unknown }).meta).toBeUndefined();
+    // The resolver was asked about exactly the ranked node uuids.
+    const lastAnchorCall = mockAnchors.mock.calls[mockAnchors.mock.calls.length - 1];
+    expect(lastAnchorCall[0]).toEqual(["anchor-1", "anchor-2"]);
+  });
+
+  it("Test 4c: an anchored and an un-anchored node resolve together, rank intact", async () => {
+    // Rows projected BEFORE cinatra#2591 have a null anchor until their next
+    // projection, so the demoted incidental probes are still their only path.
+    // Both classes must coexist in one result without losing Graphiti's order.
+    mockSearch.mockResolvedValue({
+      nodes: [
+        { uuid: "anchor-1", name: "Anchored row", summary: "", labels: ["Entity"], group_id: "g", attributes: {} },
+        { uuid: "n-legacy", name: "Legacy", summary: "", labels: [], group_id: "g", attributes: { cinatra_object_id: "b" } },
+      ],
+    });
+    mockAnchors.mockReturnValue(new Map([["anchor-1", ["a"]]]));
+    mockList.mockReturnValue([fakeRow("a"), fakeRow("b")]);
+    const handlers = createObjectsPrimitiveHandlers();
+    await handlers.objects_list({
+      primitiveName: "objects_list",
+      input: { query: "mixed", type: "test" },
+      actor: ACTOR,
+      mode: "deterministic",
+    });
+    const lastListCall = mockList.mock.calls[mockList.mock.calls.length - 1][0];
+    expect(lastListCall.ids).toEqual(["a", "b"]);
   });
 
   it("Test 5: ranking preserved (Graphiti order survives Postgres fetch)", async () => {
