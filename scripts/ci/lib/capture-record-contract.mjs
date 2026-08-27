@@ -419,7 +419,22 @@ export function absenceInstanceViolations({ instance, kind, state }) {
   return out;
 }
 
-/** Cell-name state tokens, normalized to the two states evidence claims. */
+/**
+ * Cell-name state tokens, normalized to the states evidence claims.
+ *
+ * `advisory` IS ONE OF THEM. The audit card resolves it -- it reports a reading
+ * and asks for no decision -- and two records of exactly that state already
+ * stand in the index, on `run_card` and on `page_gate_region`. They stand
+ * because this map did NOT carry the token: an unmapped token leaves
+ * `parseCellName` with a null state, and a null state asks a record for neither
+ * a pending card's controls nor a decided card's absences. That is the right
+ * requirement set for this state, arrived at by silence -- and silence did not
+ * survive the third host, where the audit tier enumerates the states a record
+ * may declare and refused the same card (the driven refusal is recorded in
+ * `evidence/2791-s9g-conformance/capture-results.json`). Naming the token makes
+ * both halves read one vocabulary instead of one reading a state and the other
+ * reading nothing.
+ */
 export const STATE_ALIASES = {
   pending: "pending",
   held: "pending",
@@ -435,7 +450,75 @@ export const STATE_ALIASES = {
   settled: "decided",
   resolved: "decided",
   done: "decided",
+  advisory: "advisory",
 };
+
+/**
+ * The two states a card that ASKS FOR A DECISION resolves, named ONCE for both
+ * halves. The audit tier re-exports this list as its own `CAPTURE_STATES`, and
+ * the anchor contract computes its digest over one anchor set per
+ * (host, kind, state) drawn from it -- so THIS list is a digest input, and the
+ * per-kind vocabulary below is deliberately not one.
+ *
+ * It is NOT "the states every kind resolves". Three kinds resolve exactly these
+ * two; the fourth resolves neither. `KIND_CAPTURE_STATES` is the authority on
+ * what a kind may declare, and this list is the default a kind the map does not
+ * name falls back to.
+ */
+export const CANONICAL_CAPTURE_STATES = Object.freeze(["pending", "decided"]);
+
+/**
+ * THE STATE VOCABULARY, PER KIND -- exact, not additive.
+ *
+ * A card asking for a decision is `pending` until it is taken and `decided`
+ * after. The audit card asks for none: it resolves `advisory`, the reading, or
+ * `absent`, which draws NO DOM AT ALL and therefore has nothing to photograph
+ * ("TWO STATES DRAW, AND ONLY TWO", packages/agents/src/verification-summary-card.tsx).
+ * So `verification_summary` resolves `advisory` and NOTHING ELSE: a `pending`
+ * record of it would be a reading asking for a decision it has no floor to take,
+ * and a `decided` one a verdict the resolver never issues. Listing it as
+ * "the two, plus advisory" would admit both.
+ *
+ * Two advisory records of that card already stand in the index (`run_card`,
+ * `page_gate_region`); a third was DRIVEN on `chat_thread` and refused by the
+ * audit tier, which enumerated one list for four kinds. The refusal is recorded
+ * in `evidence/2791-s9g-conformance/capture-results.json`.
+ *
+ * IT ADDS NO ANCHOR. A kind's advisory requirement set is the set its two
+ * ratified sets are BUILT from: a pending capture is that set plus the decision
+ * controls, a decided one is that set plus the decided summary and the
+ * controls' measured absence. Every selector an advisory record owes therefore
+ * already appears inside this kind's ratified `pending` and `decided` anchor
+ * entries -- stated precisely, because there is no `<kind>|advisory` entry in
+ * the digest and this change does not add one: the anchor map is enumerated
+ * over `CANONICAL_CAPTURE_STATES` and is left exactly where it was ratified.
+ * `scripts/ci/__tests__/capture-record-contract.test.mjs` pins the subset
+ * relation so it cannot quietly stop being true.
+ */
+export const KIND_CAPTURE_STATES = Object.freeze({
+  artifact_review_gate: CANONICAL_CAPTURE_STATES,
+  recommendation_hold: CANONICAL_CAPTURE_STATES,
+  trigger_schedule_proposal: CANONICAL_CAPTURE_STATES,
+  // The HITL screen asks a question and is answered, so it resolves the two
+  // like any other card that asks for something. Its own spellings — `asking`
+  // and `answered` — are NORMALIZED to them by `STATE_ALIASES` rather than
+  // admitted as states of their own, which is what keeps one vocabulary
+  // grading every kind. What is unusual about this kind is its settled
+  // READING, not its settled state: `settledIsAbsence` above.
+  agent_hitl_screen: CANONICAL_CAPTURE_STATES,
+  verification_summary: Object.freeze(["advisory"]),
+});
+
+/**
+ * The closed set of states a record of this kind may declare.
+ *
+ * A kind the map does not name falls back to the two -- a record that names no
+ * kind, or names one outside `CARD_KINDS`, is refused by its own arm, and this
+ * one must not answer that question a second time in a different voice.
+ */
+export function captureStatesFor(kind) {
+  return KIND_CAPTURE_STATES[kind] ?? CANONICAL_CAPTURE_STATES;
+}
 
 /** The marker a decided capture owes -- the card says what was decided. */
 export const DECIDED_SUMMARY_SELECTOR = "[data-lifecycle-card-state]";
@@ -602,6 +685,41 @@ export function validateCaptureRecord(record, io = {}) {
         `"${claimedKind}" is recorded as composition-only on "${claimedHost}" — ${admission.reason}`,
       );
     }
+  }
+
+  // AN EMPTY DECLARATION IS NOT A CLAIM, and it must not read as one. `""` is
+  // not nullish, so `record.declaredKind ?? claim.kind` keeps the empty string
+  // rather than falling back to the name -- and every arm that guards on
+  // truthiness then skips silently, which turns a blank field into a way to
+  // switch off the checks the claim owes. It is refused as malformed instead.
+  for (const field of ["declaredKind", "declaredState"]) {
+    const value = record[field];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string" || value === "") {
+      push(
+        "record/empty-declaration",
+        `\`${field}\` is present and empty -- an empty declaration is not a claim, and it answers no question the record is asked`,
+      );
+    }
+  }
+
+  // THE STATE MUST BE ONE THIS KIND RESOLVES. Before this arm an unmapped state
+  // token did not fail -- it DISABLED the state-derived requirements, so a
+  // `__advisory` review-gate cell was graded as if it claimed no state at all,
+  // which is a pending card's controls dropped rather than met. The vocabulary
+  // is per kind and EXACT, so the card that resolves `advisory` resolves only
+  // that, and the three that resolve a decision resolve only their two.
+  const kindForState = record.declaredKind ?? claim.kind;
+  const stateForKind = record.declaredState ?? claim.state;
+  if (
+    kindForState &&
+    stateForKind &&
+    !captureStatesFor(kindForState).includes(stateForKind)
+  ) {
+    push(
+      "record/state-not-in-kind-vocabulary",
+      `"${kindForState}" resolves ${captureStatesFor(kindForState).join("/")}; this record claims state "${stateForKind}"`,
+    );
   }
 
   // --- the URL class -------------------------------------------------------
