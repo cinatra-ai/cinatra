@@ -41,7 +41,17 @@ vi.mock("../graphiti-client", () => ({
   identityHashToUuid: (h: string, _g: string) => `uuid-${h}`,
 }));
 
+// Wraps the REAL classifier (every other test in this file depends on its
+// static-typeHint fast path). Only the classification-bypass test below
+// overrides it, and only for its one call (`mockResolvedValueOnce`), so no
+// other test in this file is affected regardless of run order.
+vi.mock("../classifier", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../classifier")>();
+  return { ...actual, classifyObject: vi.fn(actual.classifyObject) };
+});
+
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
+import { classifyObject } from "../classifier";
 import { upsertObjectAndEnqueue, getObjectById } from "@/lib/objects-store";
 import { objectTypeRegistry } from "../registry";
 import {
@@ -845,21 +855,38 @@ describe("cinatraAgentRunId is server-derived, not a smuggling channel", () => {
 });
 
 describe("a memory row cannot be written without declaring the type", () => {
+  // cinatra#1378 round-2 item 4. The retired generic type
+  // (`@cinatra-ai/objects:object`) is refused by an EARLIER, unrelated gate
+  // (`OBJECTS_TYPE_NOT_REGISTERED`), well before the guard this describe block
+  // exists to pin — deleting the guard block entirely still left the suite
+  // green, this test included. Driving a classifier double that resolves to
+  // the memory type WITHOUT a declared `typeHint` is what actually reaches it,
+  // the way `handlers-memory-ownership.test.ts` drives a real-shaped double
+  // rather than a stub that would pass for the wrong reason.
   it("refuses a save that reaches the memory type by classification", async () => {
-    // The memory ownership and provenance gates key on the DECLARED typeHint,
-    // which is how every real memory write arrives. A save that resolved to the
-    // type without declaring it would have had its tuple derived and probed
-    // before any gate could shape it, so re-asserting the gate here could only
-    // validate what it can no longer change. Refusing is the honest answer.
+    vi.mocked(classifyObject).mockResolvedValueOnce({
+      type: MEMORY_CONCEPT_TYPE_ID,
+      confidence: 1,
+      normalizedData: makeEnvelope(),
+      isNewType: false,
+      inferredTypeName: MEMORY_CONCEPT_TYPE_ID,
+      inferredCategory: null,
+      canonicalKeys: null,
+    });
     const handlers = createObjectsPrimitiveHandlers();
     await expect(
       handlers.objects_save({
         primitiveName: "objects_save",
-        input: { rawData: makeEnvelope(), typeHint: "@cinatra-ai/objects:object" },
+        // No typeHint at all: the classifier alone resolved this to the
+        // memory type, exactly the bypass shape the guard exists to refuse.
+        input: { rawData: makeEnvelope(), typeHint: undefined },
         actor: ACTOR,
         mode: "agentic",
       } as never),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SERVER_FIELD_REFUSED",
+      details: { field: "typeHint" },
+    });
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 });
