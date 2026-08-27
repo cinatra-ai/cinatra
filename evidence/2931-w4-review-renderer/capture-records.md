@@ -1,10 +1,10 @@
 # capture records — cinatra#2931 (W4)
 
-Head under proof: **`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3**, **W5**
-and **W9**, re-taken on this head; **`011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`**
-for **W7** and **`1c3649503d511942538c626d4ebc964e50e1302c`** for **W0** and
-**W1**, whose files are carried over **byte-identical** (their sha256 values below
-are unchanged from those commits, recomputed from the committed blobs).
+Head under proof: **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7**,
+re-taken on this head; **`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3**,
+**W5** and **W9**, and **`1c3649503d511942538c626d4ebc964e50e1302c`** for **W0**
+and **W1**, whose files are carried over **byte-identical** (their sha256 values
+below are unchanged from those commits, recomputed from the files in the tree).
 Runtime: Next.js dev on `http://localhost:3000`; the agent runtime container on
 `:3010`; a plain static server on a second origin for the third-party page of W7.
 Provider: **real** — `CINATRA_TEST_LLM_PROVIDER` unset. The provider key lives in
@@ -87,6 +87,60 @@ artifact_review_gates
 `pending`, `disposition` null: neither re-taken cell is staged from a state the
 other changed.
 
+## The run and gate behind W7, on this head
+
+Every row below is a `SELECT` readback. Nothing here was inserted, updated or
+deleted by hand; the run was driven entirely by presses in a browser.
+
+```
+agent_runs
+  id            4dfd78f9-4d4e-43a5-8d9e-9f334908efd3   (pending — W7 light and dark)
+  status        completed
+  human_present t
+  created_at    2026-08-27 02:20:02.97961+00
+  completed_at  2026-08-27 02:23:11.486+00
+
+artifact_review_gates
+  id             fb69f4b6-c086-4e51-abdb-8531776a8005
+  run_id         4dfd78f9-4d4e-43a5-8d9e-9f334908efd3
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  created_at     2026-08-27 02:23:34.325868+00
+  review_task_id lifecycle-review:b15d3da1fe8138a431b30a6aa87548e3498b9247567afd8c0fac592559f26f74
+  pinned_targets [{"artifactId":"de418b67-807f-4975-bc6a-b600c5412a6f",
+                   "representationRevisionId":"d41e0d95-d1e4-48f2-b626-9a1620e7f850"}]
+
+representation
+  id                d41e0d95-d1e4-48f2-b626-9a1620e7f850   (the pinned revision)
+  artifact_id       de418b67-807f-4975-bc6a-b600c5412a6f
+  revision          1
+  form              file
+  resource_id       810ab2f8-3bee-499f-8d6a-94d90d26e940
+  created_by_run_id 4dfd78f9-4d4e-43a5-8d9e-9f334908efd3
+  created_at        2026-08-27 02:23:11.225533+00
+
+resource
+  id            810ab2f8-3bee-499f-8d6a-94d90d26e940
+  kind          blob
+  mime          text/markdown
+  size_bytes    6086
+  substance_key blob:9ca5ffd0e41e7b45661736791333a9529f29ceb3cc1a7ef967963e21c3185b2f
+```
+
+**This gate is minted after its run terminates**, like the others in this
+directory: `02:23:11.486` → `02:23:34.326`, **22.8 s**. Named, not fixed here.
+
+**The reviewed work is prose.** The blob was read off disk and hashed:
+`sha256 9ca5ffd0e41e7b45661736791333a9529f29ceb3cc1a7ef967963e21c3185b2f`, 6 086
+bytes, first byte `#`, and **zero** occurrences of `"content":` — no JSON envelope
+in the target either W7 frame shows.
+
+**The gate was still `pending` after both frames.** It was re-read from the row
+after the second capture: `status = pending`, `disposition` null, `resolved_by`
+null. Neither frame is staged from a state the other changed.
+
 ## The decision the browser wrote
 
 ```
@@ -153,6 +207,30 @@ Each run also shows one `chat` stream (the turn that dispatched it) and the
 `artifact-matcher` calls that follow the draft. No stub provider appears anywhere;
 `CINATRA_TEST_LLM_PROVIDER` was unset for the whole round.
 
+## The usage ledger for the W7 run — the real model
+
+Every row a `SELECT` readback from `usage_events`, for the window the W7 run
+occupied. `CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 02:20:12.396+00 llm    openai   gpt-5.5             stream    chat                     22 885   122
+2026-08-27 02:23:09.388+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38 736 1 592
+2026-08-27 02:23:36.397+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 884    88
+2026-08-27 02:23:41.108+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 910   181
+2026-08-27 02:23:44.597+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 926   102
+2026-08-27 02:23:47.452+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 975    93
+2026-08-27 02:23:50.247+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 016    86
+2026-08-27 02:23:53.300+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 991   113
+2026-08-27 02:23:56.465+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 967   105
+2026-08-27 02:24:00.461+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 004   126
+2026-08-27 02:24:03.439+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 943    88
+2026-08-27 02:24:06.233+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 995   102
+```
+
+The draft-writing row carries `requested_provider = openai` and
+`effective_provider = openai`.
+
 ## The slot, as the page itself recorded it (W0, W1 — the standing cells)
 
 `MutationObserver` on `data-run-review-slot`; neither page reloaded after the turn.
@@ -173,8 +251,11 @@ captured placeholder is the second window, which ran from `16:49:30.322` to
 
 ## W7 — the wire, per capture
 
-Both W7 frames were taken in a fresh browser context with an **empty** cookie jar;
-the reader signed in through the frame's own hosted-PKCE popup.
+Both W7 frames — re-taken on `f20bb3ff6372fe3d6882f490a9289512a21a95f1` — were
+taken in a fresh browser context with an **empty** cookie jar; the reader signed in
+through the frame's own hosted-PKCE popup, on a host page served from
+`http://127.0.0.1:8088` by a plain static server, a different origin **and a
+different site** from the app on `http://localhost:3000`.
 
 ```
 lifecycle-resolve   POST /api/lifecycle-views/resolve   ×2 per capture
@@ -190,11 +271,13 @@ cookie jar at capture time (name/attributes only; no value is recorded anywhere)
 
 ## The captures
 
-Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The six rows
-marked **re-take** were shot on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`; the
-other six are the files already in the tree, **unchanged byte for byte** — each
-sha256 below was recomputed from the committed blob and matches the value recorded
-when that file was taken.
+Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The two rows
+marked **re-take** were shot on `f20bb3ff6372fe3d6882f490a9289512a21a95f1` and are
+the only two files this commit replaces; the other ten are the files already in
+the tree, **unchanged byte for byte** — each sha256 below was recomputed from the
+file in the tree and matches the value recorded when that file was taken, and each
+of those ten git blob ids is identical to the one at
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1`.
 
 | file | sha256 | bytes |
 |---|---|---|
@@ -202,20 +285,23 @@ when that file was taken.
 | `captures/W0__placeholder__chat_thread__working__dark.png` | `38d368768dad138e0b3b22d3c29730cf60ce326fd243c10f27b183fea3e4268c` | 339 355 |
 | `captures/W1__review-card__chat_thread__pending__light.png` | `949b1332c9ae2fce007a09ca40df2878c992341e257e71b2b64bc31ade9dbec1` | 367 024 |
 | `captures/W1__review-card__chat_thread__pending__dark.png` | `69ea12575b17332b1df0264df9faeb76a2c67610aef5bab625c139207f7e6856` | 361 362 |
-| **re-take** `captures/W3__review-card__run_page__pending__light.png` | `5fbf568b2d6037eaedfc894853117af8a2c3a74349b7dd71ab7ce14456a7c586` | 303 091 |
-| **re-take** `captures/W3__review-card__run_page__pending__dark.png` | `367476221003d54c165475ff16ef619bbca4b601ccef73fefe98fbe326b678a5` | 291 093 |
-| **re-take** `captures/W5__review-card__review_page__pending__light.png` | `d5298628add1b5b98b87e03737c2cf0a4a06a1232f78e36d9c136cfba704fd61` | 416 388 |
-| **re-take** `captures/W5__review-card__review_page__pending__dark.png` | `31a6f05b3bc5f514398f76f42abbe73bf1bd16f6c437b3aff3bfe17fdb9d7141` | 412 720 |
-| `captures/W7__review-card__site_widget__pending__light.png` | `2e1d0d54674b5a7642fb552563e0a03f4626c5506175783368d867f88fce6a7e` | 198 449 |
-| `captures/W7__review-card__site_widget__pending__dark.png` | `03a11fe63a1aea4d4f8948cb94f6a07ec942b90460a6e4930e2f2462c047562b` | 194 432 |
-| **re-take** `captures/W9__review-card__review_page__decided__light.png` | `5834500d99d75d676206a71a218097395374f51047c69b21dd225e9b651ca0b3` | 153 325 |
-| **re-take** `captures/W9__review-card__review_page__decided__dark.png` | `c64ae2b26d29c62195a26ed52f07a22c9debdc6732a5ff7d05970c47cfd0ce6f` | 152 520 |
+| `captures/W3__review-card__run_page__pending__light.png` | `5fbf568b2d6037eaedfc894853117af8a2c3a74349b7dd71ab7ce14456a7c586` | 303 091 |
+| `captures/W3__review-card__run_page__pending__dark.png` | `367476221003d54c165475ff16ef619bbca4b601ccef73fefe98fbe326b678a5` | 291 093 |
+| `captures/W5__review-card__review_page__pending__light.png` | `d5298628add1b5b98b87e03737c2cf0a4a06a1232f78e36d9c136cfba704fd61` | 416 388 |
+| `captures/W5__review-card__review_page__pending__dark.png` | `31a6f05b3bc5f514398f76f42abbe73bf1bd16f6c437b3aff3bfe17fdb9d7141` | 412 720 |
+| **re-take** `captures/W7__review-card__site_widget__pending__light.png` | `361a1bc3e6a94dc578e4db2db8883c49e82467f8a9a170271ad4cf0fb8d18034` | 213 057 |
+| **re-take** `captures/W7__review-card__site_widget__pending__dark.png` | `92783e14c6afffe3e5314bdb09b6d6dc2310f00026babef3d08f452b0ce4090e` | 210 785 |
+| `captures/W9__review-card__review_page__decided__light.png` | `5834500d99d75d676206a71a218097395374f51047c69b21dd225e9b651ca0b3` | 153 325 |
+| `captures/W9__review-card__review_page__decided__dark.png` | `c64ae2b26d29c62195a26ed52f07a22c9debdc6732a5ff7d05970c47cfd0ce6f` | 152 520 |
 
 ## The shutters, and what was true at each
 
 Every entry was re-counted immediately after its shutter; `after` records that
-re-count. The three re-taken cells also assert `location.pathname` at the shutter,
-so no frame can be mistaken for a neighbouring route.
+re-count. The cells re-taken on `d0db4293d72b` also assert `location.pathname` at
+the shutter, so no frame can be mistaken for a neighbouring route; the two W7
+frames instead assert the **pinned revision printed on the card**, which is what
+distinguishes this run's card from the other reviews pending on this instance. The
+W7 shutter times are the moment each PNG was written.
 
 ```
 --- re-taken on d0db4293d72b, 2026-08-27 (UTC) ---
@@ -240,10 +326,18 @@ W0 light  16:49:33.505  slot=working ph=1 cards=0 approve=0            after: tr
 W0 dark   16:49:46.028  slot=working ph=1 cards=0 approve=0            after: true
 W1 light  16:50:04.945  slot=review  ph=0 cards=1 approve=1 island=1   after: true
 W1 dark   16:50:20.590  slot=review  ph=0 cards=1 approve=1 island=1   after: true
-W7 light  22:54:30      cards=1 islands=1 signin-controls=0 approve/reject/comment=1/1/1
-                        island body=1 empty=0 targets=1 rendered=true
-                        signInPrompt=false noRenderer=false floor=0 preview=0 download=0
-W7 dark   23:04:17      the same readings, theme=dark
+
+--- re-taken on f20bb3ff6372, 2026-08-27 (UTC) ---
+W7 light  02:30:52   host page http://127.0.0.1:8088 — a different origin AND site
+                     cards=1 islands=1 signin-controls=0 approve/reject/comment=1/1/1
+                     reviewRequested=true rationale=true signInPrompt=false
+                     island body=1 empty=0 targets=1 rendered=true
+                     noRenderer=false floor=0 preview=0 download=0
+                     pinned revision printed on the card: d41e0d95-d1e…
+                     card top inside the frame = 296.375 (the framing offset)
+W7 dark   02:32:29   the same readings, theme=dark
+                     chip outline rgb(37,47,63) on ground rgb(13,24,42)   contrast 24
+                     meta ink rgb(144,161,185)   Approve fill rgb(226,232,240)
 
 Approve was pressed on the decided run at 00:54:23.451; the gate row settled at
 00:54:24.54582 and both W9 frames were taken after that.
@@ -296,29 +390,64 @@ carries **no** credential parameter — the parameters are `ref` and `scheme` an
 nothing else; the credentialed arm is the third-party application's. No credential
 value is recorded here, or anywhere in this directory.
 
-## The island's colour in the third-party application (W7 — the standing cell)
+## The island's colour in the third-party application (W7 — re-taken on this head)
 
-These readings belong to **W7**, which stands unchanged in this commit; they were
-sampled from that cell's own captures on the head it was taken on, and are carried
-here because they are the measurement its verdict rests on. The run-page rows are
-the first-party comparison those readings were taken against, and are **not** a
-measurement of the W3 files in this commit — W3's island is measured live on this
-head in the section above.
+These readings belong to **W7**, re-taken on
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1`. Each pixel value below was sampled
+**from the committed PNG itself** at device scale 2 — the chip's own border rows
+against the panel ground taken just outside the pill — not from a re-render. The
+run-page rows are the first-party comparison, read on this same head from the same
+pending run, and are **not** a measurement of the W3 files in this commit.
 
 ```
-                                        island ground     brightest pixel on the
-                                                          chip's border rows
-run page, dark            (comparison)  rgb(13,24,42)     rgb(37,47,63)   pill drawn
-run page, dark, mounted dark            rgb(13,24,42)     rgb(37,47,63)   pill drawn
-third-party application, dark  (W7)     rgb(13,24,42)     rgb(14,25,44)   pill ABSENT
-run page, light           (comparison)  near-white        pill drawn
-third-party application, light (W7)     near-white        pill drawn
+                                          panel ground      outline pixel on the
+                                                            chip's border rows
+third-party application, dark  (W7, now)  rgb(13,24,42)     rgb(37,47,63)   pill DRAWN   contrast 24
+third-party application, dark  (SUPERSEDED) rgb(13,24,42)   rgb(14,25,44)   pill absent  contrast  2
+run page, dark            (comparison)    rgb(13,24,42)     rgb(37,47,63)   pill drawn   contrast 24
+third-party application, light (W7, now)  rgb(255,255,255)  rgb(222,224,227) pill drawn  contrast 33
 ```
 
-The island's ground is the same value on both hosts in dark — the defect the earlier
-W7 dark frame showed (a white panel inside a dark widget) is gone. The one reading
-that still differs between hosts is the chip's pill outline, absent in the
-third-party application in dark; it is named in the README's W7 cell rather than
-left to be found. The "mounted dark" row is a separate load, taken with the app
-already dark before the run page opened, so the pill is not a product of the repaint
-path.
+**The two hosts measure the same colour on the same ground in dark.** Both values
+are what compositing predicts from the tokens: the dark hairline is
+`rgba(255,255,255,0.1)` and `0.1×255 + 0.9×(13,24,42) = (37,47,63)`; the light
+hairline is `rgba(21,33,58,0.14)` and over white gives `(222,224,227)`. The
+superseded frame's `rgb(14,25,44)` is that same **light** hairline composited over
+the **dark** panel — which is the ground to two levels, and is why it read as no
+outline at all.
+
+Two more readings from the same alias layer, sampled the same way:
+
+```
+                                          third-party app, dark   run page, dark
+header meta line ink (text-muted-foreground)  rgb(144,161,185)     rgb(144,161,185)
+Approve fill (--primary)                      rgb(226,232,240)     rgb(226,232,240)
+Approve fill, SUPERSEDED frame                rgb(54,78,129)       —
+```
+
+`rgb(144,161,185)` is the dark palette's `--muted` (`#90a1b9`); in light the same
+line measures `rgb(90,100,119)`, the light palette's `--muted` (`#5a6477`).
+
+The computed styles read out of the same mounted documents agree with the pixels:
+
+```
+                                    third-party application, dark   run page, dark
+--border   at the chip              #ffffff1a                       #ffffff1a
+--muted-foreground at the meta line #90a1b9                         #90a1b9
+chip border-top-color               rgba(255, 255, 255, 0.1)        rgba(255, 255, 255, 0.1)
+meta color                          rgb(144, 161, 185)              rgb(144, 161, 185)
+panel background-color              lab(8.11015 0.0567511 -14.1465) lab(8.11015 0.0567511 -14.1465)
+--border   at the DOCUMENT ROOT     #15213a24                       #ffffff1a
+--muted-foreground at the ROOT      #5a6477                         #90a1b9
+document root carries the palette   no                              yes ("… dark")
+```
+
+The last three rows are the mechanism, visible as a reading: inside the widget the
+island's own document root still resolves the **light** alias layer, because a page
+cannot write its own document root and the palette class is carried on a wrapper
+below it. What changed on this head is that the wrapper now re-declares that layer,
+so every element under it — the chip, the meta line, the Approve button — resolves
+dark, while the root, which nothing paints from, is left as it was. On the run page
+the palette class sits on the root itself, so root and chip agree; that host's
+readings are **unchanged** by this commit, which is what allows the first-party
+cells to be carried forward byte-identical.

@@ -1,24 +1,34 @@
-# cinatra#2931 (W4) — the reviewed work, drawn by its own renderer, on the merged head
+# cinatra#2931 (W4) — the reviewed work, drawn by its own renderer, on this head
 
 Every picture in this directory was taken on a live dev instance, against **real
 agent runs on the real provider** — `CINATRA_TEST_LLM_PROVIDER` unset, no stub, no
 scripted provider, no seeded row.
 
-**Three cells were re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** — the
-run page (**W3**) and the review page (**W5**, **W9**), because that head is a
-merge of `main` at `35e369ed68a6446b0125cfecaee6aa993742a961`, which carries the
-first-time run page's two-column setup rail (cinatra#2970 / cinatra#2975) and the
-schedule surfaces (cinatra#3006). Those three surfaces are re-shot rather than
-carried forward, from **two fresh real runs** started on this head.
+**W7 is re-taken on `f20bb3ff6372fe3d6882f490a9289512a21a95f1`**, the head that
+completes the island's dark palette. The previous W7 dark frame carried one named
+defect — the target chip's **pill outline was not drawn** inside a third-party
+application in dark — and this head's newest commit is its fix. The new pair comes
+from **one fresh real run** started on this head and left **pending** at its
+review.
 
-The other three cells — **W0**, **W1** and **W7** — **stand unchanged**, and are
-**byte-identical** to `bda322574903` : the conversation and the third-party
-application are untouched by the rail. Checked three ways before anything was
-written: the git blob ids of all twelve capture files are identical between
-`bda322574903` and this head, the six standing files' `sha256` values recomputed
-from the committed blobs equal the values already recorded in
-[`capture-records.md`](capture-records.md), and only the six W3/W5/W9 files are
-replaced by this commit.
+**The other five cells stand byte-identical.** W3, W5 and W9 were re-taken on
+`d0db4293d72b4554bf1c4b00fc7d5363c82375b3` for the merged setup rail; W0 and W1
+have stood since `1c3649503d511942538c626d4ebc964e50e1302c`. Checked three ways
+before anything was written: `git status` reports exactly the two W7 files
+modified, the git blob ids of the other ten are identical to
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1`, and their `sha256` values recomputed
+from the files on disk equal the values already recorded in
+[`capture-records.md`](capture-records.md).
+
+**Carrying the first-party cells forward is measured, not assumed.** The fix
+re-declares nine alias tokens inside `.dark`, and each line is textually the
+`:root` declaration it completes — so on a document root, where both blocks match
+the same element, nothing moves. That is checked against the surface rather than
+argued: the target chip's outline on the **first-party run page in dark** measures
+`rgb(37,47,63)` on this head, the **identical** value recorded for that same
+reading before the fix. The one host whose reading changes is the one whose palette
+class sits below its document root, which is the third-party application — W7, and
+only W7.
 
 ## The pin, checked before a single picture was taken
 
@@ -66,6 +76,23 @@ in the browser.
 The pending run's gate was **still `pending` after the second run's Approve was
 pressed** — re-read from the row afterwards — so no cell in this pair was staged
 from a state the other changed.
+
+## The run behind W7, on this head
+
+**W7's pair is its own run**, started on
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1` and left **pending** at its review. It
+claims nothing from the runs above and they claim nothing from it.
+
+| | run | gate | what it carries |
+|---|---|---|---|
+| **pending** | `4dfd78f9-4d4e-43a5-8d9e-9f334908efd3` — `completed`, `human_present = t` | `fb69f4b6-c086-4e51-abdb-8531776a8005` — `pending`, `disposition` null, `resolved_by` null | **W7** light and dark |
+
+Both W7 frames were taken against **this one pending gate**, and the row was read
+back after the second frame and was still `pending`. The reviewed work is
+`text/markdown`, 6 086 bytes, and its first byte is `#`: prose, with **zero**
+occurrences of `"content":` — no JSON envelope. The draft was written by the
+pinned agent on the real provider (`openai` / `gpt-5.5-2026-04-23`, 38 736 input /
+1 592 output tokens, `agent_label = blog-draft-writer-agent`).
 
 ## The run behind the standing cells, measured
 
@@ -383,61 +410,88 @@ source. Three named DEVIATIONS:**
 `captures/W7__review-card__site_widget__pending__light.png` ·
 `captures/W7__review-card__site_widget__pending__dark.png`
 
-**Re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — this is the cell the
-colour-scheme defect was seen in, and the head now carries its fix.
+**Re-taken on `f20bb3ff6372fe3d6882f490a9289512a21a95f1`.** This is the cell the
+dark-palette defect was seen in, and this head carries its fix. Both frames come
+from one fresh real run left pending at its review.
 
 **The plan says** — *"The card always shows you something; it is never blank.
 Three presentations ship, and the renderer decides which, never the screen it is
 read on."*
 
-**Requires** — the same review card inside another application's conversation, the
-target drawn by its renderer, whole, and **no login prompt**.
+**Requires** — the same review card inside another application's conversation: the
+target panel naming the work and pinning its revision, the target drawn by its
+renderer, the decision floor with the rationale field and Comment / Reject /
+Approve, the card **whole**, and **no login prompt**. In dark the island renders
+dark like the widget around it, and every token resolves as on the run page.
 
 **Shows** — a plain page on another origin mounting the Cinatra widget in an
 iframe, holding **this run's** card: `Review requested` / `Awaiting your
-decision`, the title, the `Blog Post Artifact` chip, the pinned revision
-`85de01bf-711…` with `text/markdown`, the draft **rendered as prose**, `Expand`,
-and `Comment` `Reject` `Approve` over the rationale field, with the widget's own
-composer beneath. Counted inside the frame, both themes: **1** card, **1** island,
-island `body=1 empty=0 targets=1 rendered=true`, **1**/**1**/**1**
-Approve/Reject/Comment, **0** `data-embed-signin` controls, **no** sign-in copy
-anywhere in the frame, **0** floor diagnostics, **0** `no renderer resolved`,
-**0** Preview, **0** Download.
+decision`; the title *Handover Notes That Survive a Rotation*; the `Blog Post
+Artifact` chip; the pinned revision line `@cinatra-ai/blog-post-artifact:post ·
+revision d41e0d95-d1e… · pinned · Ownership: organization · Visibility:
+organization · text/markdown · updated 2026-08-27T02:23:41.386Z`; the draft
+**rendered as prose** ("Why handover notes rot the week after they are written…");
+`Expand`; `DECISION RATIONALE (optional on approve, expected on reject)` over its
+field; and `Comment` `Reject` `Approve`, with the widget's own composer beneath.
+Counted inside the frame, both themes: **1** card, **1** island, island `body=1
+empty=0 targets=1 rendered=true`, **1**/**1**/**1** Approve/Reject/Comment, **0**
+`data-embed-signin` controls, **no** sign-in copy anywhere in the frame, **0**
+floor diagnostics, **0** `no renderer resolved`, **0** Preview, **0** Download.
 
-**The dark defect is fixed, and the fix is measured, not asserted.** The earlier
-pair showed the card's chrome dark and the target island a **white panel with dark
-ink**. On this head the island in the third-party application is **dark**: its
-ground measures `rgb(13,24,42)` — the same value the island paints on the
-first-party run page in dark (W3) — and the draft is light ink on it. The whole
-target panel is inside the island document, not the card: the island's own text is
-the title, the chip, the pinned-revision line and the rendered prose, while the
-card contributes only the header and the decision floor.
+**The chip's pill outline is drawn in dark. Measured, not asserted.** The reading
+is taken from the committed PNGs themselves: the chip's own border rows are sampled
+at device scale 2, and the brightest pixel across them is compared with the panel
+ground sampled just outside the pill.
 
-**One named DEVIATION, measured on both hosts so the claim is exact:** the target
-chip's **pill outline** is not drawn inside the third-party application in dark.
-Scanning the chip's border rows: on the first-party run page in dark the border
-sits at `rgb(37,47,63)` against the island ground `rgb(13,24,42)` — and it is
-there **both** when the island mounts dark and when it repaints into dark, checked
-separately — while inside the third-party application in dark the brightest pixel
-across those same rows is `rgb(14,25,44)`, indistinguishable from the ground. In
-light the pill is drawn on both hosts. The chip's label stays legible; what is
-missing is its outline. Ground, ink and every other reading follow the host on
-both — this is one border token that does not, and it is named here rather than
-left to be found.
+| host, scheme | panel ground | chip outline pixel | contrast | drawn |
+|---|---|---|---|---|
+| third-party application, **dark** — this head | `rgb(13,24,42)` | `rgb(37,47,63)` | **24** | **yes** |
+| third-party application, dark — *superseded frame* | `rgb(13,24,42)` | `rgb(14,25,44)` | 2 | no |
+| **first-party run page, dark** — this head | `rgb(13,24,42)` | `rgb(37,47,63)` | **24** | yes |
+| third-party application, **light** — this head | `rgb(255,255,255)` | `rgb(222,224,227)` | 33 | yes |
+
+The two hosts now measure **the same colour on the same ground**, which is the
+claim the fix makes. Both values are exactly what compositing predicts: the dark
+hairline is `rgba(255,255,255,0.1)`, and `0.1×255 + 0.9×(13,24,42)` is
+`(37,47,63)`; the light hairline is `rgba(21,33,58,0.14)`, and over white that is
+`(222,224,227)`. The superseded frame's `rgb(14,25,44)` is the same light hairline
+composited over the **dark** panel — the arithmetic of the defect, and why it read
+as the ground.
+
+**The header meta line resolves in the dark palette too.** The pinned-revision
+line under the title is `text-muted-foreground`, one of the nine aliases the fix
+completes. Its ink measures `rgb(144,161,185)` inside the third-party application
+in dark — the dark palette's `--muted` (`#90a1b9`) — and `rgb(144,161,185)` on the
+first-party run page in dark. In light it measures `rgb(90,100,119)`, the light
+palette's `--muted` (`#5a6477`). The computed styles read out of the same mounted
+documents agree: `--border` resolves to `#ffffff1a` at the chip and
+`--muted-foreground` to `#90a1b9` at the meta line, on **both** hosts, while the
+island's own document root inside the widget still resolves `#15213a24` and
+`#5a6477` — which is precisely the shape of the defect the fix addresses, now
+confined to a root nothing paints from.
+
+**A third alias moved with them, and it is visible.** `Approve` is
+`--primary`, also in the completed set. Its fill inside the third-party
+application in dark measures `rgb(226,232,240)` on this head and `rgb(54,78,129)`
+in the superseded frame; the first-party run page in dark measures
+`rgb(226,232,240)`. The button that used to paint the light palette's primary
+inside a dark widget now paints what the run page paints.
 
 **Cross-site is measured, not asserted.** The reader signed in through the frame's
 **own** hosted-PKCE popup, so an app-origin session cookie exists in the browser
 (`better-auth.session_token`, `domain=localhost`, `SameSite=Lax`, `httpOnly`) —
 and the island document request still went out with `cookie: absent`, while the
-two lifecycle resolves per capture carry `cookie: absent`,
+lifecycle resolves per capture carry `cookie: absent`,
 `x-cinatra-widget-user-token: present (cwu_)` and the host page's own origin in
 `x-cinatra-widget-origin`. The host page is served by a plain static server on a
 different origin **and a different site** from the app. Both frames were taken in
 a fresh browser context with an **empty** cookie jar.
 
-**Verdict: PASS — the card renders whole, cross-site, with no login prompt, and
-the island now follows the host's colour scheme in both themes. One named
-deviation: the chip's pill outline in dark, above.**
+**Verdict: PASS — the card renders whole, cross-site, with no login prompt, and in
+dark the island renders dark with the chip's pill outline drawn and every measured
+token resolving to the same value as on the run page. The deviation this cell
+carried in the previous round is resolved, and the resolution is measured on both
+hosts.**
 
 *Said plainly:* the widget conversation reaches the card by asking for it — the
 turn typed into the widget names the run and the pinned revision under proof,
@@ -449,86 +503,6 @@ automatic replacement is **not** claimed for the widget; what this cell proves i
 that the card renders, cross-site, in the host's own colour scheme, with no login
 prompt.
 
-### W9 — the review page, decided
-
-`captures/W9__review-card__review_page__decided__light.png` ·
-`captures/W9__review-card__review_page__decided__dark.png`
-
-**Re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`**, from the **second**
-run. Route:
-`/agents/cinatra-ai/blog-draft-writer-agent/ef14a5dd-…/review/lifecycle-review%3A77e016c0…`
-— asserted from `location.pathname` at each shutter, in both themes.
-
-**The plan says** — *"One card, one gate."*
-
-**§I requires, for a resolved gate** — *"A resolved gate stays on the rail as
-read-only history — its entry keeps its place and records how it was settled
-(approved, rejected, changes requested), so the rail is the run's whole lifecycle
-at a glance, not just its live tip."* and *"A resolved gate opens read-only: what
-was decided, and the reviewed target(s), kept for the run's audit trail."*
-
-**Shows** — the same route after **Approve** was pressed for real in the browser
-at `00:54:23.451`, over a rationale typed into the card's own field: a single card
-carrying the double-check mark, **`Approved by Ops Operator Two`** and *"The gate
-is resolved and the run has been released to continue."* The decision controls are
-gone — counted at each shutter, both themes: **0** Approve, **0** Reject, **0**
-Comment, **1** card root. The rail keeps `1 Schedule` above `2 Review`. The row it
-wrote:
-
-```
-artifact_review_audit
-  id                          51b718dc-9e43-464f-a241-ec2c5055c3bc
-  gate_id                     f079f282-7bf8-4105-ba01-db115dc89326
-  run_id                      ef14a5dd-1d1a-4a1f-8762-d55b55e985c0
-  artifact_id                 e98f02e5-cb3a-40c1-8a52-b47bccd205a3
-  representation_revision_id  43e75a37-3bc8-4322-9da7-8a01ec30a49c
-  disposition                 approve
-  renderer_kind               first-party
-  renderer_package            (null)
-  renderer_digest             (null)
-  created_at                  2026-08-27 00:54:24.54582+00
-
-artifact_review_gates  f079f282-…  status resolved  disposition approve
-  resolved_by  2660f48b-6a11-423a-afdd-a148139bf86d   (the signed-in reviewer)
-  resolved_at  2026-08-27 00:54:24.54582+00
-```
-
-**Verdict: PASS on the plan's words — one card, one gate, the decision recorded
-and the floor closed, settled by the row and not by the screen alone. Two named
-DEVIATIONS from §I, both measured on this head:**
-
-1. **The reviewed target is not kept beside the decision.** §I: a resolved gate
-   *"opens read-only: what was decided, **and the reviewed target(s)**, kept for
-   the run's audit trail."* The settled card holds the decision line and nothing
-   else — the card's whole text at each shutter is
-   `Approved by Ops Operator Two / The gate is resolved and the run has been
-   released to continue.` The target is on the audit trail (the row above pins
-   both `artifact_id` and `representation_revision_id`); it is not on the screen.
-2. **This route's rail does not record how the gate was settled — but another
-   one does, and the difference is exact.** §I's history clause asks the resolved
-   entry to *"record how it was settled"*. Measured on this page in both themes:
-   `[data-run-surface-rail-settled="true"]` → **0**, and the `Review` row keeps
-   its numeral `2` rather than taking the completed circle. The reason is that
-   the review page's rail is its own component — `ReviewRunSteps`
-   (`review-run-steps.tsx`), an inert stepper the page hands `activeStep =
-   reviewIndex` — which has no settled reading at all. The settled reading of
-   cinatra#2975 lives in `RunSurfaceRailRow`
-   (`packages/agents/src/run-surface-rail.tsx`), whose row draws
-   `{settled ? <Check/> : displayStep}` with *"the title unhighlighted"*, gated by
-   `runReviewStepSettled({ reading, gateStatus })` in
-   `packages/agents/src/run-review-slot-reading.ts`. Read live on this head for
-   **this same decided run**, that row is drawn and it is settled:
-   - `/trigger` → the `Review` row comes back `reached="true"`,
-     **`settled="true"`**, and its indicator's text is **empty** — the completed
-     circle standing in place of the numeral, exactly as §I asks.
-   - the **run page** → its own rail entry reads `kind=gate`,
-     **`status=resolved`**, and its text is **`ReviewAPPROVE`** — the entry keeps
-     its place and records the disposition.
-
-   So the clause is honoured on the run page and on the setup rail, and is
-   **absent on the review page**, which is the route this cell pictures. That is
-   the deviation, named precisely rather than softened.
-
 ## The grading table
 
 | Cell | Host | Light | Dark | Verdict |
@@ -537,7 +511,7 @@ DEVIATIONS from §I, both measured on this head:**
 | W1 review card | the conversation, pending | ✔ | ✔ | **PASS** — swapped in place on its own, drawn as prose by its renderer, one composer, no prompt window; no provenance row (named) |
 | **W3** review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder, the two-column frame, the merged gate entry and the gate opened in place; the rail reads `Step 1 / Review` and not the setup rail's three rows, the paused step is not highlighted (measured: same ink, weight and ground as the passed step), the work step is named by position, no prompt window (**4 deviations, named**) |
 | **W5** review card | the review page, pending | ✔ | ✔ | **PASS** — the same run surface with the review step selected, never a standalone document, rendered beside raw source; the box under the review is today's decision box rather than the drawing's prompt window (**cinatra#2995**), rail treatment, prompt copy (**3 deviations, named**) |
-| W7 review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and the island follows the host's colour scheme in both themes; the chip's pill outline is not drawn in dark (1 deviation, measured on both hosts) |
+| **W7** review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and in dark the island renders dark with the chip's **pill outline drawn**: `rgb(37,47,63)` on ground `rgb(13,24,42)`, the same reading as the first-party run page in dark, against `rgb(14,25,44)` (the ground) in the superseded frame; the meta line's `text-muted-foreground` measures `rgb(144,161,185)` on both hosts (**the previous round's 1 deviation is resolved; 0 open**) |
 | **W9** decided | the review page, decided | ✔ | ✔ | **PASS** on the plan's words — one card, one gate, floor closed, `renderer_kind = first-party` in the row; the reviewed target is not kept beside the decision, and this route's rail records no settled state while `/trigger` (`settled="true"`, empty indicator) and the run page (`status=resolved`, `ReviewAPPROVE`) both do (**2 deviations, named**) |
 
 ## What this round does NOT claim
