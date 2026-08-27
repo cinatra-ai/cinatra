@@ -573,9 +573,11 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
   {
     // cinatra#2928 (lifecycle-b W2a) — the FIFTH kind. The agent pausing to ask
     // for input is an INTERRUPT for the same reason the hold is: the run is
-    // genuinely blocked on the answer. W2a registers the kind so a run can
-    // STATE the moment; W3 (cinatra#2930) draws and mounts the card, which is
-    // why the kind is on BOTH obligation lists below.
+    // genuinely blocked on the answer. W2a registered the kind so a run can
+    // STATE the moment, and put it on BOTH obligation lists below; W3
+    // (cinatra#2930) draws and mounts the card and emits the ruled root
+    // declaration, so BOTH lists are struck to empty on this branch and this
+    // kind takes no exemption from either.
     kind: "agent_hitl_screen",
     carriage: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen.represent,
     canonical: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen.canonical,
