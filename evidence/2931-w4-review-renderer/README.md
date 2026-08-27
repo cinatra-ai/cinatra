@@ -1,63 +1,83 @@
 # cinatra#2931 (W4) — the reviewed work, drawn by its own renderer, on the merged head
 
-Every picture in this directory was taken on **2026-08-26**, on a live dev
-instance, against **real agent runs on the real provider** —
-`CINATRA_TEST_LLM_PROVIDER` unset, no stub, no scripted provider, no seeded row.
+Every picture in this directory was taken on a live dev instance, against **real
+agent runs on the real provider** — `CINATRA_TEST_LLM_PROVIDER` unset, no stub, no
+scripted provider, no seeded row.
 
-**Two cells were re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — the
-run page (**W3**), because that surface moved under the branch, and the
-third-party application (**W7**), because that is the cell the island's
-colour-scheme defect was seen in and this head carries its fix. They were shot
-against a **third** real run, left pending at its review. The other four cells —
-**W0**, **W1**, **W5**, **W9** — stand unchanged from
-`1c3649503d511942538c626d4ebc964e50e1302c`, **byte-identical**; their sha256 values
-in [`capture-records.md`](capture-records.md) are the same values recorded then.
+**Three cells were re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** — the
+run page (**W3**) and the review page (**W5**, **W9**), because that head is a
+merge of `main` at `35e369ed68a6446b0125cfecaee6aa993742a961`, which carries the
+first-time run page's two-column setup rail (cinatra#2970 / cinatra#2975) and the
+schedule surfaces (cinatra#3006). Those three surfaces are re-shot rather than
+carried forward, from **two fresh real runs** started on this head.
 
-## The pin, checked three ways before a single picture was taken
+The other three cells — **W0**, **W1** and **W7** — **stand unchanged**, and are
+**byte-identical** to `bda322574903` : the conversation and the third-party
+application are untouched by the rail. Checked three ways before anything was
+written: the git blob ids of all twelve capture files are identical between
+`bda322574903` and this head, the six standing files' `sha256` values recomputed
+from the committed blobs equal the values already recorded in
+[`capture-records.md`](capture-records.md), and only the six W3/W5/W9 files are
+replaced by this commit.
 
-`main` now pins `@cinatra-ai/blog-draft-writer-agent` at
-**`03a27f524d59f90f635ee98c1b5900c4bc9f7f6e`** — *"content holds the draft, not a
-second copy of the answer"* — and this head carries that pin. On the instance that
-took these pictures:
+## The pin, checked before a single picture was taken
+
+`main` pins `@cinatra-ai/blog-draft-writer-agent` at
+**`03a27f524d59f90f635ee98c1b5900c4bc9f7f6e`** — the revision whose `draft` field
+holds the draft **as prose** rather than a JSON envelope — and this head carries
+that pin. On the instance that took these pictures:
 
 | what | reading |
 |---|---|
-| `cinatra-dev-extensions.lock.json` | `{"packageName":"@cinatra-ai/blog-draft-writer-agent","resolvedSha":"03a27f524d59f90f635ee98c1b5900c4bc9f7f6e"}` |
 | the checked-out package (`sync-dev-extensions --pinned`) | `git rev-parse HEAD` = `03a27f524d59f90f635ee98c1b5900c4bc9f7f6e` |
-| the installed package | `package.json` version **0.1.4** |
-| the app's own boot scan | `[cinatra:extensions:agent] @cinatra-ai/blog-draft-writer-agent v0.1.4 upserted` |
-| the registry row it wrote | `agent_templates.package_version = 0.1.4`, `updated_at 2026-08-26 16:14:02+00` |
+| the app's own boot scan | `[cinatra:extensions:agent] @cinatra-ai/blog-draft-writer-agent 0.1.4 upserted` (the leading v of the printed token is dropped for the repository's version-token rule) |
+| the agent runtime the runs actually reached | `/.health` → `{"status":"ok","agents":29,"failed":0,"failed_agents":[]}` |
 
-And the draft the pictures show is the proof that reached the screen: the
-persisted representation is **6 351 bytes of `text/markdown`** that begins
-`## Where the hours actually go` and contains **zero** occurrences of
-`"content":`. No JSON envelope appears in any target in this set.
+**And the proof that reached the screen, not just the lock.** Both persisted
+drafts are `text/markdown` blobs holding prose:
 
-## The two runs
+```
+resource 8d54bb47-73cd-475f-8e7a-aadd67599fad   text/markdown   6 086 bytes
+  sha256 00f42c92d1663dbcb067e16543feb126c0ba48d40eb70ecca5946fc48e004699
+  begins "## Why the ritual drifts once the dashboard is automatic"
+  occurrences of the JSON-envelope key `"content":`  →  0
 
-The plan's six cells are not staged from one another. **One run is left pending**
-and carries every pending reading; **a second run is decided** and carries the
-decided one.
+resource ace23d46-7efb-472a-91ac-37ea9fa41626   text/markdown   5 734 bytes
+  sha256 e003f30c647e4d984701415d1742c030dc77789efc5e5484f7ad3465aacc6516
+  begins "## The cost a recurring meeting hides"
+  occurrences of the JSON-envelope key `"content":`  →  0
+```
 
-| | run | what it carries |
-|---|---|---|
-| **pending** | `579d0473-4b5d-40b9-9d79-8126560bbf06` | W0, W1, W5 — still `pending` in `artifact_review_gates` as this is written |
-| **decided** | `8bfc1191-eeca-4b6a-ac86-a636f476c28e` | W9 — Approve pressed for real in the browser |
-| **pending, re-take** | `01437642-8900-4c12-9cfc-c9a5db44ca24` | W3, W7 on `011da4d6133a…` — still `pending`; gate `21f9c749-3ba6-4fd1-9506-9406af5a271c` |
+**No JSON envelope appears in any target in this set.**
 
-Both were started by **one** turn typed into the chat (no `@`-mention). Every
-`Continue` in the log is one of the run's **own** gates — a setup card and the
-schedule step — pressed in the browser before the run began writing.
+## The two runs behind the re-taken cells
 
-## The pending run, measured
+The re-taken cells are not staged from one another. **One run is left pending**
+and carries both pending readings; **a second run is decided** and carries the
+decided one. Both were started by **one** turn typed into the chat, both carry
+`human_present = t`, and every gate either one paused on was answered by a press
+in the browser.
+
+| | run | gate | what it carries |
+|---|---|---|---|
+| **pending** | `88634469-a0d1-47be-94a4-473cbb25bf75` | `534ca557-f45e-4ff0-9d7a-468cb0e1ef27` — still `pending` as this is written | **W3**, **W5** |
+| **decided** | `ef14a5dd-1d1a-4a1f-8762-d55b55e985c0` | `f079f282-7bf8-4105-ba01-db115dc89326` — `resolved` / `approve` | **W9** |
+
+The pending run's gate was **still `pending` after the second run's Approve was
+pressed** — re-read from the row afterwards — so no cell in this pair was staged
+from a state the other changed.
+
+## The run behind the standing cells, measured
 
 A `MutationObserver` on the card's own `data-run-review-slot` attribute recorded
 every change of reading. The conversation and the run page each carried their own
 observer and **neither page was reloaded after the turn was typed.**
 
-This record belongs to the run behind **W0**, **W1** and **W5**; the swap it
-measures is what those three cells show. **W3** and **W7** were re-taken later,
-against a third run, and claim nothing from this timeline.
+This record belongs to the run behind **W0** and **W1**, the two conversation
+cells that stand unchanged in this commit; the swap it measures is what those two
+cells show. **W3**, **W5** and **W9** were re-taken on the merged head against the
+two runs measured in the next section, and claim nothing from this timeline;
+**W7** was taken against its own run and claims nothing from it either.
 
 | when (UTC) | what | source |
 |---|---|---|
@@ -78,45 +98,61 @@ swap happened with the page untouched. **No completion notice was painted in
 front of the review**: a completion notice removes the slot attribute entirely, so
 it would stand in that record as a third reading. It does not.
 
-**The named limit stays, and is not fixed here.** The gate is still minted after
-the run terminates (15.3 s). What this head changes is that the slot *holds* the
-placeholder across that window instead of flipping to a completion notice. The
-minting order is upstream of this slice.
+**What this head changes** is that the slot *holds* the placeholder across the
+minting window instead of flipping to a completion notice.
 
-## The re-take run, measured
+## The two re-taken runs, measured
 
-The third run — `01437642-8900-4c12-9cfc-c9a5db44ca24` — was started by **one**
-turn typed into the chat, and every gate it paused on was answered in the browser:
-its setup field, then **Run right after setup** and `Continue` on the run page's
-own schedule step, then `Continue` on its context slot. It carries **W3** and
-**W7**.
+Every timestamp below is either a row read back from the instance database or a
+line the driver wrote as it pressed a control. Nothing is estimated.
+
+### The pending run — `88634469-a0d1-47be-94a4-473cbb25bf75` (W3, W5)
 
 | when (UTC) | what | source |
 |---|---|---|
-| `21:56:20.017` | the ONE turn is typed into the conversation | driver |
-| `21:56:40.743` | the run row is created | row |
-| `22:07:54` | the schedule step is answered — **Run right after setup**, then `Continue` | driver |
-| `22:19:28.186` | the context slot is answered — `Continue`, no eligible context | log |
-| `22:20:45.477` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 763 in / 4 568 out | ledger row |
-| `22:20:47.645` | the blob is written — 19 104 bytes, `text/markdown` | row |
-| `22:20:48.136` | representation revision **1** is written, and the produced event is queued | row |
-| `22:20:48.581` | **the run terminates** | row |
-| `22:35:26.496` | the review gate is minted | row |
-| `22:45:23` / `22:45:37` | **W3** light / dark | shutter |
-| `22:54:30` / `23:04:17` | **W7** light / dark | shutter |
+| `00:23:41.426` | the ONE turn is typed into the conversation | driver |
+| `00:24:05.632` | the run row is created | row |
+| `00:24:11.688` · `00:24:12.837` | the run's own setup field is filled and `Continue` pressed, in the chat card | driver |
+| `00:24:39.261` | the run page's schedule step is answered — **Run right after setup**, then `Continue` | driver |
+| `00:25:09.422` | the run's context gate is answered — `Continue`, no eligible context | driver |
+| `00:27:40.590` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 744 in / 1 683 out | ledger row |
+| `00:27:42.578` | the blob is written — 6 086 bytes, `text/markdown` | row |
+| `00:27:43.332` | representation revision **1** is written | row |
+| `00:27:43.719` | **the run terminates** | row |
+| `00:28:00.208` | the review gate is minted — **16.5 s after the run had already ended** | row |
+| `00:36:33` / `00:36:47` | **W3** light / dark | shutter |
+| `00:40:08` / `00:40:22` | **W5** light / dark | shutter |
 
-**The gate took 14 min 38 s, and the reason is named rather than smoothed over.**
-It is not the product's normal timing. This instance's first boot was slow enough
-that background loops lost their queue locks while starting, and the log shows the
-review-orchestration loop failing to re-delay itself
-(`Missing lock for job lifecycle-review-orchestration-loop. moveToDelayed`) — after
-which it never ran again **in that process**, and the produced event sat `pending`
-in `artifact_produced_outbox`. Restarting the app re-registered the loops
-(`review-orchestration (30s) + gate-maintenance (60s) loops scheduled`); the first
-scan after that logged `scanned=1 gatesCreated=1` and the gate row appeared two
-seconds later. **That a loop which loses its lock does not reschedule itself is a
-real reading and is named here**; it is an observation from this instance, not a
-claim about this slice, which does not touch that loop.
+### The decided run — `ef14a5dd-1d1a-4a1f-8762-d55b55e985c0` (W9)
+
+| when (UTC) | what | source |
+|---|---|---|
+| `00:39:39.530` | the ONE turn is typed into the conversation | driver |
+| `00:39:59.017` | the run row is created | row |
+| `00:40:04.757` · `00:40:05.855` | the run's own setup field is filled and `Continue` pressed | driver |
+| `00:44:42.736` · `00:44:44.938` | the schedule step is answered — **Run right after setup**, then `Continue` | driver |
+| `00:51:05.783` | the context gate is answered — `Continue` | driver |
+| `00:51:45.805` | the draft model call — `blog-draft-writer-agent`, `openai gpt-5.5-2026-04-23`, 38 717 in / 1 701 out | ledger row |
+| `00:51:47.253` | the blob is written — 5 734 bytes, `text/markdown` | row |
+| `00:51:47.911` | representation revision **1** is written | row |
+| `00:51:48.217` | **the run terminates** | row |
+| `00:51:51.254` | the review gate is minted — **3.0 s after the run had already ended** | row |
+| `00:54:23.451` | **Approve** is pressed in the browser, over a typed rationale | driver |
+| `00:54:24.546` | the audit row is written and the gate reaches `resolved` | row |
+| `00:54:32` / `00:54:44` | **W9** light / dark | shutter |
+
+**The named limit stays, and is not fixed here.** The gate is still minted after
+the run terminates — 16.5 s and 3.0 s on these two runs. The minting order is
+upstream of this slice.
+
+**One failed run is disclosed rather than dropped.** A first attempt at the
+pending run, `49e4f31b-f87c-4b35-a2a9-36858614fbf2`, is `failed` in
+`agent_runs`. The cause is environmental and was read from the app's own log:
+`[wayflow] dispatch failed for run 49e4f31b… : TypeError: fetch failed` — the
+agent runtime container had been stopped by this instance's own `dev:stop` before
+the run was armed, so the dispatch had nothing to reach. The runtime was restarted
+(`/.health` → `agents: 29, failed: 0`) and the two runs above were driven after
+that. Nothing about that failed run appears in any picture.
 
 ## How the pictures were taken
 
@@ -216,97 +252,129 @@ no `Expand` control; this surface does.
 `captures/W3__review-card__run_page__pending__light.png` ·
 `captures/W3__review-card__run_page__pending__dark.png`
 
-**Re-taken on `011da4d6133a16e81a3f79a9ce0dcbb9b6fba8a0`** — this surface moved
-under the branch, so the earlier pair is replaced rather than carried forward.
+**Re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`.** Route:
+`/agents/cinatra-ai/blog-draft-writer-agent/88634469-a0d1-47be-94a4-473cbb25bf75`
+— asserted from `location.pathname` at each shutter, in both themes.
 
 **The plan says** — *"The target ladder: build-time renderer, runtime renderer,
 metadata floor — the renderer decides, never the host."*
 
-**§I requires** — the two-column frame, *"a step rail down the left"* naming
-*"the run's ordered steps"* and *"the run detail on the right"*; the rail *"merged so
-that a gate is not a page of its own but a step in the run"*, with *"the step the
-run is paused on … highlighted; steps already passed sit above it, steps still to
-come below"*; and *"a gate step opens the gate's own surface in place — a pending
-review renders the review gate (§III–§VII) right here in the run detail, under the
-same rail, never as a standalone document"*, the gate carrying *"gate header,
-review target(s), decision bar and the prompt window"*.
+**§I requires, every clause** — *"A run is one page, read down a rail."* ·
+*"The surface is a two-column frame: a step rail down the left names the run's
+ordered steps, and the run detail on the right shows the selected step."* ·
+*"Nothing about the run lives on a separate page — every step, and every gate that
+pauses the run, is reached by selecting its entry on the rail and reads in the
+same run."* · *"The rail lists the run's steps in order, merged so that a gate is
+not a page of its own but a step in the run: the ordinary work steps, and — inline
+at the point the run reached it — a gate entry."* · *"The step the run is paused
+on is highlighted; steps already passed sit above it, steps still to come below."*
+· *"Selecting a step opens it on the right."* · *"A gate step opens the gate's own
+surface in place — a pending review renders the review gate (§III–§VII) right here
+in the run detail, under the same rail, never as a standalone document."* · and
+the drawn example's gate carrying *"gate header, review target(s), decision bar
+and the prompt window"*.
 
-**Shows** — the run surface, two columns. The **rail** carries `Step 1` with a
-check above `Review` with the gate's own mark, connected in order — the gate is an
-entry **on the rail**, not a page of its own. The **detail column** holds the gate
-opened in place: `Review requested` / `Awaiting your decision`, the title, the
-`Blog Post Artifact` chip, the pinned revision `85de01bf-711…` with
-`text/markdown`, the draft **rendered as prose** by the artifact's own renderer,
-`Expand`, and the decision floor — the rationale field over `Comment` `Reject`
-`Approve`. Counted, both themes: **1** card root, **1** island, **1** iframe,
-island `body=1 empty=0 targets=1 rendered=true`, **0** floor diagnostics, **0**
-`no renderer resolved`, **0** Preview, **0** Download, **1**/**1**/**1**
-Approve/Reject/Comment.
+**Shows** — the run surface, two columns, light and dark alike. The **rail**
+carries two entries in order, connected by a rule: `Step 1` with the completed
+circle above `Review` with the gate's own glyph — the gate is an entry **on the
+rail**, not a page of its own. The **detail column** holds the gate opened in
+place: `Review requested` / `Awaiting your decision`, the title *Keeping Weekly
+Reviews Useful When Reporting Is Automated*, the `Blog Post Artifact` chip, the
+pinned revision `5b1be384-0a7…` with `text/markdown` and its update stamp, the
+draft **rendered as prose** by the artifact's own renderer, `Expand`, and the
+decision floor — the rationale field over `Comment` `Reject` `Approve`. Counted at
+each shutter, both themes: **1** card root, **1** target island, **1** iframe,
+island `body=1 empty=0 targets=1 rendered=true`, **1**/**1**/**1**
+Approve/Reject/Comment, **0** `no-semantic-renderer` diagnostics, **0**
+`Floor · structured data` chips, **0** Preview, **0** Download.
 
-**The island follows the page.** In dark the rendered pane is dark with light ink —
-ground `rgb(13,24,42)`, the same value the surrounding card paints. The address the
-card frames names the palette it read from the document it is mounted in: the
-island `src` carries `scheme`, and pressing the app's own theme control moves it —
-root class `cinatra` → `scheme=light`, root class `dark` → `scheme=dark`, and back
-to `light` — re-read live on this head. On this first-party route the address
-carries **no** credential; the credentialed arm is the widget's (W7).
+**Verdict: PASS on the ladder, on the two-column frame, on the merged gate entry
+and on the gate opened in place. Four named DEVIATIONS, all measured, all
+pre-existing and outside this slice's renderer:**
 
-**Verdict: PASS on the ladder, on the in-place gate, and — new on this head — on
-the rail's merged gate entry. Three named DEVIATIONS from §I, all pre-existing and
-outside this slice's renderer:**
+1. **The rail does not read `Schedule / Recommendation / Review` on this route.**
+   It reads `Step 1` / `Review`. The three-row setup rail of cinatra#2970 is
+   real on this head, but it is the **`/trigger`** route's rail, not the run
+   page's: read live on this head at
+   `/agents/cinatra-ai/blog-draft-writer-agent/ef14a5dd-…/trigger`, the rows come
+   back as `1 Schedule` (`data-run-surface-rail-selected="true"`),
+   `2 Recommendation` (`reached="false"`, `aria-disabled="true"`,
+   `action="recommendation-step-unavailable"`) and `Review`
+   (`reached="true"`, **`settled="true"`**, `action="open-review-step"`) — the
+   `RunSurfaceRailRow` rows of `packages/agents/src/run-surface-rail.tsx`. The run
+   page pictured here composes its own rail instead
+   (`data-conformance-id="run-step-rail"`), whose entries carry
+   `data-rail-kind` / `data-rail-status` rather than those anchors. Two rails,
+   two vocabularies, and the picture names which one this route draws.
+2. **The paused step is not highlighted, and this is measured rather than
+   eyeballed.** §I: *"The step the run is paused on is highlighted."* The drawn
+   example gives it a coloured rule, a shaded row and its own small-caps state
+   line (`AWAITING YOUR DECISION`). Read from the computed styles of the two rail
+   entries on this page: the passed work step (`kind=step`,
+   `status=completed`) and the paused gate (`kind=gate`, `status=pending`) come
+   back with the **same** ink `rgb(21, 33, 58)`, the **same** font weight `400`
+   and the **same** background `rgba(0, 0, 0, 0)`. Nothing distinguishes the
+   paused row but its glyph.
+3. **The work step is named by position, not by what it did.** §I has the rail
+   name *"the ordinary work steps"* (the drawn example: `Fetched Q3 cohort`,
+   `Drafted re-engagement email`). This rail says `Step 1`.
+4. **No prompt window under the gate on this route.** §I draws the gate's surface
+   as *"gate header, review target(s), decision bar **and the prompt window**"*.
+   Measured on this page: `/Ask Cinatra/` matches **0** times in either theme. It
+   is drawn on the review route (W5).
 
-1. **The paused step is not highlighted as drawn.** §I: *"The step the run is
-   paused on is highlighted."* The drawn example gives it a coloured rule, a
-   shaded row and its own small-caps state line (`AWAITING YOUR DECISION`). This
-   rail draws `Review` as an ordinary entry: no rule, no shaded row, no state
-   line.
-2. **The work step is named by position, not by what it did.** §I has the rail
-   name *"the ordinary work steps"* (the example: `Fetched Q3 cohort`, `Drafted
-   re-engagement email`). This rail says `Step 1`.
-3. **No prompt window under the gate.** §I draws the gate's surface as *"gate
-   header, review target(s), decision bar **and the prompt window**"*. On this
-   route the prompt window is absent; it is drawn on the review route (W5).
-
-**Not exercised by this cell:** §I's resolved-gate history — *"A resolved gate
-stays on the rail as read-only history … records how it was settled"*. This run
-has no resolved gate, so the rail has nothing to keep. W9 reads that clause and
-names its deviation there.
-
-**Why there is no `Schedule` entry.** This run was armed **Run right after setup**
-on the run page's own schedule step, so it has no schedule row. The tab strip
-reads `Setup · Permissions`: the schedule tab is rendered only when the surface has
-a schedule to show (`src/components/agent-instance-nav.tsx`, `showTriggerTab`), and
-its label is the schedule's own word. The earlier pair, taken before that work
-merged, showed a rail of `1 Schedule` **alone** with no gate entry; on this head
-the rail carries the gate and the schedule entry is correctly absent.
+**Not exercised by this cell:** §I's resolved-gate history. This run has no
+resolved gate, so the rail has nothing to keep. W9 reads that clause.
 
 ### W5 — the review page, pending
 
 `captures/W5__review-card__review_page__pending__light.png` ·
 `captures/W5__review-card__review_page__pending__dark.png`
 
+**Re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`**, from the same pending
+run. Route:
+`/agents/cinatra-ai/blog-draft-writer-agent/88634469-…/review/lifecycle-review%3A79a42743…`
+— asserted from `location.pathname` at each shutter, in both themes.
+
 **The plan says** — *"The target ladder: build-time renderer, runtime renderer,
 metadata floor — the renderer decides, never the host."*
 
-**§I requires** — that the review page be *"the same run surface"* with the review
-step selected, *"never as a standalone document"*, the gate carrying its header,
-its target(s), the decision bar and the prompt window.
+**§I requires** — that the gate be reached *"by selecting its entry on the rail"*
+and read *"in the same run"*; that a gate step open *"in place — … right here in
+the run detail, under the same rail, **never as a standalone document**"*; the
+gate carrying *"gate header, review target(s), decision bar and the prompt
+window"*; and the rail *"names the run's ordered steps"* with *"the step the run
+is paused on … highlighted"*.
 
-**Shows** — the gate's own route drawing the **run surface**: the rail
-`1 Schedule` / `2 Review` with `Review` selected, the gate in the detail column,
-the same header and pinned revision `f1fcb330-373…`, the draft in `RENDERED`
-beside `RAW SOURCE` (the raw pane opening `## Where the hours actually go`), the
-decision floor, and the run's prompt window at the foot. Counted: **1** card,
-**1** island, island `rendered=true rawsource=true`, **0** floor diagnostics,
-**0** Preview, **0** Download.
+**Shows** — the gate's own route drawing the **run surface**, not a document: the
+rail `1 Schedule` above `2 Review`, with `Review` in the selected treatment, and
+the gate in the detail column beside it. The same header and pinned revision
+`5b1be384-0a7…`, the draft in **`RENDERED`** prose beside its **`RAW SOURCE`**
+markdown — the raw pane opening `## Why the ritual drifts once the dashboard is
+automatic`, which is byte-for-byte how the persisted blob begins — `Expand`, the
+decision floor, and the run's prompt window at the foot
+(`Ask Cinatra to suggest edits to the fields above…`). Counted at each shutter,
+both themes: **1** card, **1** island, **1** iframe, island
+`body=1 empty=0 targets=1 rendered=true rawsource=true`, **1**/**1**/**1**
+Approve/Reject/Comment, **0** floor diagnostics, **0** `no renderer resolved`,
+**0** Preview, **0** Download, and `/Ask Cinatra/` matching (the prompt window is
+present on this route, unlike W3's).
 
-**Verdict: PASS — it is the run surface, not a standalone document. Two named
-deviations, both pre-existing:**
+**Verdict: PASS — it is the same run surface with the review step selected, never
+a standalone document, and the target is drawn by its renderer beside its raw
+source. Three named DEVIATIONS:**
 
-1. **The rail's step treatment.** §I draws passed steps with a check, the paused
-   step highlighted with its own small-caps state line, and steps to come open;
-   this rail draws numbered discs and a selected state.
-2. **The prompt-window copy.** §VI words it *"Ask Cinatra about this review, or
+1. **The box directly under the review is today's decision box, not the drawing's
+   prompt window.** §I orders the gate *"gate header, review target(s), decision
+   bar and the prompt window"*; here the `DECISION RATIONALE` box sits
+   immediately under the target and the prompt window is pushed to the foot of
+   the page. **This is a known deviation owned by cinatra#2995** — named here,
+   not hidden, and not fixed by this slice.
+2. **The rail's step treatment differs from the drawing's.** §I draws passed steps
+   with a check, the paused step highlighted with its own small-caps state line,
+   and steps still to come open below. This rail draws numbered discs and a
+   selected state, and `1 Schedule` carries no check.
+3. **The prompt window's copy.** §VI words it *"Ask Cinatra about this review, or
    ask for changes to the work…"*; the surface says *"Ask Cinatra to suggest edits
    to the fields above…"*.
 
@@ -386,45 +454,80 @@ prompt.
 `captures/W9__review-card__review_page__decided__light.png` ·
 `captures/W9__review-card__review_page__decided__dark.png`
 
+**Re-taken on `d0db4293d72b4554bf1c4b00fc7d5363c82375b3`**, from the **second**
+run. Route:
+`/agents/cinatra-ai/blog-draft-writer-agent/ef14a5dd-…/review/lifecycle-review%3A77e016c0…`
+— asserted from `location.pathname` at each shutter, in both themes.
+
 **The plan says** — *"One card, one gate."*
 
-**Requires** — the decided reading of the same card: the decision recorded, the
-floor closed, no Approve / Reject / Comment left. §I adds that a resolved gate
-*"opens read-only: what was decided, **and the reviewed target(s)**, kept for the
-run's audit trail"*, and that it *"stays on the rail as read-only history — its
-entry keeps its place and records how it was settled"*.
+**§I requires, for a resolved gate** — *"A resolved gate stays on the rail as
+read-only history — its entry keeps its place and records how it was settled
+(approved, rejected, changes requested), so the rail is the run's whole lifecycle
+at a glance, not just its live tip."* and *"A resolved gate opens read-only: what
+was decided, and the reviewed target(s), kept for the run's audit trail."*
 
-**Shows** — the second run's gate after **Approve** was pressed for real in the
-browser at `16:57:22.415Z`: `Approved by Ops Operator Two`, *"The gate is resolved
-and the run has been released to continue"*, and the decision controls gone —
-**0** Approve, **0** Reject, **0** Comment. The row it wrote:
+**Shows** — the same route after **Approve** was pressed for real in the browser
+at `00:54:23.451`, over a rationale typed into the card's own field: a single card
+carrying the double-check mark, **`Approved by Ops Operator Two`** and *"The gate
+is resolved and the run has been released to continue."* The decision controls are
+gone — counted at each shutter, both themes: **0** Approve, **0** Reject, **0**
+Comment, **1** card root. The rail keeps `1 Schedule` above `2 Review`. The row it
+wrote:
 
 ```
 artifact_review_audit
-  id                          f147412a-8cb6-4120-ba80-88e92d72fc44
-  gate_id                     51abc733-6a53-4d66-96e5-a896e439fd0a
-  run_id                      8bfc1191-eeca-4b6a-ac86-a636f476c28e
-  artifact_id                 79948515-3c23-46f5-b83c-48b35f5c3839
-  representation_revision_id  a5b82be2-432e-4962-b43f-7dd7d36dfaf1
+  id                          51b718dc-9e43-464f-a241-ec2c5055c3bc
+  gate_id                     f079f282-7bf8-4105-ba01-db115dc89326
+  run_id                      ef14a5dd-1d1a-4a1f-8762-d55b55e985c0
+  artifact_id                 e98f02e5-cb3a-40c1-8a52-b47bccd205a3
+  representation_revision_id  43e75a37-3bc8-4322-9da7-8a01ec30a49c
   disposition                 approve
   renderer_kind               first-party
   renderer_package            (null)
   renderer_digest             (null)
-  created_at                  2026-08-26 16:57:23.200555+00
+  created_at                  2026-08-27 00:54:24.54582+00
+
+artifact_review_gates  f079f282-…  status resolved  disposition approve
+  resolved_by  2660f48b-6a11-423a-afdd-a148139bf86d   (the signed-in reviewer)
+  resolved_at  2026-08-27 00:54:24.54582+00
 ```
 
-**Verdict: PASS — settled by the row, not by the screen alone, and the production
-proof of `core__0097`: without the widened CHECK this insert rolls the whole
-decision back and the gate never reaches `resolved`. Two named DEVIATIONS from §I,
-both pre-existing:**
+**Verdict: PASS on the plan's words — one card, one gate, the decision recorded
+and the floor closed, settled by the row and not by the screen alone. Two named
+DEVIATIONS from §I, both measured on this head:**
 
-1. **The reviewed target is not kept beside the decision.** The surface shows what
-   was decided; the target it was decided on is not drawn.
-2. **The rail does not record how the gate was settled** — and on this reading it
-   carries `1 Review` alone, having dropped the `Schedule` entry the same run's
-   rail carried while the gate was pending (W5).
+1. **The reviewed target is not kept beside the decision.** §I: a resolved gate
+   *"opens read-only: what was decided, **and the reviewed target(s)**, kept for
+   the run's audit trail."* The settled card holds the decision line and nothing
+   else — the card's whole text at each shutter is
+   `Approved by Ops Operator Two / The gate is resolved and the run has been
+   released to continue.` The target is on the audit trail (the row above pins
+   both `artifact_id` and `representation_revision_id`); it is not on the screen.
+2. **This route's rail does not record how the gate was settled — but another
+   one does, and the difference is exact.** §I's history clause asks the resolved
+   entry to *"record how it was settled"*. Measured on this page in both themes:
+   `[data-run-surface-rail-settled="true"]` → **0**, and the `Review` row keeps
+   its numeral `2` rather than taking the completed circle. The reason is that
+   the review page's rail is its own component — `ReviewRunSteps`
+   (`review-run-steps.tsx`), an inert stepper the page hands `activeStep =
+   reviewIndex` — which has no settled reading at all. The settled reading of
+   cinatra#2975 lives in `RunSurfaceRailRow`
+   (`packages/agents/src/run-surface-rail.tsx`), whose row draws
+   `{settled ? <Check/> : displayStep}` with *"the title unhighlighted"*, gated by
+   `runReviewStepSettled({ reading, gateStatus })` in
+   `packages/agents/src/run-review-slot-reading.ts`. Read live on this head for
+   **this same decided run**, that row is drawn and it is settled:
+   - `/trigger` → the `Review` row comes back `reached="true"`,
+     **`settled="true"`**, and its indicator's text is **empty** — the completed
+     circle standing in place of the numeral, exactly as §I asks.
+   - the **run page** → its own rail entry reads `kind=gate`,
+     **`status=resolved`**, and its text is **`ReviewAPPROVE`** — the entry keeps
+     its place and records the disposition.
 
----
+   So the clause is honoured on the run page and on the setup rail, and is
+   **absent on the review page**, which is the route this cell pictures. That is
+   the deviation, named precisely rather than softened.
 
 ## The grading table
 
@@ -432,34 +535,26 @@ both pre-existing:**
 |---|---|---|---|---|
 | W0 placeholder | the conversation, working | ✔ | ✔ | **PASS** — frame + spinner, no status, no result, nothing to press, no run-page link; drawn example's heading absent (named) |
 | W1 review card | the conversation, pending | ✔ | ✔ | **PASS** — swapped in place on its own, drawn as prose by its renderer, one composer, no prompt window; no provenance row (named) |
-| W3 review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder, the in-place gate and the rail's merged gate entry; the paused step is not highlighted, the work step is named by position, no prompt window (3 deviations, named) |
-| W5 review card | the review page, pending | ✔ | ✔ | **PASS** — the same run surface, rendered beside raw source, floor, prompt window; rail treatment and prompt copy (2 deviations, named) |
-| W7 review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and the island now follows the host's colour scheme in both themes; the chip's pill outline is not drawn in dark (1 deviation, measured on both hosts) |
-| W9 decided | the review page, decided | ✔ | ✔ | **PASS** — `renderer_kind = first-party`; the reviewed target and the rail's settled state are missing (2 deviations, named) |
+| **W3** review card | the run page, pending | ✔ | ✔ | **PASS** on the ladder, the two-column frame, the merged gate entry and the gate opened in place; the rail reads `Step 1 / Review` and not the setup rail's three rows, the paused step is not highlighted (measured: same ink, weight and ground as the passed step), the work step is named by position, no prompt window (**4 deviations, named**) |
+| **W5** review card | the review page, pending | ✔ | ✔ | **PASS** — the same run surface with the review step selected, never a standalone document, rendered beside raw source; the box under the review is today's decision box rather than the drawing's prompt window (**cinatra#2995**), rail treatment, prompt copy (**3 deviations, named**) |
+| W7 review card | a third-party application | ✔ | ✔ | **PASS** — rendered whole, no login prompt, cross-site measured on the wire, and the island follows the host's colour scheme in both themes; the chip's pill outline is not drawn in dark (1 deviation, measured on both hosts) |
+| **W9** decided | the review page, decided | ✔ | ✔ | **PASS** on the plan's words — one card, one gate, floor closed, `renderer_kind = first-party` in the row; the reviewed target is not kept beside the decision, and this route's rail records no settled state while `/trigger` (`settled="true"`, empty indicator) and the run page (`status=resolved`, `ReviewAPPROVE`) both do (**2 deviations, named**) |
 
-## What this round does NOT claim, and what it dropped
+## What this round does NOT claim
 
-1. **That the gate is minted before the run terminates.** It is not — 15.3 s
-   after. Stated, issue-tracked, not fixed here.
-2. **The automatic swap on the widget host.** The run panel withholds it there by
-   design, with the file named above; W7 claims the render and the absence of a
-   login prompt, nothing more.
-3. **`W2`, the placeholder in the run detail, is not in this set.** It is not one
-   of the plan walk's six cells for this round, and its dark frame could not be
-   held: the run page's slot turned to `review` at `16:49:47.114` and that frame's
-   shutter is logged at `16:49:47.284`, its re-count after the shutter came back
-   false, and the pixels show the detail panel already emptied — the frame does
-   not show what its name claims. Rather than ship a
-   picture whose reading had slipped, or stage a third run for a cell the walk
-   does not ask for, both `W2` files are removed. The same window's chat-side
-   reading is W0, and it is verified true before and after its shutter.
-4. **The rail's contents**, the missing prompt window on the plain run route, and
-   the resolved gate's omission of the reviewed target — all named above, all
-   pre-existing, all outside this slice's renderer.
-5. **That the gate's minting delay on the re-take run is product timing.** It is
-   not; it is this instance's lost queue lock, named and explained above.
-6. **That every token inside the island resolves on every host.** One does not —
-   the target chip's pill outline in dark inside the third-party application —
-   measured on both hosts and named in W7.
+1. **That the gate is minted before the run terminates.** It is not — 16.5 s and
+   3.0 s after, on the two runs measured here. Stated, not fixed here.
+2. **That the setup rail of cinatra#2970 appears on the run page.** It does not;
+   it is the `/trigger` route's rail. W3 names where each rail is drawn and what
+   each one reads, from live anchors.
+3. **That the resolved gate reads as history on every route.** It does not — the
+   review page's own rail has no settled reading. W9 names the two routes that do
+   and the one that does not.
+4. **The automatic swap on the widget host.** The run panel withholds it there by
+   design; W7 claims the render and the absence of a login prompt, nothing more.
+5. **That the box under the review is the drawing's prompt window.** It is not —
+   it is today's decision box, a known deviation owned by cinatra#2995.
+6. **Any reading for `W2`.** It is not one of this walk's cells and is not in this
+   set.
 
 Row-level readback, hashes and stamps: [`capture-records.md`](capture-records.md).
