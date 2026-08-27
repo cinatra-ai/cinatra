@@ -24,6 +24,7 @@ const mintWidgetReviewIslandUrl = vi.fn();
 const resolveAssistantWidgetBinding = vi.fn();
 const resolveLifecycleCardState = vi.fn();
 const attachLifecycleSuggestions = vi.fn();
+const attachLifecycleSettledOutcome = vi.fn();
 const decodeLifecycleGateRef = vi.fn();
 
 vi.mock(
@@ -46,6 +47,13 @@ vi.mock("@/lib/lifecycle/lifecycle-card-refetch", () => ({
 }));
 vi.mock("@/lib/lifecycle/lifecycle-suggestion-chips", () => ({
   attachLifecycleSuggestions: (...a: unknown[]) => attachLifecycleSuggestions(...a),
+}));
+// The settled reading is composed on this route too, and the mint now reads its
+// answer (a decided gate frames an island). Stubbed to a pass-through so this
+// suite still measures the MINT and not the outcome projection, which carries
+// its own suite next door.
+vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({
+  attachLifecycleSettledOutcome: (...a: unknown[]) => attachLifecycleSettledOutcome(...a),
 }));
 vi.mock("@/lib/lifecycle/trigger-schedule-proposal-card", () => ({
   resolveTriggerScheduleProposalCard: vi.fn(),
@@ -114,6 +122,7 @@ beforeEach(() => {
     body: null,
   });
   attachLifecycleSuggestions.mockImplementation(async (state: unknown) => state);
+  attachLifecycleSettledOutcome.mockImplementation(async (state: unknown) => state);
   mintWidgetReviewIslandUrl.mockReturnValue(ISLAND_URL);
 });
 
@@ -151,6 +160,22 @@ describe("the widget arm carries the island credential", () => {
     expect(answer.islandSrc).toBe(ISLAND_URL);
   });
 
+  // "A resolved gate opens read-only: what was decided, and the reviewed
+  // target(s), kept for the run's audit trail." Inside a third-party application
+  // that kept target is authenticated by this credential and nothing else, so a
+  // decided reading needs one exactly as a pending reading does.
+  it("mints for a DECIDED gate — its card keeps the reviewed target in the same island", async () => {
+    resolveLifecycleCardState.mockResolvedValue({
+      kind: "artifact_review_gate",
+      state: { state: "settled", outcome: "approved", decidedByName: "Dana Okonkwo" },
+      body: null,
+    });
+    const answer = (await (await POST(post({ widget: true }))).json()) as {
+      islandSrc?: string;
+    };
+    expect(answer.islandSrc).toBe(ISLAND_URL);
+  });
+
   it("mints NOTHING when the ref does not decode — there is no gate to bind to", async () => {
     decodeLifecycleGateRef.mockReturnValue(null);
     const answer = (await (await POST(post({ widget: true }))).json()) as Record<string, unknown>;
@@ -169,6 +194,8 @@ describe("the widget arm carries the island credential", () => {
 });
 
 describe("no credential for a card that draws no island", () => {
+  // A settled state whose disposition this build cannot read draws the GENERIC
+  // panel, not the decided reading — no island, so no credential.
   for (const state of [{ state: "settled" }, { state: "absent" }] as const) {
     it(`does not mint for \`${state.state}\``, async () => {
       resolveLifecycleCardState.mockResolvedValue({

@@ -192,10 +192,13 @@ export function bindArtifactReviewPorts(ctx: {
 }
 
 /**
- * Prepare a caller's review targets against a run's pending gate. Composes the
- * pure core with the real artifact-side ports + the caller-supplied run/gate
- * ports. Returns the per-target props + host mount descriptors (never-blank
- * floor on every artifact-level failure class; a substituted target fails).
+ * Prepare a caller's review targets against a run's gate — a PENDING gate, or a
+ * RESOLVED one's frozen set when the caller asked for the read-only history
+ * reading (`input.acceptResolvedGate`, default closed; the core owns that rule).
+ * Composes the pure core with the real artifact-side ports + the caller-supplied
+ * run/gate ports. Returns the per-target props + host mount descriptors
+ * (never-blank floor on every artifact-level failure class; a substituted target
+ * fails).
  */
 export async function prepareArtifactReviewTargets(args: {
   input: PrepareReviewInput;

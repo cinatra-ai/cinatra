@@ -182,6 +182,50 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
   });
 });
 
+// "A resolved gate opens read-only: what was decided, and the reviewed
+// target(s), kept for the run's audit trail." The decided card frames this same
+// island, so this document draws a resolved gate's frozen set exactly as it
+// draws a pending one's — with no decision chrome on either reading.
+describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {
+  function settledSurface(targets: ReturnType<typeof target>[]) {
+    return { kind: "settled", agentSummary: null, targets, pinnedCapturePairs: {} };
+  }
+
+  it("draws every pinned target the decision was taken on — never an empty document", async () => {
+    loadReviewGateSurface.mockResolvedValue(settledSurface([target("a1"), target("a2")]));
+    const el = await renderIsland(REF);
+    expect(isEmptyIsland(el)).toBe(false);
+    const props = el.props as Record<string, unknown>;
+    expect(props["data-target-count"]).toBe(2);
+    expect(props["data-review-reading"]).toBe("decided");
+    expect(panelProps(el)).toHaveLength(2);
+  });
+
+  it("hands the decided panels the same TRUSTED organization scope", async () => {
+    loadReviewGateSurface.mockResolvedValue(settledSurface([target("a1")]));
+    const el = await renderIsland(REF);
+    for (const p of panelProps(el)) expect(p.orgId).toBe(ACTOR.orgId);
+  });
+
+  it("carries NO decision chrome on the decided reading either", async () => {
+    loadReviewGateSurface.mockResolvedValue(settledSurface([target("a1")]));
+    const el = await renderIsland(REF);
+    expect(JSON.stringify(el)).not.toMatch(/review-decision-bar|approve-review|reject-review/);
+  });
+
+  it("names the PENDING reading on a still-open gate", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1")],
+      pinnedCapturePairs: {},
+      permissions: { canDecide: true, canComment: true },
+    });
+    const el = await renderIsland(REF);
+    expect((el.props as Record<string, unknown>)["data-review-reading"]).toBe("pending");
+  });
+});
+
 describe("every denial is the SAME empty document", () => {
   it("no ref", async () => {
     expect(isEmptyIsland(await renderIsland(undefined))).toBe(true);

@@ -81,11 +81,18 @@ import "server-only";
 // names no palette renders exactly what it rendered before it existed.
 //
 // EVERY DENIAL DRAWS NOTHING. No access, no such gate, a ref that does not
-// decode, a gate that is no longer pending — all render an empty document. The
-// island never says why, because the card above it must be indistinguishable
-// between "you may not read this" and "there is nothing here" (the generic
-// refusal contract). The card's own authoritative refetch is what turns a
-// settled gate into §IV's "no longer open" panel; the island stays silent.
+// decode, a gate too damaged to read — all render an empty document. The island
+// never says why, because the card above it must be indistinguishable between
+// "you may not read this" and "there is nothing here" (the generic refusal
+// contract).
+//
+// A DECIDED GATE IS NOT A DENIAL. "A resolved gate opens read-only: what was
+// decided, and the reviewed target(s), kept for the run's audit trail" — so this
+// document draws a resolved gate's frozen pinned set exactly as it draws a
+// pending one's: the same panels, the same renderers, the same pinned revision.
+// The reading is still display-only, and the difference is entirely above the
+// frame: the card that mounts this island for a decided gate draws no floor at
+// all, so there is nothing to press on either side of the boundary.
 // ---------------------------------------------------------------------------
 
 import { Suspense } from "react";
@@ -228,17 +235,20 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     reviewTaskId,
     actorCtx,
   });
-  // `not-authorized`, `blocked` and `settled` all draw nothing here — see the
-  // header. `settled` (cinatra#2904) belongs in that list for the same reason
-  // the other two do: the island's job is §III's target ladder for a gate that
-  // is still open, and a decided gate's card draws no island at all. It is one
+  // `not-authorized` and `blocked` draw nothing here — see the header. It is one
   // empty document either way, so a reader still cannot tell WHY it is empty.
-  if (surface.kind !== "ready") return empty;
+  // `settled` draws: a decided gate keeps its reviewed target(s) read-only.
+  if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
+  const decided = surface.kind === "settled";
 
   return (
     <div
       className={islandBodyClassName(scheme)}
       data-conformance-id="review-target-island-body"
+      // WHICH READING this document is: the gate's own state, named for the
+      // conformance check and for nothing else. Both readings draw the same
+      // panels from the same frozen set; neither carries decision chrome.
+      data-review-reading={decided ? "decided" : "pending"}
       data-target-count={surface.targets.length}
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}

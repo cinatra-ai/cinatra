@@ -298,12 +298,19 @@ export type ReviewSurfaceModel =
    * from its own ref. Collapsing the two is what made the page contradict the
    * transcript about the same gate at the same moment.
    *
-   * IT CARRIES NOTHING. Deliberately: the settled reading is resolved by the
-   * CARD, from the ref, against the live reader (`lifecycle-card-refetch` →
-   * `lifecycle-settled-outcome`), which is the same path every other host
-   * resolves it on. A payload here would be a second projection of the same
-   * facts, on one host only, and the two would drift. This kind says one thing —
-   * "mount the card" — and the card says the rest.
+   * IT CARRIES THE REVIEWED TARGETS. "A resolved gate opens read-only: what was
+   * decided, and the reviewed target(s), kept for the run's audit trail." So the
+   * decided reading keeps the work on screen: the same frozen pinned set,
+   * prepared through the same never-blank ladder, drawn by the same panel and
+   * the same type renderer the pending reading drew. It is the revision the gate
+   * pinned and the decision was taken on, never a later one.
+   *
+   * IT STILL CARRIES NO DECISION. The outcome, its decider and the recorded
+   * chips are resolved by the CARD, from the ref, against the live reader
+   * (`lifecycle-card-refetch` → `lifecycle-settled-outcome`), which is the same
+   * path every other host resolves them on. A second projection of THOSE facts,
+   * on one host only, is what would drift — and the card draws no floor here, so
+   * nothing on this reading can be decided again.
    *
    * WHAT IT IS NOT. It is NOT reached for an `unavailable` gate. A ref that
    * names nothing and a row too corrupt to read stay `blocked`: they are not a
@@ -312,7 +319,16 @@ export type ReviewSurfaceModel =
    * (`resolved` → `settled`, `unavailable` → `absent`); this kind is that line,
    * drawn one layer up so the page reaches the card at all.
    */
-  | { kind: "settled" }
+  | {
+      kind: "settled";
+      /** The frozen pinned set, prepared READ-ONLY — the reviewed target(s) the
+       * decided reading keeps, in gate order. */
+      targets: PreparedReviewTarget[];
+      /** As `ready`: the pinned before/after pair per target, where one exists. */
+      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+      /** As `ready`: the producing agent's one-line summary, when present. */
+      agentSummary: string | null;
+    }
   /** The pending gate, prepared: the targets to review + the decision chrome. */
   | {
       kind: "ready";

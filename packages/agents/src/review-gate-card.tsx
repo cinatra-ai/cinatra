@@ -74,8 +74,11 @@
 //   restricted → target(s) + the floor with the terminal affordances disabled
 //                and the reason on screen (§IV: a withheld card must never be
 //                drawn as a disabled one);
-//   settled    → "This review is no longer open", with a Refresh instead of a
-//                stale decision;
+//   settled    → the DECIDED reading: the reviewed target(s), kept read-only in
+//                the same island, under the line that records who decided and
+//                how — and no decision controls at all. A gate whose disposition
+//                this build cannot read falls back to "This review is no longer
+//                open", with a Refresh instead of a stale decision;
 //   advisory   → nothing. A review gate has no advisory reading (that is §VII's
 //                verification card); drawing one here would put a card with no
 //                floor where a decision is expected. Fail closed.
@@ -815,35 +818,79 @@ function renderState(args: {
       );
 
     case "settled":
-      // §IV settled — and, when the gate carried suggestions, the partition that
-      // was RECORDED against them, drawn in the same chips with no live
-      // affordance. The decision stays readable on the surface it was made on.
+      // THE DECIDED READING KEEPS WHAT WAS REVIEWED. "A resolved gate opens
+      // read-only: what was decided, and the reviewed target(s), kept for the
+      // run's audit trail." So this is the pending reading with the decision
+      // taken out of it and the decision itself put in its place:
+      //
+      //   THE TARGET STAYS, drawn by its own renderer, in the SAME island, from
+      //     the SAME ref. That is what makes it the revision that was decided
+      //     rather than whatever the artifact says now — the gate froze the
+      //     pinned set and the island prepares that set ("You approve exactly
+      //     what you saw ... a later re-materialization of the artifact can
+      //     never silently change what was approved"). A decision line over an
+      //     empty box records who pressed a button; it does not keep the work.
+      //
+      //   NO DECISION CONTROLS, ANYWHERE. No Approve, no Reject, no Comment, no
+      //     rationale field, and no composer binding: there is nothing left to
+      //     decide, and a control that cannot act is a control that fails on
+      //     press. §II's settled schedule reading is this same shape — the form,
+      //     read-only, "with no controls at all". The header loses its
+      //     awaiting-your-decision pill for the same reason.
+      //
+      //   THE DISPOSITION READS DISTINCTLY. Approve, reject and changes-
+      //     requested are three outcomes and are named as three ("Reject is not
+      //     a quiet approve" — a rejection "can never be mistaken for or routed
+      //     as an approval"; a change request "is neither approve nor reject").
+      //     `ReviewGateSettled` draws the recorded one and its decider where one
+      //     can be named — and, when the gate carried suggestions, the partition
+      //     RECORDED against them, in the same chips with no live affordance.
       //
       // TWO READINGS, AND THE RESOLVER PICKS (cinatra#2855; plan §4.2).
       //
-      //   WITH an outcome — the card names it and its decider and draws NO
-      //     Refresh. The button existed to resolve an ambiguity ("decided, or the
-      //     run moved on?") that a named outcome has already resolved; leaving it
-      //     there would offer a re-pull that can only return the same answer.
+      //   WITH an outcome — the decided reading above, and NO Refresh. The
+      //     button existed to resolve an ambiguity ("decided, or the run moved
+      //     on?") that a named outcome has already resolved; leaving it there
+      //     would offer a re-pull that can only return the same answer.
       //
       //   WITHOUT one — byte-for-byte what shipped before: the generic "This
       //     review is no longer open", its one line naming both possibilities,
       //     and the Refresh. A gate resolved before the outcome travelled, and a
       //     disposition this build cannot read, both land here, and neither is a
-      //     card that may guess.
-      return (
+      //     card that may guess. Neither may present a target as decided either,
+      //     when it cannot say what the decision was — so that reading draws the
+      //     panel it always drew, and no island.
+      return state.outcome ? (
+        <>
+          <ReviewGateHeader pending={false} />
+          {/* §III — the reviewed target(s), read-only, exactly as the pending
+              reading drew them: one island, every pinned target, the renderer
+              resolved from the artifact's own type. The island carries no
+              decision chrome on either reading. */}
+          <ReviewTargetIsland
+            src={islandSrc}
+            credentialed={islandCredentialed}
+            expanded={expanded}
+            onToggleExpanded={onToggleExpanded}
+            onRetryResolve={onRefresh}
+          />
+          {/* §VIII — the RECORDED partition, in the place it annotated: between
+              the target it is about and the decision it rode on. */}
+          {state.suggestions && state.suggestions.length > 0 ? (
+            <SuggestionChips suggestions={state.suggestions} recorded />
+          ) : null}
+          {/* The decision line — who decided, and how. Where the floor was. */}
+          <ReviewGateSettled
+            outcome={state.outcome}
+            decidedByName={state.decidedByName}
+          />
+        </>
+      ) : (
         <>
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          {state.outcome ? (
-            <ReviewGateSettled
-              outcome={state.outcome}
-              decidedByName={state.decidedByName}
-            />
-          ) : (
-            <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
-          )}
+          <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
         </>
       );
 
