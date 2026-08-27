@@ -27,13 +27,21 @@
 //   D. "Every fixture named in plan section 6 … run … inside the held-turn
 //      harness rather than a second harness" (cinatra#2936) — three of this
 //      plan's own waves shipped their proof in a private
-//      `vitest.integration-*.config.ts` tier no workflow invokes.
+//      `vitest.integration-*.config.ts` tier no workflow invoked. RECORDED as a
+//      gap when this file landed; CLOSED in the same slice's CI change, which
+//      made all three steps OF THIS HARNESS'S OWN JOB — the clause's "rather
+//      than a second harness", read as it is written — and taught
+//      `scripts/audit/ci-pinned-tests-exist.mjs` (direction 4) to fail on the
+//      next root tier that arrives unwired anywhere. D's arm below now asserts
+//      the guarantee rather than the gap: the correction the arm asked for, in
+//      the place it asked for it.
 //
-// C and D are RECORDED GAPS, in the shape this repo already uses for owed work
+// C is a RECORDED GAP, in the shape this repo already uses for owed work
 // (`UNROUTED_PRODUCERS`, the host-parity ratchet's `owed` rows): a LIVE arm that
-// reds the moment the gap closes — so the record cannot go stale — beside, for
-// C, a SKIPPED arm carrying the plan clause itself. Neither is a waiver, and
-// neither is patched here: this slice ships proof, not product.
+// reds the moment the gap closes — so the record cannot go stale — beside a
+// SKIPPED arm carrying the plan clause itself. It is not a waiver and it is not
+// patched here: that half of this slice ships proof, not product. D was the
+// second such record and is now closed; its arm is a live guarantee.
 //
 // FAIL-CLOSED, AND ITS RESIDUALS NAMED. Four of the assertions below are
 // SOURCE SCANS, so each one's reach is finite. Every residual is stated at the arm it belongs to
@@ -139,10 +147,12 @@ describe("§6 The runner — no screen re-derives a moment", () => {
     //
     // Not a restatement for its own sake: the DB tier asserts the real result
     // against a live Postgres
-    // (`src/lib/__tests__/agent-run-lifecycle-moment.integration.test.ts`), and
-    // that tier is reached only through a package script no workflow invokes —
-    // the recorded gap at the end of this file. Until it is wired, the claim has
-    // no runner.
+    // (`src/lib/__tests__/agent-run-lifecycle-moment.integration.test.ts`), which
+    // is reached through `pnpm test:lifecycle-moment` — a package script that ran
+    // in no workflow when this file landed, and now runs as a step of this
+    // harness's own job (the arm at the end of this file holds that open). This
+    // scan is the SOURCE half of the same claim and keeps its own reader: it
+    // names the two modules that must agree.
     const ddl = read(MOMENT_SCHEMA);
     for (const column of [
       "lifecycle_moment",
@@ -397,7 +407,11 @@ const WORKFLOW_TEXT = readdirSync(WORKFLOWS_DIR)
  * `post*`) are NOT modelled — a tier reached only through one of those would
  * read as un-run, which is the missed-gap direction, never a false claim.
  */
-function invokedByAWorkflow(script: string, config: string): boolean {
+function invokedByAWorkflow(
+  script: string,
+  config: string,
+  text: string = WORKFLOW_TEXT,
+): boolean {
   const scripts = packageScripts();
   const reaching = new Set<string>([script]);
   for (let grew = true; grew; ) {
@@ -411,32 +425,82 @@ function invokedByAWorkflow(script: string, config: string): boolean {
       }
     }
   }
-  if (WORKFLOW_TEXT.includes(config)) return true;
-  return [...reaching].some((s) => invocationOf(s).test(WORKFLOW_TEXT));
+  if (text.includes(config)) return true;
+  return [...reaching].some((s) => invocationOf(s).test(text));
 }
 
-describe("§6 — the plan's fixtures run in CI, or the gap is recorded", () => {
-  it("RECORDED GAP — this plan's three private proof tiers are invoked by no workflow", () => {
-    // A fixture wired to a config nothing runs is the vacuity class this repo
-    // already refuses elsewhere (`scripts/audit/ci-pinned-tests-exist.mjs`),
-    // arriving through a door that guard does not watch: a ROOT config named in
-    // a package script rather than a file path pinned inside a workflow step.
+/** The job key of the held-turn harness's CI job, and the file it lives in. */
+const HARNESS_WORKFLOW = "build-image.yml";
+const HARNESS_JOB = "chat-hitl-held-turn-e2e";
+
+/**
+ * The text of ONE job in the harness's workflow — from its key to the next
+ * top-level job key. Read by INDENTATION rather than by a YAML parse because
+ * that is all this needs and the same file is read as text three lines above;
+ * a job that is absent yields "", which the arm asserts against rather than
+ * passing vacuously.
+ */
+function harnessJobText(): string {
+  const lines = readFileSync(
+    path.join(WORKFLOWS_DIR, HARNESS_WORKFLOW),
+    "utf8",
+  ).split("\n");
+  const start = lines.indexOf(`  ${HARNESS_JOB}:`);
+  if (start === -1) return "";
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+/** The jobs the `build` fan-in requires, read off its own `needs:` line. */
+function buildPrerequisites(): readonly string[] {
+  const text = readFileSync(path.join(WORKFLOWS_DIR, HARNESS_WORKFLOW), "utf8");
+  const match = /\n  build:\n(?:[^\n]*\n)*?    needs: \[([^\]]*)\]/.exec(text);
+  return match ? match[1].split(",").map((s) => s.trim()) : [];
+}
+
+describe("§6 — the plan's fixtures run in CI", () => {
+  it("this plan's three private proof tiers are invoked by a workflow", () => {
+    // WAS THE RECORD, IS NOW THE GUARANTEE. A fixture wired to a config nothing
+    // runs is the vacuity class this repo already refuses elsewhere
+    // (`scripts/audit/ci-pinned-tests-exist.mjs`), and it arrived through a door
+    // that guard did not watch: a ROOT config named in a package script rather
+    // than a file path pinned inside a workflow step. All three tiers are now
+    // steps of this harness's own CI job, and direction 4 of that same guard
+    // fails on the next root tier that arrives unwired anywhere.
     //
-    // TRUTHFUL RECORD, NOT A WAIVER: wiring any of the three reds this arm, so
-    // the record is corrected rather than left to rot.
+    // THIS ARM IS NOT THAT GUARD, and does not duplicate it. The guard governs
+    // EVERY root tier and decides enforceability from the workflow's structure;
+    // this arm says one narrower thing the plan cares about — that THESE THREE,
+    // the proof of this plan's own waves, are among the wired ones — and it says
+    // it from the harness, where §6's own conformance sentence is checked.
     //
     // RESIDUAL, NAMED. The reach here is workflow TEXT: a mention inside a
     // comment, an echoed command, a `continue-on-error` step or a job that never
     // fires would all read as invoked. That direction costs a missed gap, never
-    // a false claim that a tier IS un-run — and every tier below is un-run by
-    // text as well as in fact. A tier reached through ANOTHER package script is
-    // credited: the resolver walks that closure rather than reading the tier's
-    // own name only.
+    // a false claim that a tier IS un-run. The structural reading is the guard's
+    // job, and it runs in the same required workflow.
     const script = (t: (typeof PLAN_PROOF_TIERS)[number]) => t.script;
-    const unrun = PLAN_PROOF_TIERS.filter(
-      (t) => !invokedByAWorkflow(t.script, t.config),
+
+    // INSIDE THIS HARNESS'S JOB, which is the clause's own words — not merely
+    // "some workflow somewhere". The job text is read on its own so a tier
+    // wired into a job of its own would still red this arm, and the job is
+    // asserted to exist first so an empty read cannot pass vacuously.
+    const jobText = harnessJobText();
+    expect(jobText, `${HARNESS_JOB} is not a job in ${HARNESS_WORKFLOW}`).not.toEqual("");
+    const outside = PLAN_PROOF_TIERS.filter(
+      (t) => !invokedByAWorkflow(t.script, t.config, jobText),
     ).map(script);
-    expect(unrun).toEqual(PLAN_PROOF_TIERS.map(script));
+    expect(outside).toEqual([]);
+
+    // …and that job is REQUIRED, which is the other half of the clause: it is a
+    // prerequisite of the `build` fan-in, the context branch protection names.
+    expect(buildPrerequisites()).toContain(HARNESS_JOB);
 
     // Each named tier really is a root integration config reached through that
     // script, and that config really is a file — otherwise the arm above is
@@ -457,13 +521,33 @@ describe("§6 — the plan's fixtures run in CI, or the gap is recorded", () => 
       ).toBe(true);
     }
 
-    // NEGATIVE CONTROL. One root integration tier IS invoked by a workflow, so a
-    // green above cannot mean "this detector credits nothing".
+    // NEGATIVE CONTROL. The tier that was already wired before this plan is
+    // credited by the whole-workflow read — so the detector is reading workflows
+    // and not agreeing with itself — and is NOT credited by the harness job's
+    // own text, which is what makes the arm above a claim about THIS job rather
+    // than about the file. A script no workflow names is credited by neither, so
+    // a green cannot mean "this detector credits everything"; that half is
+    // spelled with a name no slice owns rather than with another slice's real
+    // tier, because a control must not red when an unrelated slice wires its own
+    // work.
     expect(
       invokedByAWorkflow(
         "test:async-notification-seam",
         "vitest.integration-2882.config.ts",
       ),
     ).toBe(true);
+    expect(
+      invokedByAWorkflow(
+        "test:async-notification-seam",
+        "vitest.integration-2882.config.ts",
+        harnessJobText(),
+      ),
+    ).toBe(false);
+    expect(
+      invokedByAWorkflow(
+        "test:no-such-tier-x2936",
+        "vitest.integration-no-such-tier-x2936.config.ts",
+      ),
+    ).toBe(false);
   });
 });
