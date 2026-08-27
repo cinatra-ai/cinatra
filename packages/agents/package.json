@@ -80,6 +80,7 @@
     "./project-instance-store": "./src/project-instance-store.ts",
     "./project-template-install-gate": "./src/project-template-install-gate.ts",
     "./trigger-store": "./src/trigger-store.ts",
+    "./hitl-context": "./src/hitl-context.ts",
     "./trigger-schedule-proposal-service": "./src/trigger-schedule-proposal-service.ts",
     "./trigger-service": "./src/trigger-service.ts",
     "./trigger-schedule-propose": "./src/trigger-schedule-propose.ts",
@@ -92,7 +93,10 @@
     "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
     "./owner-containment-port": "./src/owner-containment-port.ts",
     "./cms-repaired-capture-port": "./src/cms-repaired-capture-port.ts",
-    "./lease-expiry-finalizer": "./src/lease-expiry-finalizer.ts"
+    "./lease-expiry-finalizer": "./src/lease-expiry-finalizer.ts",
+    "./run-window-conversation-store": "./src/run-window-conversation-store.ts",
+    "./run-window-actions": "./src/run-window-actions.ts",
+    "./use-run-window-conversation": "./src/use-run-window-conversation.ts"
   },
   "scripts": {
     "test": "vitest run",

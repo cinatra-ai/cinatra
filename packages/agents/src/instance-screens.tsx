@@ -63,6 +63,10 @@ import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
+// cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
+// run's own access, resolved on the server so no window is drawn for a person
+// whose message it would refuse.
+import { canRespondInRunWindow } from "@/lib/lifecycle/run-window-turn";
 import { TriggerStepWatcher } from "./trigger-step-watcher";
 import { type SerializedAgentRunMessage } from "./agentic-run-panel";
 import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
@@ -677,6 +681,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     }
   }
 
+  // cinatra#2933 — the window's own access answer for this run. `true` with no
+  // run: there is nothing to ask, and the screen keeps the box it has today.
+  const canRespondInWindow = run ? await canRespondInRunWindow(run.id) : true;
+
   // Defensive: inputSchema is typed as Record<string, unknown> on the
   // template record; narrow it here for the summary render below.
   const inputSchema = (template.inputSchema ?? {}) as {
@@ -1187,6 +1195,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                       host="run_card"
                       cardRef={scheduleRailRef}
                       promptWindowTemplateId={template.id}
+                      // cinatra#2933 -- the window under this scheduler is the
+                      // RUN's conversation, gated on the run's own access.
+                      runId={run?.id ?? null}
+                      canRespondInWindow={canRespondInWindow}
                     />
                   ),
                 });
@@ -1285,6 +1297,8 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     instanceId={instanceId}
                     templateId={template.id}
                     isAdmin={isAdmin}
+                    runId={run?.id ?? null}
+                    canRespondInWindow={canRespondInWindow}
                     inputParams={inputParams}
                     requiredFields={required}
                     properties={properties}
@@ -1318,6 +1332,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 runDetailPanel === "stepper" ? (
                   <OrchestratorStepperPanel
                     runId={run.id}
+                    canRespondInWindow={canRespondInWindow}
                     initialStatus={run.status}
                     initialError={run.error ?? null}
                     agUiEnabled={run.agUiEnabled ?? null}
@@ -1343,6 +1358,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     runId={run.id}
                     agentId={agentId}
                     instanceId={instanceId}
+                    // cinatra#2933 (lifecycle-b W5b) -- the run page is one of
+                    // the five windows, and this watcher is the panel it is
+                    // drawn by. Both halves travel together: the template the
+                    // window's turns are addressed to, and the answer this
+                    // page already resolved once from the RUN's own access, so
+                    // the box appears for a person the run would answer and for
+                    // nobody else. Same two values the other four windows on
+                    // this page are given.
+                    templateId={template.id}
+                    canRespondInWindow={canRespondInWindow}
                     initialStatus={run.status}
                     initialError={run.error ?? null}
                     initialMessages={serializeRunMessages(completedRunMessages)}
@@ -1759,6 +1784,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     }
   }
 
+  // cinatra#2933 — the window's own access answer for this run. `true` with no
+  // run: there is nothing to ask, and the screen keeps the box it has today.
+  const canRespondInWindow = run ? await canRespondInRunWindow(run.id) : true;
+
   const inputSchema = (template.inputSchema ?? {}) as {
     properties?: Record<string, { title?: string } & Record<string, unknown>>;
     required?: string[];
@@ -2005,6 +2034,8 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         instanceId={instanceId}
         templateId={template.id}
         isAdmin={isAdmin}
+        runId={run?.id ?? null}
+        canRespondInWindow={canRespondInWindow}
         inputParams={inputParams}
         requiredFields={required}
         properties={properties}
@@ -2026,6 +2057,20 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       <RunScheduleTab
         cardRef={scheduleTabRef}
         promptWindowTemplateId={template.id}
+        // cinatra#2933 (lifecycle-b W5b) -- this step's window is one of the
+        // five, so it is the RUN's conversation and it is gated on the run's
+        // own access, exactly like the other four. The schedule's own state
+        // still decides whether there is a form to edit at all: the composer
+        // is withdrawn once the schedule is over (cinatra#3004), which this
+        // component measures off the card and is unchanged.
+        //
+        // Read optionally rather than asserted: `scheduleTabRef` is minted
+        // only for a run, so this reading always has one, but that is a fact
+        // about the ref's derivation that the compiler cannot see -- and the
+        // window's own rule for a host with no run is already "no run, nothing
+        // to hold a conversation about".
+        runId={run?.id ?? null}
+        canRespondInWindow={canRespondInWindow}
       />
     </AgentPanelBody>
   ) : (
