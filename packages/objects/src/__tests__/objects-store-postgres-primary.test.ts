@@ -33,6 +33,10 @@ import {
   upsertObjectAndEnqueue,
 } from "@/lib/objects-store";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+// The request frame the ambient write-time inheritance reads (cinatra#1377
+// contrasts the explicit binding against it). Real AsyncLocalStorage via the
+// package's mcp-server test stub.
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
 const runPg = runPostgresQueriesSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -232,5 +236,206 @@ describe("softDeleteObject (atomic with outbox, conditional CTE)", () => {
     // The CTE uses SELECT FROM deleted, so if deleted is empty the outbox INSERT
     // is a no-op at the DB level. Confirm the SQL shape is correct.
     expect(callArg.queries[0].text).toMatch(/SELECT[\s\S]+FROM\s+deleted/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upsertObjectAndEnqueue — explicit project binding (cinatra#1377, epic #1373)
+//
+// The row is TAGGED with the bound project at INSERT time. That tag is the half
+// this issue adds; the OTHER half — the sealed-room list re-filter that turns the
+// tag into "visible inside that project and only there" (`AND project_id =
+// $projectId`) — is pre-existing and stays pinned where it lives, in
+// `src/lib/__tests__/sealed-room.test.ts` ("listObjectsByFilter project mode").
+// `project_id` is the LAST value in the CTE's leading positional block ($18).
+// ---------------------------------------------------------------------------
+
+describe("upsertObjectAndEnqueue — explicit project binding (cinatra#1377)", () => {
+  const PROJECT_ID_PARAM_INDEX = 17; // $18, zero-based
+
+  function projectIdWritten() {
+    return runPg.mock.calls[0][0].queries[0].values[PROJECT_ID_PARAM_INDEX];
+  }
+
+  function withAmbientFrame<T>(projectId: string | null, fn: () => T): T {
+    const als = mcpRequestContextStorage as unknown as {
+      run: (store: unknown, fn: () => T) => T;
+    };
+    return als.run({ projectContext: { projectId } }, fn);
+  }
+
+  beforeEach(() => {
+    runPg.mockReset();
+    runPg.mockReturnValue([{ rows: [baseRow({ project_id: "prj-bound" })] }]);
+  });
+
+  it("an explicit id is written to objects.project_id", () => {
+    upsertObjectAndEnqueue({
+      upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+      operation: "upsert",
+      explicitProjectBinding: "prj-bound",
+    });
+    expect(projectIdWritten()).toBe("prj-bound");
+  });
+
+  it("an explicit id WINS over an active ambient frame", () => {
+    withAmbientFrame("prj-ambient", () =>
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+        explicitProjectBinding: "prj-bound",
+      }),
+    );
+    expect(projectIdWritten()).toBe("prj-bound");
+  });
+
+  it("an explicit null writes NULL even inside an ambient frame (substrate write)", () => {
+    withAmbientFrame("prj-ambient", () =>
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+        explicitProjectBinding: null,
+      }),
+    );
+    expect(projectIdWritten()).toBeNull();
+  });
+
+  it("an OMITTED binding leaves ambient inheritance untouched", () => {
+    withAmbientFrame("prj-ambient", () =>
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+      }),
+    );
+    expect(projectIdWritten()).toBe("prj-ambient");
+  });
+
+  it("an explicit binding still cannot project a SUBSTRATE type", () => {
+    upsertObjectAndEnqueue({
+      upsertInput: {
+        id: "abc",
+        type: "@cinatra-ai/entity-contacts:contact",
+        data: {},
+        orgId: "org-1",
+      },
+      operation: "upsert",
+      explicitProjectBinding: "prj-bound",
+    });
+    expect(projectIdWritten()).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upsertObjectAndEnqueue — collision guard (cinatra#1377)
+//
+// The `objects_save` handler probes `object.update` against the existing row
+// before writing. The probe and the write are separate statements, so the guard
+// is what makes that authorization BINDING: the DO UPDATE arm is pinned to the
+// exact row state the probe saw, and anything else refuses.
+// ---------------------------------------------------------------------------
+
+describe("upsertObjectAndEnqueue — collision guard (cinatra#1377)", () => {
+  const GUARD_ARMED = 24; // $25, zero-based
+  const EXPECTED_VERSION = 25; // $26
+  const EXPECTED_PROJECT = 26; // $27
+
+  function values() {
+    return runPg.mock.calls[0][0].queries[0].values;
+  }
+  function sql() {
+    return runPg.mock.calls[0][0].queries[0].text;
+  }
+
+  beforeEach(() => {
+    runPg.mockReset();
+    runPg.mockReturnValue([{ rows: [baseRow()] }]);
+  });
+
+  it("is INERT when the caller does not arm it (existing writers unchanged)", () => {
+    upsertObjectAndEnqueue({
+      upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+      operation: "upsert",
+    });
+    expect(values()[GUARD_ARMED]).toBe(false);
+    expect(values()[EXPECTED_VERSION]).toBeNull();
+    expect(values()[EXPECTED_PROJECT]).toBeNull();
+  });
+
+  it("pins the DO UPDATE arm to the authorized version AND project when armed", () => {
+    upsertObjectAndEnqueue({
+      upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+      operation: "upsert",
+      collisionGuard: { expectedVersion: 7, expectedProjectId: "prj-open" },
+    });
+    expect(values()[GUARD_ARMED]).toBe(true);
+    expect(values()[EXPECTED_VERSION]).toBe(7);
+    expect(values()[EXPECTED_PROJECT]).toBe("prj-open");
+    // The guard rides the DO UPDATE WHERE, so it can never block an INSERT.
+    expect(sql()).toContain("$25::boolean IS NOT TRUE");
+    expect(sql()).toContain('"objects".version = $26::int');
+    expect(sql()).toContain("IS NOT DISTINCT FROM $27::text");
+  });
+
+  it("arms with a NULL expectedVersion when the caller authorized a CREATE", () => {
+    upsertObjectAndEnqueue({
+      upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+      operation: "upsert",
+      collisionGuard: { expectedVersion: null, expectedProjectId: null },
+    });
+    expect(values()[GUARD_ARMED]).toBe(true);
+    expect(values()[EXPECTED_VERSION]).toBeNull();
+  });
+
+  // The org predicate and the collision guard both produce an empty RETURNING,
+  // and nothing outside the failed statement can tell them apart — a later
+  // re-read would answer about a newer snapshot than the one that blocked the
+  // write. So the writer claims only what is certain: the precondition did not
+  // hold and nothing was written. One statement, no classification query.
+  it("a blocked guard refuses with the precondition code and writes nothing", () => {
+    runPg.mockReturnValue([{ rows: [] }]);
+    let thrown: (Error & { code?: string }) | null = null;
+    try {
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+        collisionGuard: { expectedVersion: 7, expectedProjectId: null },
+      });
+    } catch (err) {
+      thrown = err as Error & { code?: string };
+    }
+    expect(thrown?.code).toBe("OBJECTS_WRITE_PRECONDITION_FAILED");
+    // No second query: the refusal is decided from the failed statement alone.
+    expect(runPg).toHaveBeenCalledTimes(1);
+  });
+
+  it("the refusal names BOTH possible causes rather than guessing one", () => {
+    runPg.mockReturnValue([{ rows: [] }]);
+    let thrown: Error | null = null;
+    try {
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+        collisionGuard: { expectedVersion: 7, expectedProjectId: null },
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+    expect(thrown?.message).toMatch(/changed between the caller's authorization probe/);
+    expect(thrown?.message).toMatch(/cross-tenant collision/);
+  });
+
+  it("an UNARMED caller keeps the original cross-tenant message", () => {
+    runPg.mockReturnValue([{ rows: [] }]);
+    let thrown: (Error & { code?: string }) | null = null;
+    try {
+      upsertObjectAndEnqueue({
+        upsertInput: { id: "abc", type: "test", data: {}, orgId: "org-1" },
+        operation: "upsert",
+      });
+    } catch (err) {
+      thrown = err as Error & { code?: string };
+    }
+    expect(thrown?.message).toMatch(/cross-tenant collision/);
+    expect(thrown?.code).toBeUndefined();
   });
 });
