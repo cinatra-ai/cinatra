@@ -35,7 +35,16 @@ import "server-only";
 
 import { deriveRunHitlContext } from "@cinatra-ai/agents/hitl-context";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+// The run's OWN artifact review gates, through the run-scoped reader the run
+// screens already use behind the same door (`instance-screens.tsx`: "Access is
+// already enforced above … a plain run-scoped read behind that door").
+import { listReviewGatesForRun } from "@cinatra-ai/agents/artifact-review-gate-store";
 import type { RunWindowSurface } from "@cinatra-ai/agents/run-window-conversation-store";
+// The target's own door and the review surface's own words for its type — not a
+// second query path around either.
+import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
+import { reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
+import type { ActorContext } from "@/lib/authz/actor-context";
 
 /**
  * THE DATA REGION'S OWN MARKERS.
@@ -64,12 +73,27 @@ function stripMarkers(text: string): string {
 export const RUN_WINDOW_FRAME_MAX_FIELDS = 24;
 /** How much of one field's value the frame carries. */
 export const RUN_WINDOW_FRAME_MAX_VALUE = 200;
+/**
+ * How many of the run's artifact review gates the frame carries, and how many
+ * pinned targets of one gate. A run collects gates over its life (the run
+ * screens draw resolved ones as history), and the frame is a fragment in a
+ * prompt: it is bounded here for the same reason the field list is.
+ */
+export const RUN_WINDOW_FRAME_MAX_REVIEW_GATES = 5;
+export const RUN_WINDOW_FRAME_MAX_REVIEW_TARGETS = 8;
 
 export type RunWindowGateField = { name: string; value: string };
 
 export type RunWindowGate = {
-  /** The closed vocabulary of what a run outside the chat waits on. */
-  kind: "approval" | "schedule";
+  /**
+   * The closed vocabulary of what a run outside the chat waits on.
+   *
+   * `review` is an ARTIFACT REVIEW GATE — the thing the review page exists for.
+   * It is neither of the other two, which is exactly why the frame used to miss
+   * it: composed from the paused HITL gate and the schedule alone, a run held
+   * open by a review read as waiting on nothing.
+   */
+  kind: "approval" | "schedule" | "review";
   /**
    * Is the run WAITING on this, right now?
    *
@@ -96,15 +120,31 @@ export type RunWindowFrame = {
   gates: RunWindowGate[];
 };
 
-/** The two run-scoped reads, injectable so the assembly is testable without a store. */
+/** The run-scoped reads, injectable so the assembly is testable without a store. */
 export type RunWindowFramePorts = {
   readonly deriveHitlContext: typeof deriveRunHitlContext;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
+  readonly listReviewGates: typeof listReviewGatesForRun;
+  readonly readArtifact: typeof readArtifactForDetail;
 };
 
 const DEFAULT_PORTS: RunWindowFramePorts = {
   deriveHitlContext: deriveRunHitlContext,
   readRunTrigger: readRunTriggerByRunId,
+  listReviewGates: listReviewGatesForRun,
+  readArtifact: readArtifactForDetail,
+};
+
+/**
+ * The person the window's access check cleared. The gate LIST is the run's own
+ * read, behind the run door the caller already opened; a reviewed TARGET is an
+ * artifact and carries its own door, so it is read as this reader — never as
+ * the platform. A target this reader may not read is named as unreadable rather
+ * than described.
+ */
+export type RunWindowFrameViewer = {
+  orgId: string | null;
+  actor: ActorContext;
 };
 
 /** One value, as text a person would recognise from the screen, bounded. */
@@ -141,6 +181,33 @@ function renderLabel(value: unknown, fallback: string): string {
   return flat.length > RUN_WINDOW_FRAME_MAX_VALUE
     ? `${flat.slice(0, RUN_WINDOW_FRAME_MAX_VALUE)}…`
     : flat;
+}
+
+/**
+ * One reviewed target, in the words the review page's own header uses: its
+ * title and its type (`reviewTypeLabel`, the review surface model's own
+ * projection — `@cinatra-ai/email:draft` reads "Email").
+ *
+ * FAIL-SOFT AND FAIL-CLOSED AT ONCE: a read that refuses, throws or finds
+ * nothing yields the platform's own line rather than an id, so the frame never
+ * describes an artifact this reader has no standing to see and never loses the
+ * gate because one target could not be read.
+ */
+function describeReviewTarget(
+  readArtifact: RunWindowFramePorts["readArtifact"],
+  viewer: RunWindowFrameViewer,
+  artifactId: string,
+): string {
+  let read: ReturnType<typeof readArtifactForDetail> | null = null;
+  try {
+    read = readArtifact({ artifactId, orgId: viewer.orgId, actor: viewer.actor });
+  } catch {
+    read = null;
+  }
+  if (!read || read.kind !== "ok") return "(a reviewed target you cannot read)";
+  const title = renderLabel(read.artifact.title, "(untitled)");
+  const type = renderLabel(reviewTypeLabel(read.artifact.objectType), "(unknown type)");
+  return `${title} — ${type}`;
 }
 
 /** Does this field actually hold something a reader can see on the screen? */
@@ -216,6 +283,8 @@ export async function buildRunWindowFrame(args: {
     ? T
     : never;
   surface: RunWindowSurface;
+  /** The reader the window's access check cleared (see {@link RunWindowFrameViewer}). */
+  viewer: RunWindowFrameViewer;
   ports?: Partial<RunWindowFramePorts>;
 }): Promise<RunWindowFrame> {
   const ports: RunWindowFramePorts = { ...DEFAULT_PORTS, ...(args.ports ?? {}) };
@@ -243,6 +312,62 @@ export async function buildRunWindowFrame(args: {
       detail: hitl.xRenderer ? renderLabel(hitl.xRenderer, "(unnamed)") : null,
       reference: hitl.reviewTaskId ? renderLabel(hitl.reviewTaskId, "(unnamed)") : null,
       fields: gateFields(hitl.inputSchema, hitl.currentValues),
+    });
+  }
+
+  // THE RUN'S OPEN ARTIFACT REVIEW GATES.
+  //
+  // THE DEFECT THIS REPAIRS, measured on two independent gates: with a review
+  // gate PENDING on the run, the window on the review page answered "what is
+  // this step waiting for?" with "Waiting on Nothing". The frame was composed
+  // from the run's paused HITL gate and its schedule, and an artifact review
+  // gate is NEITHER — so the one thing the screen exists for never reached the
+  // model, on the surface where it matters most.
+  //
+  // THE READ IS THE RUN'S OWN, behind the door the window already opened.
+  // `listReviewGatesForRun` is the run-scoped reader the run screens use for
+  // exactly these rows behind exactly this check ("a plain run-scoped read
+  // behind that door", `instance-screens.tsx`). No new query, no org-wide read,
+  // no second run id in scope. A RESOLVED gate is carried too — it is the run's
+  // state and worth answering about — but under "also recorded", never as
+  // something the run waits on.
+  const reviewGates = await ports.listReviewGates(run.id).catch(() => []);
+  for (const gate of reviewGates.slice(0, RUN_WINDOW_FRAME_MAX_REVIEW_GATES)) {
+    const pending = gate.status === "pending";
+    const fields: RunWindowGateField[] = [
+      { name: "state", value: pending ? "pending" : "resolved" },
+    ];
+    if (pending) {
+      // WHAT IT WAITS ON, in the words of the screen the person is looking at:
+      // the decision is the reader's and it is taken on the decision bar, not
+      // by this window (the fragment's closing sentence says the same thing
+      // about every gate).
+      fields.push({
+        name: "waiting for",
+        value:
+          "your review decision — Approve, Reject, or a request for changes, " +
+          "on this review's own decision bar",
+      });
+    } else if (gate.disposition) {
+      fields.push({ name: "decided", value: renderValue(gate.disposition) });
+    }
+    const pinned = Array.isArray(gate.pinnedTargets) ? gate.pinnedTargets : [];
+    for (const target of pinned.slice(0, RUN_WINDOW_FRAME_MAX_REVIEW_TARGETS)) {
+      fields.push({
+        name: "reviewed target",
+        value: renderValue(
+          describeReviewTarget(ports.readArtifact, args.viewer, target.artifactId),
+        ),
+      });
+    }
+    gates.push({
+      kind: "review",
+      waiting: pending,
+      detail: null,
+      reference: renderLabel(gate.reviewTaskId, "(unnamed)"),
+      // Bounded like every other gate's field list, and every name and value in
+      // it has been through the same marker-stripping flattening.
+      fields: fields.slice(0, RUN_WINDOW_FRAME_MAX_FIELDS),
     });
   }
 

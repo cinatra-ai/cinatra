@@ -49,6 +49,19 @@ const hitlByRun: Record<string, unknown> = {
   },
 };
 const triggerByRun: Record<string, unknown> = {};
+// THE RUN'S ARTIFACT REVIEW GATES — the third gate read the frame makes, and
+// the one whose absence made the review page's window answer "Waiting on
+// Nothing" while the review it sits on was open.
+const gateReads: string[] = [];
+const artifactReads: string[] = [];
+const reviewGatesByRun: Record<string, unknown[]> = {};
+const artifactsById: Record<string, { artifactId: string; title: string; objectType: string }> = {
+  "art-1": {
+    artifactId: "art-1",
+    title: "Q3 launch announcement",
+    objectType: "@cinatra-ai/email:draft",
+  },
+};
 const appended: Array<{ role: string; text: string; surface: string; replyToSequence: number | null }> = [];
 const stored: Array<{ role: "user" | "assistant"; text: string; surface: string; id: string; runId: string; sequence: number; replyToSequence: number | null; createdAt: Date }> = [];
 let session: unknown = { user: { id: "u-owner", role: "user" }, session: { activeOrganizationId: "org-1" } };
@@ -121,8 +134,27 @@ vi.mock("@cinatra-ai/agents/trigger-store", () => ({
     return triggerByRun[runId] ?? null;
   },
 }));
+vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
+  listReviewGatesForRun: async (runId: string) => {
+    gateReads.push(runId);
+    return reviewGatesByRun[runId] ?? [];
+  },
+}));
+vi.mock("@/lib/artifacts/artifact-service", () => ({
+  readArtifactForDetail: (input: { artifactId: string }) => {
+    artifactReads.push(input.artifactId);
+    const artifact = artifactsById[input.artifactId];
+    return artifact ? { kind: "ok", artifact } : { kind: "not-found" };
+  },
+}));
 vi.mock("@/lib/authz/build-actor-context", () => ({
   actorFromSession: (s: { user: { id: string } }) => ({ actorType: "human", source: "ui", userId: s.user.id, organizationId: "org-1", roles: [] }),
+  // The kernel actor the frame reads a reviewed target as — the same
+  // translation every other review surface makes.
+  buildActorContextFromPrimitive: (
+    actor: { userId?: string | null },
+    orgId?: string | null,
+  ) => ({ actorType: "human", userId: actor.userId ?? null, organizationId: orgId ?? undefined }),
 }));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: async () => session,
@@ -167,8 +199,11 @@ beforeEach(() => {
   readAgentRunById.mockClear().mockImplementation(async () => RUN_ROW as Record<string, unknown>);
   hitlReads.length = 0;
   triggerReads.length = 0;
+  gateReads.length = 0;
+  artifactReads.length = 0;
   frameThrows = false;
   for (const key of Object.keys(triggerByRun)) delete triggerByRun[key];
+  for (const key of Object.keys(reviewGatesByRun)) delete reviewGatesByRun[key];
   appended.length = 0;
   stored.length = 0;
   lastTurnArgs = null;
@@ -425,10 +460,30 @@ const FIVE_SURFACES = [
   "review",
 ] as const;
 
+/** One artifact review gate, PENDING, on the run every case here answers on. */
+const PENDING_REVIEW_GATE = {
+  id: "gate-1",
+  runId: "run-1",
+  orgId: "org-1",
+  reviewTaskId: "lg-run-1",
+  status: "pending" as const,
+  pinnedTargets: [{ artifactId: "art-1", representationRevisionId: "rev-1" }],
+  disposition: null,
+  fingerprint: null,
+  resolvedBy: null,
+  resolvedAt: null,
+  createdAt: new Date("2026-08-01T00:00:00Z"),
+};
+
 describe("the window hands the assistant the run it sits under", () => {
   it.each(FIVE_SURFACES)(
     "the %s mount's turn carries the run's id, status, gate and gate fields",
     async (surface) => {
+      // THE REVIEW GATE IS OPEN ON THIS RUN, on every one of the five mounts:
+      // the exchange is one per run, so a person who reaches the same run from
+      // the run page and from the review page must not get two different
+      // answers about what it is waiting on.
+      reviewGatesByRun["run-1"] = [PENDING_REVIEW_GATE];
       await mod.runWindowTurn({
         runId: "run-1",
         surface,
@@ -445,6 +500,16 @@ describe("the window hands the assistant the run it sits under", () => {
       expect(frame).toContain("Book a demo");
       // The screen the person is typing on, so the answer can be about it.
       expect(frame).toContain(surface);
+      // THE REVIEW THE RUN IS HELD BY — the reading this frame used to miss
+      // entirely, which is why the review page answered "Waiting on Nothing"
+      // on the very screen waiting for the person's decision.
+      expect(frame).toContain("- Waiting on: review, task lg-run-1");
+      expect(frame).toContain("your review decision");
+      expect(frame).toContain("Q3 launch announcement");
+      expect(frame).toContain("Email");
+      // Read by the run's own id, and the target as this reader.
+      expect(gateReads).toEqual(["run-1"]);
+      expect(artifactReads).toEqual(["art-1"]);
       // The message is still what the person typed — the frame is not folded
       // into their words.
       const msgs = (lastTurnArgs as { messages: Array<{ content: string }> }).messages;
@@ -484,6 +549,7 @@ describe("the window hands the assistant the run it sits under", () => {
     // Read by the run's own id, once, on the row that cleared the access check.
     expect(hitlReads).toEqual(["run-1"]);
     expect(triggerReads).toEqual(["run-1"]);
+    expect(gateReads).toEqual(["run-1"]);
     const frame = (lastTurnArgs as { runFrame?: string }).runFrame ?? "";
     expect(frame).not.toContain("run-2");
     expect(frame).not.toContain("the other run's business");
@@ -499,9 +565,11 @@ describe("the window hands the assistant the run it sits under", () => {
     ).rejects.toBeInstanceOf(mod.RunWindowAccessDenied);
     // No model was asked, so no frame was assembled…
     expect(lastTurnArgs).toBeNull();
-    // …and nothing about the run was read for one.
+    // …and nothing about the run was read for one — its review gates included.
     expect(hitlReads).toEqual([]);
     expect(triggerReads).toEqual([]);
+    expect(gateReads).toEqual([]);
+    expect(artifactReads).toEqual([]);
     // …and the box is not drawn for them at all.
     expect(await mod.canRespondInRunWindow("run-1")).toBe(false);
   });

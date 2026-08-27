@@ -43,7 +43,11 @@ import {
   type RunWindowMessage,
   type RunWindowSurface,
 } from "@cinatra-ai/agents/run-window-conversation-store";
-import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
+import {
+  actorFromSession,
+  buildActorContextFromPrimitive,
+  type ActorRoleHints,
+} from "@/lib/authz/build-actor-context";
 import { getAuthSession, resolveUserContextForUserId } from "@/lib/auth-session";
 // The person's LIVE standing — membership, org role, teams, project grants,
 // platform tier — through W5a's own leaf rather than a second assembly. A
@@ -317,6 +321,11 @@ export async function runWindowTurn(
   //
   // FAIL-SOFT. A frame that cannot be built costs the answer its context, never
   // the answer: the turn runs without it, exactly as it did before.
+  //
+  // WHAT IT CARRIES SINCE THE PICTURES: the run's OPEN ARTIFACT REVIEW GATES
+  // too. The review page's window used to answer "Waiting on Nothing" with a
+  // review gate pending on the run, because the frame was composed from the
+  // paused HITL gate and the schedule alone and a review gate is neither.
   let runFrame = "";
   try {
     const { buildRunWindowFrame, renderRunWindowFrame } = await loadRunWindowFrame();
@@ -325,6 +334,18 @@ export async function runWindowTurn(
         run: run as never,
         template: template as never,
         surface: input.surface,
+        // THE READER, so the frame's own reads happen as this person and not as
+        // the platform. The gate list is the run's, behind the run door this
+        // module just opened; a reviewed target is an artifact and carries its
+        // own door, which this actor is what opens.
+        viewer: {
+          orgId: actor.orgId,
+          actor: buildActorContextFromPrimitive(
+            actor.actor,
+            actor.orgId,
+            actor.roleHints,
+          ),
+        },
       }),
     );
   } catch (err) {
