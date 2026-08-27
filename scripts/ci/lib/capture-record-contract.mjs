@@ -308,6 +308,89 @@ export function settledIsAbsence(kind) {
   return (kind ? CARD_KINDS[kind]?.settledIsAbsence : false) === true;
 }
 
+/**
+ * WHAT A `decided` RECORD OF A SETTLED-ABSENCE KIND PINS — the one rule both
+ * tiers enforce, so neither can drift into refusing what the other writes.
+ *
+ * THE HOLE THIS CLOSES. `settledIsAbsence` makes `requiredAssertionsFor` owe the
+ * card ABSENT, so a decided capture of such a kind has no root-scoped
+ * requirement; the recorder resolves a root only for root-scoped requirements,
+ * so it wrote no `instance`; and the audit tier requires an `instance` of any
+ * record whose kind has a card root. Each rule was right on its own and
+ * together they refused EVERY truthful `decided` record of the one kind that
+ * settles to no DOM — measured twice, on two real runs, on the pictures this
+ * program exists to index.
+ *
+ * THE SMALLEST THING THAT CLOSES IT is to say what such a record pins instead of
+ * a card: THE ABSENCE. The kind's own root, the count that was read for it —
+ * which must be zero, and which the recorder takes twice around the shutter
+ * like every other number — an empty attribute set, because identity is read off
+ * an element and there was none, and the claim itself in as many words.
+ *
+ * IT IS A NARROW ADMISSION, NOT A LOOSENING. An absence instance is admissible
+ * ONLY on a `decided` capture of a kind whose settled reading draws nothing; a
+ * kind whose settled reading is a card with an outcome on it still owes the card
+ * it measured, and a record claiming otherwise is refused here rather than
+ * quietly indexed. Nothing in this function is a digest input: it grades a
+ * record, it does not change which anchors a claim owes.
+ *
+ * @returns {string[]} the reasons this record's `instance` is not that — empty when it is.
+ */
+export function absenceInstanceViolations({ instance, kind, state }) {
+  const spec = kind ? CARD_KINDS[kind] : null;
+  const root = spec?.root ?? null;
+  const settledAbsent = spec?.settledIsAbsence === true && state === "decided";
+  const inst = instance ?? null;
+  const claimsAbsence = inst !== null && typeof inst === "object" && inst.absent === true;
+  const out = [];
+  if (claimsAbsence && !settledAbsent) {
+    out.push(
+      `the record pins an ABSENCE instance, and "${kind ?? "(no kind)"}" at state ` +
+        `"${state ?? "(none)"}" has no absence to pin — only a decided capture of a kind whose ` +
+        "settled reading draws nothing at all may say the card it measured was not there",
+    );
+    return out;
+  }
+  if (!settledAbsent || root === null) return out;
+  if (inst === null || typeof inst !== "object") {
+    out.push(
+      "a decided capture of a kind whose settled reading is an ABSENCE must pin that absence — " +
+        `the root it was owed (${root}), the count it read for it, and \`absent: true\` — rather ` +
+        "than carrying no instance at all, which reads the same as never having looked",
+    );
+    return out;
+  }
+  if (inst.absent !== true) {
+    out.push(
+      "this kind settles to no DOM at all, so a decided record of it pins the ABSENCE of its root " +
+        `(\`absent: true\`) rather than a card: it pins ${JSON.stringify(inst.selector)}`,
+    );
+  }
+  if (inst.selector !== root) {
+    out.push(
+      `the recorded absence pins ${JSON.stringify(inst.selector)}, and this kind's own root is ${root}`,
+    );
+  }
+  if (inst.matched !== 0) {
+    out.push(
+      `the recorded absence counted ${JSON.stringify(inst.matched)} card(s) at ${root} — a root ` +
+        "that is still on the screen is not a settled reading, whatever the record calls it",
+    );
+  }
+  if (inst.attributes === null || typeof inst.attributes !== "object") {
+    out.push(
+      "identity is read OFF the element and there was no element — an absence records an empty " +
+        "`attributes` object rather than omitting it",
+    );
+  } else if (Object.keys(inst.attributes).length > 0) {
+    out.push(
+      `the recorded absence carries attributes ${JSON.stringify(inst.attributes)} — an element ` +
+        "that was not on the screen cannot have been read",
+    );
+  }
+  return out;
+}
+
 /** Cell-name state tokens, normalized to the two states evidence claims. */
 export const STATE_ALIASES = {
   pending: "pending",
@@ -579,6 +662,16 @@ export function validateCaptureRecord(record, io = {}) {
         `a decided capture still shows "${f.selector}" -- it is not decided`,
       );
     }
+  }
+
+  // --- what the record pins, where its kind settles to an absence ----------
+  // The one rule both tiers enforce -- see `absenceInstanceViolations`.
+  for (const detail of absenceInstanceViolations({
+    instance: record.instance ?? null,
+    kind: record.declaredKind ?? claim.kind,
+    state: record.declaredState ?? claim.state,
+  })) {
+    push("record/absence-instance", detail);
   }
   return v;
 }

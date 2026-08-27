@@ -1014,3 +1014,32 @@ textarea:focus::placeholder {
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* §I "NO SEND" — the third give-up, where the CARD has taken the send over.
+
+   The drawing's own words for the subordinate field are "No box of its own, no
+   fill, no send", and its example draws that field with no button at all. The
+   two rules above take the box and the fill; this is the send. It applies only
+   where the region DECLARES that the card owns it
+   (`data-send-affordance="card"`, written by the card on a conversation host
+   when it draws its own Continue outside the region), so the run page and the
+   review page — where the field is the primary input and its own control is the
+   only way forward — are never touched.
+
+   THE PROP CONTRACT IS THE MECHANISM; THIS IS THE BACKSTOP. The card carries the
+   rule to the renderer through `hideSubmit`, the shared field-renderer prop
+   whose own contract says a renderer drawing its own Continue must skip it, so
+   a renderer that honours the contract never draws the control at all and this
+   rule has nothing to hide. What it covers is a component this repository has
+   never read which ignores the prop.
+
+   IT HIDES AN UNAMBIGUOUS SEND AND NOTHING ELSE. A submit-typed control is a
+   send by declaration; any other button inside a field can BE the field — a
+   select trigger, an option row, a picker — and hiding those would take away
+   the input §I only re-weights. A renderer that both ignores the prop and draws
+   its send as a plain button is not reached, which is a limit stated here
+   rather than a claim not made. */
+.lifecycle-fields-subordinate[data-send-affordance="card"] button[type="submit"],
+.lifecycle-fields-subordinate[data-send-affordance="card"] input[type="submit"] {
+  display: none !important;
+}

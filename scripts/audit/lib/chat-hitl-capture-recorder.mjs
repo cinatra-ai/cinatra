@@ -96,6 +96,7 @@ import {
   CARD_KINDS,
   DECIDED_SUMMARY_SELECTOR,
   RECORDER_ID,
+  absenceInstanceViolations,
   captureHostAdmissibility,
   requiredAssertionsFor,
   settledIsAbsence,
@@ -104,7 +105,7 @@ import {
 // Re-exported so the anchor contract reads the canonical answers through the
 // same door every other requirement comes through, rather than reaching past
 // this tier into the contract for two of them.
-export { captureHostAdmissibility, settledIsAbsence };
+export { absenceInstanceViolations, captureHostAdmissibility, settledIsAbsence };
 
 /**
  * The recorder's identity, stamped on every record it writes and named by the
@@ -707,6 +708,45 @@ export async function observeCapture({
     );
   }
 
+  // THE ABSENCE INSTANCE — what a `decided` capture of a settled-absence kind
+  // pins, and the reason a record of one used to be unwritable at all.
+  //
+  // A kind whose settled reading draws nothing owes its root ABSENT, so there is
+  // no root-scoped requirement, so the pin above never ran and the record went
+  // out with no `instance` — which the audit tier refuses of any record whose
+  // kind has a card root. The absence is the claim, so the absence is what gets
+  // pinned: the root that was owed, and the count that was read for it. That
+  // count is NOT taken again here — it is the frame-scoped number this capture
+  // already measured TWICE, before and after the shutter, and the drift check
+  // above has already refused the capture if the two disagreed.
+  if (instance === null && settledIsAbsence(kind) && state === "decided") {
+    const absentRoot = cardRootFor(kind);
+    const measured = absentRoot
+      ? assertions.find(
+          (a) =>
+            a.selector === absentRoot &&
+            (a.scope ?? "frame") === "frame" &&
+            a.expect === "absent",
+        )
+      : null;
+    if (measured) {
+      instance = {
+        selector: absentRoot,
+        // MEASURED, never assumed. A root that is still on the screen is
+        // written down as such and the validators refuse the record for it.
+        matched: measured.count,
+        // There is no card to be the nth of, and none to read an identity off.
+        index: null,
+        id: null,
+        attributes: {},
+        // THE CLAIM, in as many words — a record that pins a card it failed to
+        // find is a different and still-refused thing from one that pins the
+        // card's absence on purpose.
+        absent: true,
+      };
+    }
+  }
+
   const record = {
     cell,
     declaredHost,
@@ -1127,7 +1167,21 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // GRADED. The pin is this tier's own. A record that carries one must be able
   // to stand behind it, in every particular below; a record that carries none
   // simply does not pin a card, and is judged on what it does assert.
-  if (cardRoot !== null && (strict || record?.instance !== undefined)) {
+  // A KIND THAT SETTLES TO NO DOM PINS THE ABSENCE, and the rule for it is the
+  // canonical contract's own — one function, called by both halves, so this tier
+  // cannot refuse a record the other half writes.
+  const pinsAnAbsence =
+    (settledIsAbsence(record?.declaredKind) && record?.declaredState === "decided") ||
+    record?.instance?.absent === true;
+  if (pinsAnAbsence) {
+    for (const detail of absenceInstanceViolations({
+      instance: record?.instance ?? null,
+      kind: record?.declaredKind,
+      state: record?.declaredState,
+    })) {
+      v.push(`${where}: ${detail}`);
+    }
+  } else if (cardRoot !== null && (strict || record?.instance !== undefined)) {
     const inst = record?.instance;
     if (inst === null || typeof inst !== "object") {
       v.push(

@@ -237,6 +237,37 @@ export function hitlFieldPresentationFor(host: LifecycleCardHost): HitlFieldPres
   return FIELD_PRESENTATION[host];
 }
 
+/**
+ * §I "NO SEND" — WHOSE CONTROL THE SEND IS, PER HOST.
+ *
+ * The same clause that decides the treatment decides this, because it is one
+ * sentence: where the field is drawn SUBORDINATE it gives up "the enclosing
+ * box, the raised ground and the send affordance", and §I's own example draws
+ * that field with no button at all. A send drawn INSIDE the subordinate field
+ * is the second primary input the rule exists to forbid — it does not stop
+ * being one because the component that drew it is a field renderer.
+ *
+ * So on a conversation host the CARD owns the send: it draws its own Continue,
+ * outside the fields region, and the renderer's own submit is not drawn inside
+ * it. On the run page and the review page the field is the primary input, the
+ * renderer keeps its own control, and nothing here reaches them.
+ *
+ * ONE SHAPE IS DELIBERATELY LEFT OUT, and it is stated rather than hidden: a
+ * GROUPED-SETUP form owns its own submit for the whole form and resolves its
+ * own children, so the card draws no Continue for it on any host and cannot
+ * take the form's over. Its send stays inside the region on a conversation
+ * host. Giving that form the card's Continue means the form handing its whole
+ * validated value out on demand, which is its own work and not this fix's.
+ */
+export function hitlGateKey(gate: AgentHitlScreenGate): string {
+  return `${gate.reviewTaskId}::${gate.xRenderer}::${gate.fieldName ?? ""}`;
+}
+
+export function cardOwnsTheSend(host: LifecycleCardHost, gate: AgentHitlScreenGate): boolean {
+  if (hitlFieldPresentationFor(host) !== "subordinate") return false;
+  return !classifyHitlGate(gate).isGroupedSetup;
+}
+
 /** One shared empty buffer, so "nothing typed yet" is one identity rather than
  *  a fresh object every render. */
 const EMPTY_BUFFER: Record<string, unknown> = Object.freeze({});
@@ -521,6 +552,9 @@ export function AgentHitlScreenFields({
   onSubmitBuffer,
   withholdRenderer,
   rendererContext,
+  hideRendererSubmit,
+  registerFlush,
+  gateKey,
 }: {
   runId: string;
   /** THE HOST THIS REGION IS DRAWN ON — §I's hierarchy is a fact about the
@@ -539,6 +573,22 @@ export function AgentHitlScreenFields({
   /** The reader's connected sending accounts, where the host could ask for
    *  them. Empty on a host that cannot — see `useFieldRendererContext`. */
   rendererContext?: FieldRendererContext;
+  /** §I "no send" — the CARD owns the send on this host, so the renderer's own
+   *  submit is not drawn inside the field. Carried through the SHARED renderer
+   *  props contract (`hideSubmit`, which every field renderer receives and
+   *  which says in as many words that a renderer drawing its own Continue must
+   *  skip it), never through a per-renderer flag, so it reaches a component
+   *  this repository has never read. The stylesheet scope below it is the
+   *  containment backstop for one that ignores the contract. */
+  hideRendererSubmit?: boolean;
+  /** How the card asks the renderer for what is in it. The shipped renderers
+   *  hold the reader's text locally and hand it out through this — which is the
+   *  SAME call their own Continue makes — so the card's Continue submits
+   *  exactly what that button submitted. Tagged with the gate the region drew,
+   *  so a registration cannot outlive the question it belongs to. */
+  registerFlush?: (key: string, fn: () => Promise<void>) => void;
+  /** The gate identity a registration is tagged with. */
+  gateKey?: string;
 }): ReactElement {
   const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
@@ -566,6 +616,10 @@ export function AgentHitlScreenFields({
   const Renderer = entry?.renderer ?? null;
 
   const presentation = hitlFieldPresentationFor(host);
+  const flushKey = gateKey ?? hitlGateKey(gate);
+  const registerRendererFlush = registerFlush
+    ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
+    : undefined;
 
   return (
     <div
@@ -575,6 +629,10 @@ export function AgentHitlScreenFields({
       // so the region says which side of the hierarchy it is on rather than
       // leaving a reader to infer it from a class list.
       data-field-presentation={presentation}
+      // §I "no send", READABLE OFF THE DOM and the hook the stylesheet's own
+      // backstop hangs on: the region says the card owns the send rather than
+      // leaving a reader to infer it from the absence of a button.
+      {...(hideRendererSubmit === true ? { "data-send-affordance": "card" } : {})}
     >
       {withholdRenderer === true ? (
         // WITHHELD, not broken: the region is the anchor a capture is graded
@@ -632,6 +690,8 @@ export function AgentHitlScreenFields({
           }
           context={context}
           mode="edit"
+          hideSubmit={hideRendererSubmit === true}
+          registerFlush={registerRendererFlush}
         />
       )}
     </div>
@@ -644,6 +704,37 @@ export function AgentHitlScreenFields({
  * envelope filled only when the renderer wrote none, and the attachment
  * envelope applied for every gate that is not a setup gate.
  */
+function HitlContinueControl({
+  submitting,
+  blocked,
+  onPress,
+}: {
+  submitting: boolean;
+  blocked: boolean;
+  onPress: () => Promise<void>;
+}): ReactElement {
+  return (
+    <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+      <Button
+        size="sm"
+        className="gap-1.5"
+        data-action="submit-hitl-screen"
+        disabled={submitting || blocked}
+        {...(blocked
+          ? {
+              title:
+                "Continue this run where you are signed in to Cinatra — this surface carries no credential for the decision.",
+            }
+          : {})}
+        onClick={() => void onPress()}
+      >
+        {submitting ? "Continuing…" : "Continue"}
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 export function AgentHitlScreenContinue({
   gate,
   buffered,
@@ -661,36 +752,54 @@ export function AgentHitlScreenContinue({
   onContinue: (payload: Record<string, unknown>) => Promise<void>;
 }): ReactElement {
   return (
-    <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
-      <Button
-        size="sm"
-        className="gap-1.5"
-        data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
-        {...(blocked
-          ? {
-              title:
-                "Continue this run where you are signed in to Cinatra — this surface carries no credential for the decision.",
-            }
-          : {})}
-        onClick={async () => {
-          let payload: Record<string, unknown> = {
-            ...buffered,
-            approved: true,
-            approvedAt: new Date().toISOString(),
-          };
-          if (!isSetupGateTaskId(gate.reviewTaskId)) {
-            payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
-          }
-          payload = withContextSelectorEnvelope(gate.xRenderer, gate.currentValues, payload);
-          await onContinue(payload);
-        }}
-      >
-        {submitting ? "Continuing…" : "Continue"}
-        <ArrowRight className="h-3.5 w-3.5" />
-      </Button>
-    </div>
+    <HitlContinueControl
+      submitting={submitting}
+      blocked={blocked}
+      onPress={async () => {
+        let payload: Record<string, unknown> = {
+          ...buffered,
+          approved: true,
+          approvedAt: new Date().toISOString(),
+        };
+        if (!isSetupGateTaskId(gate.reviewTaskId)) {
+          payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
+        }
+        payload = withContextSelectorEnvelope(gate.xRenderer, gate.currentValues, payload);
+        await onContinue(payload);
+      }}
+    />
   );
+}
+
+/**
+ * THE CARD'S CONTINUE ON A SETUP GATE — the same control, the same anchor, and
+ * the SAME submit the renderer's own button made.
+ *
+ * A setup-loop gate submits ON CHANGE: the renderer's button calls `onChange`
+ * with what the reader typed, the card wraps it under the gate's own field name
+ * with the shipped `wrapPrimitiveSetupPayload`, and hands it to the one submit
+ * core. This control changes NOTHING about that path. It asks the renderer for
+ * its value through the shared props contract's own flush — which is the same
+ * call the renderer's button makes — and then submits what came back, wrapped
+ * by the same helper, through the same core.
+ *
+ * WHY IT EXISTS. §I forbids a send inside the subordinate field, and on a
+ * conversation host that button was the only way forward. Taking it away
+ * without putting the card's own control in its place would strand the reader —
+ * which is exactly the regression `agentic-run-panel.tsx` records from the last
+ * time a surface hid it. So the send MOVES rather than disappearing: out of the
+ * field, onto the card, where §I says the card's own control belongs.
+ */
+export function AgentHitlScreenSetupContinue({
+  submitting,
+  blocked,
+  onContinue,
+}: {
+  submitting: boolean;
+  blocked: boolean;
+  onContinue: () => Promise<void>;
+}): ReactElement {
+  return <HitlContinueControl submitting={submitting} blocked={blocked} onPress={onContinue} />;
 }
 
 /**
@@ -726,6 +835,31 @@ export function AgentHitlScreenCard({
   const [reloadToken, setReloadToken] = useState(0);
   const [buffered, setBuffered] = useState<Record<string, unknown>>(EMPTY_BUFFER);
   const [submitting, setSubmitting] = useState(false);
+
+  // THE SETUP GATE'S ANSWER, HELD BETWEEN THE FIELD AND THE CARD'S CONTINUE.
+  //
+  // A setup-loop gate has always submitted ON CHANGE, because the renderer's own
+  // button was the send. On a conversation host §I moves that send onto the card
+  // (`cardOwnsTheSend`), so the same `onChange` now STAGES what it would have
+  // submitted — byte for byte, the same `wrapPrimitiveSetupPayload` output under
+  // the same field name — and the card's Continue submits it through the same
+  // core. A ref rather than state on purpose: the flush below calls `onChange`
+  // synchronously, and a state write would not be readable in the same turn.
+  const setupAnswerRef = useRef<{ payload: unknown; fieldName: string | undefined } | null>(null);
+  // How the card asks the field for what is in it, through the shared renderer
+  // props contract. The shipped renderers hold the reader's text locally and
+  // hand it out here — the SAME call their own Continue makes.
+  //
+  // KEYED BY THE GATE, and for the same reason the buffer is: a renderer that
+  // has been replaced can still be holding the previous question's text, and a
+  // flush called on it would answer the NEW question with the OLD field. It
+  // cannot be CLEARED on a gate change instead, because a child's effect runs
+  // before its parent's — the renderer registers for the new gate first and the
+  // parent would then throw that registration away.
+  const flushRef = useRef<null | { key: string; fn: () => Promise<void> }>(null);
+  const registerRendererFlush = useCallback((key: string, fn: () => Promise<void>) => {
+    flushRef.current = { key, fn };
+  }, []);
 
   // THE HOST OWNS THE GATE WHEN IT OWNS THE DRAWING. See the header: a host that
   // hands in a screen has already decided the run is asking, so the card asks
@@ -766,13 +900,18 @@ export function AgentHitlScreenCard({
   // asked for them. So the buffer is KEYED by the gate it was typed into: a
   // buffer whose key does not match the gate on screen is not this gate's
   // answer and is not read, and the effect below drops it.
-  const gateKey =
-    gate === null ? null : `${gate.reviewTaskId}::${gate.xRenderer}::${gate.fieldName ?? ""}`;
+  const gateKey = gate === null ? null : hitlGateKey(gate);
   const bufferedGateRef = useRef<string | null>(null);
   useEffect(() => {
     if (bufferedGateRef.current === gateKey) return;
     bufferedGateRef.current = gateKey;
     setBuffered(EMPTY_BUFFER);
+    // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
+    // the buffer does, and so does the flush that produced it: the renderer is
+    // keyed by the gate and re-registers on the new one, and a flush left over
+    // from the previous gate would answer the next question with the last one's
+    // field.
+    setupAnswerRef.current = null;
   }, [gateKey]);
   // Read in the SAME render the key changed in, so a submit that lands before
   // the effect runs cannot carry the previous gate's values either.
@@ -839,6 +978,29 @@ export function AgentHitlScreenCard({
     [submit],
   );
 
+  // WHERE THE CARD OWNS THE SEND, the setup field's own change STAGES instead of
+  // submitting. Nothing about the payload changes — it is the same wrap under
+  // the same field name — only who presses.
+  const stageSetupAnswer = useCallback(
+    async (payload: unknown, fieldName: string | undefined) => {
+      setupAnswerRef.current = { payload, fieldName };
+    },
+    [],
+  );
+
+  // THE CARD'S CONTINUE ON A SETUP GATE. Ask the field for its value the way the
+  // field's own button asks it, then submit exactly that through the one core.
+  // A renderer that hands nothing back (a required box left empty says so
+  // itself, in its own words, inside the field) leaves the screen as it was.
+  const onContinueSetup = useCallback(async () => {
+    setupAnswerRef.current = null;
+    const flush = flushRef.current;
+    if (flush !== null && flush.key === gateKey) await flush.fn();
+    const staged = setupAnswerRef.current;
+    if (staged === null) return;
+    await submit(staged.payload, staged.fieldName);
+  }, [submit, gateKey]);
+
   // The grouped-setup form's own submit lands here: the SAME approved envelope
   // the Continue builds, from the buffer the form just wrote.
   const onSubmitBuffer = useCallback(
@@ -863,6 +1025,15 @@ export function AgentHitlScreenCard({
     // ABSENCE of a session rather than the presence of a credential, so a host
     // that declares neither is covered by it too.
     const withholdRenderer = !cookieSession && !gateRendererIsSessionFree(runId, gate);
+    // §I "NO SEND" — see `cardOwnsTheSend`. On a conversation host the send is
+    // the card's, so the renderer's own submit is not drawn inside the field.
+    const ownsTheSend = cardOwnsTheSend(host, gate);
+    // …and on a SETUP gate that is the control that has to appear in its place,
+    // because a setup gate draws no Continue of the card's own today. Never
+    // where the renderer itself is withheld: there is no field mounted to ask
+    // for a value, so a control that could not submit anything is not drawn —
+    // the same silence the fields region is left in there.
+    const cardOwnsSetupSend = ownsTheSend && !isMidRun && !withholdRenderer;
     return (
       <>
         <AgentHitlScreenFields
@@ -871,10 +1042,13 @@ export function AgentHitlScreenCard({
           gate={gate}
           buffered={activeBuffered}
           onBuffer={onBuffer}
-          onSubmitField={submit}
+          onSubmitField={cardOwnsSetupSend ? stageSetupAnswer : submit}
           onSubmitBuffer={onSubmitBuffer}
           withholdRenderer={withholdRenderer}
           rendererContext={rendererContext}
+          hideRendererSubmit={ownsTheSend}
+          registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
+          gateKey={gateKey ?? ""}
         />
         {isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
@@ -883,6 +1057,12 @@ export function AgentHitlScreenCard({
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
             onContinue={onContinue}
+          />
+        ) : cardOwnsSetupSend ? (
+          <AgentHitlScreenSetupContinue
+            submitting={submitting}
+            blocked={!cookieSession && auth === null}
+            onContinue={onContinueSetup}
           />
         ) : null}
       </>
@@ -901,7 +1081,10 @@ export function AgentHitlScreenCard({
     rendererContext,
     auth,
     onContinue,
+    onContinueSetup,
     onSubmitBuffer,
+    registerRendererFlush,
+    stageSetupAnswer,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

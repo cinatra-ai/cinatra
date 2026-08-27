@@ -30,12 +30,22 @@
 // stays on every host — what §I moves is the weight of the FIELD. It is drawn
 // OUTSIDE the fields region, which is what makes "no send affordance" a
 // measurable fact about the region rather than a claim about the card.
+//
+// AND "NO SEND" IS THE THIRD GIVE-UP, not an exemption for whoever drew the
+// button. The graded pictures caught a SETUP gate in a conversation drawing the
+// renderer's own filled Continue INSIDE the fields region while the card's own
+// measured zero — a send affordance inside the subordinate field, which is the
+// second primary input §I exists to forbid. So on a conversation host the send
+// is the CARD'S: the card draws its own Continue for a setup gate too, outside
+// the region, and the renderer's own submit is not drawn inside it. The run
+// page and the review page keep the primary treatment and the renderer's own
+// button exactly as they were.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -57,6 +67,7 @@ import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { Textarea } from "@/components/ui/textarea";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { approveReviewTask } from "../hitl-actions";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const GLOBAL_STYLESHEET = join(REPO_ROOT, "src", "app", "globals.css");
@@ -381,20 +392,162 @@ describe("§I — the shipped fallback renderer, drawn inside the region", () =>
     ).toBe(region);
   });
 
-  it("keeps its OWN Continue, which is the run's way forward and not a second place to type", async () => {
+  it("draws NO send inside the region on a conversation host — §I's third give-up", async () => {
     registerShippedFallback();
     screenStateMock.mockImplementation(async () => SHIPPED_GATE);
     const region = await fieldsRegionOn("chat_thread");
-    // STATED RATHER THAN SUPPRESSED. Several shipped fallback branches draw
-    // their own Continue, and `agentic-run-panel.tsx` records the rule that no
-    // surface hides it any more — on a setup-loop gate the card draws none of
-    // its own, so that control is the ONLY way the run goes forward and hiding
-    // it would strand the reader. §I takes the weight off the FIELD; a control
-    // that continues the run is not a second place to hold a conversation.
+    // THE DEFECT THE GRADED PICTURES MEASURED, now the rule. The shipped
+    // fallback draws its own Continue; inside a conversation that button is a
+    // send affordance inside the subordinate field, and §I's own example draws
+    // that field with no button at all. The card carries the rule to the
+    // renderer through the SHARED props contract, so it reaches a renderer this
+    // slice does not own.
+    expect([...region.querySelectorAll("button")], "any send inside the field").toHaveLength(0);
+    // …and the region says so on the DOM, which is what the stylesheet's own
+    // containment backstop hangs on and what a picture is graded against.
+    expect(region.getAttribute("data-send-affordance")).toBe("card");
+  });
+
+  it("puts the card's OWN Continue in its place, outside the region", async () => {
+    registerShippedFallback();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const card = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>(
+        '[data-lifecycle-card="agent_hitl_screen"]',
+      );
+      if (!found) throw new Error("no card");
+      return found;
+    });
+    // The send MOVES rather than disappearing — taking it away without putting
+    // the card's control in its place is the regression `agentic-run-panel.tsx`
+    // records from the last time a surface hid it.
+    expect(card.querySelectorAll(CONTINUE), "the card's own control").toHaveLength(1);
+    const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+    expect(region.querySelectorAll(CONTINUE), "and NOT inside the field").toHaveLength(0);
+  });
+
+  it("run_card keeps the renderer's own Continue, and the card draws none", async () => {
+    registerShippedFallback();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const mounted = mountOn("run_card");
+    await settle();
+    const card = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>(
+        '[data-lifecycle-card="agent_hitl_screen"]',
+      );
+      if (!found) throw new Error("no card");
+      return found;
+    });
+    const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+    // WHERE THERE IS NO CHAT BOX the field is the primary input and its own
+    // control is the only way forward. Nothing here moves.
     const buttons = [...region.querySelectorAll("button")];
-    expect(buttons.length, "the renderer's own control, left alone").toBeGreaterThan(0);
-    expect(buttons.map((b) => b.textContent)).toContain("Continue");
-    // What the CARD must never do is add a second one beside it.
-    expect(region.querySelectorAll(CONTINUE)).toHaveLength(0);
+    expect(buttons.map((b) => b.textContent), "the renderer's own control").toContain("Continue");
+    expect(region.getAttribute("data-send-affordance"), "not declared on a page host").toBeNull();
+    expect(card.querySelectorAll(CONTINUE), "the card adds none").toHaveLength(0);
+  });
+
+  it("the card's Continue submits EXACTLY what the renderer's button submitted", async () => {
+    registerShippedFallback();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const card = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>(
+        '[data-lifecycle-card="agent_hitl_screen"]',
+      );
+      if (!found) throw new Error("no card");
+      return found;
+    });
+    const field = card.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      `${FIELDS_REGION} textarea, ${FIELDS_REGION} input`,
+    )!;
+    expect(field, "the shipped renderer's own field").not.toBeNull();
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "How small teams keep research organised" } });
+    });
+    const continueButton = card.querySelector<HTMLButtonElement>(CONTINUE)!;
+    await act(async () => {
+      fireEvent.click(continueButton);
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // THE SAME CORE, THE SAME ARGUMENTS. A setup-loop answer is the value
+    // wrapped under the gate's OWN field name and handed to the shipped
+    // review-task approval — which is exactly what the renderer's own button
+    // produced before this control existed. There is no second submit path.
+    expect(approveReviewTask).toHaveBeenCalledTimes(1);
+    expect(approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-2930",
+      { idea: "How small teams keep research organised" },
+      "idea",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. THE MID-RUN GATE IS UNCHANGED
+// ---------------------------------------------------------------------------
+
+describe("§I — the mid-run gate keeps the shape it already had", () => {
+  it.each(SUBORDINATE_HOSTS)(
+    "%s: the card's own Continue, outside a region that holds no send",
+    async (host) => {
+      const mounted = mountOn(host);
+      await settle();
+      const card = await waitFor(() => {
+        const found = mounted.container.querySelector<HTMLElement>(
+          '[data-lifecycle-card="agent_hitl_screen"]',
+        );
+        if (!found) throw new Error(`no card on ${host}`);
+        return found;
+      });
+      expect(card.querySelectorAll(CONTINUE), "the card's control").toHaveLength(1);
+      const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+      expect(region.querySelectorAll("button"), "no send in the field").toHaveLength(0);
+    },
+  );
+
+  it.each(PRIMARY_HOSTS)("%s: the card's own Continue, and no declaration", async (host) => {
+    const mounted = mountOn(host);
+    await settle();
+    const card = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>(
+        '[data-lifecycle-card="agent_hitl_screen"]',
+      );
+      if (!found) throw new Error(`no card on ${host}`);
+      return found;
+    });
+    expect(card.querySelectorAll(CONTINUE), "the card's control").toHaveLength(1);
+    const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+    expect(region.getAttribute("data-send-affordance")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. THE STYLESHEET'S CONTAINMENT BACKSTOP
+// ---------------------------------------------------------------------------
+
+describe("§I — the scope hides a send a renderer drew anyway, and only where the card owns it", () => {
+  const blocks = () =>
+    readFileSync(GLOBAL_STYLESHEET, "utf8")
+      .split("}")
+      .filter((b) => b.includes(".lifecycle-fields-subordinate"))
+      .join("}\n");
+
+  it("hides a submit-typed control, and hangs the rule on the card's own declaration", () => {
+    const rule = blocks()
+      .split("\n")
+      .filter((line) => line.includes('[data-send-affordance="card"]'));
+    expect(rule.length, "the backstop").toBeGreaterThan(0);
+    for (const line of rule) {
+      expect(line, "scoped to the subordinate region").toContain(".lifecycle-fields-subordinate");
+      expect(line, "and to the card's own declaration").toContain(
+        '[data-send-affordance="card"]',
+      );
+      expect(line, "an unambiguous send only").toMatch(/\[type="submit"\]/);
+    }
   });
 });
