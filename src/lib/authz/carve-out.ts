@@ -14,9 +14,30 @@ import type { Action } from "./registry";
 import type { ResourceType } from "./resource-ref";
 
 /**
- * Seven boundary perimeters where access must be checked:
+ * Eight boundary perimeters where access must be checked:
  * MCP handler dispatch, server actions, RSC loaders, deterministic clients,
- * delegated chat tokens, route handlers, and BullMQ run-start triggers.
+ * delegated chat tokens, delegated PUBLIC-SITE-WIDGET tokens, route handlers,
+ * and BullMQ run-start triggers.
+ *
+ * THE WIDGET PERIMETER IS ITS OWN (cinatra#2935, lifecycle-b W5d). The two
+ * delegated tool policies are separate modules with separate allowlists and
+ * separate backstops — `delegated-chat-tool-policy.ts` is broad, and
+ * `delegated-widget-tool-policy.ts` is CLOSED and kind-keyed — so an exception
+ * granted on one is not an exception on the other. Recording a widget-only
+ * exception as `delegated_chat_token` would have said, in the one typed ledger
+ * that is supposed to be readable, that the chat surface holds a permission it
+ * does not. The chat parity check reads the chat policy's own override block;
+ * the widget one reads the widget policy's, and each now has a boundary to be
+ * checked against.
+ *
+ * WHAT THIS PERIMETER IS, AND WHAT IT IS NOT (convergence round 1, finding 3).
+ * It is the DECLARATION half: the typed twin of an exception written in a tool
+ * policy, kept in lockstep with that policy by a parity check. It is NOT a
+ * runtime bypass selector — `enforceMcpBoundary` chooses between
+ * `delegated_chat_token` and `mcp_handler_dispatch` and is unchanged by this
+ * value, deliberately: a widget-reachable primitive should still take the
+ * ordinary kernel check, and `findCarveOut` returning nothing for it is the
+ * correct outcome, not a gap. Nothing here opens a runtime door.
  */
 export type BoundaryPerimeter =
   | "mcp_handler_dispatch"
@@ -24,6 +45,7 @@ export type BoundaryPerimeter =
   | "rsc_loader"
   | "deterministic_client"
   | "delegated_chat_token"
+  | "delegated_widget_token"
   | "route_handler"
   | "bullmq_trigger";
 
@@ -152,6 +174,21 @@ export const CARVE_OUTS: readonly CarveOut[] = [
     boundary: "delegated_chat_token",
     reason:
       "The card lends the assistant ONE of its own controls, once, for ONE message (PLAN: Agents Lifecycle (B) section 4). The token-policy gate (perimeter 5) is what this entry opens; NOTHING about the decision is relaxed. The handler (src/lib/lifecycle/lent-action-mcp.ts) refuses unless the request frame carries a server-minted, signed, single-use grant naming the person, the message, the bound card ref and the ONE allowed control, matched against the frame's own identity, spent by one atomic DELETE before any effect. It then resolves the person's OWN live standing (never the delegated token's weaker hints), re-resolves the bound card under it, refuses a control the card does not offer, and runs the card's own path — submitReviewDecisionAction for the review card's Comment/Approve/Reject, approveReviewTaskInternal for a waiting screen's Continue — which enforce run access, the gate CAS and the audit row exactly as a button press does. A prompt-injected model holds no grant and the primitive does nothing for it. agent_run_resume and approvals_decide stay unreachable: this is one named primitive, not a lifted backstop.",
+    risk: "high",
+    owningTeam: "platform-authz",
+    reviewedAt: "2026-08-25",
+    reviewerId: "platform-authz-reviewer",
+  },
+  // cinatra#2935 (lifecycle-b W5d) — THE ONE NARROW START. The typed twin of the
+  // disclosed exception in the delegated-WIDGET tool policy. There is no chat
+  // entry to pair with: chat reaches the same road through `agent_run`.
+  {
+    primitiveName: "agent_named_start",
+    resourceType: "agent_run",
+    action: "create",
+    boundary: "delegated_widget_token",
+    reason:
+      "DECLARATION ONLY — this entry is the typed twin of the exact-name exception in the delegated-WIDGET tool policy, kept in lockstep with it by a structural parity test; it opens no runtime bypass (enforceMcpBoundary never selects this perimeter, so the ordinary kernel check still runs, which is what this primitive wants). A person inside a third-party application names an agent and their own assistant starts it (PLAN: Agents Lifecycle (B) section 4). It replaces the server-side sentence-matcher that until this slice was the widget's ONLY way to start an agent, and it is strictly narrower: a package name and the inputs the person gave, never a template id, a timeout or a polling surface. The token-policy gate (perimeter 5) is what this entry opens; NOTHING about starting a run is relaxed. The handler (src/lib/lifecycle/named-agent-start-mcp.ts) places the caller from the transport-verified frame only, resolves that person's LIVE standing at the call (never the delegated token's weaker hints), and then invokes agent_run in process, which runs the runnable and readiness gates, the creation preflight, enforceRunAccess(execute) and the project binding under that credential and launches through the coordinator — so an agent the person may not start is refused and the platform's own refusal is relayed word for word. It creates no run itself: the run-creation fence still sees one producer. agent_run stays OFF the widget allowlist (cinatra#2790).",
     risk: "high",
     owningTeam: "platform-authz",
     reviewedAt: "2026-08-25",

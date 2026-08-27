@@ -57,13 +57,6 @@ const SYSTEM_BODY = "SYSTEM_PROMPT_BODY";
 const CONFIRMATION_POLICY = "\n\nCONFIRMATION_POLICY";
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
-  serverSideExplicitDispatch: vi.fn(),
-}));
 // USER-CONTROLLED, and driven from a mutable fake (convergence round 2, finding 1).
 // Connector-owned sections are rendered into the user context VERBATIM, so this
 // is the channel a prompt injection actually arrives on — a connector display

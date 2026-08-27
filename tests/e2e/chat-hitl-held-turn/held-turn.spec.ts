@@ -10,9 +10,13 @@
  * a hand-written record. Each is true, and none of them can fail when the RUNTIME
  * stops creating the hold — because none of them ever asks the runtime for one.
  *
- * This flow asks. A browser types a message into `/chat`; from there nothing is
- * simulated. The runtime routes the turn through its own hard pre-router, creates
- * a real `agent_runs` row, evaluates the recommendation checkpoint, parks the run,
+ * This flow asks. A browser types a message into `/chat`; from there exactly ONE
+ * thing is stood in for and everything below it is real. The stand-in is the model
+ * layer: on a key-free stack the deterministic provider makes the one decision a
+ * model makes here — which tool this turn calls — and words the answer. The
+ * conversation's own assistant then calls `agent_run` (cinatra#2935, lifecycle-b
+ * W5d: nothing dispatches before the model any more), and the runtime creates a
+ * real `agent_runs` row, evaluates the recommendation checkpoint, parks the run,
  * and answers `pending_input`. The transcript then draws the §V card at the
  * `agent_run` producing slot, the person decides ON THAT CARD, and the runtime
  * releases the park and enqueues the run. Every claim below is checked twice: once
@@ -139,7 +143,7 @@ const RUN_EVIDENCE_DIR =
 
 /**
  * THE COLD-COMPILE BUDGET. On a cold dev route the FIRST `POST /api/chat` compiles
- * the route graph before the pre-router dispatches at all — measured in minutes on
+ * the route graph before the assistant calls anything at all — measured in minutes on
  * a constrained machine, with zero rows in `agent_runs` to show for it while it
  * happens. A 300 s budget produced two false reds on the S9b round for exactly this
  * reason. This is a compile ceiling, not a flake allowance: once the route is warm
@@ -332,12 +336,12 @@ const TURN_REFUSALS = [
   // The public MCP URL missed its 2500 ms reachability probe (a cold route). The
   // setup project now measures that route for exactly this reason.
   "Cinatra tools are unavailable",
-  // No provider adapter bound, so the turn went conversation-only and the
-  // explicit-dispatch package was nulled before the pre-router could see it.
+  // No provider adapter bound, so the turn was refused for want of a model before
+  // the assistant could call anything.
   "No LLM provider configured",
-  // The pre-router DID fire and the dispatch was refused — an opt-in agent that is
-  // registered but not installed, or one whose connector needs are unmet. The
-  // sentence is the boundary's own, and it names the cause far better than a
+  // The assistant DID call `agent_run` and the start was refused — an opt-in agent
+  // that is registered but not installed, or one whose connector needs are unmet.
+  // The sentence relays the boundary's own words, and it names the cause far better than a
   // fifteen-minute silence followed by "no held card" ever could. It covers the
   // template-scope refusal (`agent-template-scope: … cross_org`) that a test user
   // outside the agent's own organization gets, which is otherwise invisible: the

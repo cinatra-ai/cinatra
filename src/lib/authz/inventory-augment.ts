@@ -170,6 +170,13 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // ONE bound card and the ONE control — so the model cannot reach this even for
   // a run it could otherwise operate. status enforced.
   lifecycle_bound_card_decide:      { resourceType: "agent_run", action: "update", status: "enforced" },
+  // THE ONE NARROW START (cinatra#2935, lifecycle-b W5d) — the widget's
+  // replacement for the removed sentence-matcher, classified on the resource it
+  // actually creates. The authority is `agent_run`'s own: the handler resolves
+  // the person's live standing and hands it to the primitive, which runs
+  // `enforceRunAccess(execute)` plus the project binding before the coordinator
+  // launches anything. status enforced.
+  agent_named_start:                { resourceType: "agent_run", action: "create", status: "enforced" },
   // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5).
   // DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
   // artifact::create). There is no dedicated artifact_extension resourceType (cf.

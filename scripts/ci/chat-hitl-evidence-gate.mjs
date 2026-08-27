@@ -69,8 +69,12 @@ export const DISPATCH_ROOTS = ["src/app/api/chat", "packages/chat/src"];
 
 /** Always in scope, discovered or not. */
 export const PINNED_DISPATCH_SOURCES = [
-  "src/app/api/chat/explicit-dispatch.ts",
-  "src/app/api/chat/explicit-dispatch-server.ts",
+  // cinatra#2935 (lifecycle-b W5d): the two deterministic pre-router modules
+  // that used to lead this list are gone — the assistant starts a named agent
+  // itself, so no module speaks to the user from a pre-model dispatch path any
+  // more. What remains pinned is the card the run appears on. The DISCOVERY
+  // markers below still find any new file that starts speaking from the
+  // dispatch path, which is the property this list backstops rather than owns.
   "packages/chat/src/inline-agent-run-card.tsx",
 ];
 
@@ -83,7 +87,6 @@ export const DISPATCH_MARKERS = [
   'send("text"',
   "send('text'",
   "SYNTHETIC_TOOL_CALL_ID",
-  "detectExplicitDispatchDirective",
 ];
 
 // ---------------------------------------------------------------------------

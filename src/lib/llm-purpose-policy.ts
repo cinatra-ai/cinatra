@@ -206,15 +206,6 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
     rationale:
       "INVENTORY FINDING: pinned in code today via an explicit provider argument. Recorded as-is rather than silently widened — the extraction depends on strict structured-output schema adherence that has only been validated on OpenAI. Re-evaluating it is follow-up work, not a drive-by change inside the un-fencing.",
   },
-  {
-    purpose: "agent-run-input-extraction",
-    file: "src/app/api/chat/explicit-dispatch-server.ts",
-    what: "Extracting structured agent-run inputs from a chat prompt.",
-    policy: "explicit-pin",
-    pinnedProvider: "openai",
-    rationale:
-      "Same strict structured-output dependency and the same as-is recording as chat-hitl-prompt-drive.",
-  },
 
   // ---- separate-default --------------------------------------------------
   {

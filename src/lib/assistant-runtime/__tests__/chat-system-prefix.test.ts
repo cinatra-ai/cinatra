@@ -35,7 +35,6 @@ const BASE: ChatSystemPromptFragments = {
   // other fragment: the ordering case locates fragments by their own text, so an
   // empty fixture value would index at 0 and make the assertion vacuous.
   boundCardContext: "\n\nBOUND",
-  explicitDispatchDirective: "\nDISPATCH\n",
   conversationOnlyNotice: "\n\nNOTICE",
 };
 
@@ -75,11 +74,15 @@ describe("byte-stability", () => {
     }
   });
 
-  it("the explicit-dispatch directive appearing mid-conversation costs only its own bytes", () => {
-    // The regression this replaces: the directive used to be the FIRST
-    // fragment, so a single "@vendor/slug" mention moved the divergence point
-    // to byte 0 and re-billed the entire prompt.
-    const without = composeChatSystemPrompt({ ...BASE, explicitDispatchDirective: "" });
+  it("a volatile-tail fragment appearing mid-conversation costs only its own bytes", () => {
+    // The regression this case was written for: the removed explicit-dispatch
+    // directive used to be the FIRST fragment, so a single "@vendor/slug"
+    // mention moved the divergence point to byte 0 and re-billed the entire
+    // prompt. AMENDED for cinatra#2935 (lifecycle-b W5d): that directive and
+    // its producer are gone, so the case is driven by the fragment that has the
+    // same shape today — the bound card, which likewise appears only on the
+    // turn whose message carries one.
+    const without = composeChatSystemPrompt({ ...BASE, boundCardContext: "" });
     const with_ = composeChatSystemPrompt(BASE);
     const head = chatSystemPromptStableHead(BASE);
     expect(without.startsWith(head)).toBe(true);
@@ -97,7 +100,6 @@ describe("byte-stability", () => {
       instanceFreezeState: "",
       pendingConfirmationContext: "",
       boundCardContext: "",
-  explicitDispatchDirective: "",
       conversationOnlyNotice: "",
     };
     // The policy trailer is the ONE thing that is never absent — that is the

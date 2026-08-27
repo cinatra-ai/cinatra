@@ -47,9 +47,9 @@
     {
       "packageName": "@cinatra-ai/chat-assistant-core-skill",
       "repo": "cinatra-ai/chat-assistant-core-skill",
-      "resolvedSha": "b1b51c8c5af36cc8b29ddddf23cac06e7a8cd26e",
+      "resolvedSha": "ec584587d06dc33ca904dff91e6e369a4a847def",
       "packageVersion": "0.1.2",
-      "treeSha256": "2e14accf38f5cef7c61eeb3c7498608501f51bbd919b26a28b6b8d0a4f23746c"
+      "treeSha256": "03a5b53570f4f2c713be324c625d689dcefa7d88ceb3966a4adbf305ad62cb3e"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
