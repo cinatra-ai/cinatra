@@ -1,0 +1,138 @@
+{
+  "runId": "25866caa-97f8-43e9-924b-0dc46e5b655b",
+  "path": "/agents/cinatra-ai/blog-draft-writer-agent/25866caa-97f8-43e9-924b-0dc46e5b655b",
+  "readings": [
+    {
+      "name": "fill-no-submit",
+      "message": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+      "fieldsBefore": {
+        "scheduledAt": {
+          "value": "",
+          "label": "Run at",
+          "tag": "input"
+        }
+      },
+      "fieldsAfter": {
+        "scheduledAt": {
+          "value": "",
+          "label": "Run at",
+          "tag": "input"
+        }
+      },
+      "fieldsChanged": [],
+      "statusBefore": "pending_trigger",
+      "statusAfter": "pending_trigger",
+      "windowPlaceholder": null,
+      "bubbles": [
+        {
+          "text": "make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is",
+          "side": "person"
+        },
+        {
+          "text": "The assistant could not answer just now — please try again.",
+          "side": "assistant"
+        },
+        {
+          "text": "make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is",
+          "side": "person"
+        },
+        {
+          "text": "Placed in the fields on the person's screen. Nothing was submitted — they press the button.",
+          "side": "assistant"
+        },
+        {
+          "text": "what is this field for?",
+          "side": "person"
+        },
+        {
+          "text": "This setup screen is collecting the inputs the **Blog Draft Writer Agent** needs before it writes the draft: | Field | What it’s for | |---|---| | **Title** | The blog post’s headline or core idea. | | **Summary** | A short description of the angle or thesis. | | **Outline** | Optional structure: sections, bullets, or talking points to include. | If you mean a specific field on the screen, tell me its label and I’ll explain that one.",
+          "side": "assistant"
+        },
+        {
+          "text": "set the idea to \"Why cadence beats bursts for blog reach\" and send it",
+          "side": "person"
+        },
+        {
+          "text": "Submitted.",
+          "side": "assistant"
+        },
+        {
+          "text": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+          "side": "person"
+        },
+        {
+          "text": "The assistant could not answer just now — please try again.",
+          "side": "assistant"
+        },
+        {
+          "text": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+          "side": "person"
+        },
+        {
+          "text": "The assistant could not answer just now — please try again.",
+          "side": "assistant"
+        },
+        {
+          "text": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+          "side": "person"
+        },
+        {
+          "text": "The assistant could not answer just now — please try again.",
+          "side": "assistant"
+        },
+        {
+          "text": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+          "side": "person"
+        },
+        {
+          "text": "This screen can’t schedule the run. It only has these fields: | Field | Purpose | |---|---| | **title** | Blog idea/title | | **summary** | Draft summary | | **outline** | Draft outline | Use the schedule controls on the run screen to set **August 28, 2026 at 09:00 Europe/Berlin**.",
+          "side": "assistant"
+        }
+      ],
+      "newWindowRows": [
+        {
+          "sequence": 17,
+          "role": "user",
+          "content": "schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone",
+          "cj": "{\"messageType\":\"window\",\"role\":\"user\",\"surface\":\"schedule\",\"text\":\"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone\",\"messageId\":\"run-window:25866caa-97f8-43e9-924b-0dc46e5b655b:1787857622365:tihozhvz\"}",
+          "created_at": "2026-08-27T19:07:02.365Z"
+        },
+        {
+          "sequence": 18,
+          "role": "assistant",
+          "content": "This screen can’t schedule the run. It only has these fields:\n\n| Field | Purpose |\n|---|---|\n| **title** | Blog idea/title |\n| **summary** | Draft summary |\n| **outline** | Draft outline |\n\nUse the schedule controls on the run screen to set **August 28, 2026 at 09:00 Europe/Berlin**.",
+          "cj": "{\"messageType\":\"window\",\"role\":\"assistant\",\"surface\":\"schedule\",\"text\":\"This screen can’t schedule the run. It only has these fields:\\n\\n| Field | Purpose |\\n|---|---|\\n| **title** | Blog idea/title |\\n| **summary** | Draft summary |\\n| **outline** | Draft outline |\\n\\nUse the schedule controls on the run screen to set **August 28, 2026 at 09:00 Europe/Berlin**.\",\"replyToSequence\":17,\"messageId\":\"run-window:25866caa-97f8-43e9-924b-0dc46e5b655b:1787857622365:tihozhvz\"}",
+          "created_at": "2026-08-27T19:07:19.140Z"
+        }
+      ],
+      "turnAttempts": [
+        {
+          "attempt": 1,
+          "toolboxMissing": false,
+          "platformCouldNotAnswer": false,
+          "publicOrigin": {
+            "checked": true,
+            "ok": true,
+            "tries": 1,
+            "ms": 4241
+          }
+        }
+      ],
+      "screenButtonPressedByTheAssistantDriver": false,
+      "shots": [
+        "schedule__fill-no-submit__light.png",
+        "schedule__fill-no-submit__dark.png"
+      ]
+    }
+  ],
+  "finalRun": {
+    "id": "25866caa-97f8-43e9-924b-0dc46e5b655b",
+    "status": "pending_trigger",
+    "created_at": "2026-08-27T18:34:39.812Z",
+    "started_at": null,
+    "completed_at": null,
+    "lifecycle_moment": "schedule",
+    "template_id": "5e7f165e-445a-4500-a53e-14e1795e9521",
+    "run_by": "eb81826b-3b07-473c-b84a-40b86a6d4715"
+  }
+}
