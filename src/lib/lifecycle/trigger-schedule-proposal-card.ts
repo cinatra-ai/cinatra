@@ -34,6 +34,11 @@ import "server-only";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { ActorRoleHints } from "@cinatra-ai/agents";
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+// THE ROW A HELD SCHEDULE'S CARD OPENS ON (cinatra#2936). One decision, applied
+// here as it is on the run page's scheduling step: `scheduleScreenSelection`
+// applies `scheduleDefaultForLaunch`, which
+// `@cinatra-ai/agents/lifecycle-coordinator` declares and exports.
+import { scheduleScreenSelection } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import {
   TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
@@ -126,6 +131,14 @@ export async function resolveTriggerScheduleProposalCard(params: {
     // would refuse to run this agent for gets `restricted` for the same reason
     // and with the same sentence they would get before it expired.
     if (resolved.phase === "expired") {
+      // THE SAME DECISION AS THE LIVE CARD'S, for the same reason: what the
+      // reader sees is the schedule they stated, so the card re-opens on their
+      // own rows rather than on an empty form.
+      const expiredRows = scheduleScreenSelection({
+        humanPresent: true,
+        statedSchedule: resolved.proposal.schedule,
+      });
+      if (expiredRows === null) return ABSENT_PROPOSAL_CARD;
       const state: LifecycleCardState = resolved.canConfirm
         ? { state: "pending", canDecide: true, canComment: false }
         : {
@@ -140,7 +153,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         agentName: resolved.agentName,
         // The rows the reader last saw, so the expired card re-opens on their
         // own schedule rather than on an empty form.
-        schedule: resolved.proposal.schedule,
+        schedule: expiredRows,
         // Read back through the ONE renderer the settled card uses, so "what
         // expired" is worded exactly as "what was armed" would have been.
         scheduleCopy: describeProposalSchedule(resolved.proposal.schedule),
@@ -149,6 +162,21 @@ export async function resolveTriggerScheduleProposalCard(params: {
     }
 
     if (resolved.phase === "proposal") {
+      // THE ROWS ARE THE SCHEDULE MOMENT'S DEFAULT, APPLIED (cinatra#2936).
+      // A held schedule IS the "stated" answer — the person stated it in a
+      // conversation and is reading it back — so the card's rows come from the
+      // one decision rather than from a rule of this module's own, which is
+      // what the run page's scheduling step now does too.
+      //
+      // A PERSON IS PRESENT WHENEVER THIS BODY IS BUILT. The resolution above
+      // answers `absent` for every reader the token was not minted for, so a
+      // drawn proposal body always has the person who stated it in front of it.
+      // The refusal is honoured rather than worked around: no rows, no card.
+      const proposalRows = scheduleScreenSelection({
+        humanPresent: true,
+        statedSchedule: resolved.proposal.schedule,
+      });
+      if (proposalRows === null) return ABSENT_PROPOSAL_CARD;
       // §IV: `restricted` and `absent` are never drawn for each other. A reader
       // who may SEE the proposal but not confirm it gets a DRAWN card with a
       // disabled floor and the reason on screen — never a silently dropped one.
@@ -164,7 +192,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         phase: "proposal",
         version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
         agentName: resolved.agentName,
-        schedule: resolved.proposal.schedule,
+        schedule: proposalRows,
         // The duration estimate is a per-template read the scheduling step
         // already performs on its own surface; the card asks for it separately
         // rather than paying for it on every resolve of an already-settled
