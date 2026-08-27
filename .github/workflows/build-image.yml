@@ -3348,6 +3348,116 @@ jobs:
           fi
           echo "chat-HITL held-turn e2e passed"
 
+      # cinatra#2936 (epic #2926 W6). Plan (B) section 6 says this plan's
+      # fixtures run inside THIS harness's job rather than a second harness, and
+      # its Conformance block says the epic's gates stay green through every
+      # wave. FOUR of the plan's own proof tiers did neither:
+      # `test:lifecycle-moment` (W2a, cinatra#2928), `test:lent-action-grant`
+      # (W5a, cinatra#2932), `test:named-agent-start` (W5d, cinatra#2935) and
+      # `test:run-window` (W5b, cinatra#2933) are root package scripts that NO
+      # workflow invoked, so each could regress without reddening a single check
+      # — the same vacuity class the wired `test:async-notification-seam` tier
+      # closed for itself, arriving through the door
+      # `scripts/audit/ci-pinned-tests-exist.mjs` did not watch: a ROOT config
+      # named in a package script rather than a file path pinned inside a step.
+      # Direction 4 of that gate now watches it, so the next root tier that
+      # arrives unwired cannot be silent — and the W5b tier is the first one it
+      # held: it landed after the other three were wired here, was recorded in
+      # that gate's ledger as unwired for exactly as long as that was true, and
+      # is the fourth step below.
+      #
+      # HERE, AND NOT IN A JOB OF THEIR OWN, because "inside the held-turn
+      # harness rather than a second harness" is what section 6 asks for and this
+      # job already IS that job: it is a `build` prerequisite, so these tiers gate
+      # through the required context with NO branch-protection or
+      # required-context change; its services are the postgres:18 + redis:8 the
+      # tiers assume; its runtime mode and presence-only placeholders are the
+      # harness's own (no credential is introduced — the three tiers whose
+      # module graph reaches the app's auth config each supply their own fixed
+      # BETTER_AUTH_SECRET placeholder in their own config, because that graph
+      # refuses to load unbound); and the `public` schema step above has already
+      # provisioned the Better Auth tables that the store DDL those tiers replay
+      # carries foreign keys into. A separate job would have paid a second
+      # checkout and install to say something weaker.
+      #
+      # THE W5b TIER ASKS FOR LESS THAN THE OTHER THREE, and nothing was added
+      # for it. It imports no product module at all — it opens a `pg` pool and
+      # speaks SQL — so it wants no BETTER_AUTH_SECRET, no Redis, no runtime
+      # mode and no scripted provider, and it builds the one table it measures
+      # itself (the bootstrap's own shape for `agent_run_messages`, minus the
+      # `agent_runs` foreign key), so it needs nothing from the `public` schema
+      # step either. `SUPABASE_DB_URL` — already this job's, unconditionally —
+      # is the whole of its dependency, which is why it can join as one more
+      # step rather than as a job with services of its own.
+      #
+      # LAST IN THE JOB, AND THAT ORDER IS LOAD-BEARING — do not move these up.
+      # These tiers write to the SAME database the dev runtime above boots
+      # against. Schema-wise they are isolated (each config sets its own
+      # `SUPABASE_SCHEMA` — `cinatra_x2928` / `cinatra_x2932` / `cinatra_x2933` /
+      # `cinatra_x2935` — and vitest's `test.env` overrides this job's `cinatra`
+      # inside the worker; measured with `SUPABASE_SCHEMA=cinatra` exported into
+      # a real run, all four pass and that schema is left alone). But the W2a
+      # tier also seeds a row in the Better-Auth-owned `public."organization"`
+      # and deliberately leaves it behind, and a boot that finds exactly one
+      # organization anchors ownerless templates to it. Ahead of the boot that
+      # would quietly change the state this harness exercises; after the flow's
+      # own assertion it cannot reach anything.
+      #
+      # FOURTH FOR THE W5b TIER, AND FOURTH IS A FREE CHOICE — which is worth
+      # stating, so the next reader does not take it for one more constraint.
+      # That tier writes NOTHING outside its own schema: it creates
+      # `cinatra_x2933`, reads and writes exactly one table in it, drops it
+      # again in `afterAll`, and never names a `public.*` relation at all. Of
+      # the other three only W2a leaves anything behind there — the
+      # `public."organization"` row above, deliberately; W5a names no `public.*`
+      # relation either, and W5d writes a user/organization/member trio and
+      # deletes all three in its own `afterAll`. So nothing the W5b tier does
+      # can reach a later step, and nothing an earlier tier leaves is visible to
+      # it: it is safe in either position. It is APPENDED rather than inserted
+      # precisely because it is — the W2a/W5a/W5d order above was measured as it
+      # stands, and adding a step after the last of them is the one placement
+      # that cannot have changed it. What it DOES share with the three is the
+      # paragraph above: it writes to the database the dev runtime boots
+      # against, so it stays after the flow's own assertion.
+      #
+      # `!cancelled()` so a RED e2e above does not hide a red tier: the tiers
+      # still run and report on their own, and the job is red for whichever
+      # failed. The docs-only skip is unchanged.
+      #
+      # `shell: bash` IS LOAD-BEARING. This job's `runs-on:` is an expression
+      # (`${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}`), and an expression can
+      # resolve to anything — so a static reader cannot know the default shell is
+      # `bash -e` and must refuse to credit a step that leaves it implicit.
+      # `scripts/audit/ci-pinned-tests-exist.mjs` is exactly such a reader, and
+      # its direction 4 is what keeps these four steps from being quietly
+      # deleted; without this line it reports the tiers as run by nobody.
+      # Explicit `bash` is `bash -eo pipefail`, which is STRICTER than the
+      # implicit `bash -e` the steps around them get — and identical for these,
+      # which run one command each and contain no pipeline.
+      #
+      # Each tier gets its OWN vitest invocation — its own process, so one tier's
+      # pool and schema lifecycle never touch the next. Same convention as the
+      # sibling `extension-lifecycle-db-tests` job's per-suite steps.
+      - name: Lifecycle-moment triple — real-DB tier (cinatra#2928, W2a)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-moment
+
+      - name: Lent-action grant ledger — real-DB tier (cinatra#2932, W5a)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lent-action-grant
+
+      - name: Named-agent start — real-DB tier (cinatra#2935, W5d)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:named-agent-start
+
+      - name: Run-window conversation — real-DB tier (cinatra#2933, W5b)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:run-window
+
   image:
     # The container build itself, UN-SERIALIZED from the unit tier (critical-path
     # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +

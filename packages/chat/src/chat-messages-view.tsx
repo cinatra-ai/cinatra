@@ -66,6 +66,10 @@ import {
   runCardWaitsForRecommendation,
   type RunRecommendationHoldResolution,
 } from "@cinatra-ai/agents/run-recommendation-card";
+// The ONE renderer of `agent_hitl_screen`, reached by its own SUBPATH for the
+// same reason the §V renderer is: the barrel drags the whole agents client
+// graph into every consumer, and this leaf is all the transcript needs.
+import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -262,6 +266,51 @@ function AgentRunTurnSlot({
   const runCardWaits = runCardWaitsForRecommendation(hold);
   const decided = recommendationWasDecided(hold);
 
+  // WHEN THE RUN STARTS ASKING, AND HOW THIS TURN HEARS ABOUT IT
+  // (cinatra#2930, lifecycle-b W3).
+  //
+  // The §V card above is live the moment this turn renders: a hold parks the run
+  // BEFORE dispatch, so its answer is already there and one read on mount is the
+  // whole story. The HITL screen is not like that — the agent parks MID-RUN, long
+  // after the turn was drawn — so a card that read once on mount would answer
+  // "no screen" and never ask again, and the person would sit in front of a run
+  // that is waiting on them with nothing on screen to say so.
+  //
+  // The signal is the run panel's OWN: it already polls the run and publishes a
+  // descriptor up this tree whenever the open gate's identity changes
+  // (`onActiveGateChange`, the chat prompt-window lift). This slot listens to
+  // that and hands the card a CHANGE SIGNAL built from the gate's identity, so
+  // the card re-reads its authority exactly when the answer can have changed —
+  // no timer, no second poller, and nothing read out of the signal itself.
+  const [gateSignal, setGateSignal] = useState<string | null>(null);
+  const onGateChange = useCallback(
+    (changedRunId: string, gate: ChatGateDescriptor | null, instanceId: string) => {
+      if (changedRunId === runId) {
+        // THE WHOLE SIGNATURE, not the gate's id alone. Sequential per-field
+        // setup gates share one review-task id AND one renderer and differ only
+        // in the field they ask for, so a signal built from those two would go
+        // quiet exactly where the question changes — the card would keep the
+        // previous field on screen and could answer the new gate with it. This
+        // mirrors the panel's own `gateSignature`: the identity, the field name
+        // and the field shape.
+        setGateSignal(
+          gate === null
+            ? null
+            : [
+                gate.reviewTaskId,
+                gate.xRenderer,
+                gate.fieldName ?? "",
+                gate.fields
+                  .map((f) => `${f.name}:${f.type}:${f.required ? 1 : 0}`)
+                  .join(","),
+              ].join("::"),
+        );
+      }
+      onActiveGateChange?.(changedRunId, gate, instanceId);
+    },
+    [runId, onActiveGateChange],
+  );
+
   return (
     // `data-agent-run-slot` names WHICH run this marked slot belongs to. The
     // slot index alone says "some marked container" — this view marks three —
@@ -319,10 +368,33 @@ function AgentRunTurnSlot({
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
       <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      {/* THE HITL SCREEN, ON THE CONVERSATION HOSTS (cinatra#2930, lifecycle-b
+          W3). The second kind whose carriage is a typed INTERRUPT, mounted for
+          exactly the same reasons as the §V card above it and in exactly the
+          same place: at the `agent_run` dispatch part's own container, which is
+          this kind's producing slot, as a SIBLING of the inline run panel and
+          never a child of it.
+
+          THE PANEL STANDS DOWN INSIDE EITHER CONVERSATION HOST
+          (`runCardOwnsLifecycleCopy`), so a paused run shows ONE screen here —
+          this card — and the run page keeps the panel's own. Both draw the same
+          fields and the same Continue; what differs is which host declared the
+          root.
+
+          BOTH ARMS OF THE ONE COLUMN. This container is shared by `/chat` and
+          by the site widget, and the mount is deliberately not gated on the
+          surface kind: the card's host declaration selects its transport, so
+          the same mount is correct on both.
+
+          Mounted for every `agent_run` part rather than gated on the tool
+          result's status: the card self-gates — a run that states no HITL
+          moment renders nothing — which is also what makes it survive a
+          transcript reload. */}
+      <AgentHitlScreenCard runId={runId} wireRef={gateSignal} />
       {runCardWaits ? null : (
         <InlineAgentRunCard
           runId={runId}
-          onActiveGateChange={onActiveGateChange}
+          onActiveGateChange={onGateChange}
           recommendationDecided={decided}
         />
       )}

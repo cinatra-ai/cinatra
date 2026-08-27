@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import {
   CAPTURE_HOSTS,
   CAPTURE_STATES,
+  captureHostAdmissibility,
   captureRequirementsFor,
 } from "./chat-hitl-capture-recorder.mjs";
 
@@ -57,6 +58,10 @@ export const ANCHOR_CONTRACT_KINDS = Object.freeze([
   "recommendation_hold",
   "trigger_schedule_proposal",
   "verification_summary",
+  // THE FIFTH KIND (cinatra#2930, lifecycle-b W3). It was ruled a kind before it
+  // had a card and is drawn now, so the alarm covers it: its capture
+  // requirements and its parity row are digest inputs like every other kind's.
+  "agent_hitl_screen",
 ]);
 
 /**
@@ -84,8 +89,15 @@ export function captureAnchorExpectations() {
   for (const host of CAPTURE_HOSTS) {
     out[host] = { "*": captureRequirementsFor(host).map(selectorOf) };
     for (const kind of ANCHOR_CONTRACT_KINDS) {
+      const admission = captureHostAdmissibility(kind, host);
       for (const state of CAPTURE_STATES) {
-        out[host][`${kind}|${state}`] = captureRequirementsFor(host, kind, state).map(selectorOf);
+        // A CELL WITH NO REACHABLE SUBJECT records its REASON where its anchors
+        // would be. That keeps the composition-only declaration inside the
+        // alarm: quietly making such a cell capturable later — or changing why
+        // it is not — moves the digest exactly as renaming an anchor does.
+        out[host][`${kind}|${state}`] = admission.capturable
+          ? captureRequirementsFor(host, kind, state).map(selectorOf)
+          : [`composition-only ${admission.reason}`];
       }
     }
   }

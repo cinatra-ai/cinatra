@@ -1150,11 +1150,65 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       "/api/lifecycle-views/recommendation-hold/anything",
       "/api/lifecycle-views/recommendation-hold/decide/",
       "/api/lifecycle-views/recommendation-hold/decide/anything",
+      // cinatra#2930 — the HITL screen's pair is the same shape: `/submit` IS a
+      // descendant of the read and is public only by its own entry.
+      "/api/lifecycle-views/hitl-screen/",
+      "/api/lifecycle-views/hitl-screen/anything",
+      "/api/lifecycle-views/hitl-screen/submit/",
+      "/api/lifecycle-views/hitl-screen/submit/anything",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
     }
+  });
+
+  it("cinatra#2930: BOTH HITL-screen paths are ADMITTED cookieless, and each on its own entry", async () => {
+    // THE DEFECT THIS PINS. The card's whole widget arm posts to these two
+    // paths with `credentials: "omit"`. Neither was on the exact list, so the
+    // guard 307'd every read and every submit to /sign-in BEFORE the handler
+    // that authorizes the `cwu_` ever ran: the card drew nothing and no answer
+    // ever resumed a run. Direct route-handler tests cannot see it, because
+    // they call the handler and never pass the proxy.
+    //
+    // Admission is asserted STRICTLY — `NextResponse.next()` is a 200 carrying
+    // `x-middleware-next: 1` and no Location — so a future guard answering
+    // 401/403/500 here, with the handler still never running, fails this.
+    for (const p of [
+      "/api/lifecycle-views/hitl-screen",
+      "/api/lifecycle-views/hitl-screen/submit",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status ?? 200, `${p} must be admitted`).toBe(200);
+      expect(res.headers.get("x-middleware-next"), `${p} must be admitted`).toBe("1");
+      expect(res.headers.get("location"), `${p} must not redirect`).toBeNull();
+    }
+    // AND EACH ON ITS OWN ENTRY: the submit is a DESCENDANT of the read, and
+    // the exact list does not admit descendants. Remove either line and one of
+    // the two halves dies while the other keeps working — the shape that made
+    // this defect survive a whole slice.
+    const exact = guardSource.match(/const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+    for (const needle of [
+      '"/api/lifecycle-views/hitl-screen"',
+      '"/api/lifecycle-views/hitl-screen/submit"',
+    ]) {
+      const line = exact.split("\n").find((l) => l.includes(needle));
+      expect(line, `${needle} must have its own entry`).toBeDefined();
+      expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+      expect((line ?? "").toLowerCase()).toMatch(/reachability only/);
+      expect((line ?? "").toLowerCase()).toMatch(/exact path, never a prefix/);
+      expect((line ?? ""), `${needle} must name its refusal`).toMatch(/401/);
+    }
+    // The two halves consume under DIFFERENT grants — seeing the question is
+    // not answering it — and each line has to say which.
+    const readLine = exact
+      .split("\n")
+      .find((l) => l.includes('"/api/lifecycle-views/hitl-screen"'));
+    const submitLine = exact
+      .split("\n")
+      .find((l) => l.includes('"/api/lifecycle-views/hitl-screen/submit"'));
+    expect(readLine ?? "").toMatch(/lifecycle\.read/);
+    expect(submitLine ?? "").toMatch(/lifecycle\.decide/);
   });
 
   it("PREFIX-BOUNDARY CONTROL: a string-prefix sibling (/api/lifecycle-views/capture-foo) still 307s", async () => {
@@ -1172,10 +1226,11 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
 
   it("the exemptions are never broadened to an /api/lifecycle-views prefix", () => {
     // A bare namespace prefix would unguard every exempted path in one edit,
-    // and would also unguard every future sibling. FIVE paths are exempt
+    // and would also unguard every future sibling. SEVEN paths are exempt
     // (capture; resolve since cinatra#2577; decide since #2575's correction;
-    // the recommendation hold's read and its decision since cinatra#2790) and
-    // all five must be EXACT entries.
+    // the recommendation hold's read and its decision since cinatra#2790; and
+    // the HITL screen's read and its submit since cinatra#2930) and all seven
+    // must be EXACT entries.
     expect(guardSource).not.toMatch(/"\/api\/lifecycle-views"\s*,/);
     const exactBlock = guardSource.match(
       /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
@@ -1185,6 +1240,10 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/recommendation-hold"/);
     expect(exactBlock ?? "").toMatch(
       /"\/api\/lifecycle-views\/recommendation-hold\/decide"/,
+    );
+    expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/hitl-screen"/);
+    expect(exactBlock ?? "").toMatch(
+      /"\/api\/lifecycle-views\/hitl-screen\/submit"/,
     );
     const prefixBlock = guardSource.match(
       /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,

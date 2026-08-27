@@ -473,3 +473,43 @@ standing on the same `artifact_review_gates` row read out above —
 `b9aea2d6-9248-4552-939f-fc074b88d4f1`, status `pending`, `01:06:02.533` — and
 the run page's is `R7` (+ dark) on that same row. Both were recorded at
 `1929e861551b`.
+
+---
+
+# The WIDGET round — database readback, 2026-08-27
+
+Run `740c28fd-c6c1-496b-9a97-f8b2085c0076`. Every row below was read from the
+lane database with the shipped schema, never off a screen, and every one of them
+was written by the app's own dispatch — this round inserted no run, park,
+decision, offered-set, record or review row.
+
+| Table | Row |
+|---|---|
+| `cinatra.agent_runs` | `id 740c28fd-c6c1-496b-9a97-f8b2085c0076`, `human_present = true`, `template_id 3ac23e05-c031-43a8-8596-e502ea21bdd2`, `created_at 2026-08-27T16:13:58.570Z`; `status` **`pending_input`** before the decision, **`pending_approval`** after it |
+| `cinatra.lifecycle_continuation_park` | `id 6c181441-ee7a-4d6b-8d75-d41fa813a32d`, `run_id 740c28fd-…`, `event_id recommendation:run-start:740c28fd-…`, `checkpoint recommendation`, `protected_effect none`, `reevaluation_intent f`, `status` **`released`**, `ttl_expires_at 2026-08-28T16:14:00.221Z`, `created_at 2026-08-27T16:14:00.221Z`, `resolved_at 2026-08-27T16:15:04.350Z`, `hold_notification cleared`, `hold_notify_attempted_at 2026-08-27T16:15:04.470Z` |
+| `cinatra.run_recommendation_offered_set` | four rows, all `hold_id 6c181441-…`, `offered_at 2026-08-27T16:14:08.347Z`, `recommended = false`, ranks 1–4: `blog-post-matcher` · `blog-writing` · `brand-voice-matcher` · `web-research` |
+| `cinatra.run_selected_skill_revisions` | three rows, all `selected_at 2026-08-27T16:15:03.901Z` — `@cinatra-ai/blog-post-matcher-skill:blog-post-matcher` `recommended_confirmed` · `@cinatra-ai/blog-writing-skill:blog-writing` **`user_adjusted`** · `@cinatra-ai/web-research-skill:web-research` `recommended_confirmed` |
+| `cinatra.run_recommendation_skips` | **empty** — that table records a *recommended* skill that was not kept, and the skipped chip (`brand-voice-matcher`) was never recommended for this run (`recommended = false` on all four offered rows) |
+| `cinatra.usage_events` | `provider openai`, `model gpt-5.5`, `created_at 2026-08-27T16:14:02.273Z` — inside the turn's own window |
+
+**The broker proof, per request**, taken off the wire in the browser that made
+them (`capture-results.json` → `siteWidget.wire`):
+
+| # | Path | Method | `Cookie` | `X-Cinatra-Widget-User-Token` | `X-Cinatra-Widget-Origin` | `X-Cinatra-Widget-Assistant` | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | present | present | 200 |
+| 2 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | present | present | 200 |
+| 3 | `/api/lifecycle-views/recommendation-hold/decide` | POST | **absent** | present (`cwu_`) | present | present | 200 |
+| 4 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | present | present | 200 |
+
+`decide` answered `outcome.ok = true`, `outcome.error = null`,
+`outcome.dispatched = true`. The browser's cookie jar DID hold
+`better-auth.session_token` for the app origin (`sameSite Lax`, `httpOnly`) —
+the frame's sign-in window is a top-level window on that origin — and not one of
+the four requests carried it.
+
+**The lane's own writes, disclosed.** One: four `custom_skill_assignments` rows
+for `@cinatra-ai/blog-draft-writer-agent`, written through the SHIPPED writer
+`upsertCustomSkillAssignment` and read back through the shipped
+`getAssignedSkillIdsForAgent` (four in, the same four out). No direct SQL was
+issued against any table by this round.

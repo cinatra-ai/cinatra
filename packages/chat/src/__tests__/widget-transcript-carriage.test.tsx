@@ -75,6 +75,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
   skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: vi.fn(async () => []),
@@ -154,6 +167,20 @@ const HELD_ANSWER = {
   holdRef: "hold-ref-2826",
 } as Record<string, unknown>;
 
+/** The HITL screen's own authorized answer — the second INTERRUPT kind. */
+const ASKING_ANSWER = {
+  state: "asking",
+  runId: "run-held-2826",
+  screenRef: "hitl-screen-ref-2930",
+  gate: {
+    reviewTaskId: "task-2930",
+    xRenderer: "cinatra.schema-field:output",
+    inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+    currentValues: {},
+    fieldName: "answer",
+  },
+} as Record<string, unknown>;
+
 let widgetStub: ReturnType<typeof installWidgetServiceStub> | null = null;
 
 function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {}) {
@@ -164,6 +191,10 @@ function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {
     // broker endpoint rather than a cookie-bound action. The widget's server
     // answers it from the same mock the card would otherwise call.
     recommendationHold: () => holdStateMock(),
+    // cinatra#2930 (lifecycle-b W3): the HITL screen is the SECOND kind carried
+    // as a typed INTERRUPT, so on this surface it is read through its own
+    // broker endpoint rather than a cookie-bound action, for the same reason.
+    hitlScreen: () => hitlScreenStateMock(),
     ...options,
   });
   return widgetStub;
@@ -210,8 +241,11 @@ function requestedViewTypes(): string[] {
  * product carries it, not the way that is convenient to assert.
  */
 async function mountKind(surface: SurfaceName, kind: LifecycleCardKind) {
+  // BOTH INTERRUPT KINDS ride the run's own dispatch part rather than a
+  // DATA_PART, so both are mounted from the transcript a parked dispatch really
+  // leaves behind (cinatra#2930 for the HITL screen, S9b for the hold).
   const messages =
-    kind === "recommendation_hold"
+    kind === "recommendation_hold" || kind === "agent_hitl_screen"
       ? lifecycleHeldTranscript()
       : lifecycleDataPartTranscript(kind, `ref-${kind}`);
   const mounted = await mountSurface(surface, { messages });
@@ -353,6 +387,9 @@ describe("the recommendation hold on the widget arm", () => {
       installStub();
       if (kind === "recommendation_hold") {
         holdStateMock.mockImplementation(async () => HELD_ANSWER);
+      }
+      if (kind === "agent_hitl_screen") {
+        hitlScreenStateMock.mockImplementation(async () => ASKING_ANSWER);
       }
       const { root } = await mountKind("widget", kind);
       if (!drawnKinds(root).includes(kind)) unmounted.push(kind);

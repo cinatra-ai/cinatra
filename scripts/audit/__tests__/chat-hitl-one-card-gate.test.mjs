@@ -1316,9 +1316,13 @@ describe("the two modes on the real tree", () => {
   // pinned rather than the mere presence of a placeholder, so a kind quietly
   // slipping BACK to placeholder is as visible as one being drawn.
   it("names the kinds that are still placeholders, and no others", () => {
-    expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([
-      "agent_hitl_screen",
-    ]);
+    // EMPTY, and struck in the change that drew the last one: W3 (cinatra#2930)
+    // draws `agent_hitl_screen` and mounts it on every host, so no kind is a
+    // placeholder any more. The assertion is kept rather than deleted because
+    // it is a red done-check in BOTH directions — a kind added without a card
+    // fails here, and a card claimed without a drawn owner fails in the rules
+    // above it.
+    expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([]);
   });
 
   it("the verification kind is DRAWN, with a real owner and a rendered proof", () => {
@@ -1335,7 +1339,7 @@ describe("the two modes on the real tree", () => {
     expect(collectContractViolations()).toEqual([]);
   });
 
-  it("the REQUIRED gate — no flag at all — still FAILS today, on the fifth kind's missing card", () => {
+  it("the REQUIRED gate — no flag at all — PASSES, now that the fifth kind has its card", () => {
     // The ordinary run is the done-check. This is the claim "the gate fails on
     // main": it has to be true of the run somebody actually makes, not of an
     // opt-in flag nobody passes. What it fails ON has moved twice — first the
@@ -1343,20 +1347,19 @@ describe("the two modes on the real tree", () => {
     // of the four hosts), and now the fifth kind — and that is the point of
     // pinning it.
     //
-    // ONE HALF IS CLOSED HERE AND ONE IS NOT, and the pin says which.
-    // cinatra#2789 and cinatra#2788 drew §VII and §VI, and cinatra#2790 (S9f)
-    // mounted the recommendation card on the two hosts that carried a gap — so
-    // no "has no production mount on host" finding is left. What remains is the
-    // FIFTH kind, `agent_hitl_screen`, which cinatra#2928 registered without
-    // drawing (its card is owed to cinatra#2930). The done-check stays red until
-    // that one lands. A gate that went green here while a kind had no card at
-    // all would be the same dishonesty in a new place.
+    // BOTH HALVES ARE CLOSED NOW, and the pin says so rather than assuming it.
+    // cinatra#2789 and cinatra#2788 drew §VII and §VI, cinatra#2790 (S9f)
+    // mounted the recommendation card on the two hosts that carried a gap, and
+    // W3 (cinatra#2930) draws the FIFTH kind and mounts it on all four. So the
+    // done-check is green — and a green done-check is only worth reading while
+    // the rules are still armed, which is what the two `not.toMatch` arms and
+    // the lenient count below are for.
     const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
-    expect(res.status).toBe(1);
-    // The one finding left, NAMED. The required gate's other half is that it
-    // says which card is missing, not merely that something is.
-    expect(out).toMatch(/'agent_hitl_screen' has no card of its own/);
+    expect(res.status).toBe(0);
+    // NO kind is missing a card, and the one that was is named in neither
+    // direction: not as a gap, and not as a placeholder.
+    expect(out).not.toMatch(/'agent_hitl_screen' has no card of its own/);
     // …and the host gap S9f closed is gone, in BOTH directions: a gate that went
     // green on a rule by dropping it would read the same as one that met it, so
     // the rule is re-read from the lenient arm below rather than assumed.
@@ -1376,7 +1379,7 @@ describe("the two modes on the real tree", () => {
     });
     expect(audit.status).toBe(0);
     expect(audit.stdout + audit.stderr).toMatch(
-      /4\/5 kinds drawn by a named owner, every mount host-declared/,
+      /5\/5 kinds drawn by a named owner, every mount host-declared/,
     );
   });
 
@@ -1385,15 +1388,14 @@ describe("the two modes on the real tree", () => {
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(0);
     expect(out).toMatch(/no NEW false claim/);
-    // 4 of 5 DRAWN, so BOTH halves are asserted: the count says how much of the
-    // tree the lenient read actually verified, and the placeholder rider is
-    // back — cinatra#2928 registered a fifth kind and drew nothing, so the
-    // lenient read must still name the gap rather than let exit 0 read as
-    // "everything is drawn".
-    expect(out).toMatch(/4\/5 kinds drawn by a named owner/);
-    expect(out).toMatch(/the REQUIRED gate \(no flag\) fails on these/);
-    expect(out).toMatch(/STILL A PLACEHOLDER/);
-    expect(out).toMatch(/agent_hitl_screen/);
+    // 5 of 5 DRAWN, and the placeholder rider is GONE — which is the half that
+    // has to be asserted now. W3 (cinatra#2930) drew the fifth kind, so a
+    // lenient read that still named a gap would be reporting one that no longer
+    // exists, and a count that stayed at four would be the same claim in
+    // arithmetic.
+    expect(out).toMatch(/5\/5 kinds drawn by a named owner/);
+    expect(out).not.toMatch(/the REQUIRED gate \(no flag\) fails on these/);
+    expect(out).not.toMatch(/STILL A PLACEHOLDER/);
   });
 
   it("--complete is the RULED name for the done-check and runs the same check", () => {
@@ -1404,7 +1406,7 @@ describe("the two modes on the real tree", () => {
     const named = spawnSync(process.execPath, [GATE, "--complete"], { cwd: REPO_ROOT, encoding: "utf8" });
     expect(named.status).toBe(bare.status);
     expect(named.stdout + named.stderr).toBe(bare.stdout + bare.stderr);
-    expect(named.status).toBe(1);
+    expect(named.status).toBe(0);
   });
 
   it("an UNRECOGNISED flag is refused, never read as a passing done-check", () => {
@@ -1474,19 +1476,17 @@ describe("exemptions and the live tree", () => {
   });
 
   it("the CLI's lenient read exits 0 on the real tree, counts the drawn kinds and still names the gap", () => {
-    // TWO sentences, and both are asserted. The COUNT says how much of the tree
-    // the lenient read verified, so a reader cannot mistake "exit 0" for
-    // "everything is drawn"; the `STILL A PLACEHOLDER` rider names what is not
-    // drawn — `agent_hitl_screen`, which cinatra#2928 registered without drawing
-    // and whose card is OWED to cinatra#2930. cinatra#2788 struck the schedule
-    // row and cinatra#2789 the verification one, which is why the count is 4 of
-    // 5 rather than 3.
+    // THE COUNT IS THE SENTENCE THAT MATTERS NOW, and its absence of a rider is
+    // the other half. It says how much of the tree the lenient read verified —
+    // all five kinds — so a reader cannot mistake "exit 0" for a read that
+    // skipped something; and the `STILL A PLACEHOLDER` rider is gone because
+    // W3 (cinatra#2930) drew the last undrawn kind. cinatra#2788 struck the
+    // schedule row and cinatra#2789 the verification one before it.
     const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(out).toMatch(/no NEW false claim/);
-    expect(out).toMatch(/4\/5 kinds drawn by a named owner/);
-    expect(out).toMatch(/STILL A PLACEHOLDER/);
-    expect(out).toMatch(/agent_hitl_screen/);
+    expect(out).toMatch(/5\/5 kinds drawn by a named owner/);
+    expect(out).not.toMatch(/STILL A PLACEHOLDER/);
     expect(res.status).toBe(0);
   });
 });

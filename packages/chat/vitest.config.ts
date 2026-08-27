@@ -93,6 +93,16 @@ export default defineConfig({
         root,
         "packages/agents/src/run-recommendation-chip-row.tsx",
       ),
+      // cinatra#2930 — the HITL screen card, mounted by the message list on the
+      // conversation hosts. Subpath alias, so it stays above the bare entry.
+      "@cinatra-ai/agents/agent-hitl-screen-card": path.join(
+        root,
+        "packages/agents/src/agent-hitl-screen-card.tsx",
+      ),
+      "@cinatra-ai/agents/agent-hitl-screen": path.join(
+        root,
+        "packages/agents/src/agent-hitl-screen.ts",
+      ),
       // cinatra#2789 — §VII's ONE audit renderer, dispatched by the registry
       // under test. Subpath alias, so it stays above the bare-package entry.
       "@cinatra-ai/agents/verification-summary-card": path.join(
