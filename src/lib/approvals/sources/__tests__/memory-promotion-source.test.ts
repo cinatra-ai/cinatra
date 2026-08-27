@@ -205,8 +205,8 @@ describe("AC6 — no approvals page, route or promotion-specific UI is introduce
     const here = dirname(fileURLToPath(import.meta.url));
     const files = readdirSync(join(here, ".."))
       .filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
-    // A backend, not a source: there is no `memory-*.contract.ts` and no
-    // memory entry could exist in the registry without one.
+    // A backend, not a source: there is no `memory-*.contract.ts`, and the
+    // registry row for this subject lives in promotion-subjects.ts.
     expect(files).toContain("memory-promotion.ts");
     expect(files.filter((f) => f.startsWith("memory") && f.includes("contract"))).toEqual([]);
   });
