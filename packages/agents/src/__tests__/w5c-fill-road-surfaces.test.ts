@@ -178,14 +178,34 @@ describe("a file attached beside a message still reaches the run", () => {
 // ---------------------------------------------------------------------------
 // THE WINDOW IS THE SCREEN'S — the server binds it, the page claims nothing.
 // ---------------------------------------------------------------------------
-describe("the four form windows are bound to the run's own waiting screen", () => {
+// AMENDED (cinatra#2934, repaired after the picture leg). The SCHEDULE screen
+// left this set: the surface in front of the person there is the scheduler form,
+// not the run's waiting screen, and binding the run's HITL gate row to it
+// offered the setup step's fields on a screen that draws none of them. The three
+// that remain are unchanged, the ARMED-trigger tab deliberately among them —
+// the armed form is cinatra#2788's and is not built here.
+describe("the windows under the run's own waiting screen are bound to it", () => {
   it("the turn names the run and the server mints the screen's ref", () => {
     const turn = read("src/lib/lifecycle/run-window-turn.ts");
-    expect(turn).toContain('input.surface === "review" ? [] : [input.runId]');
+    expect(turn).toContain("boundScreenClaimForSurface");
+    expect(turn).toContain("return { screenRunIds: [runId], candidateRefs: [] };");
     const binding = read("src/lib/lifecycle/bound-card-binding.ts");
     expect(binding).toContain("mintParkedScreenRef");
     // The review-redirect moment is a REVIEW card and is never bound as a screen.
     expect(binding).toContain("ARTIFACT_REVIEW_REDIRECT_RENDERER_ID");
+  });
+
+  it("the SCHEDULE screen is bound to its own form, which lends no press", () => {
+    const turn = read("src/lib/lifecycle/run-window-turn.ts");
+    expect(turn).toContain("encodeScheduleFormRef");
+    const resolver = read("src/lib/lifecycle/bound-reference-resolver.ts");
+    // The form's rows are DECLARED by their own module, and the card lends a
+    // fill and nothing else — the person presses the form's own button.
+    expect(resolver).toContain("scheduleFormSchema");
+    expect(resolver).toContain('if (resolution.kind === "schedule_form") return ["fill"];');
+    // And the lent action refuses anything that is not a waiting screen.
+    const action = read("src/lib/lifecycle/lent-action-mcp.ts");
+    expect(action).toContain('if (bound.kind !== "hitl_screen") return refuseCardUnavailable();');
   });
 
   it("the chat page names the run its composer sits under", () => {

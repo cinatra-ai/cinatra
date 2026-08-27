@@ -67,12 +67,18 @@ describe("a turn applies its own fill and no other", () => {
     expect(effect).toEqual({ fill: null, acted: false });
   });
 
-  it("applies the NEWEST of the fills this turn placed", async () => {
+  // AMENDED (convergence round 2, finding 1). This case used to pin that the
+  // NEWEST fill was applied and the earlier one was not. That was wrong: the
+  // press this same message can ask for sends the screen's own values with EVERY
+  // fill of the message over them, so a window applying only the last showed one
+  // thing while the submit sent another. Every fill of the turn is applied, in
+  // order, exactly as `buildScreenSubmitValues` composes them.
+  it("applies EVERY fill this turn placed, later ones winning", async () => {
     loadRunWindowConversation.mockResolvedValue([]);
     sendRunWindowTurn.mockResolvedValue({
       ok: true,
       entries: [],
-      fills: [MINE, ALSO_MINE],
+      fills: [MINE, ALSO_MINE, { ref: "ref_1", values: { subject: "and then this" } }],
       acted: false,
     });
 
@@ -83,7 +89,13 @@ describe("a turn applies its own fill and no other", () => {
     await act(async () => {
       effect = await result.current.send("make the subject that, and the body this");
     });
-    expect(effect).toEqual({ fill: ALSO_MINE, acted: false });
+    expect(effect).toEqual({
+      fill: {
+        ref: "ref_1",
+        values: { subject: "and then this", body: "and this" },
+      },
+      acted: false,
+    });
   });
 
   it("a turn sent BEFORE the stored exchange has been read still applies its own", async () => {

@@ -195,7 +195,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** The two formats a row may declare, and what each control accepts. */
 export const IANA_TIMEZONE_FORMAT = "iana-timezone";
 export const LOCAL_DATE_TIME_FORMAT = "local-date-time";
-const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+/**
+ * The spellings the local date-time box accepts, and the ONE it holds.
+ *
+ * A `datetime-local` control holds `YYYY-MM-DDTHH:mm` read in the timezone row
+ * beside it. The seconds a caller may append are dropped, and a single space
+ * instead of the `T` is the same writing — but a ZONE DESIGNATOR is not: trimming
+ * the `Z` off `2026-08-28T09:00Z` would silently re-read a UTC instant as a local
+ * one and move the run (convergence round 2, finding 3). Anything carrying one is
+ * refused, and so is a date the calendar does not have.
+ */
+const LOCAL_DATE_TIME_SPELLING =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/;
 
 let ianaZones: Set<string> | null | undefined;
 function isIanaTimezone(value: string): boolean {
@@ -226,9 +237,30 @@ function isIanaTimezone(value: string): boolean {
  */
 function normalizeForRow(row: Record<string, unknown> | null, value: unknown): unknown {
   if (row?.format === LOCAL_DATE_TIME_FORMAT && typeof value === "string") {
-    return value.trim().replace(" ", "T").slice(0, 16);
+    return readLocalDateTime(value) ?? value;
   }
   return value;
+}
+
+/**
+ * The value the local date-time box would hold for this spelling, or `null`.
+ *
+ * ONE function for both questions — what the box shows, and whether the box
+ * could show it — so a spelling can never be accepted by the check and then
+ * written differently by the normalisation. A date the calendar does not have is
+ * `null`, so `2026-99-99T99:99` is refused rather than merely reshaped.
+ */
+function readLocalDateTime(value: string): string | null {
+  const parts = LOCAL_DATE_TIME_SPELLING.exec(value.trim());
+  if (!parts) return null;
+  const [, year, month, day, hour, minute] = parts as unknown as string[];
+  const m = Number(month);
+  if (m < 1 || m > 12) return null;
+  if (Number(hour) > 23 || Number(minute) > 59) return null;
+  const daysInMonth = new Date(Date.UTC(Number(year), m, 0)).getUTCDate();
+  const d = Number(day);
+  if (d < 1 || d > daysInMonth) return null;
+  return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
 /**
@@ -254,7 +286,13 @@ function valueFitsRow(row: Record<string, unknown> | null, value: unknown): bool
   if (row.type === "string") {
     if (typeof value !== "string") return false;
     if (row.format === IANA_TIMEZONE_FORMAT) return isIanaTimezone(value);
-    if (row.format === LOCAL_DATE_TIME_FORMAT) return LOCAL_DATE_TIME.test(value);
+    if (row.format === LOCAL_DATE_TIME_FORMAT) {
+      // THE VALUE MUST ALREADY BE THE ONE THE BOX HOLDS. `normalizeForRow` ran
+      // first and returned the caller's own string unchanged when it could not
+      // be read as a real local date and time, so anything that is not its own
+      // canonical form here is a spelling this box cannot show.
+      return readLocalDateTime(value) === value;
+    }
     return true;
   }
   if (row.type === "boolean") return typeof value === "boolean";
@@ -272,12 +310,27 @@ function valueFitsRow(row: Record<string, unknown> | null, value: unknown): bool
   }
   if (row.type === "object") {
     if (!isPlainObject(value)) return false;
-    // EVERY DECLARED KEY, all the way down: an inner property the control draws
-    // as text must not be handed a number, or the box renders empty while the
-    // answer says it was filled.
+    // THE CLOSED SET HOLDS AT EVERY DEPTH (convergence round 2, finding 2). An
+    // object that DECLARES its properties is a closed set, so a key it does not
+    // declare has no control behind it at any depth and the whole value is
+    // refused — the top level drops such a key because it iterates them; here
+    // there is one value to answer about, and the fail-closed answer is no.
+    //
+    // An object that declares NO properties is not a closed set at all — it is a
+    // free-form value the form takes as it comes — so it is passed through, the
+    // same reading `fillableFieldNames` takes of it.
+    const declaresProperties = isPlainObject(
+      (row as { properties?: unknown }).properties,
+    );
     for (const [key, inner] of Object.entries(value)) {
       const declared = propertySchema(row, key);
-      if (declared && !valueFitsRow(declared, inner)) return false;
+      if (!declared) {
+        if (declaresProperties) return false;
+        continue;
+      }
+      // And a declared property the control draws as text must not be handed a
+      // number, or the box renders empty while the answer says it was filled.
+      if (!valueFitsRow(declared, inner)) return false;
     }
     return true;
   }

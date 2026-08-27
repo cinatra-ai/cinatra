@@ -323,6 +323,37 @@ describe("only a value the control could hold is placed", () => {
     ).toEqual({ idea: { title: "ok" } });
   });
 
+  it("a key no control draws is refused at every depth, not only the first", () => {
+    // A DECLARED object property that is itself an object is a closed set too:
+    // a key it does not declare has no control behind it at any depth.
+    const nested = {
+      schema: {
+        type: "object",
+        properties: {
+          brief: {
+            type: "object",
+            properties: {
+              audience: { type: "object", properties: { name: { type: "string" } } },
+              // Free-form: declares no properties, so it is not a closed set and
+              // the form takes it as it comes.
+              notes: { type: "object" },
+            },
+          },
+        },
+      },
+      values: {},
+    };
+    expect(
+      selectDrawnFillValues(nested, { brief: { audience: { admin: true } } }),
+    ).toEqual({});
+    expect(
+      selectDrawnFillValues(nested, { brief: { audience: { name: "readers" } } }),
+    ).toEqual({ brief: { audience: { name: "readers" } } });
+    expect(
+      selectDrawnFillValues(nested, { brief: { notes: { anything: 1 } } }),
+    ).toEqual({ brief: { notes: { anything: 1 } } });
+  });
+
   it("clearing the single-text control is what its own empty box emits", () => {
     const held = { ...IDEA_FORM, values: { idea: { title: "old", summary: "kept" } } };
     expect(selectDrawnFillValues(held, { idea: null })).toEqual({
@@ -565,6 +596,19 @@ describe("the schedule screen binds the scheduler form", () => {
     // other way is RECORDED as the characters the box will show.
     expect(selectDrawnFillValues(form, { scheduledAt: "2026-08-28 09:00:00" })).toEqual({
       scheduledAt: "2026-08-28T09:00",
+    });
+    // A ZONED instant is NOT this box's value: the box holds a local time read
+    // in the timezone row beside it, so trimming the designator would move the
+    // run without saying so.
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-08-28T09:00Z" })).toEqual({});
+    expect(
+      selectDrawnFillValues(form, { scheduledAt: "2026-08-28T09:00+02:00" }),
+    ).toEqual({});
+    // Nor is a date the calendar does not have.
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-99-99T99:99" })).toEqual({});
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-02-30T09:00" })).toEqual({});
+    expect(selectDrawnFillValues(form, { scheduledAt: "2028-02-29T09:00" })).toEqual({
+      scheduledAt: "2028-02-29T09:00",
     });
   });
 

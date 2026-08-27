@@ -150,14 +150,26 @@ export function useRunWindowConversation(args: {
         }
         setEntries(outcome.entries);
         // THIS TURN'S OWN FILLS, and only those — the server selected them by the
-        // turn's identity. The NEWEST is the one the screen writes into its
-        // fields: a turn that filled twice placed the second set last, and that
-        // is what the person was told about. A turn that placed none applies
-        // none, so a screen re-reading the run never re-applies a fill the
-        // person has since edited away.
+        // turn's identity. A turn that placed none applies none, so a screen
+        // re-reading the run never re-applies a fill the person has since edited
+        // away.
+        //
+        // EVERY ONE OF THEM, COMPOSED IN ORDER (convergence round 2, finding 1).
+        // A turn that filled the subject and then the body placed TWO rows, and
+        // applying only the last left the subject as it was — while the press
+        // this same message can ask for sends the screen's own values with EVERY
+        // fill of the message over them (`buildScreenSubmitValues`). The two must
+        // agree, or the fields would show one thing and the submit send another.
+        // The composition here is that builder's, key for key: later fills win.
         const fills = outcome.fills;
         return {
-          fill: fills.length > 0 ? (fills[fills.length - 1] ?? null) : null,
+          fill:
+            fills.length > 0
+              ? {
+                  ref: fills[fills.length - 1]!.ref,
+                  values: Object.assign({}, ...fills.map((f) => f.values)),
+                }
+              : null,
           acted: outcome.acted,
         };
       } finally {
