@@ -886,10 +886,24 @@ const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
  *
  * The threshold and the digit+letter requirement were calibrated against this
  * repository's own token corpus (every tracked file under packages/memory,
- * packages/objects and docs): at 0.85 the only tokens that flag are hex
- * digests — zero identifiers, zero paths, zero prose — while random keys are
- * caught at 93% (32 hex chars), 100% (64 hex chars) and 96-98% (24-43
- * base64url chars).
+ * packages/objects and docs): at 0.85, no ordinary path or prose word in that
+ * corpus flags. Random keys are caught at 93% (32 hex chars), 100% (64 hex
+ * chars) and 96-98% (24-43 base64url chars).
+ *
+ * This rule CANNOT tell an opaque credential apart from a common high-entropy
+ * IDENTIFIER by shape alone, and a memory concept is full of the latter — a
+ * bundle id, an object id, a run id, a commit SHA. Measured against this
+ * detector (5000 samples per shape): a random v4 UUID flags 94.0% of the time
+ * (93.7% inside a prose sentence, 93.5% inside a link target), and a
+ * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags;
+ * a 12-character short SHA does not, because it is under the length floor
+ * below. Nothing here excludes an identifier shape by name — only
+ * `externalId` and `bundleId`, and only at the top level (see
+ * `MEMORY_SCAN_EXCLUDED_KEYS`) — so a concept body or a nested frontmatter
+ * value that quotes one is refused exactly like a credential would be.
+ * Whether to exclude identifier shapes is a separate call this detector
+ * deliberately does not make; buying author ergonomics with a hole is a trade
+ * that should be made on purpose.
  *
  * DELIBERATELY OUT OF SCOPE, so this comment does not read as broader than the
  * code (cinatra#1378 review item 5):

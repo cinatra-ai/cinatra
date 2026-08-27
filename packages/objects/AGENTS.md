@@ -450,7 +450,13 @@ in order, before any commit:
    key, 96.7% on 43-character base64url, 83.6% on 64-character standard base64
    — measured numbers, not a claim of coverage. A hex DIGEST in a body is
    flagged too: it is the same shape as a hex key and nothing in the string
-   separates them, so the gate resolves that ambiguity fail-closed. Both
+   separates them, so the gate resolves that ambiguity fail-closed. The same is
+   true of a common IDENTIFIER shape, and a memory concept is full of those: a
+   random v4 UUID flags 94.0% of the time (93.7% in prose, 93.5% in a link
+   target), a ULID-shaped id flags 85.8%, and a 40-character git commit SHA
+   flags (a 12-character short SHA does not — under the length floor). The
+   name-based exclusion above is the only carve-out, and it is top-level only:
+   the same UUID quoted anywhere else in the envelope is scanned. Both
    directions refuse: a credential-shaped literal (`OBJECTS_MEMORY_SECRET_DETECTED`)
    and a scan that could not **complete** (`OBJECTS_MEMORY_SECRET_SCAN_FAILED`) —
    "could not look" must never produce the same answer as "looked and found
