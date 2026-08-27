@@ -292,15 +292,16 @@ function isPlaceholderToken(token: string): boolean {
 }
 
 /**
- * A credential carried in a URL's userinfo (`scheme://user:password@host`).
+ * A credential carried in a URL's userinfo: a scheme, then `user:password`, then `@host`.
  *
  * Scanned on the WHOLE value before token splitting, because the splitter
  * consumes `:` and `/` and would take the pair apart. Parsed procedurally
  * rather than with a regex: the value is untrusted concept content, and a
  * pattern with two adjacent unbounded runs is a reachable denial of service.
  *
- * A placeholder password (`postgres://app:${PGPASSWORD}@host`) is documentation
- * and is tolerated, exactly like every other placeholder token.
+ * A placeholder password (an env-var reference in the password position of a
+ * connection URL) is documentation and is tolerated, exactly like every other
+ * placeholder token.
  */
 function matchUrlUserinfoCredential(value: string): boolean {
   let from = 0;

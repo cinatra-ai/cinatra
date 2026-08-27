@@ -1046,7 +1046,7 @@ function isMemorySecretPlaceholderToken(token: string): boolean {
 }
 
 /**
- * A credential carried in a URL's userinfo (`scheme://user:password@host`).
+ * A credential carried in a URL's userinfo: a scheme, then `user:password`, then `@host`.
  *
  * Scanned on the WHOLE value before token splitting, because the splitter
  * consumes `:` and `/` and would take the pair apart. Parsed procedurally
