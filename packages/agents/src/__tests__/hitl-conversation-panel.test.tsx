@@ -57,6 +57,7 @@ describe("HitlConversationPanel", () => {
   it("returns null when visible=false", () => {
     const { container } = render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={false}
         conversation={[]}
@@ -71,6 +72,7 @@ describe("HitlConversationPanel", () => {
   it("returns null when portalTarget is null", () => {
     const { container } = render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={null}
         visible={true}
         conversation={[]}
@@ -85,6 +87,7 @@ describe("HitlConversationPanel", () => {
   it("renders user + assistant bubbles when visible and conversation has entries", async () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[
@@ -106,6 +109,7 @@ describe("HitlConversationPanel", () => {
   it("shows Thinking… when promptPending=true", async () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[{ id: 1, role: "user", content: "go" }]}
@@ -123,6 +127,7 @@ describe("HitlConversationPanel", () => {
   it("calls onSubmit when the PromptField submits", async () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -143,6 +148,7 @@ describe("HitlConversationPanel", () => {
     const conversation = [{ id: 1, role: "user" as const, content: "hi" }];
     const { rerender } = render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={conversation}
@@ -165,6 +171,7 @@ describe("HitlConversationPanel", () => {
 
     rerender(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={conversation}
@@ -201,6 +208,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
   it("`enableAttachments` undefined → paperclip HIDDEN (onAttachmentsSelected NOT passed to PromptField; legacy byte-identical)", () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -223,6 +231,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
   it("§I — the field-assist input is NOT promoted to primary (#2865)", () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -241,6 +250,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
   it("`enableAttachments: true` → onAttachmentsSelected IS passed", () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -271,6 +281,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
 
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -333,6 +344,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
   it("submit with NO pending attachments → onSubmit called with EXACTLY ONE arg (back-compat single-arg invariant)", async () => {
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}
@@ -359,6 +371,7 @@ describe("HitlConversationPanel paperclip + attachments", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(
       <HitlConversationPanel
+        surface="run-page"
         portalTarget={document.body}
         visible={true}
         conversation={[]}

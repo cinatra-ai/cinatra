@@ -21,7 +21,8 @@ import {
 import { toast } from "@/lib/cinatra-toast";
 
 import { format } from "date-fns";
-import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
 import {
@@ -95,6 +96,15 @@ export type TriggerScreenClientProps = {
   instanceId: string;
   templateId: string;
   isAdmin?: boolean;
+  /** The run this screen's schedule belongs to, when one exists (cinatra#2933). */
+  runId?: string | null;
+  /**
+   * May this person type in the window? Server-derived from the RUN's access
+   * (`respondToHitl`), replacing the platform-administrator check the screen
+   * used to hide its box behind. Absent ⇒ shown, for the pre-run screen that
+   * has no run to ask.
+   */
+  canRespondInWindow?: boolean;
   durationEstimate?: DurationEstimate | null;
   inputParams?: unknown;
   requiredFields?: unknown;
@@ -225,8 +235,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // ---------------------------------------------------------------------------
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
-  const convIdRef = useRef(0);
+  // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION. What is typed
+  // here is kept with the run: read on mount, appended server-side per turn,
+  // present after a reload. The field-assist call below still fills the form's
+  // own fields and is retired by #2934 together with the fill that replaces it.
+  const runWindow = useRunWindowConversation({
+    runId: props.runId ?? null,
+    surface: "schedule",
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -272,8 +288,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const userId = ++convIdRef.current;
-    setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
+    void runWindow.send(prompt);
     setPromptPending(true);
     try {
       const res = await fetch(
@@ -285,6 +300,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
           body: JSON.stringify({
             prompt,
             xRenderer: "trigger-config",
+            // cinatra#2933 - the run the screen belongs to, so the route asks
+            // the RUN's access instead of the platform tier.
+            ...(props.runId ? { runId: props.runId } : {}),
             currentValue: {
               triggerType: watch("triggerType"),
               scheduledAt: (watch as (n: string) => string)("scheduledAt") ?? null,
@@ -294,7 +312,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             },
             schemaProperties: ["triggerType", "scheduledAt", "timezone", "cronExpression"],
             lastAssistantMessage:
-              [...conversation].reverse().find(m => m.role === "assistant")?.content ?? null,
+              [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
           }),
         },
       );
@@ -319,25 +337,15 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         const parsed = parseCronToRecurring(suggestions.cronExpression);
         if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
       }
-      const assistantMsg = (json.message?.trim()) || "Done.";
-      if (Object.keys(suggestions).length > 0) {
-        setConversation(prev => [
-          ...prev,
-          { id: ++convIdRef.current, role: "assistant", content: assistantMsg },
-        ]);
-      } else {
+      if (Object.keys(suggestions).length === 0) {
         toast.error("No suggestions generated. Try describing the schedule you want, e.g. \"Every Monday at 9am\".");
       }
     } catch (err) {
       console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
-      setConversation(prev => [
-        ...prev,
-        { id: ++convIdRef.current, role: "assistant", content: "Could not fetch suggestions — please try again." },
-      ]);
     } finally {
       setPromptPending(false);
     }
-  }, [props.templateId, conversation, watch, setValue]);
+  }, [props.templateId, runWindow, watch, setValue]);
 
   function updateRecurring(patch: Partial<RecurringConfig>) {
     setValue("triggerType", "recurring");
@@ -779,15 +787,23 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         this form from a sentence, which is a control like any other. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
+      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+      // `app-artifact-review.html` §X): the mount names its surface and the
+      // window reads the drawing's own sentence for it.
+      surface="schedule"
+      // cinatra#2933 — the schedule screen used to HIDE its box from anyone who
+      // was not a platform administrator; the run's own access decides now.
+      // The read-only reading (cinatra#2980) still carries no box at all: the
+      // box exists to FILL IN this form, and a fired schedule takes no filling.
       visible={
         !readOnly &&
         !props.embeddedAsRenderer &&
         !!props.templateId &&
         !!portalTarget &&
-        props.isAdmin !== false
+        props.canRespondInWindow !== false
       }
-      conversation={conversation}
-      promptPending={promptPending}
+      conversation={runWindow.entries}
+      promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_trigger_assist_${props.templateId}`}
       onSubmit={handlePromptSubmit}
     />

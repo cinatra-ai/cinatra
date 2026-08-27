@@ -49,6 +49,8 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
 export function RunScheduleTab({
   cardRef,
   promptWindowTemplateId = null,
+  runId,
+  canRespondInWindow,
 }: {
   /** The run-scoped schedule ref, minted server-side by the page. */
   cardRef: string;
@@ -58,6 +60,11 @@ export function RunScheduleTab({
    * makes.
    */
   promptWindowTemplateId?: string | null;
+  /** cinatra#2933 (lifecycle-b W5b) -- the run whose conversation this host's
+   *  window is, and the run's own answer to whether this person may type in it.
+   *  Forwarded unchanged; this host concludes nothing from either. */
+  runId?: string | null;
+  canRespondInWindow?: boolean;
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
   const scheduler = useScheduleSurfaceReading(cardHost);
@@ -82,6 +89,8 @@ export function RunScheduleTab({
       {promptWindowTemplateId && scheduler.drawn ? (
         <SchedulePromptWindow
           templateId={promptWindowTemplateId}
+          runId={runId}
+          canRespondInWindow={canRespondInWindow}
           readOnly={!scheduler.changeable}
         />
       ) : null}

@@ -380,6 +380,8 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
         <ReviewPromptWindow
           submitAction={submitAction}
           canComment={surface.permissions.canComment}
+          runId={runId}
+          boundCardRef={gateCardRef}
           storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
         />
       ) : null}
