@@ -5,222 +5,227 @@
     {
       "primitiveName": "agent_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 10
+      "line": 11
     },
     {
       "primitiveName": "agent_creation_request_decide",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 824
+      "line": 828
     },
     {
       "primitiveName": "agent_creation_request_edit",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 794
+      "line": 798
     },
     {
       "primitiveName": "agent_creation_request_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 820
+      "line": 824
     },
     {
       "primitiveName": "agent_creation_request_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 808
+      "line": 812
     },
     {
       "primitiveName": "agent_creation_request_propose",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 772
+      "line": 776
     },
     {
       "primitiveName": "agent_creation_request_retry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 840
+      "line": 844
     },
     {
       "primitiveName": "agent_delete",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 258
+      "line": 262
     },
     {
       "primitiveName": "agent_export",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 294
+      "line": 298
     },
     {
       "primitiveName": "agent_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 51
+      "line": 54
     },
     {
       "primitiveName": "agent_import",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 300
+      "line": 304
     },
     {
       "primitiveName": "agent_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 41
+      "line": 44
+    },
+    {
+      "primitiveName": "agent_named_start",
+      "file": "src/lib/lifecycle/named-agent-start-mcp.ts",
+      "line": 420
     },
     {
       "primitiveName": "agent_registry_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 315
+      "line": 319
     },
     {
       "primitiveName": "agent_registry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 307
+      "line": 311
     },
     {
       "primitiveName": "agent_run",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 32
+      "line": 33
     },
     {
       "primitiveName": "agent_run_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 57
+      "line": 60
     },
     {
       "primitiveName": "agent_run_hitl_prompts_exclude",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 147
+      "line": 151
     },
     {
       "primitiveName": "agent_run_hitl_prompts_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 142
+      "line": 146
     },
     {
       "primitiveName": "agent_run_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 63
+      "line": 67
     },
     {
       "primitiveName": "agent_run_messages_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 135
+      "line": 139
     },
     {
       "primitiveName": "agent_run_move_with_outputs",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 108
+      "line": 112
     },
     {
       "primitiveName": "agent_run_resume",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 127
+      "line": 131
     },
     {
       "primitiveName": "agent_run_stop",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 243
+      "line": 247
     },
     {
       "primitiveName": "agent_run_trigger_delete",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 765
+      "line": 769
     },
     {
       "primitiveName": "agent_run_trigger_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 759
+      "line": 763
     },
     {
       "primitiveName": "agent_run_trigger_set",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 727
+      "line": 731
     },
     {
       "primitiveName": "agent_run_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 84
+      "line": 88
     },
     {
       "primitiveName": "agent_runs_stop",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 249
+      "line": 253
     },
     {
       "primitiveName": "agent_save",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 18
+      "line": 19
     },
     {
       "primitiveName": "agent_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 461
+      "line": 465
     },
     {
       "primitiveName": "agent_source_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 358
+      "line": 362
     },
     {
       "primitiveName": "agent_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 472
+      "line": 476
     },
     {
       "primitiveName": "agent_source_read",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 363
+      "line": 367
     },
     {
       "primitiveName": "agent_source_review",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 692
+      "line": 696
     },
     {
       "primitiveName": "agent_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 443
+      "line": 447
     },
     {
       "primitiveName": "agent_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 374
+      "line": 378
     },
     {
       "primitiveName": "agent_source_write_files",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 406
+      "line": 410
     },
     {
       "primitiveName": "agent_template_duplicate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 264
+      "line": 268
     },
     {
       "primitiveName": "agent_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 271
+      "line": 275
     },
     {
       "primitiveName": "agent_version_diff",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 329
+      "line": 333
     },
     {
       "primitiveName": "agent_version_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 337
+      "line": 341
     },
     {
       "primitiveName": "agent_version_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 343
+      "line": 347
     },
     {
       "primitiveName": "agent_version_rollback",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 351
+      "line": 355
     },
     {
       "primitiveName": "agents_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 853
+      "line": 857
     },
     {
       "primitiveName": "apollo_administration_get",
@@ -330,22 +335,22 @@
     {
       "primitiveName": "artifact_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 543
+      "line": 547
     },
     {
       "primitiveName": "artifact_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 550
+      "line": 554
     },
     {
       "primitiveName": "artifact_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 535
+      "line": 539
     },
     {
       "primitiveName": "artifact_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 515
+      "line": 519
     },
     {
       "primitiveName": "artifacts_get",
@@ -715,12 +720,12 @@
     {
       "primitiveName": "email_outreach_initial_drafts_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 191
+      "line": 195
     },
     {
       "primitiveName": "email_outreach_recipients_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 214
+      "line": 218
     },
     {
       "primitiveName": "email_send",
@@ -730,12 +735,12 @@
     {
       "primitiveName": "email_test_delivery_parse_action",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 180
+      "line": 184
     },
     {
       "primitiveName": "email_test_delivery_run_send",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 160
+      "line": 164
     },
     {
       "primitiveName": "extensions_archive",
@@ -1100,22 +1105,22 @@
     {
       "primitiveName": "skill_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 608
+      "line": 612
     },
     {
       "primitiveName": "skill_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 615
+      "line": 619
     },
     {
       "primitiveName": "skill_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 601
+      "line": 605
     },
     {
       "primitiveName": "skill_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 578
+      "line": 582
     },
     {
       "primitiveName": "skills_catalog_list",

@@ -3,6 +3,7 @@
  * No server imports — safe to import in unit tests.
  */
 import { z } from "zod";
+import { RUN_START_REPLY_RULE } from "../run-status";
 import { AGENT_RUN_TIMEOUT_MAX_SECONDS } from "../wayflow-url";
 
 export type ToolMeta = { description: string; inputSchema: z.ZodTypeAny };
@@ -30,7 +31,9 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   "agent_run": {
-    description: "Run an installed Cinatra agent. **Use this as the FIRST ACTION when the user explicitly asks to use, run, invoke, call, or dispatch an agent, or when the user names an agent package (the canonical scoped form looks like '@cinatra-ai/<slug>-agent').** Prefer `packageName`; do NOT call `agent_list` first when the packageName is already present in the prompt. Use `templateId` only when a prior tool result returned a UUID. Exactly one of `packageName` or `templateId` is required; passing both returns `Pass exactly one of templateId or packageName to agent_run.`. When passing `packageName` with a vendor scope that EXACTLY matches this instance's operator-vendor namespace (e.g. `@<your-instance-namespace>/<slug>`), the resolver auto-aliases to the canonical `@cinatra-ai/<slug>` so in-repo agents are reachable regardless of which scope a chat assistant scraped from Verdaccio. Arbitrary third-party scopes are NOT collapsed — `@somevendor/foo` returns `Template not found`. In the source-authoring pipeline this is also the final step: after `agent_source_write` → `agent_source_validate` → `agent_source_compile` → `agent_source_publish`, call `agent_run` to execute the published agent. Returns `{ runId, status: 'queued' }` on success — the run is async (BullMQ); MUST be followed by `agent_run_get` polling until a terminal status (`completed | failed | pending_approval | stopped`). Returns a structured rejection like `{ code: 'WAYFLOW_AGENT_NOT_REGISTERED' | 'WAYFLOW_NOT_CONFIGURED', error, ... }` when a preflight check rejects dispatch — surface the `error` verbatim and DO NOT poll.",
+    description:
+      "Run an installed Cinatra agent. **Use this as the FIRST ACTION when the user explicitly asks to use, run, invoke, call, or dispatch an agent, or when the user names an agent package (the canonical scoped form looks like '@cinatra-ai/<slug>-agent').** Prefer `packageName`; do NOT call `agent_list` first when the packageName is already present in the prompt. Use `templateId` only when a prior tool result returned a UUID. Exactly one of `packageName` or `templateId` is required; passing both returns `Pass exactly one of templateId or packageName to agent_run.`. When passing `packageName` with a vendor scope that EXACTLY matches this instance's operator-vendor namespace (e.g. `@<your-instance-namespace>/<slug>`), the resolver auto-aliases to the canonical `@cinatra-ai/<slug>` so in-repo agents are reachable regardless of which scope a chat assistant scraped from Verdaccio. Arbitrary third-party scopes are NOT collapsed — `@somevendor/foo` returns `Template not found`. In the source-authoring pipeline this is also the final step: after `agent_source_write` → `agent_source_validate` → `agent_source_compile` → `agent_source_publish`, call `agent_run` to execute the published agent. Returns `{ runId, status, message }` on success — the run is async (BullMQ) — or a structured rejection like `{ code: 'WAYFLOW_AGENT_NOT_REGISTERED' | 'WAYFLOW_NOT_CONFIGURED', error, ... }` when a preflight check rejects dispatch. " +
+      RUN_START_REPLY_RULE,
     inputSchema: z.object({
       templateId: z.string().optional().describe("UUID of the agent template to run. Use only when a prior tool result returned it. Otherwise prefer `packageName`."),
       packageName: z.string().optional().describe("Package name of the agent to run (canonical scoped form '@cinatra-ai/<slug>-agent'). Resolved against `agent_templates.package_name` with current-vendor → `@cinatra-ai/<slug>` alias fallback. Mutually exclusive with `templateId`."),
@@ -55,7 +58,8 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   "agent_run_get": {
-    description: "Get the status and results of an agent run by ID. Returns status, stepResults, error, startedAt, and completedAt. Poll this after agent_run until status is one of the terminal values: 'completed', 'failed', 'pending_approval', or 'stopped'.",
+    description:
+      "Get the status and results of an agent run by ID. Returns status, stepResults, error, startedAt, and completedAt. A run ENDS at 'completed', 'failed' or 'stopped', and WAITS ON A PERSON at 'pending_approval' or 'pending_input' — a run in either of those two moves again only when somebody acts, never on its own. Read a run with it when the person asks how that run is doing. A run started in a conversation needs none of this: its own card re-reads the run and shows its progress there.",
     inputSchema: z.object({
       runId: z.string().describe("ID of the agent run to retrieve."),
     }),

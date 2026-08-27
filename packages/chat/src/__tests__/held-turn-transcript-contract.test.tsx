@@ -1159,12 +1159,20 @@ describe("the production mount points, read from the import graph", () => {
     }
   });
 
-  it("the transcript's agent_run branch still names the inline run card", () => {
+  it("the transcript's run-start branch still names the inline run card", () => {
     // The positive half: the container this gate measures is the one the run
     // card renders into. If that stops being true the projection is measuring
     // something else, and this says so.
+    //
+    // AMENDED for cinatra#2935 (lifecycle-b W5d): the branch used to compare
+    // against the single literal `agent_run`. The widget's own narrowly scoped
+    // start produces the same run through the same primitive under a different
+    // tool name, so the comparison moved to the shared closed set — which is
+    // what this assertion now names. A branch that went back to one literal
+    // would draw nothing for a widget start, which is the failure this case
+    // exists to catch.
     const view = readFileSync(join(CHAT_SRC, "chat-messages-view.tsx"), "utf8");
-    expect(view).toContain('part.name === "agent_run"');
+    expect(view).toContain("isRunStartToolName(part.name)");
     expect(view).toContain("<InlineAgentRunCard");
     expect(view).toContain("<UndoActionChip");
   });

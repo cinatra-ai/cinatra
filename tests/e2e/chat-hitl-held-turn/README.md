@@ -10,9 +10,14 @@ Issue [#2824](https://github.com/cinatra-ai/cinatra/issues/2824), epic
 
 ## What it proves
 
-A browser types one message into `/chat`. From there nothing is simulated:
+A browser types one message into `/chat`. From there exactly **one** thing is
+stood in for — the model layer, which on a key-free stack makes the one decision a
+model makes here (which tool this turn calls) and words the answer. Everything
+below it is real:
 
-1. the runtime routes the turn through its own hard pre-router and creates a real
+1. the conversation's own assistant calls `agent_run` — since
+   [#2935](https://github.com/cinatra-ai/cinatra/issues/2935) (lifecycle-b W5d)
+   nothing dispatches before the model — and the runtime creates a real
    run that **parks** — `agent_runs.status = pending_input`, `human_present = true`,
    a `recommendation` park row in `parked`, and **zero** queue jobs behind it;
 2. the transcript draws the §V card at the `agent_run` producing slot, on the
@@ -68,8 +73,9 @@ from the creation-flow set, and declares no dependencies at all. That it is itse
 "skill-free" costs nothing: the scorer offers whatever sits in
 `agent_assigned_skills` for the package, and the fixture puts one row there.
 
-The driving message embeds its own `inputParams`, so the dispatch takes the
-brace-matched deterministic fast path and **no model is consulted for anything**.
+The driving message embeds its own `inputParams`, so the assistant passes on the
+inputs the sentence states outright and invents none: the same message always
+starts the same run with the same arguments.
 
 Never run `pnpm seed` against this database — the seed truncates `agent_templates`.
 
@@ -77,8 +83,10 @@ Never run `pnpm seed` against this database — the seed truncates `agent_templa
 
 `fixtures.mts apply` writes three things, each through a **shipped writer**: an
 OpenAI *presence* placeholder (no real key; generation is served by the scripted
-provider, and without a bound provider adapter the turn goes conversation-only and
-the pre-router never fires), the MCP public base URL, and **one**
+provider, and under its flag the runtime reports a provider as available whether
+or not this row exists — so the row is world for the instance rather than a
+precondition of this flow's turn, written and restored so the instance is left as
+it was found), the MCP public base URL, and **one**
 `agent_assigned_skills` row. Without that row the recommendation scorer has no
 candidate to offer, so the checkpoint answers "no recommendation candidates" and the
 run dispatches unheld.

@@ -15,6 +15,11 @@
 //      that DOES short-circuit: a lifecycle question the provider itself claims.
 //      It drives the real primitives through the chat-bearer dispatcher, and the
 //      reserved producer label rides ONLY what that dispatcher reported.
+//   5. THE `/chat` AGENT-START BRANCH (cinatra#2935, lifecycle-b W5d) — the turn
+//      that asks for an agent to be STARTED. W5d removed the pre-model dispatch
+//      reader, so this is the ONLY road from a conversation to a run on a
+//      key-free stack, and it is the seam the chat-HITL held-turn flow drives
+//      through a browser.
 //
 // The heavy import graph is mocked; the REAL `@cinatra-ai/llm/scripted-test-provider`
 // seam runs (not mocked) so this is a genuine seam test. The widget dispatcher is
@@ -49,11 +54,6 @@ const resolveBoundDefaultAdapter = vi.fn(async () => {
 const stream = vi.fn((..._args: unknown[]) => Promise.resolve(undefined));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({ serverSideExplicitDispatch: vi.fn() }));
 vi.mock("@/app/api/chat/chat-user-context", () => ({ buildChatUserContextSections: vi.fn(async () => []) }));
 vi.mock("@/app/api/chat/extension-confirmation", () => ({
   buildExtensionImplementationConfirmationPolicy: () => "",
@@ -104,15 +104,24 @@ const { chatDispatchScript, createChatDispatchSpy } = vi.hoisted(() => {
   const chatDispatchScript = {
     /** What the "real" primitive answers, keyed by tool name. */
     answers: {} as Record<string, string>,
+    /**
+     * Every call the dispatcher was actually asked to make, in order
+     * (cinatra#2935). The factory spy above records who the bearer was minted
+     * for; this records what was then CALLED with it — the arguments a start
+     * carries are the half a factory assertion cannot see.
+     */
+    calls: [] as Array<{ name: string; args: Record<string, unknown> }>,
     /** Whether the dispatcher REPORTS its answer as genuinely dispatched. */
     report: true,
   };
   const createChatDispatchSpy = vi.fn(
-    (params: { onDispatched?: (t: string) => void }) => async (call: { name: string }) => {
-      const text = chatDispatchScript.answers[call.name] ?? "{}";
-      if (chatDispatchScript.report) params.onDispatched?.(text);
-      return text;
-    },
+    (params: { onDispatched?: (t: string) => void }) =>
+      async (call: { name: string; args: Record<string, unknown> }) => {
+        chatDispatchScript.calls.push({ name: call.name, args: call.args });
+        const text = chatDispatchScript.answers[call.name] ?? "{}";
+        if (chatDispatchScript.report) params.onDispatched?.(text);
+        return text;
+      },
   );
   return { chatDispatchScript, createChatDispatchSpy };
 });
@@ -125,7 +134,23 @@ vi.mock("../scripted-self-mcp-dispatch", async (importOriginal) => ({
 import { runAssistantTurn } from "../runtime";
 import { resolveChatExternalMcpTools, buildLlmMcpServerToolForWidget } from "@cinatra-ai/llm";
 import { UAT_SENTINEL } from "@cinatra-ai/llm/scripted-test-provider";
+// cinatra#2935 (lifecycle-b W5d) — the chat-HITL held-turn flow's OWN constants.
+// The agent-start cases below stand in for that browser flow, so they read what
+// it types and what it asserts rather than retyping either: the seam and the
+// flow cannot then drift apart. The module is a plain constants file with no
+// imports of its own.
+import {
+  HELD_TURN_AGENT_PACKAGE,
+  HELD_TURN_MESSAGE,
+  HELD_TURN_PAUSED_TEXT,
+  HELD_TURN_RUNNING_TEXT,
+} from "../../../../tests/e2e/chat-hitl-held-turn/constants";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
+// cinatra#2935 (lifecycle-b W5d) — the PLATFORM'S own report for a started run.
+// The fixtures below answer with it because the real primitive does, and the
+// sentence is read from the minter rather than retyped so the seam cannot drift
+// from what a person is actually shown.
+import { describeStartedRun } from "@cinatra-ai/agents/run-status";
 
 const wpPrincipal: WidgetPrincipal = {
   kind: "public_site_widget",
@@ -453,5 +478,288 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat lifecycle bran
       ),
     ).rejects.toThrow(/must NEVER run outside development/);
     expect(createChatDispatchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE `/chat` AGENT-START BRANCH (cinatra#2935, lifecycle-b W5d).
+// ---------------------------------------------------------------------------
+// W5d removed the platform's pre-model dispatch reader, so the assistant is now
+// the ONLY road from a conversation to a run. On a key-free stack the assistant
+// is the deterministic provider, and these cases are the seam the `chat-hitl`
+// held-turn flow drives through in a browser: the same sentence, the same
+// package, the same tool, the same two sentences the turn answers with.
+//
+// THE LITERALS ARE IMPORTED, NOT RETYPED (see the import at the head of this
+// file). The flow's own constants are the source of truth for what a person
+// types and what the turn must say, so this file reads them rather than copying
+// them — a divergence between the seam and the flow it stands for is then
+// impossible rather than merely unlikely.
+
+const AGENT_RUN_TOOL = "agent_run";
+const STARTED_RUN_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b";
+/** What the REAL primitive answers a start: the run, its status, and the
+ *  platform's own report of both. The report is what the turn says back. */
+const HELD_ANSWER = JSON.stringify({
+  runId: STARTED_RUN_ID,
+  status: "pending_input",
+  message: describeStartedRun({
+    packageName: HELD_TURN_AGENT_PACKAGE,
+    runId: STARTED_RUN_ID,
+    status: "pending_input",
+  }),
+});
+const QUEUED_ANSWER = JSON.stringify({
+  runId: STARTED_RUN_ID,
+  status: "queued",
+  message: describeStartedRun({
+    packageName: HELD_TURN_AGENT_PACKAGE,
+    runId: STARTED_RUN_ID,
+    status: "queued",
+  }),
+});
+const REFUSED_ANSWER = JSON.stringify({
+  error: "Agent is not installed on this instance. Install it from the marketplace.",
+});
+
+describe("runAssistantTurn scripted-provider short-circuit (/chat agent-start branch)", () => {
+  beforeEach(() => {
+    resolveDefaultAdapter.mockClear();
+    resolveBoundDefaultAdapter.mockClear();
+    stream.mockClear();
+    createChatDispatchSpy.mockClear();
+    chatDispatchScript.answers = { [AGENT_RUN_TOOL]: HELD_ANSWER };
+    chatDispatchScript.calls = [];
+    chatDispatchScript.report = true;
+  });
+
+  it("REAL SEAM: the flow's own sentence calls the REAL `agent_run` once, with the package and the inputs the sentence states", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    // The start is the assistant's, not a pre-model reader's: no adapter is
+    // resolved, and the turn never falls through to the real model path.
+    expect(resolveDefaultAdapter).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    // The bearer is minted for THIS session's user, org and role.
+    expect(createChatDispatchSpy).toHaveBeenCalledTimes(1);
+    expect(createChatDispatchSpy.mock.calls[0][0]).toMatchObject({
+      userId: "u1",
+      orgId: "o1",
+      platformRole: "member",
+    });
+    // ONE call, and it is the run-start primitive itself.
+    const toolCalls = frames
+      .filter((f) => f.event === "tool_call")
+      .map((f) => (f.data as { name: string }).name);
+    expect(toolCalls).toEqual([AGENT_RUN_TOOL]);
+    // The arguments are the sentence's own: the canonical package the legacy
+    // `cinatra_<slug>` wording resolves to, and the inputs it states outright.
+    expect(chatDispatchScript.calls).toEqual([
+      {
+        name: AGENT_RUN_TOOL,
+        args: {
+          packageName: HELD_TURN_AGENT_PACKAGE,
+          inputParams: JSON.stringify({ oasJson: "{}" }),
+        },
+      },
+    ]);
+    // The result travels to the sink verbatim, carrying the run id the sink
+    // pins the inline card on — the transcript's mount depends on it.
+    const results = frames
+      .filter((f) => f.event === "tool_result")
+      .map((f) => f.data as { name: string; result: string });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.name).toBe(AGENT_RUN_TOOL);
+    expect(results[0]!.result).toBe(HELD_ANSWER);
+    // And the turn SAYS what happened, in the PLATFORM'S words rather than its
+    // own (cinatra#2935): the run id, and the held condition.
+    const text = frames
+      .filter((f) => f.event === "text")
+      .map((f) => (f.data as { content: string }).content)
+      .join("");
+    expect(text).toContain(`runId: \`${STARTED_RUN_ID}\``);
+    expect(text).toContain(HELD_TURN_PAUSED_TEXT);
+    expect(text).not.toContain(HELD_TURN_RUNNING_TEXT);
+  });
+
+  it("CHIP-LABEL STABILITY: the report added to the answer does not move the label the runtime derives from it", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    // The runtime derives the chip label from the result payload, so a field
+    // added to that payload has to be shown not to move it — the same turn is
+    // driven twice, once with the platform's report on the answer and once
+    // without, and the label the sink is handed must be the same string.
+    const labelFor = async (answerText: string): Promise<string | undefined> => {
+      chatDispatchScript.answers = { [AGENT_RUN_TOOL]: answerText };
+      const frames: Array<{ event: string; data: unknown }> = [];
+      await runAssistantTurn(
+        buildCinatraAssistantRuntimeConfig(),
+        argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+      );
+      const result = frames.find((f) => f.event === "tool_result");
+      return (result?.data as { resultLabel?: string } | undefined)?.resultLabel;
+    };
+
+    const withReport = await labelFor(QUEUED_ANSWER);
+    const withoutReport = await labelFor(
+      JSON.stringify({ runId: STARTED_RUN_ID, status: "queued" }),
+    );
+    expect(withReport).toBe(withoutReport);
+    expect(withReport).toBeTruthy();
+  });
+
+  it("THE STATUS DECIDES THE SENTENCE: a run that did NOT park is never described as parked", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    chatDispatchScript.answers = { [AGENT_RUN_TOOL]: QUEUED_ANSWER };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    const text = frames
+      .filter((f) => f.event === "text")
+      .map((f) => (f.data as { content: string }).content)
+      .join("");
+    expect(text).toContain(HELD_TURN_RUNNING_TEXT);
+    expect(text).not.toContain(HELD_TURN_PAUSED_TEXT);
+  });
+
+  it("THE CARD REPORTS THE RUN, NOT A POLL: the turn ends on the platform's report and never reads the run back", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    // From the plan (PLAN: Agents Lifecycle (B), "The card is the visible
+    // truth"): "the card re-reads its state from the server and settles in
+    // place. The assistant's line reports what came back and adds nothing."
+    // So a start turn is exactly TWO things — the start, and the platform's
+    // sentence — and a read of the run afterwards is not one of them.
+    chatDispatchScript.answers = { [AGENT_RUN_TOOL]: QUEUED_ANSWER };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    const toolCalls = frames
+      .filter((f) => f.event === "tool_call")
+      .map((f) => (f.data as { name: string }).name);
+    expect(toolCalls).toEqual([AGENT_RUN_TOOL]);
+    expect(toolCalls).not.toContain("agent_run_get");
+    expect(chatDispatchScript.calls.map((c) => c.name)).toEqual([AGENT_RUN_TOOL]);
+
+    // The turn ENDS on the platform's own sentence — the whole of it, byte for
+    // byte, with nothing said after it. (What comes before is this stand-in's
+    // fixed sentinel, which every scripted turn carries and no real model does;
+    // the subject here is what follows the start.)
+    const report = describeStartedRun({
+      packageName: HELD_TURN_AGENT_PACKAGE,
+      runId: STARTED_RUN_ID,
+      status: "queued",
+    });
+    const text = frames
+      .filter((f) => f.event === "text")
+      .map((f) => (f.data as { content: string }).content)
+      .join("");
+    expect(text.endsWith(report)).toBe(true);
+    // And it is said ONCE — a turn that read the run back would have a second
+    // account of the same run somewhere in this string.
+    expect(text.split(STARTED_RUN_ID)).toHaveLength(2);
+  });
+
+  it("THE REFUSAL TRAVELS: a start the primitive refused is relayed in the platform's own words, and no run id is claimed", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    chatDispatchScript.answers = { [AGENT_RUN_TOOL]: REFUSED_ANSWER };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    const text = frames
+      .filter((f) => f.event === "text")
+      .map((f) => (f.data as { content: string }).content)
+      .join("");
+    expect(text).toContain("Agent is not installed on this instance.");
+    expect(text).not.toContain("runId:");
+    expect(text).not.toContain(HELD_TURN_PAUSED_TEXT);
+    expect(text).not.toContain(HELD_TURN_RUNNING_TEXT);
+  });
+
+  it("SCOPE: naming an agent WITHOUT asking for it to run starts nothing and is never short-circuited", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    resolveDefaultAdapter.mockResolvedValueOnce(null);
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        `What does ${HELD_TURN_AGENT_PACKAGE} actually do?`,
+      ),
+    );
+
+    expect(resolveDefaultAdapter).toHaveBeenCalledTimes(1);
+    expect(createChatDispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it("PRECEDENCE: a sentence the pull ALSO claims keeps the pull's answer, byte for byte", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    chatDispatchScript.answers = {
+      [AGENT_RUN_TOOL]: HELD_ANSWER,
+      [LIST_TOOL]: REAL_LIST_ANSWER,
+      [RENDER_TOOL]: REAL_ENVELOPE,
+    };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        `run ${HELD_TURN_AGENT_PACKAGE} — and which reviews are waiting for me?`,
+      ),
+    );
+
+    // A review question is the more specific reading, so nothing is started.
+    const toolCalls = frames
+      .filter((f) => f.event === "tool_call")
+      .map((f) => (f.data as { name: string }).name);
+    expect(toolCalls).toEqual([LIST_TOOL, RENDER_TOOL]);
+    expect(toolCalls).not.toContain(AGENT_RUN_TOOL);
+  });
+
+  it("PROD-MODE CONFORMANCE PIN: flag OFF → a start sentence resolves the adapter like any other chat turn", async () => {
+    delete process.env.CINATRA_TEST_LLM_PROVIDER;
+    resolveDefaultAdapter.mockResolvedValueOnce(null);
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), null, HELD_TURN_MESSAGE),
+    );
+
+    expect(resolveDefaultAdapter).toHaveBeenCalledTimes(1);
+    expect(createChatDispatchSpy).not.toHaveBeenCalled();
+    expect(frames).toContainEqual({
+      event: "error",
+      data: { message: "No LLM provider configured." },
+    });
   });
 });

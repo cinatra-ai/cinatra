@@ -74,7 +74,7 @@ jobs:
       # that lag by construction, since the successor tips were extracted from
       # fef2b294).
       skills_repos: |
-        cinatra-ai/chat-assistant-core-skill@b1b51c8c5af36cc8b29ddddf23cac06e7a8cd26e
+        cinatra-ai/chat-assistant-core-skill@ec584587d06dc33ca904dff91e6e369a4a847def
         cinatra-ai/extension-authoring-skill@01c040e6453a08f8de128bc40b7b9047793fde1a
         cinatra-ai/automation-authoring-skill@596afabf6a10b8f1f297521fcb7d1f78fb70213b
         cinatra-ai/company-research-skill@639fdc073b7d600a8436900843bfd3ac42778743
