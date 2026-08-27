@@ -23,17 +23,23 @@
 //      the buttons still work; no silent no-op" (§6 One road) — the CONFINEMENT
 //      half only; see that describe for what it does and does not prove.
 //   C. "the schedule moment is shown for every run a person starts …" (§6 The
-//      runner) — UNMET on `main`, recorded.
+//      runner) — the DECISION half is met (cinatra#2936): the schedule default
+//      has its consumer and one statement, asserted below. The clause's other
+//      half — that the moment is SHOWN on all three hosts — is an observation
+//      about screens and stays recorded as owed.
 //   D. "Every fixture named in plan section 6 … run … inside the held-turn
 //      harness rather than a second harness" (cinatra#2936) — three of this
 //      plan's own waves shipped their proof in a private
 //      `vitest.integration-*.config.ts` tier no workflow invokes.
 //
-// C and D are RECORDED GAPS, in the shape this repo already uses for owed work
+// D is a RECORDED GAP, in the shape this repo already uses for owed work
 // (`UNROUTED_PRODUCERS`, the host-parity ratchet's `owed` rows): a LIVE arm that
-// reds the moment the gap closes — so the record cannot go stale — beside, for
-// C, a SKIPPED arm carrying the plan clause itself. Neither is a waiver, and
-// neither is patched here: this slice ships proof, not product.
+// reds the moment the gap closes, so the record cannot go stale. C's recorded
+// gap was HALF closed by cinatra#2936: its live arm did exactly what it was
+// written to do — it went red the moment a consumer appeared — and is now the
+// positive assertion. What is still owed under C is the screen observation, and
+// it keeps its skipped arm carrying the plan clause itself. Neither is a
+// waiver.
 //
 // FAIL-CLOSED, AND ITS RESIDUALS NAMED. Four of the assertions below are
 // SOURCE SCANS, so each one's reach is finite. Every residual is stated at the arm it belongs to
@@ -109,6 +115,66 @@ const read = (relative: string) =>
   readFileSync(path.join(REPO_ROOT, relative), "utf8");
 
 /**
+ * A module's CODE, with EVERY comment removed — block comments, whole-line `//`
+ * comments and TRAILING `//` comments alike.
+ *
+ * For an arm that claims a module still READS something, a plain text scan is a
+ * false green waiting to happen: a commented-out import and a commented-out call
+ * satisfy it exactly as the live ones would, which is the state a module is in
+ * the moment someone retires an edge and leaves the lines behind. A trailing
+ * comment is the same hole one column to the right, so the line scan below is a
+ * quote-aware cut rather than a `startsWith` — `"https://…"` keeps its slashes
+ * because the cut only fires outside a string.
+ *
+ * WHAT IT CANNOT DO: fabricate. Nothing here JOINS text the module kept apart —
+ * a block comment is blanked in place rather than deleted, a trailing cut only
+ * ever shortens its own line, and every pattern below matches within ONE line
+ * (`[^\S\n]` where horizontal space is meant, never `\s`) — so no spelling can
+ * appear that no single line carries.
+ *
+ * RESIDUALS, STATED, BECAUSE NOTHING HERE PARSES TYPESCRIPT. A `//` inside a
+ * multi-line template or a regex literal reads as a comment start and DROPS real
+ * code from the scan, which reds an arm that should pass. And an unbalanced
+ * quote inside a regex literal — `/"/` — leaves the scan believing it is inside
+ * a string, so a trailing comment on THAT line survives uncut and could answer
+ * for code. Both are shapes neither scanned module has; a fixture that had to
+ * rule them out would belong in the compiler's own tier, and neither residual
+ * replaces the behavioural coverage this arm cites.
+ */
+const withoutComments = (source: string) => {
+  const cutTrailing = (line: string) => {
+    let quote: string | null = null;
+    for (let i = 0; i < line.length; i += 1) {
+      const character = line[i];
+      if (quote !== null) {
+        if (character === "\\") {
+          i += 1;
+          continue;
+        }
+        if (character === quote) quote = null;
+        continue;
+      }
+      if (character === '"' || character === "'" || character === "`") {
+        quote = character;
+        continue;
+      }
+      if (character === "/" && line[i + 1] === "/") return line.slice(0, i);
+    }
+    return line;
+  };
+  return source
+    // BLANKED, NOT DELETED. A removed block comment would pull the text on
+    // either side of it together — across newlines — and two fragments that
+    // never touched in the module could spell a pattern between them. Replacing
+    // every character except the newlines keeps every line and every column
+    // where the module put them.
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "))
+    .split("\n")
+    .map(cutTrailing)
+    .join("\n");
+};
+
+/**
  * Escape every RegExp metacharacter in a literal — the BACKSLASH included.
  *
  * One helper rather than a per-site `replace`: a partial escape (dots only, the
@@ -121,6 +187,13 @@ const escapeForRegExp = (literal: string) =>
 
 const CLASSIFIER = "packages/agents/src/run-surface-status.ts";
 const COORDINATOR = "packages/agents/src/lifecycle-coordinator.ts";
+/** Where the tier-neutral lifecycle decisions are stated (cinatra#2936), and
+ *  the two surfaces that draw a schedule. Listed in the order `sourcesMatching`
+ *  sorts them, so an expectation reads like the answer it compares against. */
+const REGISTRY =
+  "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts";
+const SCHEDULING_STEP = "packages/agents/src/trigger-screen-client.tsx";
+const HELD_SCHEDULE_CARD = "src/lib/lifecycle/trigger-schedule-proposal-card.ts";
 const MOMENT_SCHEMA = "src/lib/agent-run-lifecycle-moment-schema.ts";
 const STORE = "src/lib/drizzle-store.ts";
 
@@ -297,45 +370,116 @@ describe("§6 One road — the tool-capability primitives are confined to the mo
 // ---------------------------------------------------------------------------
 
 describe("§6 The runner — the schedule moment for a run a person starts", () => {
-  it("RECORDED GAP — the decision has no consumer, and the record names the slice that owes it", () => {
-    // TRUTHFUL RECORD, NOT A WAIVER. `scheduleDefaultForLaunch` states what the
-    // screen would offer; on `main` nothing reads it, so no run a person starts
-    // reaches a schedule moment and the clause is UNMET. The coordinator says so
-    // itself, and names the slice that consumes it.
+  it("the decision is stated ONCE, and the surfaces that draw a schedule read it", () => {
+    // THE GAP THIS ARM RECORDED IS CLOSED (cinatra#2936). It was written to red
+    // the moment a consumer appeared, and it did. What it asserts now is the
+    // other side of the same fact, and it is still live in both directions: a
+    // second statement of the decision reds it, and so does a surface that stops
+    // reading it.
     //
-    // Live in BOTH directions: it reds if a reader appears (flip the record and
-    // unskip the clause below) and it reds if the record stops naming its owner.
-    // The scan is on the BARE IDENTIFIER, not on a call shape, so an aliased
-    // import or a callback reference counts as a consumer too.
+    // The scans are on the BARE IDENTIFIERS, not on a call shape, so an aliased
+    // import or a callback reference counts too.
     //
-    // The decision's own answers are covered behaviourally by
-    // `packages/agents/src/__tests__/lifecycle-coordinator.test.ts` ("the
-    // schedule default"), including that presence decides before a stated
-    // schedule is read; that is not restated here.
-    const readers = sourcesMatching(/scheduleDefaultForLaunch/).filter(
-      (relative) => relative !== COORDINATOR,
-    );
-    expect(readers).toEqual([]);
+    // ONE STATEMENT, and this is the arm that says so: the decision is DECLARED
+    // in exactly one module. It is the tier-neutral card registry rather than
+    // the coordinator's own file because the coordinator is `server-only` and
+    // both surfaces that draw a schedule are client modules; the coordinator,
+    // which owns the decision, exports it from there under its own name. A
+    // second declaration anywhere reds this.
+    expect(sourcesMatching(/export function scheduleDefaultForLaunch/)).toEqual([
+      REGISTRY,
+    ]);
 
-    // The record is the decision's OWN doc comment, comment-markers stripped and
-    // whitespace normalized, so a re-wrap is not a failure and a failure prints
-    // a sentence rather than a sixty-kilobyte module.
-    const coordinator = read(COORDINATOR);
-    const at = coordinator.indexOf("export function scheduleDefaultForLaunch");
-    const record = coordinator
-      .slice(coordinator.lastIndexOf("/**", at), at)
-      .replace(/\n\s*\*\s?/g, " ")
-      .replace(/\s+/g, " ");
-    expect(record).toContain("`launchAgentRun` does not call it");
-    expect(record).toContain("cinatra#2930");
+    // AND THESE ARE THE ONLY FILES THAT SO MUCH AS NAME IT — the statement, the
+    // owner that exports it, and the two surfaces whose own notes say which
+    // decision they are applying. A fifth file naming it reds this arm, which is
+    // what keeps a second copy from appearing quietly.
+    expect(sourcesMatching(/scheduleDefaultForLaunch/)).toEqual([
+      REGISTRY,
+      COORDINATOR,
+      SCHEDULING_STEP,
+      HELD_SCHEDULE_CARD,
+    ]);
+
+    // ONE MAPPING, AND ITS CONSUMERS. `scheduleScreenSelection` turns the
+    // decision's answer into the row a screen opens on. Its readers are the run
+    // page's own scheduling step and the held schedule's card body — the two
+    // surfaces §3 names — and nobody else names it at all.
+    expect(sourcesMatching(/scheduleScreenSelection/)).toEqual([
+      REGISTRY,
+      COORDINATOR,
+      SCHEDULING_STEP,
+      HELD_SCHEDULE_CARD,
+    ]);
+
+    // AND THEY READ IT, rather than merely naming it. A comment outlives an
+    // import, so the set above cannot tell a consumer from a file that only
+    // mentions the decision it used to apply: each surface is pinned to the
+    // import EDGE and to a call, IN ITS CODE — comments stripped first, or a
+    // commented-out pair would answer for a retired edge.
+    for (const surface of [SCHEDULING_STEP, HELD_SCHEDULE_CARD]) {
+      const text = withoutComments(read(surface));
+      expect(text, `${surface} no longer imports the mapping`).toMatch(
+        /import \{ scheduleScreenSelection \} from "@cinatra-ai\/agent-ui-protocol\/renderable-views";/,
+      );
+      expect(text, `${surface} no longer calls the mapping`).toMatch(
+        /scheduleScreenSelection\([^\S\n]*\{/,
+      );
+    }
+
+    // AND THE STEP STATES NO DEFAULT OF ITS OWN — the duplicate this closed.
+    expect(
+      read(SCHEDULING_STEP),
+      "the scheduling step names the row itself again",
+    ).not.toMatch(/defaultValues:\s*\{\s*triggerType/);
+
+    // The record is the decision's OWN doc comment on each side, comment-markers
+    // stripped and whitespace normalized, so a re-wrap is not a failure and a
+    // failure prints a sentence rather than a sixty-kilobyte module.
+    const docBefore = (relative: string, declaration: RegExp) => {
+      const text = read(relative);
+      const at = text.search(declaration);
+      return text
+        .slice(text.lastIndexOf("/**", at), at)
+        .replace(/\n\s*\*\s?/g, " ")
+        .replace(/\s+/g, " ");
+    };
+    // The statement still says what the decision IS.
+    const statement = docBefore(REGISTRY, /export function scheduleDefaultForLaunch/);
+    expect(statement).toMatch(/never for a run nobody is present for/i);
+
+    // AND THAT IT ARMS NOTHING — the guard the recorded-gap arm carried, kept
+    // against the relocated statement. The decision answers what a SCREEN
+    // offers; the entry that creates runs does not apply it, and a call added
+    // there would disturb neither file set above.
+    expect(statement).toContain("`launchAgentRun` does not call it");
+    expect(
+      read(COORDINATOR),
+      "the launch entry applies the schedule default",
+    ).not.toMatch(/scheduleDefaultForLaunch\s*\(/);
+    // The coordinator still says the decision is its own, and why the statement
+    // sits where it does.
+    const owner = docBefore(COORDINATOR, /export \{\s*\n\s*scheduleDefaultForLaunch,/);
+    expect(owner).toContain("cinatra#2936");
+    expect(owner).toContain("tier-neutral card registry");
   });
 
   it.skip(
-    "UNMET ON MAIN (packages/agents/src/lifecycle-coordinator.ts:340) — the schedule moment is shown for every run a person starts, from the run page with or without setup fields, from a conversation and from a third-party application, with run-now selected unless a schedule was stated",
+    "OWED — the schedule moment is SHOWN for every run a person starts, from the run page with or without setup fields, from a conversation and from a third-party application (the selection it opens with is met: cinatra#2936)",
     () => {
-      // Deliberately unimplemented rather than written-and-red: the surface this
-      // clause is about does not exist on `main`, so there is nothing to drive.
-      // The arm above holds the gap honest until it does.
+      // Deliberately unimplemented rather than written-and-red, and NARROWER
+      // than it was. The clause's selection half — "with run-now selected unless
+      // a schedule was stated" — is met and covered behaviourally by
+      // `packages/agents/src/__tests__/schedule-default-one-consumer-2936.test.tsx`
+      // (the step opens on the row the decision names, a stated schedule is
+      // filled into the rows, and a run nobody is present for gets no selection)
+      // and by `src/lib/lifecycle/__tests__/schedule-card-rows-from-the-decision-2936.test.ts`
+      // for the held schedule's card.
+      //
+      // What is left is an observation about three RENDERED hosts, which belongs
+      // to a Playwright project of this harness's own config — the same place
+      // the tool-less-conversation clause above leaves its rendered half. The
+      // live arm above holds the decision honest meanwhile.
     },
   );
 });
