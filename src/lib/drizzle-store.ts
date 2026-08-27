@@ -1386,7 +1386,7 @@ END $$`,
     // spread keeps them executed core-store DDL, so the schema-migration gate
     // still reads them; cinatra#2648 taught its classifier this exact shape.
     ...triggerSchemaQueries(schemaName),
-    ...triggerScheduleProposalSchemaQueries(schemaName), ...reviewIslandGrantSchemaQueries(schemaName), ...lentActionGrantSchemaQueries(schemaName), // cinatra#2932 (lifecycle-b W5a) — the LENT-ACTION GRANT's NET-NEW single-use ledger: one row per grant the send minted, spent by one atomic DELETE at the tool call, so "consumed by its first use" is a fact about the world rather than a property of a signed string. Born in its leaf, additive-only, no numbered twin (a new table needs none). Rides this line for the same ratchet reason as the import. cinatra#2754 — one row per minted island address, spent once; rides this line for the same ratchet reason as the import
+    ...triggerScheduleProposalSchemaQueries(schemaName), ...reviewIslandGrantSchemaQueries(schemaName), ...lentActionGrantSchemaQueries(schemaName),...memoryPromotionRequestSchemaQueries(schemaName), // cinatra#1381 — memory row promotion's NET-NEW request ledger, born in its leaf beside its artifact sibling; additive-only, no numbered twin (a new table needs none). Rides this spread-only line for the same ratchet reason as the import: this module sits at its file-size ceiling, which may only ever shrink. // cinatra#2932 (lifecycle-b W5a) — the LENT-ACTION GRANT's NET-NEW single-use ledger: one row per grant the send minted, spent by one atomic DELETE at the tool call, so "consumed by its first use" is a fact about the world rather than a property of a signed string. Born in its leaf, additive-only, no numbered twin (a new table needs none). Rides this line for the same ratchet reason as the import. cinatra#2754 — one row per minted island address, spent once; rides this line for the same ratchet reason as the import
     // project_dispatch_attempts + project_leases: the dynamic-dispatch
     // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
@@ -3797,7 +3797,7 @@ END $$` },
     // At most ONE pending promotion request per artifact row — a second
     // request while one is in flight is a constraint-backed conflict, never a
     // duplicate queue item.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_promotion_request_one_pending ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id) WHERE status = 'pending'` }, ...memoryPromotionRequestSchemaQueries(schemaName), // cinatra#1381 — memory row promotion's NET-NEW request ledger, born in its leaf beside its artifact sibling; additive-only, no numbered twin (a new table needs none). Rides this line for the same ratchet reason as the import: this module sits at its file-size ceiling, which may only ever shrink.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_promotion_request_one_pending ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id) WHERE status = 'pending'` },
     // Data Safety: Undo & Versioning substrate.
     // object_change_event = append-only history with canonical before/after
     // SNAPSHOTS. Emitted in the SAME DB transaction as the
