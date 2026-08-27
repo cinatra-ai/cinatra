@@ -205,3 +205,94 @@ export const remoteEffectAttemptsListForChangeSetSchema = z.object({
 export const remoteEffectAttemptRetrySchema = z.object({
   attemptId: z.string().min(1),
 }).strict();
+
+// ---------------------------------------------------------------------------
+// memory_recall (cinatra#1380, epic #1373) — the SHARED-memory recall surface.
+//
+// The offline counterpart (recall over local bundle files) stays in the
+// `memory` CLI; this primitive is the server-side one, and it reads the SAME
+// canonical Postgres rows `objects_list` reads, through the SAME authorization.
+// It exists as its own primitive rather than a flag on `objects_list` because
+// it answers a narrower question with a narrower answer: it is pinned to
+// `@cinatra-ai/memory:concept`, it projects a capped recall row instead of the
+// whole envelope, and it carries an explicit `mode` the caller must read.
+//
+// STRICT (the #1378 lesson, applied at the door). An unknown top-level key is
+// a REJECTION, not a tolerated stray — which is also what makes a
+// client-supplied `group_ids` / `groupIds` / `lanes` impossible to express.
+// Lanes are SERVER-DERIVED from the authenticated actor (cinatra#1379) and
+// there is deliberately no input surface for them; `orgId` is likewise
+// actor-derived and never accepted from a caller.
+// ---------------------------------------------------------------------------
+
+/** Cap on the free-text `query`, in UTF-8 BYTES. A recall query is a question,
+ *  not a payload; 1 KiB sits far above every legitimate one. */
+export const MEMORY_RECALL_QUERY_MAX_BYTES = 1024;
+
+/** Cap on the `kind` frontmatter-type filter, in UTF-8 bytes. Matches the
+ *  envelope's own `okfType`, which is a short type token. */
+export const MEMORY_RECALL_KIND_MAX_BYTES = 200;
+
+/** Default number of recall rows when the caller does not ask. */
+export const MEMORY_RECALL_DEFAULT_LIMIT = 10;
+
+/** Hard ceiling on recall rows. Lower than `objects_list`'s 500 on purpose: a
+ *  recall feeds a model's context window, and the excerpt cap below is only
+ *  meaningful against a bounded row count. */
+export const MEMORY_RECALL_MAX_LIMIT = 50;
+
+function memoryRecallUtf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+export const memoryRecallSchema = z
+  .object({
+    // REQUIRED. Trimmed and non-empty: a blank query would fall straight
+    // through to the degraded path and hand back recent rows, which is exactly
+    // the "recent presented as search" outcome this tool exists to prevent.
+    query: z
+      .string()
+      .min(1)
+      .refine((q) => q.trim().length > 0, {
+        message: "query must not be blank",
+      })
+      .refine((q) => memoryRecallUtf8Bytes(q) <= MEMORY_RECALL_QUERY_MAX_BYTES, {
+        message: `query exceeds the ${MEMORY_RECALL_QUERY_MAX_BYTES}-byte cap`,
+      }),
+    // Frontmatter type filter — matched against the envelope's `okfType` in
+    // JS, on rows already fetched and already `object.read`-gated. It never
+    // reaches SQL and never reaches the semantic index, so there is no
+    // injection surface to smuggle through; it is capped and non-blank anyway,
+    // because an author-controlled string with no ceiling is the surface this
+    // repo has now found uncapped three times.
+    kind: z
+      .string()
+      .min(1)
+      .refine((k) => k.trim().length > 0, { message: "kind must not be blank" })
+      .refine((k) => memoryRecallUtf8Bytes(k) <= MEMORY_RECALL_KIND_MAX_BYTES, {
+        message: `kind exceeds the ${MEMORY_RECALL_KIND_MAX_BYTES}-byte cap`,
+      })
+      .optional(),
+    // Project recall. Same three-state semantics as `objects_list.projectId`:
+    // omitted / null = no project filter, an id = SEALED to that project.
+    //
+    // Be precise about what "sealed" costs, because the lane derivation reads
+    // like it says otherwise: cinatra#1379 puts BOTH the project lanes and the
+    // ambient ones in the search set, so the index ranks against ambient memory
+    // too — but the canonical read carries the sealed-room
+    // `AND project_id = $projectId`, and an ambient row (`project_id IS NULL`)
+    // does not survive it. A project recall therefore RETURNS PROJECT ROWS ONLY.
+    //
+    // A supplied id is NOT a grant — the handler 404-hides it through
+    // `assertProjectReadAccess` and the SQL re-filter lives in
+    // `listObjectsByFilter`.
+    projectId: z.string().nullish(),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MEMORY_RECALL_MAX_LIMIT)
+      .optional()
+      .default(MEMORY_RECALL_DEFAULT_LIMIT),
+  })
+  .strict();

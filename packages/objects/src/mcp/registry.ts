@@ -36,6 +36,16 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     description: "List all registered object types.",
     inputSchema: schemas.objectsTypesListSchema,
   },
+  // cinatra#1380 (epic #1373) — the shared-memory recall surface. The
+  // description is written FOR a tool-calling agent, and it names `mode`
+  // explicitly: a caller that cannot tell semantic recall from a recent-rows
+  // fallback will state things the memory corpus never said, which is the one
+  // failure this primitive exists to prevent.
+  "memory_recall": {
+    description:
+      "Recall shared agent-memory concepts by meaning. Searches ONLY the memory rows the caller is entitled to (scope lanes are derived server-side from the authenticated actor; there is no lane input). Optional `kind` filters on the concept's OKF frontmatter type, optional `projectId` restricts the recall to memory tagged for that project (project memory ONLY: pan-project/ambient memory is not returned; omit `projectId` to recall across your scope). ALWAYS read `mode`: \"semantic\" means the results are ranked answers to your query; \"degraded-recent\" means the semantic index was unavailable or returned no known rows, so these are simply RECENT memory rows in your scope and are NOT an answer to the query — do not present them as one. `ordering` says how the rows were sorted (\"semantic-rank\" or, on the degraded path, a plain \"lexical-fallback\" token match). Each item carries a capped body excerpt; read the whole concept with objects_get.",
+    inputSchema: schemas.memoryRecallSchema,
+  },
   // Data Safety: Undo & Versioning MCP primitives.
   "change_set_undo": {
     description:

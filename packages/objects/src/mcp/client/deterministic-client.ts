@@ -84,5 +84,45 @@ export function createDeterministicObjectsClient(input: {
         "objects_types_list",
         {},
       ),
+    // cinatra#1380 (epic #1373) — shared-memory recall. An in-process caller
+    // reaches EXACTLY the gates an external MCP caller does: the same strict
+    // schema parse, the same server-derived lane entitlement, the same
+    // sealed-room gate and the same per-row `object.read` probe. There is
+    // deliberately NO lane / group_ids / orgId parameter here either: exposing
+    // one on the in-process client would be a second door into the thing the
+    // wire schema exists to close.
+    //
+    // `mode` is on the return type because callers must branch on it:
+    // "degraded-recent" items are recent memory rows in the caller's scope,
+    // NOT an answer to the query.
+    //
+    // `projectId` SEALS the recall to that project (project rows only); the
+    // ambient lanes the search covers are relevance context, not results. See
+    // the field's note in `schemas.memoryRecallSchema`.
+    memoryRecall: (inp: {
+      query: string;
+      kind?: string;
+      projectId?: string | null;
+      limit?: number;
+    }) =>
+      invoke<{
+        items: Array<{
+          id: string;
+          conceptPath: string | null;
+          title: string | null;
+          kind: string | null;
+          scope: {
+            ownerLevel: string;
+            ownerId: string | null;
+            visibility: string;
+            projectId: string | null;
+          };
+          excerpt: string;
+          excerptTruncated: boolean;
+        }>;
+        mode: "semantic" | "degraded-recent";
+        ordering: "semantic-rank" | "lexical-fallback";
+        meta?: { semanticSearch: string; fallback: string };
+      }>("memory_recall", inp),
   };
 }
