@@ -265,7 +265,11 @@ export type ReviewDisposition = "approve" | "reject" | "comment";
  * type — never accepted from the client. `digest` is set only for a runtime
  * (main-realm dynamic) load — the exact package + content digest. */
 export interface ReviewRendererProvenance {
-  kind: "build-map" | "runtime" | "floor";
+  /** `first-party` is the FORM RUNG (plan (B) §5): the host's own renderer for a
+   * declared text form. It is recorded as its own kind and never as `floor`,
+   * because a rendered draft is not a review that fell through — and the floor
+   * gate counts `floor` rows. */
+  kind: "build-map" | "runtime" | "first-party" | "floor";
   packageName: string | null;
   digest: string | null;
 }
@@ -274,13 +278,20 @@ export interface ReviewRendererProvenance {
  * binder uses this against the mount it RE-RESOLVES at submit time (from the
  * type), so the provenance is authoritative, not a client claim. */
 export function rendererProvenanceFromMount(mount: ReviewTargetMount): ReviewRendererProvenance {
-  if (mount.kind === "build-map") {
-    return { kind: "build-map", packageName: mount.packageName, digest: null };
+  switch (mount.kind) {
+    case "build-map":
+      return { kind: "build-map", packageName: mount.packageName, digest: null };
+    case "runtime":
+      return {
+        kind: "runtime",
+        packageName: mount.packageName,
+        digest: mount.descriptor.tuple.digest,
+      };
+    case "form":
+      return { kind: "first-party", packageName: null, digest: null };
+    case "floor":
+      return { kind: "floor", packageName: mount.packageName, digest: null };
   }
-  if (mount.kind === "runtime") {
-    return { kind: "runtime", packageName: mount.packageName, digest: mount.descriptor.tuple.digest };
-  }
-  return { kind: "floor", packageName: mount.packageName, digest: null };
 }
 
 /** The client decision: WHAT is reviewed + the disposition + an optional comment.

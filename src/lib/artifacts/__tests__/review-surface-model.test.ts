@@ -22,10 +22,18 @@ import {
   reviewProvenanceLabel,
   reviewRevisionMarker,
   reviewTypeLabel,
+  reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
+const form: ReviewTargetMount = {
+  kind: "form",
+  slot: "detail",
+  arm: "first-party",
+  form: "markdown",
+};
 
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
@@ -55,10 +63,24 @@ describe("§III — provenance conformance id from the OPAQUE mount kind", () =>
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
   });
 
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
+  // markdown / plain-text rendering carries NO label above the reviewed work.
+  // §V of the pinned review spec draws a provenance strip for the two renderer
+  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
+  // none of those three, and it is not given a fourth strip — it is given none.
+  // The reviewer sees the draft, and nothing above the draft.
+  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
+    expect(reviewProvenanceConformanceId(form)).toBeNull();
+  });
+
   it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
-    expect(reviewProvenanceLabel(buildMap).kind).toBe("build-time");
+    expect(reviewProvenanceLabel(buildMap)).toMatchObject({ kind: "build-time" });
     expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
-    expect(reviewProvenanceLabel(floor).kind).toBe("floor");
+    expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
+  });
+
+  it("the form rung has no provenance label to print", () => {
+    expect(reviewProvenanceLabel(form)).toBeNull();
   });
 });
 
@@ -319,5 +341,47 @@ describe("the settled copy names the outcome and its decider", () => {
       expect(reviewSettledCopy(outcome).body).not.toBe(generic.body);
     }
     expect(generic.title).toBe("This review is no longer open");
+  });
+});
+
+describe("reviewTargetRowFacts — the header meta line's read-only row facts", () => {
+  // THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line used to
+  // print the two scope facts bare, so the common case read the SAME WORD twice
+  // for two different facts.
+  it("labels the two scope facts so they are not the same word twice", () => {
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "organization",
+      visibility: "organization",
+      mime: "text/markdown",
+      updatedAt: "8 min ago",
+    });
+    const line = facts.join(" · ");
+    expect(line).toBe("Ownership: organization · Visibility: organization · text/markdown · updated 8 min ago");
+    expect(line).not.toContain("organization · organization");
+  });
+
+  it("keeps BOTH facts, in the order the drawing draws them", () => {
+    // design@fe2182547d4a specs/app-artifact-review.html §IV — "the read-only row
+    // facts the host authorized — owner level / visibility, MIME, and updated
+    // time" — and §II's example line "… · Team · Private · text/html · updated 8
+    // min ago". Neither fact is dropped; both are labelled.
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "team",
+      visibility: "private",
+      mime: "text/html",
+      updatedAt: "8 min ago",
+    });
+    expect(facts).toEqual([
+      "Ownership: team",
+      "Visibility: private",
+      "text/html",
+      "updated 8 min ago",
+    ]);
+  });
+
+  it("carries no type keying — every artifact type reads the same line", () => {
+    const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
+    const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
+    expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
   });
 });

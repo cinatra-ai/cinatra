@@ -145,3 +145,52 @@ describe("cross-site — the credential the server sealed", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2931 — the HOST's colour scheme
+// ---------------------------------------------------------------------------
+//
+// The island is a nested document that cannot see the surface around it, so the
+// card names the palette its own document is painting in. The composer's job is
+// only to carry it: WHICH palette is read is the runtime hook's, and that every
+// host reads it is `review-island-host-color-scheme.test.tsx`'s.
+
+describe("the host's colour scheme rides the same address", () => {
+  const FRAME = { assistant: "wordpress", instanceId: "inst-1" };
+
+  it("names the palette beside the ref, on a first-party address", () => {
+    const url = new URL(reviewTargetIslandSrc(REF, null, null, "dark"), "https://app.example");
+    expect(url.searchParams.get("scheme")).toBe("dark");
+    expect(url.searchParams.get("ref")).toBe(REF);
+    expect([...url.searchParams.keys()].sort()).toEqual(["ref", "scheme"]);
+  });
+
+  it("names it beside the credential and the frame selectors too", () => {
+    const url = new URL(
+      reviewTargetIslandSrc(
+        REF,
+        FRAME,
+        `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=sealed-value`,
+        "light",
+      ),
+      "https://app.example",
+    );
+    expect(url.searchParams.get("scheme")).toBe("light");
+    expect(url.searchParams.get("ic")).toBe("sealed-value");
+    expect([...url.searchParams.keys()].sort()).toEqual([
+      "assistant",
+      "ic",
+      "instanceId",
+      "ref",
+      "scheme",
+    ]);
+  });
+
+  it("composes exactly the pre-scheme src when the host declares no palette", () => {
+    for (const none of [null, undefined]) {
+      expect(reviewTargetIslandSrc(REF, FRAME, null, none)).toBe(
+        reviewTargetIslandSrc(REF, FRAME),
+      );
+    }
+  });
+});

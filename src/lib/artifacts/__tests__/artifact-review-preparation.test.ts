@@ -105,6 +105,66 @@ describe("prepareReviewTargetsCore — gate provenance (hard failures, before an
     );
     expect(r).toEqual({ ok: false, error: { kind: "gate-not-pending" } });
   });
+
+  // "A resolved gate opens read-only: what was decided, and the reviewed
+  // target(s), kept for the run's audit trail." The history reading prepares a
+  // decided gate's frozen set through THIS core — and only when it asks.
+  it("a RESOLVED gate stays closed unless the caller asked for the read-only history", async () => {
+    const r = await prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets: [t("a", "1")] },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "resolved", targets: [t("a", "1")] }),
+      }),
+    );
+    expect(r).toEqual({ ok: false, error: { kind: "gate-not-pending" } });
+  });
+
+  it("a RESOLVED gate's frozen set is prepared for the read-only history reading", async () => {
+    const r = await prepareReviewTargetsCore(
+      {
+        runId: "run",
+        reviewTaskId: "wayflow-t",
+        targets: [t("a", "1")],
+        acceptResolvedGate: true,
+      },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "resolved", targets: [t("a", "1")] }),
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.prepared.map((p) => p.target)).toEqual([t("a", "1")]);
+  });
+
+  it("the history reading still substitutes NOTHING — the decided set is the gate's", async () => {
+    const r = await prepareReviewTargetsCore(
+      {
+        runId: "run",
+        reviewTaskId: "wayflow-t",
+        targets: [t("a", "1"), t("c", "9")],
+        acceptResolvedGate: true,
+      },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "resolved", targets: [t("a", "1")] }),
+      }),
+    );
+    expect(r).toEqual({
+      ok: false,
+      error: { kind: "target-substitution", substituted: [t("c", "9")] },
+    });
+  });
+
+  it("an ABSENT gate is closed to the history reading too", async () => {
+    const r = await prepareReviewTargetsCore(
+      {
+        runId: "run",
+        reviewTaskId: "wayflow-t",
+        targets: [t("a", "1")],
+        acceptResolvedGate: true,
+      },
+      ports({ readGatePinnedTargets: async () => ({ status: "not-found" }) }),
+    );
+    expect(r).toEqual({ ok: false, error: { kind: "gate-not-pending" } });
+  });
 });
 
 describe("prepareReviewTargetsCore — NO client target substitution", () => {

@@ -1,0 +1,719 @@
+# capture records — cinatra#2931 (W4)
+
+Head under proof: **`8e30992447054ef67dbca906ce92773d6c7b5e53`** for **W0** and
+**W1**, re-taken on this head; **`73c201854cecfe50c8036a32b5f7489111acb99c`** for
+**W9**, **`f20bb3ff6372fe3d6882f490a9289512a21a95f1`** for **W7** and
+**`d0db4293d72b4554bf1c4b00fc7d5363c82375b3`** for **W3** and **W5**, whose files
+are carried over **byte-identical** (their sha256 values below are unchanged from
+those commits, recomputed from the files in the tree, and their git blob ids are
+identical to `eaf87c2359319f06f781a1a82e7e858a85d3a491`).
+Runtime: Next.js dev on `http://localhost:3000`; the agent runtime container on
+`:3010`; a plain static server on a second origin for the third-party page of W7.
+Provider: **real** — `CINATRA_TEST_LLM_PROVIDER` unset. The provider key lives in
+the instance database, sealed there through the app's own provider form; it was
+never written to a file, never passed as an argument and never printed.
+
+**Direct SQL disclosure.** The only statements issued by hand against the instance
+database this round were `SELECT`s — every row below is a readback. No run, gate,
+artifact, representation, resource, audit or usage row was inserted, updated or
+deleted by hand. Every state change came from a control pressed in a browser.
+
+## The pinned agent
+
+| reading | value |
+|---|---|
+| checked-out package `HEAD` | `03a27f524d59f90f635ee98c1b5900c4bc9f7f6e` |
+| package version on disk | `0.1.4` |
+| boot scan | `[cinatra:extensions:agent] @cinatra-ai/blog-draft-writer-agent 0.1.4 upserted` (the leading v of the printed token is dropped for the repository's version-token rule) |
+| the agent runtime the runs reached | `/.health` → `{"status":"ok","agents":29,"failed":0,"failed_agents":[]}` |
+
+## The runs re-taken on this head
+
+```
+agent_runs
+  id            88634469-a0d1-47be-94a4-473cbb25bf75   (pending — W3, W5)
+  status        completed
+  human_present t
+  created_at    2026-08-27 00:24:05.632287+00
+  completed_at  2026-08-27 00:27:43.719+00
+
+  id            ef14a5dd-1d1a-4a1f-8762-d55b55e985c0   (decided — W9)
+  status        completed
+  human_present t
+  created_at    2026-08-27 00:39:59.017318+00
+  completed_at  2026-08-27 00:51:48.217+00
+```
+
+The runs behind the standing cells are unchanged and are recorded in the commit
+those files came from. The run behind **W0** and **W1** is this commit's own and is
+recorded in full below; `579d0473-4b5d-40b9-9d79-8126560bbf06`, the run the
+superseded W0/W1 pair was taken against, is retired and claims nothing here.
+
+## The run and gate behind W0 and W1, on this head
+
+Every value a `SELECT` readback from the instance database.
+
+```
+agent_runs
+  id            6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  status        completed
+  human_present t
+  created_at    2026-08-27 09:03:14.619345+00
+  completed_at  2026-08-27 09:08:24.246+00
+
+artifact_review_gates
+  id             d5eb4fa0-1b3c-42b4-918e-05c6b20ed2d6
+  run_id         6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  review_task_id lifecycle-review:fdb26d053b86748c52b041a77e8ac1c16bd69d1bcce3a0f039a826430c8a2c54
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  reopen_count   0
+  created_at     2026-08-27 09:08:51.418241+00
+  expires_at     2026-09-03 09:08:51.322+00
+  pinned_targets [{"artifactId": "16233c31-7fad-49a4-8d51-c73623bb55ba",
+                   "representationRevisionId": "b11361a6-354c-4354-b76f-f45291cca4ec"}]
+```
+
+The gate was read back as `pending` after the last of the four shutters. The
+revision it pins is the revision the W1 card prints.
+
+### The stored turn — the platform's sentence, and the parts
+
+The assistant turn the two cells picture, read back from `assistant_turns`
+(thread `f4b38c96-466e-4c03-a3e6-0a0b7e4679e0`, turn
+`7ef56418-d2ab-406d-a080-9349bc1efc07`), in the order the row holds them:
+
+```
+parts[0]  kind      text
+          content   Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+
+parts[1]  kind      tool_call
+          name      agent_run
+          runId     6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+          status    completed
+
+parts.length              2
+occurrences of agent_run_get      0
+occurrences of skill_file_read    0
+```
+
+Held against the platform's own `message` for this run — minted by the shipped
+`describeStartedRun` in `packages/agents/src/run-status.ts`, the function
+`agent_run` calls to build that field, given this run's package, id and status:
+
+```
+platform message  Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+stored turn text  Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `6973e1a9-5d4a-4c2f-97a0-c454ba64c542`, status: `queued`). The run started.
+strict equality   true
+byte length       132   /   132
+```
+
+### The reviewed work behind W0 and W1
+
+```
+representation b11361a6-354c-4354-b76f-f45291cca4ec
+  artifact_id        16233c31-7fad-49a4-8d51-c73623bb55ba
+  resource_id        7d7c17b2-8837-41b7-949d-ea0f40d9a979
+  revision           1
+  created_by_run_id  6973e1a9-5d4a-4c2f-97a0-c454ba64c542
+  created_at         2026-08-27 09:08:23.83032+00
+
+resource 7d7c17b2-8837-41b7-949d-ea0f40d9a979
+  kind        blob
+  mime        text/markdown
+  size_bytes  5517
+  created_at  2026-08-27 09:08:22.627808+00
+
+artifact_blobs 44ace426-fcb5-4b99-8701-7c920b85d06c
+  sha256          8bda8e41fab010c445521ccdb7654da809d3fcede44559a9ac891b4cd8681cff
+  size_bytes      5517
+  mime_detected   text/markdown
+  storage_backend local-disk
+```
+
+Recomputed from the blob on disk: `sha256` matches, 5 517 bytes, first byte `#`,
+first line `## Where the Hours Actually Go`, and occurrences of the JSON-envelope
+key `"content":` → **0**. Prose, not an envelope.
+
+### The usage ledger for the W0/W1 run — the real model
+
+Every row a `SELECT` readback from `usage_events`, for the window this run
+occupied. `CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 09:03:18.331+00 llm    openai   gpt-5.5             stream    chat                     21 736   441
+2026-08-27 09:08:20.674+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  39 095 1 605
+2026-08-27 09:08:44.218+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 780    97
+2026-08-27 09:08:50.074+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 806   189
+2026-08-27 09:08:54.993+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 822    90
+2026-08-27 09:09:00.191+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 871    81
+2026-08-27 09:09:05.586+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 912    81
+2026-08-27 09:09:09.891+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 887   120
+2026-08-27 09:09:14.647+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 863   115
+2026-08-27 09:09:19.276+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 900   141
+2026-08-27 09:09:23.799+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 839    83
+2026-08-27 09:09:28.079+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 891   117
+```
+
+The one `chat` stream is the turn that dispatched the run; the draft-writing row
+carries `requested_provider = openai` and `effective_provider = openai`.
+
+### The diagnostic runs of this round, disclosed
+
+Three further runs were started on this head while the capture was being brought
+in, and **none of them appears in any picture**:
+`d7bad2d6-65eb-4114-8334-d7a5fa133145`, `e3722feb-dd16-40c7-9ec3-3beacafc62ea` and
+`4cb8afd2-60ab-4f47-8eea-e0fd97f942d4`. All three are real runs on the real
+provider; each carries the same platform sentence in its own stored turn. They are
+named here so the ledger and gate tables of this instance read straight.
+
+**One failed run, disclosed.** `49e4f31b-f87c-4b35-a2a9-36858614fbf2` is `failed`
+in `agent_runs` — a first attempt at the pending run, whose dispatch had no agent
+runtime to reach (`[wayflow] dispatch failed … TypeError: fetch failed`) because
+this instance's own `dev:stop` had stopped that container. The runtime was
+restarted before either pictured run was driven. No picture shows it.
+
+## The review gates
+
+```
+artifact_review_gates
+  id             534ca557-f45e-4ff0-9d7a-468cb0e1ef27
+  run_id         88634469-a0d1-47be-94a4-473cbb25bf75
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  created_at     2026-08-27 00:28:00.20752+00
+  review_task_id lifecycle-review:79a42743b9fb8fd23e66a698507030f335494d4ab380d9b455472dd7cb40c1db
+  pinned_targets [{"artifactId":"bafb9bd6-abb4-4801-a3fa-78f78a358549",
+                   "representationRevisionId":"5b1be384-0a70-4d9c-9f5b-0db82d398db9"}]
+
+  id             f079f282-7bf8-4105-ba01-db115dc89326
+  run_id         ef14a5dd-1d1a-4a1f-8762-d55b55e985c0
+  status         resolved
+  disposition    approve
+  resolved_by    2660f48b-6a11-423a-afdd-a148139bf86d   (the signed-in reviewer)
+  resolved_at    2026-08-27 00:54:24.54582+00
+  created_at     2026-08-27 00:51:51.253535+00
+  review_task_id lifecycle-review:77e016c0ed698491d3901b47f545259ae17fbdcd505db60e44c6330e8e77cbfd
+  pinned_targets [{"artifactId":"e98f02e5-cb3a-40c1-8a52-b47bccd205a3",
+                   "representationRevisionId":"43e75a37-3bc8-4322-9da7-8a01ec30a49c"}]
+```
+
+**Each gate is minted after its run has already terminated** —
+`00:27:43.719` → `00:28:00.208` (16.5 s) and `00:51:48.217` → `00:51:51.254`
+(3.0 s). Named in the README, not fixed here.
+
+**The pending gate was re-read after the decided run's Approve** and was still
+`pending`, `disposition` null: neither re-taken cell is staged from a state the
+other changed.
+
+## The run, gate and decision behind W9, on this head
+
+Every row below is a `SELECT` readback. Nothing here was inserted, updated or
+deleted by hand; the run was driven, and the gate decided, entirely by presses in a
+browser.
+
+```
+agent_runs
+  id            0770c32a-e1dc-4edb-884a-744dad88fdac   (decided — W9 light and dark)
+  status        completed
+  human_present t
+  created_at    2026-08-27 04:25:36.291574+00
+  completed_at  2026-08-27 04:45:07.703+00
+
+artifact_review_gates
+  id             f6f5c67e-8974-4fb0-a461-5c82efc6b3ca
+  run_id         0770c32a-e1dc-4edb-884a-744dad88fdac
+  status         resolved
+  disposition    approve
+  resolved_by    2660f48b-6a11-423a-afdd-a148139bf86d   (the signed-in reviewer)
+  resolved_at    2026-08-27 04:49:08.649939+00
+  created_at     2026-08-27 04:45:27.913822+00
+  reopen_count   0
+  review_task_id lifecycle-review:582f16f568fb991f2a4088a04ba589f8662b57ffb7c9f46fde4f2f6d5a7bb9f3
+  pinned_targets [{"artifactId":"7d24b246-acc4-46be-9cdc-a20689cf2ce5",
+                   "representationRevisionId":"a31b40a9-ca65-4994-9040-20dd83f8d859"}]
+
+artifact_review_audit
+  id                          ef880fa0-7796-4497-93c9-37671bdaecd2
+  gate_id                     f6f5c67e-8974-4fb0-a461-5c82efc6b3ca
+  run_id                      0770c32a-e1dc-4edb-884a-744dad88fdac
+  artifact_id                 7d24b246-acc4-46be-9cdc-a20689cf2ce5
+  representation_revision_id  a31b40a9-ca65-4994-9040-20dd83f8d859
+  disposition                 approve
+  renderer_kind               first-party
+  renderer_package            (null)
+  renderer_digest             (null)
+  created_at                  2026-08-27 04:49:08.649939+00
+```
+
+`Approve` was pressed in the browser at `04:49:07.753`, over a rationale typed into
+the card's own field. The audit row and the gate's `resolved_at` carry the same
+stamp, `04:49:08.649939+00`. This gate is minted **20.2 s after its run had already
+terminated** (`04:45:07.703` → `04:45:27.913`) — named in the README, not fixed
+here.
+
+**The pinned revision is the one the audit row records.** The gate froze
+`a31b40a9-ca65-4994-9040-20dd83f8d859`; the island printed that same id in the
+pending reading at `04:49:06` and in the decided reading at both shutters; the
+audit row the decision wrote carries it too.
+
+### The reviewed work behind W9
+
+```
+artifact_materializations
+  id                          4b696d42-e9b1-4500-ac29-8ff40c776c23
+  artifact_id                 7d24b246-acc4-46be-9cdc-a20689cf2ce5
+  representation_revision_id  a31b40a9-ca65-4994-9040-20dd83f8d859
+  phase                       finalized
+  created_at                  2026-08-27 04:45:06.670042+00
+
+artifact_blobs (local-disk)
+  id            d2d8d0b4-ee6a-4e12-897e-2190317352fd
+  sha256        fdf86ba84303bdb72d39250584e320eafa6ac10f96bc2acb110eb22c25b28610
+  size_bytes    6 493
+  mime_detected text/markdown
+  created_at    2026-08-27 04:45:07.063515+00
+```
+
+Read from the stored bytes themselves: the file's first byte is `#`, it begins
+`## Why a settled decision drifts back open`, and it contains **zero** occurrences
+of `"content":` — prose, not a JSON envelope. The island drew 12 874 characters of
+it as 35 paragraphs under 10 headings, in both readings.
+
+### The usage ledger for the W9 run — the real model
+
+`CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 04:25:45.737+00 llm    openai   gpt-5.5             stream    chat                     22 882   114
+2026-08-27 04:45:05.617+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38 733 1 746
+2026-08-27 04:45:16.665+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 968   100
+2026-08-27 04:45:21.474+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 994   159
+2026-08-27 04:45:25.978+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 010    73
+2026-08-27 04:45:29.918+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 059    92
+2026-08-27 04:45:33.616+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 100    77
+2026-08-27 04:45:38.271+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 075   110
+2026-08-27 04:45:41.651+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 051   106
+2026-08-27 04:45:45.051+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 088   125
+2026-08-27 04:45:48.619+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 027    96
+2026-08-27 04:45:52.010+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 079   104
+```
+
+**One failed run, disclosed.** `bc634422-3be9-4327-aa78-778b2c98fc9a` is `failed`
+in `agent_runs` — a first attempt at this run, whose dispatch had no agent runtime
+to reach (`[wayflow] dispatch failed … TypeError: fetch failed`) because the
+runtime container had stopped with the dev server it is bound to. The runtime was
+restarted (`/.health` → `200`) before the pictured run was driven. No picture shows
+it.
+
+## The run and gate behind W7, on this head
+
+Every row below is a `SELECT` readback. Nothing here was inserted, updated or
+deleted by hand; the run was driven entirely by presses in a browser.
+
+```
+agent_runs
+  id            4dfd78f9-4d4e-43a5-8d9e-9f334908efd3   (pending — W7 light and dark)
+  status        completed
+  human_present t
+  created_at    2026-08-27 02:20:02.97961+00
+  completed_at  2026-08-27 02:23:11.486+00
+
+artifact_review_gates
+  id             fb69f4b6-c086-4e51-abdb-8531776a8005
+  run_id         4dfd78f9-4d4e-43a5-8d9e-9f334908efd3
+  status         pending
+  disposition    (null)
+  resolved_by    (null)
+  resolved_at    (null)
+  created_at     2026-08-27 02:23:34.325868+00
+  review_task_id lifecycle-review:b15d3da1fe8138a431b30a6aa87548e3498b9247567afd8c0fac592559f26f74
+  pinned_targets [{"artifactId":"de418b67-807f-4975-bc6a-b600c5412a6f",
+                   "representationRevisionId":"d41e0d95-d1e4-48f2-b626-9a1620e7f850"}]
+
+representation
+  id                d41e0d95-d1e4-48f2-b626-9a1620e7f850   (the pinned revision)
+  artifact_id       de418b67-807f-4975-bc6a-b600c5412a6f
+  revision          1
+  form              file
+  resource_id       810ab2f8-3bee-499f-8d6a-94d90d26e940
+  created_by_run_id 4dfd78f9-4d4e-43a5-8d9e-9f334908efd3
+  created_at        2026-08-27 02:23:11.225533+00
+
+resource
+  id            810ab2f8-3bee-499f-8d6a-94d90d26e940
+  kind          blob
+  mime          text/markdown
+  size_bytes    6086
+  substance_key blob:9ca5ffd0e41e7b45661736791333a9529f29ceb3cc1a7ef967963e21c3185b2f
+```
+
+**This gate is minted after its run terminates**, like the others in this
+directory: `02:23:11.486` → `02:23:34.326`, **22.8 s**. Named, not fixed here.
+
+**The reviewed work is prose.** The blob was read off disk and hashed:
+`sha256 9ca5ffd0e41e7b45661736791333a9529f29ceb3cc1a7ef967963e21c3185b2f`, 6 086
+bytes, first byte `#`, and **zero** occurrences of `"content":` — no JSON envelope
+in the target either W7 frame shows.
+
+**The gate was still `pending` after both frames.** It was re-read from the row
+after the second capture: `status = pending`, `disposition` null, `resolved_by`
+null. Neither frame is staged from a state the other changed.
+
+## The decision the browser wrote
+
+```
+artifact_review_audit
+  id                          51b718dc-9e43-464f-a241-ec2c5055c3bc
+  gate_id                     f079f282-7bf8-4105-ba01-db115dc89326
+  run_id                      ef14a5dd-1d1a-4a1f-8762-d55b55e985c0
+  artifact_id                 e98f02e5-cb3a-40c1-8a52-b47bccd205a3
+  representation_revision_id  43e75a37-3bc8-4322-9da7-8a01ec30a49c
+  disposition                 approve
+  renderer_kind               first-party
+  renderer_package            (null)
+  renderer_digest             (null)
+  created_at                  2026-08-27 00:54:24.54582+00
+```
+
+Approve was pressed in the browser at `00:54:23.451`, over a rationale typed into
+the card's own field. The audit row and the gate's `resolved_at` carry the same
+stamp, `00:54:24.54582+00`.
+
+## The reviewed work
+
+```
+objects
+  bafb9bd6-abb4-4801-a3fa-78f78a358549  @cinatra-ai/blog-post-artifact:post
+                                        organization  2026-08-27 00:27:43.331755+00
+  e98f02e5-cb3a-40c1-8a52-b47bccd205a3  @cinatra-ai/blog-post-artifact:post
+                                        organization  2026-08-27 00:51:47.911208+00
+
+representation
+  5b1be384-0a70-4d9c-9f5b-0db82d398db9  artifact bafb9bd6-…  revision 1  form file
+      resource 8d54bb47-73cd-475f-8e7a-aadd67599fad
+      created_by_run_id 88634469-…      2026-08-27 00:27:43.331755+00
+  43e75a37-3bc8-4322-9da7-8a01ec30a49c  artifact e98f02e5-…  revision 1  form file
+      resource ace23d46-7efb-472a-91ac-37ea9fa41626
+      created_by_run_id ef14a5dd-…      2026-08-27 00:51:47.911208+00
+
+resource
+  8d54bb47-73cd-475f-8e7a-aadd67599fad  blob  text/markdown  6 086 bytes
+  ace23d46-7efb-472a-91ac-37ea9fa41626  blob  text/markdown  5 734 bytes
+
+artifact_blobs (local-disk)
+  sha256 00f42c92d1663dbcb067e16543feb126c0ba48d40eb70ecca5946fc48e004699  6 086
+  sha256 e003f30c647e4d984701415d1742c030dc77789efc5e5484f7ad3465aacc6516  5 734
+```
+
+`mime = text/markdown` is what makes these the acceptance's *markdown draft*, and
+what the card's text rung resolves on. Read from the stored bytes themselves: the
+first begins `## Why the ritual drifts once the dashboard is automatic`, the second
+`## The cost a recurring meeting hides`, and **each contains zero occurrences of
+`"content":`** — no JSON envelope reached any target in this set.
+
+## The usage ledger — the real model, both runs
+
+```
+usage_events
+  2026-08-27 00:27:40.589768+00  llm  openai  gpt-5.5-2026-04-23  generate
+      blog-draft-writer-agent   38 744 in / 1 683 out   (the pending run)
+  2026-08-27 00:51:45.804991+00  llm  openai  gpt-5.5-2026-04-23  generate
+      blog-draft-writer-agent   38 717 in / 1 701 out   (the decided run)
+```
+
+Each run also shows one `chat` stream (the turn that dispatched it) and the
+`artifact-matcher` calls that follow the draft. No stub provider appears anywhere;
+`CINATRA_TEST_LLM_PROVIDER` was unset for the whole round.
+
+## The usage ledger for the W7 run — the real model
+
+Every row a `SELECT` readback from `usage_events`, for the window the W7 run
+occupied. `CINATRA_TEST_LLM_PROVIDER` was unset; no scripted provider appears.
+
+```
+occurred_at (UTC)          source provider model               operation agent_label              in     out
+2026-08-27 02:20:12.396+00 llm    openai   gpt-5.5             stream    chat                     22 885   122
+2026-08-27 02:23:09.388+00 llm    openai   gpt-5.5-2026-04-23  generate  blog-draft-writer-agent  38 736 1 592
+2026-08-27 02:23:36.397+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 884    88
+2026-08-27 02:23:41.108+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 910   181
+2026-08-27 02:23:44.597+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 926   102
+2026-08-27 02:23:47.452+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 975    93
+2026-08-27 02:23:50.247+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 016    86
+2026-08-27 02:23:53.300+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 991   113
+2026-08-27 02:23:56.465+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 967   105
+2026-08-27 02:24:00.461+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          2 004   126
+2026-08-27 02:24:03.439+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 943    88
+2026-08-27 02:24:06.233+00 llm    openai   gpt-5.5-2026-04-23  generate  artifact-matcher          1 995   102
+```
+
+The draft-writing row carries `requested_provider = openai` and
+`effective_provider = openai`.
+
+## The slot, as the two windows themselves recorded it (W0, W1 — re-taken)
+
+`MutationObserver` on `data-run-review-slot`, one per window. The conversation was
+open in **two windows** — light and dark, each in its own browser context — and
+**neither was reloaded after it was opened**: one `goto` each at `09:03:31`, and
+nothing after it.
+
+```
+the light window                      the dark window
+09:03:31.157  (no slot)               09:03:31.159  (no slot)
+09:04:02.815  working                 09:04:02.814  working
+09:04:03.957  (no slot)               09:04:03.957  (no slot)
+09:08:24.990  working                 09:08:24.990  working
+09:08:52.365  review, card=0          09:08:52.149  review, card=0
+09:08:54.269  review, card=1          09:08:53.989  review, card=1
+```
+
+The first `working` flash is the run's own setup gate opening and closing (1.1 s).
+The captured placeholder is the second window, which ran from `09:08:24.990` to
+`09:08:52.365` — **27.4 s** — and began `744 ms` after the run row terminated at
+`09:08:24.246`. Page errors raised in either window across the whole run: **0**.
+
+**Reload accounting.** `goto` calls per window after the turn was typed: **1**, at
+`09:03:31`. Between that load and the `review, card=1` reading, the observer's
+series is unbroken on a single document — the swap is the document changing
+itself, not a new document arriving.
+
+## W7 — the wire, per capture
+
+Both W7 frames — re-taken on `f20bb3ff6372fe3d6882f490a9289512a21a95f1` — were
+taken in a fresh browser context with an **empty** cookie jar; the reader signed in
+through the frame's own hosted-PKCE popup, on a host page served from
+`http://127.0.0.1:8088` by a plain static server, a different origin **and a
+different site** from the app on `http://localhost:3000`.
+
+```
+lifecycle-resolve   POST /api/lifecycle-views/resolve   ×2 per capture
+    cookie:                         absent
+    x-cinatra-widget-user-token:    present (cwu_)
+    x-cinatra-widget-origin:        the host page's own origin
+island-document     GET  /lifecycle/review-island       ×1 per capture
+    cookie:                         absent
+
+cookie jar at capture time (name/attributes only; no value is recorded anywhere)
+    better-auth.session_token   domain=localhost   path=/   SameSite=Lax   httpOnly=true
+```
+
+## The captures
+
+Viewport 1440×900, `deviceScaleFactor: 2` → 2880×1800 pixels each. The four rows
+marked **re-take** were shot on `8e30992447054ef67dbca906ce92773d6c7b5e53` and are
+the only four files this commit replaces; the other eight are the files already in
+the tree, **unchanged byte for byte** — each sha256 below was recomputed from the
+file in the tree and matches the value recorded when that file was taken, and each
+of those eight git blob ids is identical to the one at
+`eaf87c2359319f06f781a1a82e7e858a85d3a491`.
+
+| file | sha256 | bytes |
+|---|---|---|
+| **re-take** `captures/W0__placeholder__chat_thread__working__light.png` | `45a39b0bd2d6b7fa2726ce2e4415a747c749373afaadb89b2e8a5fff2393634f` | 328 287 |
+| **re-take** `captures/W0__placeholder__chat_thread__working__dark.png` | `3fd0ea32b34f990263810479d5db51efd7b93117660734cf6a2d109db503b578` | 326 766 |
+| **re-take** `captures/W1__review-card__chat_thread__pending__light.png` | `cfea1830d577500e284374e6e2d0c651ff5c242ed1c1680eb0d0d86ef751330b` | 367 749 |
+| **re-take** `captures/W1__review-card__chat_thread__pending__dark.png` | `47fe52db2b202a4490af8583c3dc5e819ecd64a6e79fd7bbc186b00ee996c824` | 363 023 |
+| `captures/W3__review-card__run_page__pending__light.png` | `5fbf568b2d6037eaedfc894853117af8a2c3a74349b7dd71ab7ce14456a7c586` | 303 091 |
+| `captures/W3__review-card__run_page__pending__dark.png` | `367476221003d54c165475ff16ef619bbca4b601ccef73fefe98fbe326b678a5` | 291 093 |
+| `captures/W5__review-card__review_page__pending__light.png` | `d5298628add1b5b98b87e03737c2cf0a4a06a1232f78e36d9c136cfba704fd61` | 416 388 |
+| `captures/W5__review-card__review_page__pending__dark.png` | `31a6f05b3bc5f514398f76f42abbe73bf1bd16f6c437b3aff3bfe17fdb9d7141` | 412 720 |
+| `captures/W7__review-card__site_widget__pending__light.png` | `361a1bc3e6a94dc578e4db2db8883c49e82467f8a9a170271ad4cf0fb8d18034` | 213 057 |
+| `captures/W7__review-card__site_widget__pending__dark.png` | `92783e14c6afffe3e5314bdb09b6d6dc2310f00026babef3d08f452b0ce4090e` | 210 785 |
+| `captures/W9__review-card__review_page__decided__light.png` | `53fec984fbc29521ac468618e0da202d1288701d9fbd21d7044cb7008969a9a8` | 382 458 |
+| `captures/W9__review-card__review_page__decided__dark.png` | `f73e708168a7a536ac546b5fe74ecbf3df8843d73f4418c26251c5ae59278b74` | 378 255 |
+
+## The shutters, and what was true at each
+
+Every entry was re-counted immediately after its shutter; `after` records that
+re-count. The cells re-taken on `d0db4293d72b` also assert `location.pathname` at
+the shutter, so no frame can be mistaken for a neighbouring route; the two W7
+frames instead assert the **pinned revision printed on the card**, which is what
+distinguishes this run's card from the other reviews pending on this instance. The
+W7 shutter times are the moment each PNG was written.
+
+```
+--- re-taken on d0db4293d72b, 2026-08-27 (UTC) ---
+W3 light  00:36:33   path=/agents/cinatra-ai/blog-draft-writer-agent/88634469-…
+                     rail="Step 1 | Review"   promptWindow=false
+                     cards=1 islands=1 iframes=1 approve/reject/comment=1/1/1
+                     island body=1 empty=0 targets=1 rendered=true rawsource=true
+                     noRenderer=false floor=0 preview=0 download=0
+W3 dark   00:36:47   the same readings, theme=dark
+W5 light  00:40:08   path=/agents/…/88634469-…/review/lifecycle-review%3A79a42743…
+                     rail="1 | Schedule | 2 | Review"   promptWindow=true
+                     cards=1 islands=1 iframes=1 approve/reject/comment=1/1/1
+                     island rendered=true rawsource=true  floor=0 preview=0 download=0
+W5 dark   00:40:22   the same readings, theme=dark
+
+--- re-taken on 8e3099244705, 2026-08-27 (UTC) ---
+W0 light  09:08:26.4   slot=working ph=1 cards=0 spinners=1 approve/reject/comment=0/0/0
+                       islands=0  runProgressHeading=false  openRunPage=false
+                       recheck=false  pendingApprovalPill=false        after: true
+                       sentence whole inside the frame = true
+                       framing sentence+card  union 249px  card 155px  viewport 900px
+W0 dark   09:08:27.4   the same readings, theme=dark                   after: true
+W1 light  09:09:32.9   slot=review  ph=0 cards=1 islands=1 iframes=1
+                       approve/reject/comment=1/1/1  rationale field=1
+                       rendered=true  replyingToReview=true  promptWindow=false
+                       openRunPage=false  island body=1 empty=0 targets=1
+                       island "content": occurrences = 0                after: true
+                       Approve clear of the composer = true
+                       framing sentence+card  union 791px  card 697px  viewport 900px
+W1 dark   09:09:33.9   the same readings, theme=dark                   after: true
+
+--- re-taken on f20bb3ff6372, 2026-08-27 (UTC) ---
+W7 light  02:30:52   host page http://127.0.0.1:8088 — a different origin AND site
+                     cards=1 islands=1 signin-controls=0 approve/reject/comment=1/1/1
+                     reviewRequested=true rationale=true signInPrompt=false
+                     island body=1 empty=0 targets=1 rendered=true
+                     noRenderer=false floor=0 preview=0 download=0
+                     pinned revision printed on the card: d41e0d95-d1e…
+                     card top inside the frame = 296.375 (the framing offset)
+W7 dark   02:32:29   the same readings, theme=dark
+                     chip outline rgb(37,47,63) on ground rgb(13,24,42)   contrast 24
+                     meta ink rgb(144,161,185)   Approve fill rgb(226,232,240)
+
+--- re-taken on 73c201854cec, 2026-08-27 (UTC) ---
+W9 pending  04:49:06   the REFERENCE reading, before any press, same gate, same session
+                       island reading=pending targets=1 rev=a31b40a9-ca65-4994-9040-20dd83f8d859
+                       draft 12 874 chars / 35 p / 10 headings   looksJson=false
+                       approve/reject/comment=1/1/1  rationale=1  awaitingPill=true
+W9 light    04:49:19   path=/agents/…/0770c32a-…/review/lifecycle-review%3A582f16f5…
+                       rail column="1 | Schedule | 2 | Review"  settled-rail-rows=0
+                       island reading=decided targets=1 scheme=light island-controls=0
+                       rev=a31b40a9-ca65-4994-9040-20dd83f8d859  (identical to pending)
+                       draft 12 874 chars / 35 p / 10 headings   looksJson=false
+                       cards=1 islands=1 approve=0 reject=0 comment=0 rationale=0
+                       textareas-in-card=0  buttons-in-card=[Expand]
+                       awaitingPill=false  promptWindow=false
+                       decision line "Approved by Ops Operator Two"
+W9 dark     04:49:34   the same readings, theme=dark, island scheme=dark
+
+Approve was pressed on the decided run at 04:49:07.753; the gate row settled at
+04:49:08.649939 and both W9 frames were taken after that. The previous round's W9
+frames (`5834500d…` light, `c64ae2b2…` dark, from run `ef14a5dd-…`) are superseded
+by this pair and are replaced in place.
+```
+
+## The rail, read live on this head
+
+The two rails the README's W3 and W9 cells distinguish, read from their own
+anchors on this head, for the runs pictured:
+
+```
+run page  /agents/…/88634469-…            (the pending run — W3's route)
+    [data-conformance-id="run-step-rail"]  →  "Step 1 | Review"
+    entry 1  kind=step  status=completed  "Step 1"
+             colour rgb(21,33,58)  weight 400  ground rgba(0,0,0,0)
+    entry 2  kind=gate  status=pending    "Review"
+             colour rgb(21,33,58)  weight 400  ground rgba(0,0,0,0)
+
+run page  /agents/…/ef14a5dd-…            (the decided run)
+    entry 2  kind=gate  status=resolved   "ReviewAPPROVE"
+
+trigger   /agents/…/ef14a5dd-…/trigger    (the setup rail of cinatra#2970/#2975)
+    row  schedule        selected=true   settled=false  action=open-schedule-step
+    row  recommendation  reached=false   settled=false  aria-disabled=true
+                         action=recommendation-step-unavailable
+    row  review          reached=true    settled=true   action=open-review-step
+                         indicator text EMPTY  → the completed circle in place of
+                         the numeral, the title unhighlighted
+
+review    /agents/…/0770c32a-…/review/…   (the decided gate — W9's route, this head)
+    [data-review-run-steps]                →  "2 | Review"     (the stepper alone)
+    its rail COLUMN                        →  "1 | Schedule | 2 | Review"
+    row  "1 Schedule"   button  action=open-schedule-step
+    row  "2 Review"     button  action=open-review-step   colour rgb(21,33,58) weight 500
+    [data-run-surface-rail-settled]        →  0 elements
+    [data-rail-kind] / [data-rail-status]  →  0 elements
+    the entry KEEPS ITS PLACE and stays selected; nothing on it records HOW the
+    gate was settled. The previous round read the stepper alone and recorded
+    "no longer lists Schedule" — that reading was short by one sibling and is
+    corrected here.
+```
+
+## The island's address and colour, read live on this head (W3's route)
+
+The card composes the island address from the palette class of the document **it**
+is mounted in. Read from the parent DOM while pressing the app's own theme control:
+
+```
+root class ... cinatra   island src /lifecycle/review-island  params [ref, scheme]  scheme=light
+    island ground rgb(247, 247, 243)   ink rgb(21, 33, 58)
+root class ... dark      island src /lifecycle/review-island  params [ref, scheme]  scheme=dark
+    island ground lab(3.87463 0.500388 -12.2712)   ink lab(98.1434 -0.369519 -1.05966)
+```
+
+The palette named on the address tracks the host document's palette class exactly,
+and the island's ground and ink move with it. On this first-party route the address
+carries **no** credential parameter — the parameters are `ref` and `scheme` and
+nothing else; the credentialed arm is the third-party application's. No credential
+value is recorded here, or anywhere in this directory.
+
+## The island's colour in the third-party application (W7 — re-taken on this head)
+
+These readings belong to **W7**, re-taken on
+`f20bb3ff6372fe3d6882f490a9289512a21a95f1`. Each pixel value below was sampled
+**from the committed PNG itself** at device scale 2 — the chip's own border rows
+against the panel ground taken just outside the pill — not from a re-render. The
+run-page rows are the first-party comparison, read on this same head from the same
+pending run, and are **not** a measurement of the W3 files in this commit.
+
+```
+                                          panel ground      outline pixel on the
+                                                            chip's border rows
+third-party application, dark  (W7, now)  rgb(13,24,42)     rgb(37,47,63)   pill DRAWN   contrast 24
+third-party application, dark  (SUPERSEDED) rgb(13,24,42)   rgb(14,25,44)   pill absent  contrast  2
+run page, dark            (comparison)    rgb(13,24,42)     rgb(37,47,63)   pill drawn   contrast 24
+third-party application, light (W7, now)  rgb(255,255,255)  rgb(222,224,227) pill drawn  contrast 33
+```
+
+**The two hosts measure the same colour on the same ground in dark.** Both values
+are what compositing predicts from the tokens: the dark hairline is
+`rgba(255,255,255,0.1)` and `0.1×255 + 0.9×(13,24,42) = (37,47,63)`; the light
+hairline is `rgba(21,33,58,0.14)` and over white gives `(222,224,227)`. The
+superseded frame's `rgb(14,25,44)` is that same **light** hairline composited over
+the **dark** panel — which is the ground to two levels, and is why it read as no
+outline at all.
+
+Two more readings from the same alias layer, sampled the same way:
+
+```
+                                          third-party app, dark   run page, dark
+header meta line ink (text-muted-foreground)  rgb(144,161,185)     rgb(144,161,185)
+Approve fill (--primary)                      rgb(226,232,240)     rgb(226,232,240)
+Approve fill, SUPERSEDED frame                rgb(54,78,129)       —
+```
+
+`rgb(144,161,185)` is the dark palette's `--muted` (`#90a1b9`); in light the same
+line measures `rgb(90,100,119)`, the light palette's `--muted` (`#5a6477`).
+
+The computed styles read out of the same mounted documents agree with the pixels:
+
+```
+                                    third-party application, dark   run page, dark
+--border   at the chip              #ffffff1a                       #ffffff1a
+--muted-foreground at the meta line #90a1b9                         #90a1b9
+chip border-top-color               rgba(255, 255, 255, 0.1)        rgba(255, 255, 255, 0.1)
+meta color                          rgb(144, 161, 185)              rgb(144, 161, 185)
+panel background-color              lab(8.11015 0.0567511 -14.1465) lab(8.11015 0.0567511 -14.1465)
+--border   at the DOCUMENT ROOT     #15213a24                       #ffffff1a
+--muted-foreground at the ROOT      #5a6477                         #90a1b9
+document root carries the palette   no                              yes ("… dark")
+```
+
+The last three rows are the mechanism, visible as a reading: inside the widget the
+island's own document root still resolves the **light** alias layer, because a page
+cannot write its own document root and the palette class is carried on a wrapper
+below it. What changed on this head is that the wrapper now re-declares that layer,
+so every element under it — the chip, the meta line, the Approve button — resolves
+dark, while the root, which nothing paints from, is left as it was. On the run page
+the palette class sits on the root itself, so root and chip agree; that host's
+readings are **unchanged** by this commit, which is what allows the first-party
+cells to be carried forward byte-identical.

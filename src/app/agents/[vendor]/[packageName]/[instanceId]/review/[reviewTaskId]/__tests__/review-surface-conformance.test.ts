@@ -275,16 +275,42 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
   });
 
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
+  // all above the reviewed work for the built-in markdown / plain-text
+  // rendering. §V's three drawn provenance regions belong to the two renderer
+  // tiers a PACKAGE supplies and to the floor; the host's own text rendering
+  // takes none of them and is given no fourth one. The strip is therefore
+  // OPTIONAL in the panel — rendered only when there is a provenance to state.
+  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
+    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+    const panel = stripComments(TARGET_PANEL);
+    // The strip exists only behind a null check on the resolved region id.
+    expect(panel).toMatch(/provenanceConformanceId !== null/);
+  });
+
   it("a runtime provenance additionally shows its package identity (§III)", () => {
     expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
     expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
   });
 
-  it("the representation slot mounts through the host ReviewTargetMount with a generic-floor fallback", () => {
+  it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
     expect(TARGET_PANEL).toMatch(/ReviewTargetMount/);
-    expect(TARGET_PANEL).toMatch(/fallback=\{genericFloor\}/);
-    // The floor renders from host display-only props, never the raw bytes.
-    expect(TARGET_PANEL).toMatch(/ReviewGenericFloor/);
+    expect(TARGET_PANEL).toMatch(/orgId=\{orgId\}/);
+  });
+
+  // cinatra#2931 W4 — plan (B) §5: "The fallback face dies with its wrong
+  // diagnosis." The sentence, the table of technical fields and the Preview /
+  // Download links are gone from the card; what remains is the mount's own
+  // sanitized diagnostic for a genuine no-renderer state and for each defensive
+  // state, which keep their honest readings.
+  it("carries NO fallback face — no 'no renderer resolved' sentence, no field table, no Preview/Download", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/No type renderer resolved/);
+    expect(panel).not.toMatch(/ReviewGenericFloor/);
+    expect(panel).not.toMatch(/genericFloor/);
+    expect(panel).not.toMatch(/urls\.preview|urls\.download/);
+    expect(panel).not.toMatch(/>\s*Download\s*</);
+    expect(TARGET_PANEL).toMatch(/fallback=\{null\}/);
   });
 });
 

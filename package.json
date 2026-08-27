@@ -283,6 +283,8 @@
     "gate:exec-compose-scoping": "node scripts/audit/exec-compose-scoping-check.mjs",
     "gate:exec-compose-scoping:test": "node --test scripts/audit/__tests__/exec-compose-scoping-check.test.mjs",
     "gate:file-size": "node scripts/audit/file-size-ratchet.mjs",
+    "gate:artifact-review-floor": "node scripts/audit/artifact-review-floor-gate.mjs",
+    "gate:artifact-review-floor:test": "node --test scripts/audit/__tests__/artifact-review-floor-gate.test.mjs",
     "gate:chat-hitl-acceptance": "node scripts/audit/chat-hitl-acceptance-gate.mjs",
     "gate:chat-hitl-acceptance:strict": "node scripts/audit/chat-hitl-acceptance-gate.mjs --strict",
     "gate:chat-hitl-one-card": "node scripts/audit/chat-hitl-one-card-gate.mjs",

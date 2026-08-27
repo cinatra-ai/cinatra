@@ -7,10 +7,26 @@ import "server-only";
 // library, but PINNED to the exact revision the gate froze (never "latest").
 //
 // RENDERER RESOLVED FROM THE ARTIFACT TYPE (never caller-chosen): `resolveMount`
-// runs the SEMANTIC `detail` dispatch (`resolveSemanticDispatch`) off the row's
-// effective-identity winner + the generated build map, then classifies the
-// loadable path exactly like `ExtensionRendererMount`. It branches only on the
-// opaque dispatch outputs — G1-clean, no concrete type / renderer id keyed here.
+// runs the SAME resolution the artifact detail page runs — `resolveArtifactDispatchInputs`
+// fed to the pure `pickArtifactRenderer` leaf — and then classifies the loadable
+// path exactly like `ExtensionRendererMount`. It branches only on the opaque
+// dispatch outputs — G1-clean, no concrete type / renderer id keyed here.
+//
+// ONE RESOLUTION, CARD AND PAGE (plan `PLAN: Agents Lifecycle (B)` §5). This
+// binder used to re-implement the precedence: semantic winner, then an EXTENSION
+// representation provider, then the floor — the page's ladder minus its last
+// rung, the first-party renderer for declared text forms. That missing rung is
+// the whole defect the plan names: the same markdown draft that renders on its
+// own page showed "cannot render" under review. Calling the page's own
+// composition instead of a second copy of it means the two cannot drift again,
+// and the rung arrives with it rather than as a fourth branch here.
+//
+// AND ONE IDENTITY. The page resolves off the row's assertion-aware PRESENTATION
+// identity (epic #1883 A6); this path resolved off the EFFECTIVE identity, so a
+// row filed under an asserted type could resolve one renderer on its page and
+// another under review. The card now reads the presentation identity too — the
+// enabler the plan puts before any package conversion, because every adoption
+// would widen that divergence.
 //
 // The RUN + GATE ports (verifyRunAccess, readGatePinnedTargets) are supplied by
 // the CALLER (the review surface / the reviewer-generalization slice #1796 that
@@ -34,9 +50,9 @@ import {
   type RevisionMemberOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
 
+import { pickArtifactRenderer } from "./renderer-dispatch";
 import {
-  resolveSemanticDispatch,
-  resolveRepresentationDispatch,
+  resolveArtifactDispatchInputs,
   classifyLoadablePath,
 } from "./renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
@@ -83,21 +99,16 @@ export function bindArtifactReviewPorts(ctx: {
     mime: string;
     propsApiVersion: number;
   }): Promise<ResolvedRendererMount> => {
-    // Classify a resolved (packageName, generatedKey, `built`) tuple — from EITHER
-    // dispatch path below — into a host mount descriptor exactly like the detail
-    // route: the build-map SSR fast path, the runtime dynamic seam, or the
-    // never-blank floor (requires-rebuild when the resolved key is not loadable in
-    // THIS build). Keyed only on the opaque `generatedKey`; no concrete package
-    // identity is branched on here (coupling-ban G1).
+    // Classify a resolved (packageName, generatedKey) pair into a host mount
+    // descriptor exactly like the detail route: the build-map SSR fast path, the
+    // runtime dynamic seam, or the never-blank floor (requires-rebuild when the
+    // resolved key is not loadable in THIS build). Keyed only on the opaque
+    // `generatedKey`; no concrete package identity is branched on here
+    // (coupling-ban G1).
     const mountLoadable = async (
       packageName: string,
       generatedKey: string,
-      built: boolean,
     ): Promise<ResolvedRendererMount> => {
-      if (!built) {
-        // Runtime-installed but absent from THIS build.
-        return { kind: "floor", packageName, reason: "requires-rebuild" };
-      }
       const path = classifyLoadablePath(generatedKey);
       if (path === "build-map") {
         return { kind: "build-map", packageName, generatedKey };
@@ -115,50 +126,47 @@ export function bindArtifactReviewPorts(ctx: {
       return { kind: "floor", packageName, reason: "requires-rebuild" };
     };
 
-    // 1) SEMANTIC detail slot — the type's winner-bound semantic renderer takes
-    // precedence (mirrors `pickArtifactRenderer`: semantic wins over
-    // representation). Winner-binding (defensive): the resolved claimant must BE
-    // the row's effective-identity extension winner.
-    const semantic = resolveSemanticDispatch(input.artifact.objectType, input.artifact.effectiveIdentity);
-    const winnerBound =
-      semantic !== null &&
-      input.artifact.effectiveIdentity.kind === "extension" &&
-      input.artifact.effectiveIdentity.extension === semantic.packageName;
-    if (semantic && winnerBound) {
-      return mountLoadable(semantic.packageName, semantic.generatedKey, semantic.built);
-    }
-
-    // 2) REPRESENTATION fallback (the S6-L-A slice) — when no semantic renderer
-    // wins, consult the org-scoped representation-provider dispatch at the `detail`
-    // slot, exactly as the non-review detail route does
-    // (`resolveArtifactDispatchInputs`). An EXTENSION representation provider can
-    // therefore serve a review target — e.g. a CMS-snapshot MIME that has no
-    // semantic renderer now renders through its representation renderer instead of
-    // flooring to "review target unavailable". Keyed purely on `(orgId, mime)` +
-    // the opaque `generatedKey` — never on an extension package identity
-    // (coupling-ban G1). A first-party host handler is NOT a mountable review
-    // target (there is no such mount kind) and, like a no-provider MIME, falls
-    // through to the unchanged generic floor below.
     // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): the org-scoped providers of
     // build-bundled NON-SYSTEM (`guardedOptional`) renderer packs are bound/retired
     // from the canonical install rows before the SYNC resolve below. Without this
     // the CMS-snapshot pack — bundled and dev-enrolled, but deliberately NOT a
     // system base (cinatra#1630: no auto-bind for every org, no teardown exemption)
-    // — has no production binding path at all and this fallback resolves null.
+    // — has no production binding path at all and its representation never resolves.
+    // The detail route does exactly this before its own dispatch.
     await ensureActivatedRepresentationProviders(orgId);
-    const representation = resolveRepresentationDispatch(orgId, input.mime, "detail");
-    if (representation && representation.tier === "extension") {
-      return mountLoadable(
-        representation.packageName,
-        representation.generatedKey,
-        representation.built,
-      );
-    }
 
-    // 3) FLOOR (unchanged) — no semantic winner and no extension representation
-    // provider. `packageName` still reports the semantic claimant when one exists
-    // (a losing non-winner claimant), else null.
-    return { kind: "floor", packageName: semantic?.packageName ?? null, reason: "no-semantic-renderer" };
+    // THE PAGE'S OWN LADDER, called rather than copied: semantic winner →
+    // representation provider → the first-party form arm → the fallback.
+    const dispatch = pickArtifactRenderer(
+      resolveArtifactDispatchInputs({
+        orgId,
+        baseType: input.artifact.objectType,
+        identity: input.artifact.presentationIdentity,
+        mime: input.mime,
+      }),
+    );
+
+    switch (dispatch.kind) {
+      case "semantic":
+      case "representation":
+        return mountLoadable(dispatch.packageName, dispatch.generatedKey);
+      case "requires-rebuild":
+        return { kind: "floor", packageName: dispatch.packageName, reason: "requires-rebuild" };
+      case "mime":
+        // THE FORM RUNG. `pickHandler` still owns exactly two declared text
+        // forms after the G2 cutover (markdown, escaped plain text); any other
+        // handler kind is unreachable from it and floors rather than inventing a
+        // mount the review surface cannot render.
+        if (dispatch.handler === "markdown" || dispatch.handler === "text") {
+          return { kind: "form", arm: "first-party", form: dispatch.handler };
+        }
+        return { kind: "floor", packageName: null, reason: "no-semantic-renderer" };
+      case "fallback":
+        // Genuinely nothing renders this type: no package renderer, no declared
+        // text form. This is the ONLY state the card's "cannot render" reading is
+        // for, and the floor gate counts exactly it.
+        return { kind: "floor", packageName: null, reason: "no-semantic-renderer" };
+    }
   };
 
   const buildProps = (input: {
@@ -184,10 +192,13 @@ export function bindArtifactReviewPorts(ctx: {
 }
 
 /**
- * Prepare a caller's review targets against a run's pending gate. Composes the
- * pure core with the real artifact-side ports + the caller-supplied run/gate
- * ports. Returns the per-target props + host mount descriptors (never-blank
- * floor on every artifact-level failure class; a substituted target fails).
+ * Prepare a caller's review targets against a run's gate — a PENDING gate, or a
+ * RESOLVED one's frozen set when the caller asked for the read-only history
+ * reading (`input.acceptResolvedGate`, default closed; the core owns that rule).
+ * Composes the pure core with the real artifact-side ports + the caller-supplied
+ * run/gate ports. Returns the per-target props + host mount descriptors
+ * (never-blank floor on every artifact-level failure class; a substituted target
+ * fails).
  */
 export async function prepareArtifactReviewTargets(args: {
   input: PrepareReviewInput;
