@@ -1,4 +1,9 @@
 import { CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
+import {
+  PLATFORM_SUPPLIED_RUN_ID_KEY,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs data module (allowJs)
+} from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
 
 // ---------------------------------------------------------------------------
 // WayFlow A2A initial-message payload builder (#1193).
@@ -45,7 +50,11 @@ export function buildWayflowInitialMessagePayload(
 ): Record<string, unknown> {
   return {
     ...(input.inputParams ?? {}),
-    cinatra_run_id: input.runId,
+    // Keyed off the SHARED platform-supplied constant rather than a local
+    // literal, so the pre-dispatch check (OAS-RUNTIME-014) and this writer
+    // can never disagree about which inputs the platform supplies
+    // unprompted (cinatra#3003).
+    [PLATFORM_SUPPLIED_RUN_ID_KEY]: input.runId,
     [CINATRA_RUN_TOKEN_MESSAGE_KEY]: input.runToken,
   };
 }

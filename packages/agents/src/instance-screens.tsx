@@ -120,6 +120,27 @@ import { readProposalConsumeByRunId } from "./trigger-schedule-proposal-store";
 //
 // Exported so the unit test can lock the rule independently of DB / auth.
 // ---------------------------------------------------------------------------
+/**
+ * IS A PERSON PRESENT FOR THIS RUN, as the schedule moment asks it
+ * (cinatra#2936)?
+ *
+ * One of the two inputs the runner's schedule default takes, read off the run
+ * row. `humanPresent` is `boolean | null`: it records whether the run was
+ * STARTED by a person (cinatra#2067) and every producer that does not stamp it
+ * leaves it unset, so `null` records NOTHING rather than recording absence. A
+ * run only reaches the scheduling step by coming back from someone answering its
+ * setup gate, so an unrecorded stamp reads as the person standing at the screen;
+ * a row that records `false` is taken at its word and the step draws no
+ * selection for it.
+ *
+ * Exported so the unit test can lock the rule independently of DB / auth.
+ */
+export function schedulePresenceForRun(
+  run: { humanPresent?: boolean | null } | null | undefined,
+): boolean {
+  return run?.humanPresent !== false;
+}
+
 export function shouldShowPersistentTab(
   trigger: { triggerType: string } | null,
 ): boolean {
@@ -1304,6 +1325,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     properties={properties}
                     setupComplete={setupComplete}
                     durationEstimate={triggerStepDurationEstimate}
+                    // WHAT THE ROW STATES, FOR THE RUNNER'S SCHEDULE DEFAULT
+                    // (cinatra#2936). The step opens on the row that decision
+                    // names, and presence is one of its two inputs. The reading
+                    // itself is `schedulePresenceForRun` above.
+                    humanPresent={schedulePresenceForRun(run)}
                   />
                 </AgentPanelBody>
               ) : null}
