@@ -787,6 +787,10 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         this form from a sentence, which is a control like any other. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
+      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+      // `app-artifact-review.html` §X): the mount names its surface and the
+      // window reads the drawing's own sentence for it.
+      surface="schedule"
       // cinatra#2933 — the schedule screen used to HIDE its box from anyone who
       // was not a platform administrator; the run's own access decides now.
       // The read-only reading (cinatra#2980) still carries no box at all: the

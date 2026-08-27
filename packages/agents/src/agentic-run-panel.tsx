@@ -1479,6 +1479,10 @@ export function AgenticRunPanel({
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
+      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+      // `app-artifact-review.html` §X): the mount names its surface and the
+      // window reads the drawing's own sentence for it.
+      surface="run-page"
       // cinatra#2566 (epic #2564 S2): a MARKED review gate is excluded. The
       // field-assist panel exists to help a human fill a gate's FIELDS; a review
       // gate has none — it has a target to read and one decision to take, and the

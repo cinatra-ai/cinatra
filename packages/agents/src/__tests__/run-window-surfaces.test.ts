@@ -110,14 +110,15 @@ describe("each of the five windows outside the chat is a per-run conversation", 
       expect(src).not.toMatch(/const \[conversation, /);
     });
 
-    it(`${w.name} states no placeholder of its own`, () => {
+    it(`${w.name} states no sentence of its own — it names its surface and the window reads §X`, () => {
       const src = read(w.file);
-      // The ratified drawing (design fe2182547d4a, app-artifact-review.html §IX)
-      // fixes ONE placeholder for this window and says "nothing about it moves".
-      // A per-surface WORDING has no drawing, so no window invents one: the
-      // mechanism is shipped, the copy is the drawing's.
+      // §X of `app-artifact-review.html` (design 458fb7ffce6c) fixes a DIFFERENT
+      // sentence for each of the five readings, and the map that holds all five
+      // is the shared panel's. A mount declares WHICH READING it is and nothing
+      // more, so no window can drift from the drawing on its own.
       expect(src).not.toContain('placeholder="');
       expect(src).not.toContain("placeholder={");
+      expect(src).toContain(`surface="${w.surface}"`);
     });
   }
 
@@ -231,14 +232,47 @@ describe("a window that is a second view of a run a thread already shows hands o
   });
 });
 
-describe("the window's copy is the ratified drawing's", () => {
-  it("lives in ONE place, as the default of the shared panel's prop", () => {
+describe("§X — one window, five readings: the sentence in the empty field", () => {
+  // The drawing at design `458fb7ffce6c`, `app-artifact-review.html` §X: "One
+  // thing is read per surface — the sentence in the empty field, which names
+  // what the window does where it stands. Nothing else about the window changes
+  // from one reading to the next." These are those five sentences, character
+  // for character, ellipsis included.
+  const READINGS: Array<[string, string]> = [
+    ["run-page", "Ask Cinatra to fill the fields above, or ask about this step…"],
+    ["step-by-step", "Ask Cinatra to fill this step's fields, or ask about the run…"],
+    ["schedule", "Ask Cinatra to set the schedule above, or ask about it…"],
+    ["armed-trigger", "Ask Cinatra to change this schedule, or ask about it…"],
+    ["review", "Ask Cinatra about this review, or ask for changes to the work…"],
+  ];
+
+  it("lives in ONE place — the shared panel's per-surface map, not five mounts", () => {
     const panel = read("packages/agents/src/hitl-conversation-panel.tsx");
     expect(panel).toContain(
-      'export const RUN_WINDOW_PLACEHOLDER =\n  "Ask Cinatra to suggest edits to the fields above…";',
+      "export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {",
     );
-    expect(panel).toContain("placeholder = RUN_WINDOW_PLACEHOLDER");
+    // The one difference between the readings is resolved inside the window,
+    // from the surface it is mounted on.
+    expect(panel).toContain("const placeholder = RUN_WINDOW_PLACEHOLDERS[surface];");
     expect(panel).toContain("placeholder={placeholder}");
+    // The string every mount used to show is gone from the product.
+    expect(panel).not.toContain("Ask Cinatra to suggest edits to the fields above");
+  });
+
+  for (const [surface, sentence] of READINGS) {
+    it(`the "${surface}" reading is §X's own sentence: "${sentence}"`, () => {
+      const panel = read("packages/agents/src/hitl-conversation-panel.tsx");
+      expect(panel).toContain(`"${sentence}"`);
+    });
+  }
+
+  it("has exactly one sentence per surface, and no sixth", () => {
+    const panel = read("packages/agents/src/hitl-conversation-panel.tsx");
+    const map = panel.slice(
+      panel.indexOf("RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {"),
+      panel.indexOf("export type HitlConversationEntry"),
+    );
+    expect(map.match(/"Ask Cinatra [^"]+"/g) ?? []).toHaveLength(READINGS.length);
   });
 });
 

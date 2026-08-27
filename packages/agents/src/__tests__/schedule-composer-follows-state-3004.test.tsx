@@ -4,9 +4,9 @@
 //
 // What the proofs showed: on a one-off that had already fired, the surface drew
 // the schedule read-only and then, underneath it, a live composer still asking
-// "Ask Cinatra to suggest edits to the fields above…". The fields above could
-// not be edited by anybody, so the invitation was one the surface could not
-// keep.
+// "Ask Cinatra to change this schedule, or ask about it…" (§X's reading for
+// this surface). The schedule above could not be changed by anybody, so the
+// invitation was one the surface could not keep.
 //
 // THE RULE, IN THE PLAN'S OWN TERMS. The window belongs "below the scheduler",
 // and a scheduler that is over has nothing left to suggest edits to. So the

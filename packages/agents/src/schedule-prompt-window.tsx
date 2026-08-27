@@ -77,9 +77,9 @@ export function SchedulePromptWindow({
   /**
    * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004)
    *
-   * The window's own invitation is "Ask Cinatra to suggest edits to the fields
-   * above", and a schedule that is over has no fields anybody can edit — so the
-   * invitation would be one the surface cannot keep. The composer follows the
+   * The window's own invitation on this surface is "Ask Cinatra to change this
+   * schedule, or ask about it…" (§X), and a schedule that is over can be
+   * changed by nobody — so the invitation would be one the surface cannot keep. The composer follows the
    * form: present and live while the schedule can still be changed, gone once
    * the run is over.
    *
@@ -214,6 +214,10 @@ export function SchedulePromptWindow({
     >
       <HitlConversationPanel
         portalTarget={mount}
+        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+        // `app-artifact-review.html` §X): the mount names its surface and the
+        // window reads the drawing's own sentence for it.
+        surface="armed-trigger"
         // Two independent reasons for there to be no box, and both still hold:
         // the schedule is over so there is nothing to edit (cinatra#3004), or
         // the run would refuse this person's message (cinatra#2933).

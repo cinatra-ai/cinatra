@@ -33,11 +33,13 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 /**
- * The window's own words, from the ratified drawing (design `fe2182547d4a`,
- * `app-artifact-review.html` §IX). Asserting the COPY rather than a test id:
- * a box drawn with different words is a different box.
+ * IS A BOX DRAWN AT ALL. Every reading of the window opens its sentence the
+ * same way (§X: "These are five readings of one window, never five windows"),
+ * so this matches the window WHICHEVER reading it is — the right instrument for
+ * "drawn / not drawn", and the wrong one for "which sentence", which the §X
+ * block below asserts against each surface's own words.
  */
-const RUN_WINDOW_PLACEHOLDER = /Ask Cinatra to suggest edits to the fields above/i;
+const ANY_WINDOW_SENTENCE = /^Ask Cinatra /;
 
 // ---------------------------------------------------------------------------
 // Mocks — everything the four surfaces reach that jsdom cannot resolve. NONE
@@ -226,6 +228,14 @@ async function settle() {
 type Surface = {
   name: string;
   surface: string;
+  /**
+   * §X's sentence for THIS reading, character for character from the ratified
+   * drawing (design `458fb7ffce6c`, `app-artifact-review.html` §X, "One window,
+   * five readings"), ellipsis included. It is written out here rather than
+   * imported from the panel so the test states the drawing rather than
+   * restating the product.
+   */
+  sentence: string;
   mount: (canRespond: boolean | undefined) => Promise<React.ReactElement>;
 };
 
@@ -233,6 +243,7 @@ const SURFACES: Surface[] = [
   {
     name: "the run page",
     surface: "run-page",
+    sentence: "Ask Cinatra to fill the fields above, or ask about this step…",
     mount: async (canRespond) => {
       const { AgenticRunPanel } = await import("../agentic-run-panel");
       return (
@@ -251,6 +262,7 @@ const SURFACES: Surface[] = [
   {
     name: "the step-by-step screen",
     surface: "step-by-step",
+    sentence: "Ask Cinatra to fill this step's fields, or ask about the run…",
     mount: async (canRespond) => {
       const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
       return (
@@ -281,6 +293,7 @@ const SURFACES: Surface[] = [
   {
     name: "the schedule screen",
     surface: "schedule",
+    sentence: "Ask Cinatra to set the schedule above, or ask about it…",
     mount: async (canRespond) => {
       const { TriggerScreenClient } = await import("../trigger-screen-client");
       return (
@@ -301,6 +314,7 @@ const SURFACES: Surface[] = [
     // hosts now mount, so this render is the window both of them draw.
     name: "the armed schedule's window",
     surface: "armed-trigger",
+    sentence: "Ask Cinatra to change this schedule, or ask about it…",
     mount: async (canRespond) => {
       const { SchedulePromptWindow } = await import("../schedule-prompt-window");
       return (
@@ -405,7 +419,7 @@ describe("the armed schedule's window is withdrawn once the schedule is over", (
       />,
     );
     await settle();
-    expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).toBeNull();
+    expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
   });
 });
 
@@ -414,7 +428,7 @@ describe("AC1 — each window outside the chat is DRAWN, with the ratified place
     it(`${s.name} ("${s.surface}") draws the window`, async () => {
       render(await s.mount(true));
       await settle();
-      expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).not.toBeNull();
+      expect(screen.queryByText(ANY_WINDOW_SENTENCE)).not.toBeNull();
     });
   }
 });
@@ -424,7 +438,43 @@ describe("AC3 — a person the run would refuse is shown no box", () => {
     it(`${s.name} ("${s.surface}") draws NO window without respond access`, async () => {
       render(await s.mount(false));
       await settle();
-      expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).toBeNull();
+      expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// §X — ONE WINDOW, FIVE READINGS (design `458fb7ffce6c`,
+// `app-artifact-review.html`, "X. One window, five readings").
+//
+// "One thing is read per surface — the sentence in the empty field, which names
+// what the window does where it stands. Nothing else about the window changes
+// from one reading to the next."
+//
+// The fifth reading, the review page, is asserted the same way by
+// `review-prompt-window.render.test.tsx` under the root suite.
+// ---------------------------------------------------------------------------
+describe("§X — the sentence in the empty field names what the window does where it stands", () => {
+  for (const s of SURFACES) {
+    it(`${s.name} ("${s.surface}") reads: "${s.sentence}"`, async () => {
+      render(await s.mount(true));
+      await settle();
+      // The drawing's own string, character for character — an ellipsis
+      // spelled with three dots is a different sentence and fails here.
+      expect(screen.queryByText(s.sentence)).not.toBeNull();
+    });
+
+    it(`${s.name} ("${s.surface}") no longer reads any other reading's sentence`, async () => {
+      render(await s.mount(true));
+      await settle();
+      for (const other of SURFACES) {
+        if (other.surface === s.surface) continue;
+        expect(screen.queryByText(other.sentence)).toBeNull();
+      }
+      // …nor the one string all five used to show.
+      expect(
+        screen.queryByText(/Ask Cinatra to suggest edits to the fields above/),
+      ).toBeNull();
     });
   }
 });
@@ -438,7 +488,7 @@ describe("the refusal is the run's answer, not an accident of the mount", () => 
     it(`${s.name} answers differently with and without access`, async () => {
       const withAccess = render(await s.mount(true));
       await settle();
-      const drawn = screen.queryByText(RUN_WINDOW_PLACEHOLDER) !== null;
+      const drawn = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
       withAccess.unmount();
       cleanup();
       document.body.innerHTML = "";
@@ -446,7 +496,7 @@ describe("the refusal is the run's answer, not an accident of the mount", () => 
 
       render(await s.mount(false));
       await settle();
-      const refused = screen.queryByText(RUN_WINDOW_PLACEHOLDER) !== null;
+      const refused = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
 
       expect(drawn).toBe(true);
       expect(refused).toBe(false);

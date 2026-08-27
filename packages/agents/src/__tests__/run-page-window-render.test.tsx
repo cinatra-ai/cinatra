@@ -32,10 +32,15 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-// The one string the ratified drawing fixes for this window. Asserting the
-// COPY, not a test id: a box that draws with different words is not this
-// window.
-const RUN_WINDOW_PLACEHOLDER = /Ask Cinatra to suggest edits to the fields above/i;
+// §X's OWN SENTENCE FOR THIS READING (design `458fb7ffce6c`,
+// `app-artifact-review.html`, "X. One window, five readings" — "The run page —
+// a step waiting for its fields"). Character for character, ellipsis included:
+// asserting the COPY, not a test id, because a box that draws with different
+// words is not this window.
+const RUN_PAGE_SENTENCE =
+  "Ask Cinatra to fill the fields above, or ask about this step…";
+/** Is a box drawn at all, whichever reading it is. */
+const ANY_WINDOW_SENTENCE = /^Ask Cinatra /;
 
 const routerPush = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -194,8 +199,22 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
     render(<SetupCompletionWatcher {...runPageProps()} />);
 
-    const prompt = await screen.findByText(RUN_WINDOW_PLACEHOLDER);
+    const prompt = await screen.findByText(ANY_WINDOW_SENTENCE);
     expect(prompt).not.toBeNull();
+  });
+
+  it('§X — the run page\'s reading is "Ask Cinatra to fill the fields above, or ask about this step…"', async () => {
+    // The run page's PRODUCTION mount, not a fixture: §X fixes this surface's
+    // sentence as "The run page — a step waiting for its fields", and this is
+    // the screen that reading is about.
+    const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
+    render(<SetupCompletionWatcher {...runPageProps()} />);
+
+    expect(await screen.findByText(RUN_PAGE_SENTENCE)).not.toBeNull();
+    // The one string all five mounts used to show is gone from this screen.
+    expect(
+      screen.queryByText(/Ask Cinatra to suggest edits to the fields above/),
+    ).toBeNull();
   });
 
   it("shows NO window to a person the run would refuse (AC3)", async () => {
@@ -208,7 +227,7 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
     // must still be absent, because the access gate short-circuits `visible`.
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 50));
-    expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).toBeNull();
+    expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
   });
 
   it("carries the run's own access answer down to the panel, not a default", async () => {
@@ -220,7 +239,7 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
     const { unmount } = render(
       <SetupCompletionWatcher {...runPageProps({ canRespondInWindow: true })} />,
     );
-    expect(await screen.findByText(RUN_WINDOW_PLACEHOLDER)).not.toBeNull();
+    expect(await screen.findByText(ANY_WINDOW_SENTENCE)).not.toBeNull();
     unmount();
   });
 });

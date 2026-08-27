@@ -20,7 +20,8 @@ export type SubmitReviewDecisionAction = (input: {
  * The REAL conversational prompt window on the review surface (owner ruling
  * 2026-07-25 (1), cinatra#2063): the changes-request channel is the same live
  * PromptField conversation the pre-migration review HITL used
- * ("Ask Cinatra to suggest edits to the fields above…"), NOT the decision-bar
+ * (§X's reading for this surface: "Ask Cinatra about this review, or ask for
+ * changes to the work…"), NOT the decision-bar
  * rationale box. It mounts the shared `HitlConversationPanel` (sticky, portalled
  * into <main>) and routes a typed request through the EXISTING Comment path
  * (`submitReviewDecisionAction` with disposition "comment") — which, on a fenced
@@ -118,6 +119,10 @@ export function ReviewPromptWindow({
     <div data-conformance-id="review-prompt-window" data-action="request-changes -> changes-requested">
       <HitlConversationPanel
         portalTarget={portalTarget}
+        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+        // `app-artifact-review.html` §X): the mount names its surface and the
+        // window reads the drawing's own sentence for it.
+        surface="review"
         visible={canComment && !!portalTarget}
         conversation={[...runWindow.entries, ...outcomeLines]}
         promptPending={promptPending || runWindow.pending}

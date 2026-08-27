@@ -1009,6 +1009,10 @@ function HitlApprovalCard({
         had a renderer-change reset (no equivalent of agentic-run-panel.tsx:329). */}
     <HitlConversationPanel
       portalTarget={portalTarget}
+      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+      // `app-artifact-review.html` §X): the mount names its surface and the
+      // window reads the drawing's own sentence for it.
+      surface="step-by-step"
       visible={
         !isGenericObjectSchema &&
         // cinatra#2933 — the run's access decides who sees the box.

@@ -20,8 +20,15 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-/** The window's own words, from the ratified drawing (design `fe2182547d4a`). */
-const RUN_WINDOW_PLACEHOLDER = /Ask Cinatra to suggest edits to the fields above/i;
+/**
+ * §X's OWN SENTENCE FOR THIS READING (design `458fb7ffce6c`,
+ * `app-artifact-review.html`, "X. One window, five readings" — "The review page
+ * — under the decision bar"). Character for character, ellipsis included.
+ */
+const REVIEW_SENTENCE =
+  "Ask Cinatra about this review, or ask for changes to the work…";
+/** Is a box drawn at all, whichever reading it is. */
+const ANY_WINDOW_SENTENCE = /^Ask Cinatra /;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -77,13 +84,30 @@ describe('the review page ("review") is the fifth window (cinatra#2933)', () => 
   it("AC1 — draws the window, with the ratified placeholder", async () => {
     await mount(true);
     await settle();
-    expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).not.toBeNull();
+    expect(screen.queryByText(ANY_WINDOW_SENTENCE)).not.toBeNull();
+  });
+
+  it('§X — the review page\'s reading is "Ask Cinatra about this review, or ask for changes to the work…"', async () => {
+    // §X: "On the review page, the sentence names the review." There is no form
+    // here, so the sentence names the review and the change request rather than
+    // filling fields — which is what this window actually does (§VI).
+    await mount(true);
+    await settle();
+    expect(screen.queryByText(REVIEW_SENTENCE)).not.toBeNull();
+    // Not any other reading's sentence, and not the one string all five mounts
+    // used to show.
+    expect(
+      screen.queryByText("Ask Cinatra to fill the fields above, or ask about this step…"),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/Ask Cinatra to suggest edits to the fields above/),
+    ).toBeNull();
   });
 
   it("AC3 — draws NO window for a reader the gate would refuse", async () => {
     await mount(false);
     await settle();
-    expect(screen.queryByText(RUN_WINDOW_PLACEHOLDER)).toBeNull();
+    expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
   });
 
   it("the refusal is the gate's answer, not an accident of the mount", async () => {
@@ -92,7 +116,7 @@ describe('the review page ("review") is the fifth window (cinatra#2933)', () => 
     // two outcomes must differ.
     const withAccess = await mount(true);
     await settle();
-    const drawn = screen.queryByText(RUN_WINDOW_PLACEHOLDER) !== null;
+    const drawn = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
     withAccess.unmount();
     cleanup();
     document.body.innerHTML = "";
@@ -100,7 +124,7 @@ describe('the review page ("review") is the fifth window (cinatra#2933)', () => 
 
     await mount(false);
     await settle();
-    const refused = screen.queryByText(RUN_WINDOW_PLACEHOLDER) !== null;
+    const refused = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
 
     expect(drawn).toBe(true);
     expect(refused).toBe(false);
