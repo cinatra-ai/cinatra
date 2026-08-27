@@ -39,6 +39,18 @@ import {
   packageDiscoverySet,
   readPackageSuiteExceptions,
   auditPackageSuiteRunners,
+  rootTierConfigs,
+  rootPackageScripts,
+  vitestConfigTokens,
+  argvNamesConfig,
+  scriptRunsTierWholesale,
+  scriptChainSegments,
+  scriptsReachingTier,
+  rootTierIsEnforced,
+  readRootTierExceptions,
+  auditRootIntegrationTiers,
+  ROOT_TIER_EXCEPTIONS_FILE,
+  ROOT_TIER_CONFIG_RE,
   isNonUnitTierFile,
   hasUnquotedExpansion,
   hasTopLevelRedirect,
@@ -2135,5 +2147,321 @@ describe("direction 3 — round-8 fail-open closures", () => {
     expect(rootSuiteIsEnforced()).toBe(true);
     expect(findUngatedAuditTests(REPO_ROOT)).toEqual([]);
     expect(findMissingPinnedTests()).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// DIRECTION 4 — root integration tiers (cinatra#2936).
+//
+// The failure this direction exists to prevent is a FALSE POSITIVE: crediting a
+// tier as run when nothing runs it. So most cases below assert a REFUSAL, and
+// the adversarial bar is the one directions 2 and 3 set — every way a workflow
+// line or a package script can LOOK like a tier runner without being one.
+// ---------------------------------------------------------------------------
+
+/** A fixture repository root: root package.json scripts, tier configs, workflows. */
+function tierFixture({ workflow = "", scripts = {}, configs = [], exceptions, trigger = "on: [pull_request, push]\n" } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ci-tier-"));
+  mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  const withRunner = workflow.includes("runs-on:")
+    ? workflow
+    : workflow.replace(/\n(\s*)steps:/g, "\n$1runs-on: ubuntu-latest\n$1steps:");
+  writeFileSync(join(root, ".github", "workflows", "build-image.yml"), trigger + withRunner);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", scripts }));
+  for (const c of configs) writeFileSync(join(root, c), "export default {};\n");
+  if (exceptions !== undefined) {
+    mkdirSync(join(root, "scripts", "audit"), { recursive: true });
+    writeFileSync(join(root, ROOT_TIER_EXCEPTIONS_FILE), JSON.stringify({ exceptions }));
+  }
+  return { root, workflowDir: join(root, ".github", "workflows") };
+}
+
+/** One tier, one script, one workflow body — the shape most cases only vary in. */
+function enforced(workflowBody, { script = "test:x", body = "vitest run --config vitest.integration-1.config.ts" } = {}) {
+  const fx = tierFixture({
+    workflow: workflowBody,
+    scripts: { [script]: body },
+    configs: ["vitest.integration-1.config.ts"],
+  });
+  return rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir });
+}
+
+const STEP = (run) => `jobs:\n  j:\n    steps:\n      - run: ${run}\n`;
+
+describe("direction 4 — the tier config vocabulary", () => {
+  it("recognises the root tier naming convention and nothing else", () => {
+    for (const ok of ["vitest.integration-2882.config.ts", "vitest.integration-2936.config.ts", "vitest.integration-a.b-c.config.ts"]) {
+      expect(ROOT_TIER_CONFIG_RE.test(ok), ok).toBe(true);
+    }
+    for (const no of ["vitest.config.ts", "vitest.integration.config.ts", "packages/x/vitest.integration-1.config.ts", "vitest.integration-1.config.mts"]) {
+      expect(ROOT_TIER_CONFIG_RE.test(no), no).toBe(false);
+    }
+  });
+
+  it("names a config only when the ARGV carries it", () => {
+    expect(argvNamesConfig(["--config", "a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["--config=a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["-c", "a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(['--config', '"a.ts"'], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["--config", "b.ts"], "a.ts")).toBe(false);
+    expect(argvNamesConfig([], "a.ts")).toBe(false);
+    expect(argvNamesConfig(["a.ts"], "a.ts")).toBe(false);
+    expect(argvNamesConfig(["--project", "a.ts"], "a.ts")).toBe(false);
+  });
+
+  it("reads --config in every spelling, and reads nothing else", () => {
+    expect(vitestConfigTokens("vitest run --config a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run --config=a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run -c a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run -c=a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens('vitest run --config "a.ts"')).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run --project a.ts")).toEqual([]);
+    expect(vitestConfigTokens("vitest run a.ts")).toEqual([]);
+  });
+
+  it("lists the tier configs that exist on disk", () => {
+    const fx = tierFixture({ configs: ["vitest.integration-1.config.ts", "vitest.integration-2.config.ts"] });
+    writeFileSync(join(fx.root, "vitest.config.ts"), "export default {};\n");
+    expect(rootTierConfigs(fx.root)).toEqual(["vitest.integration-1.config.ts", "vitest.integration-2.config.ts"]);
+    expect(rootPackageScripts(fx.root)).toEqual({});
+  });
+});
+
+describe("direction 4 — a package script body that can carry a failure", () => {
+  it("accepts an unconditional && chain", () => {
+    expect(scriptChainSegments("a && b && c")).toEqual(["a", "b", "c"]);
+    expect(scriptChainSegments("vitest run")).toEqual(["vitest run"]);
+  });
+
+  it("refuses every separator and construct that masks a status", () => {
+    for (const cmd of [
+      "vitest run; echo done",
+      "vitest run || true",
+      "vitest run | tee out",
+      "vitest run & wait",
+      "(vitest run)",
+      "vitest run > out",
+      "cd packages/x && vitest run",
+      "exit 0 && vitest run",
+      "set +e && vitest run",
+      "vitest run $EXTRA",
+    ]) {
+      expect(scriptChainSegments(cmd), cmd).toBeNull();
+    }
+    expect(scriptChainSegments(42)).toBeNull();
+  });
+});
+
+describe("direction 4 — which scripts reach a tier", () => {
+  const CONFIG = "vitest.integration-1.config.ts";
+  const reach = (scripts) => {
+    const fx = tierFixture({ scripts, configs: [CONFIG] });
+    return [...scriptsReachingTier(fx.root, CONFIG)].sort();
+  };
+
+  it("credits the script whose body is a wholesale run of that config", () => {
+    expect(reach({ "test:x": `vitest run --config ${CONFIG} --no-coverage` })).toEqual(["test:x"]);
+  });
+
+  it("credits an AGGREGATE script that invokes it, transitively", () => {
+    expect(
+      reach({ "test:x": `vitest run --config ${CONFIG}`, "test:all": "pnpm test:x", "test:everything": "pnpm test:all" }),
+    ).toEqual(["test:all", "test:everything", "test:x"]);
+  });
+
+  it("refuses a script narrowed by a positional, pointed elsewhere, or neutralised", () => {
+    expect(reach({ "test:x": `vitest run --config ${CONFIG} src/a.test.ts` })).toEqual([]);
+    expect(reach({ "test:x": "vitest run --config vitest.config.ts" })).toEqual([]);
+    expect(reach({ "test:x": "true" })).toEqual([]);
+    expect(reach({ "test:x": `vitest run --config ${CONFIG}; echo done` })).toEqual([]);
+  });
+
+  it("refuses a DECOY: the tier config beside an invocation that never receives it", () => {
+    // The config token is in the script, and the script really does run vitest
+    // wholesale — but on the DEFAULT config, which for a repository-root run is
+    // the root unit tier and not this tier at all.
+    expect(reach({ "test:x": `echo --config ${CONFIG} && vitest run` })).toEqual([]);
+    expect(reach({ "test:x": `X=--config vitest run` })).toEqual([]);
+    expect(reach({ "test:x": "vitest run" })).toEqual([]);
+  });
+
+  it("refuses an aggregate whose chain cannot carry the tier's failure", () => {
+    const scripts = { "test:x": `vitest run --config ${CONFIG}`, "test:all": "pnpm test:x || true" };
+    expect(reach(scripts)).toEqual(["test:x"]);
+  });
+});
+
+describe("direction 4 — what a workflow has to say to be credited", () => {
+  it("credits a bare `pnpm <script>` step at the repository root", () => {
+    expect(enforced(STEP("pnpm test:x"))).toBe(true);
+    expect(enforced(STEP("pnpm run test:x"))).toBe(true);
+    expect(enforced(STEP("nice -n 10 pnpm test:x"))).toBe(true);
+  });
+
+  it("credits a direct wholesale `vitest run --config <tier>`", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest.integration-1.config.ts --no-coverage"))).toBe(true);
+  });
+
+  it("refuses a direct run that names a DIFFERENT config, or names none", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest.config.ts"))).toBe(false);
+    expect(enforced(STEP("pnpm exec vitest run"))).toBe(false);
+  });
+
+  it("refuses a direct DECOY: the config named beside the run, not passed to it", () => {
+    expect(enforced(STEP("X=--config=vitest.integration-1.config.ts pnpm exec vitest run"))).toBe(false);
+  });
+
+  it("refuses a narrowed direct run", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest.integration-1.config.ts src/a.test.ts"))).toBe(false);
+  });
+
+  it("refuses a forwarded argument on the script call — a flag it cannot tell from a filter", () => {
+    expect(enforced(STEP("pnpm test:x --maxWorkers=2"))).toBe(false);
+    expect(enforced(STEP("pnpm test:x -- src/a.test.ts"))).toBe(false);
+  });
+
+  it("refuses a step that cannot turn the check red", () => {
+    expect(enforced("jobs:\n  j:\n    steps:\n      - run: pnpm test:x\n        continue-on-error: true\n")).toBe(false);
+    expect(enforced("jobs:\n  j:\n    if: false\n    steps:\n      - run: pnpm test:x\n")).toBe(false);
+    expect(enforced(STEP("pnpm test:x || true"))).toBe(false);
+    expect(enforced(STEP("pnpm test:x | tee out"))).toBe(false);
+  });
+
+  it("refuses a workflow that never fires on a change", () => {
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:x"),
+      trigger: "on: workflow_dispatch\n",
+      scripts: { "test:x": "vitest run --config vitest.integration-1.config.ts" },
+      configs: ["vitest.integration-1.config.ts"],
+    });
+    expect(rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
+  });
+
+  it("refuses a run that happens somewhere other than the repository root", () => {
+    expect(enforced("jobs:\n  j:\n    steps:\n      - run: pnpm test:x\n        working-directory: packages/x\n")).toBe(false);
+    expect(enforced(STEP("cd packages/x && pnpm test:x"))).toBe(false);
+  });
+
+  it("credits the tier through an aggregate script named in the workflow", () => {
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:all"),
+      scripts: { "test:x": "vitest run --config vitest.integration-1.config.ts", "test:all": "pnpm test:x" },
+      configs: ["vitest.integration-1.config.ts"],
+    });
+    expect(rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(true);
+  });
+});
+
+describe("direction 4 — the ledger", () => {
+  const ok = {
+    config: "vitest.integration-1.config.ts",
+    slice: "https://github.com/cinatra-ai/cinatra/issues/1",
+    reason: "no workflow runs this tier and wiring it belongs to its own slice",
+  };
+  const ledger = (entries) => JSON.stringify({ exceptions: entries });
+
+  it("accepts a well-formed ledger", () => {
+    expect(readRootTierExceptions(".", ledger([ok]))).toEqual([ok]);
+    expect(readRootTierExceptions(".", ledger([]))).toEqual([]);
+  });
+
+  it("throws on a malformed ledger rather than degrading in either direction", () => {
+    expect(() => readRootTierExceptions(".", "{oops")).toThrow(/not valid JSON/);
+    expect(() => readRootTierExceptions(".", "{}")).toThrow(/exceptions/);
+    expect(() => readRootTierExceptions(".", ledger(["x"]))).toThrow(/expected an object/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, config: "vitest.config.ts" }]))).toThrow(/config/);
+    expect(() => readRootTierExceptions(".", ledger([ok, ok]))).toThrow(/duplicate/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, slice: "cinatra#1" }]))).toThrow(/slice/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, slice: "https://github.com/o/r/pull/1" }]))).toThrow(/slice/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, reason: "later" }]))).toThrow(/reason/);
+  });
+
+  it("a missing ledger file reads as no exceptions", () => {
+    const fx = tierFixture({});
+    expect(readRootTierExceptions(fx.root)).toEqual([]);
+  });
+});
+
+describe("direction 4 — the verdict", () => {
+  const CONFIG = "vitest.integration-1.config.ts";
+  const base = {
+    scripts: { "test:x": `vitest run --config ${CONFIG}` },
+    configs: [CONFIG],
+  };
+  const verdict = (fx) => auditRootIntegrationTiers(fx.root, fx.workflowDir);
+
+  it("a wired tier is enforced and reported by the script that reaches it", () => {
+    const v = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x") }));
+    expect(v.ungated).toEqual([]);
+    expect(v.enforced).toEqual([{ config: CONFIG, scripts: ["test:x"] }]);
+  });
+
+  it("an unwired tier with no ledger entry is a HARD failure that names it", () => {
+    const v = verdict(tierFixture({ ...base, workflow: STEP("echo nothing") }));
+    expect(v.ungated).toEqual([{ config: CONFIG, scripts: ["test:x"] }]);
+    expect(v.exempt).toEqual([]);
+  });
+
+  it("a tier no script reaches at all is still governed", () => {
+    const v = verdict(tierFixture({ workflow: STEP("echo nothing"), scripts: {}, configs: [CONFIG] }));
+    expect(v.ungated).toEqual([{ config: CONFIG, scripts: [] }]);
+  });
+
+  it("a ledger entry moves an unwired tier from ungated to exempt", () => {
+    const entry = { config: CONFIG, slice: "https://github.com/cinatra-ai/cinatra/issues/1", reason: "its own slice owns the wiring of this tier" };
+    const v = verdict(tierFixture({ ...base, workflow: STEP("echo nothing"), exceptions: [entry] }));
+    expect(v.ungated).toEqual([]);
+    expect(v.exempt).toEqual([entry]);
+  });
+
+  it("a ledger entry for a tier that IS run, or for a config that is gone, is itself a failure", () => {
+    const redundant = { config: CONFIG, slice: "https://github.com/cinatra-ai/cinatra/issues/1", reason: "claims a gap that CI does not have any more" };
+    const wired = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [redundant] }));
+    expect(wired.redundantExceptions).toEqual([redundant]);
+
+    const stale = { config: "vitest.integration-9.config.ts", slice: "https://github.com/cinatra-ai/cinatra/issues/9", reason: "names a config file that no longer exists at all" };
+    const gone = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [stale] }));
+    expect(gone.staleExceptions).toEqual([stale]);
+  });
+});
+
+describe("direction 4 — the LIVE repo", () => {
+  it("every root integration tier is run by CI or recorded in the ledger", () => {
+    const v = auditRootIntegrationTiers();
+    expect(v.ungated).toEqual([]);
+    expect(v.staleExceptions).toEqual([]);
+    expect(v.redundantExceptions).toEqual([]);
+    expect(v.tiers.length).toBeGreaterThan(0);
+  });
+
+  it("this plan's three proof tiers are wired (cinatra#2936)", () => {
+    const enforcedConfigs = new Set(auditRootIntegrationTiers().enforced.map((e) => e.config));
+    for (const config of [
+      "vitest.integration-2928.config.ts",
+      "vitest.integration-2932.config.ts",
+      "vitest.integration-2935.config.ts",
+      // The negative control: the one tier that was already wired. A green
+      // above cannot mean "this direction credits everything".
+      "vitest.integration-2882.config.ts",
+    ]) {
+      expect(enforcedConfigs.has(config), `${config} is run by no workflow`).toBe(true);
+    }
+  });
+
+  it("the LIVE ledger parses, and every entry names a config on disk that no workflow runs", () => {
+    // The ledger FILE stays even when empty — an empty one is the healthy end
+    // state, and the reader maps a missing file to [], so without this the whole
+    // ledger could be deleted and every check here would pass vacuously.
+    expect(
+      existsSync(join(REPO_ROOT, ROOT_TIER_EXCEPTIONS_FILE)),
+      "the root-tier ledger must remain a durable policy artifact even when empty",
+    ).toBe(true);
+    const entries = readRootTierExceptions();
+    const onDisk = new Set(rootTierConfigs());
+    for (const e of entries) {
+      expect(onDisk.has(e.config), `${e.config} is not a root tier config on disk`).toBe(true);
+      expect(rootTierIsEnforced(e.config), `${e.config} IS run — delete its ledger entry`).toBe(false);
+    }
   });
 });

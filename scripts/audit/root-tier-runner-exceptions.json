@@ -1,0 +1,53 @@
+{
+  "$comment": [
+    "ROOT-TIER RUNNER LEDGER \u2014 direction 4 of scripts/audit/ci-pinned-tests-exist.mjs.",
+    "A root `vitest.integration-*.config.ts` has exactly two lawful states: a workflow runs it, or it is recorded here.",
+    "`slice` is the issue whose work the tier IS \u2014 where wiring it belongs. It may be CLOSED, and that is exactly what",
+    "this ledger records: the tier shipped and its runner did not. An entry for a tier that IS run, or for a config file",
+    "that no longer exists, fails the gate, so this list can only shrink honestly.",
+    "Every entry below was found by the cinatra#2936 audit; that change wired the three tiers of its own plan and left",
+    "these untouched, because each belongs to another slice and wiring one needs that slice's services and its judgement."
+  ],
+  "exceptions": [
+    {
+      "config": "vitest.integration-1983.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/1983",
+      "reason": "No package script reaches this config at all \u2014 the only place it is named outside itself is a doc comment in the suite it configures, so there is not even a script for a workflow to call. Wiring it means adding both the script and a step with a real Postgres."
+    },
+    {
+      "config": "vitest.integration-2578.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2578",
+      "reason": "Reached by `pnpm test:usage-ledger`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2669.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2669",
+      "reason": "Reached by `pnpm test:unknown-cost`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2691.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2691",
+      "reason": "Reached by `pnpm test:week-window`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2696.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2696",
+      "reason": "Reached by `pnpm test:install-semantics`, which no workflow invokes. Four suites, a real Postgres and its own provisioning; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2823.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2823",
+      "reason": "Reached by `pnpm test:durable-reload`, which no workflow invokes \u2014 although the issue's own title calls it a required Postgres job. Making it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2911.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2911",
+      "reason": "Reached by `pnpm test:created-at-immutable`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest.integration-2933.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2933",
+      "reason": "Reached by `pnpm test:run-window`, which no workflow invokes. It is the newest tier of this same epic and was not in the audit this change acts on, so wiring it belongs to its own slice rather than being folded in unannounced."
+    }
+  ]
+}
