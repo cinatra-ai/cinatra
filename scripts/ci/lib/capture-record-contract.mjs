@@ -221,7 +221,92 @@ export const CARD_KINDS = {
     root: '[data-lifecycle-card="verification_summary"]',
     decisionControls: ["[data-action]"],
   },
+  // THE FIFTH KIND (cinatra#2930, lifecycle-b W3) — the agent paused mid-run to
+  // ask a person for input. It was registered as a kind before it had a card,
+  // and this vocabulary still refused it after the card landed, which made its
+  // pictures unindexable: a truthful capture of the shipped screen could not be
+  // named here at all.
+  agent_hitl_screen: {
+    cellTokens: ["hitl-card", "hitl-screen", "agent-hitl-screen"],
+    root: '[data-lifecycle-card="agent_hitl_screen"]',
+    // ONE MEMBER, and it is deliberately the FIELDS REGION rather than the
+    // Continue. The screen has two shapes and only one of them draws a
+    // Continue: a MID-RUN gate carries the card's own Continue, and a
+    // SETUP-LOOP gate submits on change and draws none
+    // (`packages/agents/src/agent-hitl-screen-card.tsx`). Requiring the
+    // Continue would refuse an honest capture of the setup screen; and a
+    // multi-member group is read by the audit tier as "every member present",
+    // which is the same trap `trigger_schedule_proposal` was caught in. The
+    // fields region is what a pending screen ALWAYS draws, on both shapes and
+    // on both capturable hosts, and it is what a settled one stops drawing.
+    // The Continue is ratified as an ANCHOR in the one-card gate's set for this
+    // kind instead, exactly as `save-schedule-changes` is.
+    decisionControls: ['[data-conformance-id="hitl-screen-fields"]'],
+    // THE SETTLED READING OF THIS KIND IS AN ABSENCE, and it is the only kind
+    // that is. A decided review card is still drawn — its floor is replaced by
+    // its outcome — so `decided` owes the card's root and its state
+    // declaration. This card's settled state is `none`, which is NO DOM AT ALL
+    // (the card returns null), because a question that has been answered is not
+    // a question the transcript should keep asking. So a `decided` capture of
+    // this kind owes the ABSENCE of the root and of the fields region rather
+    // than their presence, which is exactly what the shipped card draws after
+    // the answer lands.
+    settledIsAbsence: true,
+    // WHERE A TRUTHFUL PICTURE OF THIS KIND CAN BE TAKEN AT ALL. The kind is
+    // MOUNTED on all four hosts and the parity ratchet records all four; what
+    // this says is narrower and is about the CAMERA, not the mount — two of
+    // those cells cannot be reached by any sequence the shipped code offers, so
+    // asking for a picture of them would be asking for one that has to be
+    // staged.
+    capturableHosts: ["chat_thread", "run_card"],
+    compositionOnly: {
+      site_widget:
+        "a card travels from the run's own turn, and a widget conversation cannot start a " +
+        "run that reaches `pending_approval`: `agent_run` is not in the delegated widget " +
+        "allowlist (packages/mcp-server/src/delegated-widget-tool-policy.ts), and the " +
+        "content-editor launch claims no present human and runs queued -> running -> " +
+        "completed without ever parking (src/lib/host-content-editor-dispatch.ts). The " +
+        "mount is real and is proven by the card suite's widget arms and the real-store " +
+        "submit tier; it is the PICTURE that has no reachable subject.",
+      page_gate_region:
+        "the review page draws a gate region for ONE review task, and this card refuses a " +
+        "MARKED artifact-review gate (packages/agents/src/agent-hitl-screen-core.ts) while " +
+        "the run's HITL context answers only for `pending_approval` — so a single-gate run " +
+        "shows the review gate or this one, never both, and no sequence reaches a run " +
+        "parked on a non-review gate while a review page for a different review task of the " +
+        "same run exists. The region composes the card; the composition is what is " +
+        "recorded, not a photograph of it.",
+    },
+  },
 };
+
+/**
+ * MAY A CAPTURE OF THIS KIND BE TAKEN ON THIS HOST?
+ *
+ * The smallest notion the gate and the plan validator can both enforce: a kind
+ * may declare the hosts a truthful picture of it can be taken on, and must give
+ * the REASON for each host it leaves out. A kind that declares nothing is
+ * capturable on every host, which is what the four kinds that came before this
+ * one say by saying nothing — so this adds a rule without moving any of them.
+ *
+ * This is not a claim about the MOUNT. A composition-only cell is still drawn,
+ * still recorded by the host-parity ratchet and still asserted by the render
+ * suites; what it has no reachable subject for is a PHOTOGRAPH.
+ */
+export function captureHostAdmissibility(kind, host) {
+  const spec = kind ? CARD_KINDS[kind] : null;
+  if (!spec || !Array.isArray(spec.capturableHosts)) return { capturable: true, reason: null };
+  if (spec.capturableHosts.includes(host)) return { capturable: true, reason: null };
+  return {
+    capturable: false,
+    reason: spec.compositionOnly?.[host] ?? "declared composition-only, with no reason recorded",
+  };
+}
+
+/** Does this kind's SETTLED reading draw nothing at all? */
+export function settledIsAbsence(kind) {
+  return (kind ? CARD_KINDS[kind]?.settledIsAbsence : false) === true;
+}
 
 /** Cell-name state tokens, normalized to the two states evidence claims. */
 export const STATE_ALIASES = {
@@ -229,6 +314,12 @@ export const STATE_ALIASES = {
   held: "pending",
   open: "pending",
   "live-run": "pending",
+  // `agent_hitl_screen` draws `data-lifecycle-card-state="asking"` — the run is
+  // waiting at the screen. It is the same claim `pending` makes and it is
+  // normalized to it rather than admitted as a third state, so one vocabulary
+  // still grades every kind.
+  asking: "pending",
+  answered: "decided",
   decided: "decided",
   settled: "decided",
   resolved: "decided",
@@ -276,6 +367,12 @@ export function requiredAssertionsFor({ host, kind, state }) {
   const spec = kind ? CARD_KINDS[kind] : null;
   const required = [];
   const forbidden = [];
+  // A kind whose SETTLED reading is no DOM at all cannot owe its own root — see
+  // `settledIsAbsence` on the kind. Everything else about the frame still holds:
+  // the conversation list is still there, and the widget frame is still the
+  // widget frame. What changes is that the card is owed ABSENT rather than
+  // present, which is the claim its `decided` picture actually makes.
+  const settledAbsence = spec?.settledIsAbsence === true && state === "decided";
   if (host === "chat_thread") {
     required.push({ selector: "[data-conversation-list]", scope: "frame" });
   }
@@ -287,21 +384,34 @@ export function requiredAssertionsFor({ host, kind, state }) {
     });
     required.push({ selector: "[data-conversation-list]", scope: "frame" });
   }
-  required.push({
-    selector: `[data-lifecycle-card-host="${host}"]`,
-    scope: "frame",
-  });
+  if (!settledAbsence) {
+    required.push({
+      selector: `[data-lifecycle-card-host="${host}"]`,
+      scope: "frame",
+    });
+  }
   if (spec) {
-    required.push({ selector: spec.root, scope: "frame" });
+    if (!settledAbsence) required.push({ selector: spec.root, scope: "frame" });
     if (state === "pending") {
       for (const sel of spec.decisionControls) {
         required.push({ selector: sel, scope: "root", any: spec.decisionControls });
       }
     }
     if (state === "decided") {
-      required.push({ selector: DECIDED_SUMMARY_SELECTOR, scope: "root" });
-      for (const sel of spec.decisionControls) {
-        forbidden.push({ selector: sel, scope: "root" });
+      if (settledAbsence) {
+        // THE WHOLE CARD IS THE ABSENCE, counted frame-wide because there is no
+        // root left to count anything inside. The host declaration is neither
+        // required nor forbidden: another kind's card may legitimately be on the
+        // same screen, and refusing that would refuse an honest picture.
+        forbidden.push({ selector: spec.root, scope: "frame" });
+        for (const sel of spec.decisionControls) {
+          forbidden.push({ selector: sel, scope: "frame" });
+        }
+      } else {
+        required.push({ selector: DECIDED_SUMMARY_SELECTOR, scope: "root" });
+        for (const sel of spec.decisionControls) {
+          forbidden.push({ selector: sel, scope: "root" });
+        }
       }
     }
   }
@@ -365,6 +475,22 @@ export function validateCaptureRecord(record, io = {}) {
       "record/state-claim-mismatch",
       `the cell name claims state "${claim.state}" but the record declares "${record.declaredState}"`,
     );
+  }
+
+  // --- the cell has a reachable subject ------------------------------------
+  // A kind may declare the hosts a truthful picture of it can be taken on. A
+  // record for a cell it left out is refused WITH THE REASON, so the refusal
+  // reads as the recorded fact it is rather than as an unexplained "no".
+  {
+    const claimedKind = record.declaredKind ?? claim.kind;
+    const claimedHost = record.declaredHost ?? claim.host;
+    const admission = captureHostAdmissibility(claimedKind, claimedHost);
+    if (!admission.capturable) {
+      push(
+        "record/host-composition-only",
+        `"${claimedKind}" is recorded as composition-only on "${claimedHost}" — ${admission.reason}`,
+      );
+    }
   }
 
   // --- the URL class -------------------------------------------------------

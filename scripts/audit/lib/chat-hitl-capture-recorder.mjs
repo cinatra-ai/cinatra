@@ -96,8 +96,15 @@ import {
   CARD_KINDS,
   DECIDED_SUMMARY_SELECTOR,
   RECORDER_ID,
+  captureHostAdmissibility,
   requiredAssertionsFor,
+  settledIsAbsence,
 } from "../../ci/lib/capture-record-contract.mjs";
+
+// Re-exported so the anchor contract reads the canonical answers through the
+// same door every other requirement comes through, rather than reaching past
+// this tier into the contract for two of them.
+export { captureHostAdmissibility, settledIsAbsence };
 
 /**
  * The recorder's identity, stamped on every record it writes and named by the
@@ -289,7 +296,11 @@ export function captureRequirementsFor(host, kind = null, state = null) {
     return out;
   };
   const specs = required.map((r) => spec(r, "present"));
-  if (root) {
+  // A kind whose settled reading draws nothing has no root to count the host
+  // declaration inside — the canonical set has already turned this cell's claim
+  // into an ABSENCE, and this tier's addition cannot ask for a presence inside
+  // it.
+  if (root && !(settledIsAbsence(kind) && state === "decided")) {
     specs.push({
       frame: frameOf("root"),
       scope: "root",
@@ -766,6 +777,11 @@ export function hostTokenInCell(cell) {
  * that DOES claim one must agree with the record.
  */
 const CELL_KIND_LABELS = Object.freeze({
+  // THE HAND-WRITTEN ALIASES, FIRST. These are spellings this tier has always
+  // read and some of them (`schedule-proposal`) are not cell tokens of the
+  // canonical contract at all, so they are kept rather than derived — and they
+  // are kept FIRST, so no cell name that already resolved can change kind when
+  // the derived set below grows.
   "review-card": "artifact_review_gate",
   "recommendation-hold": "recommendation_hold",
   "recommendation-card": "recommendation_hold",
@@ -773,6 +789,17 @@ const CELL_KIND_LABELS = Object.freeze({
   "schedule-card": "trigger_schedule_proposal",
   "verification-card": "verification_summary",
   "verification-summary": "verification_summary",
+  // …AND THEN THE CANONICAL CONTRACT'S OWN CELL TOKENS, derived rather than
+  // copied. A hand-kept copy of a list the contract already owns is how
+  // `agent_hitl_screen` came to be unreadable HERE while the contract knew it
+  // perfectly well: the kind was admitted and its cell names still parsed to
+  // nothing, so a rule keyed on the kind never fired. Longest token first, so a
+  // broad token can never answer for a name a specific one describes.
+  ...Object.fromEntries(
+    Object.entries(CARD_KINDS)
+      .flatMap(([kind, spec]) => (spec.cellTokens ?? []).map((token) => [token, kind]))
+      .sort((a, b) => b[0].length - a[0].length),
+  ),
 });
 
 /**
@@ -862,6 +889,27 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
     return v; // Everything below is host-relative.
   }
   const host = record.declaredHost;
+
+  // --- the cell has a reachable subject -------------------------------------
+  // Refused BEFORE the frame and anchor arms, because a cell nothing can reach
+  // is not a badly-taken picture — it is a picture that should never have been
+  // asked for, and the frame violations that follow would bury the reason.
+  {
+    // THE EFFECTIVE KIND, never only the declared one (convergence). A record
+    // may leave `declaredKind` off — every host but chat_thread is allowed to —
+    // and reading the declaration alone would let a cell with no reachable
+    // subject walk straight past this rule by saying nothing. The cell NAME
+    // carries the same claim and is what the canonical half reads.
+    const effectiveKind = record?.declaredKind ?? kindTokenInCell(record?.cell);
+    const admission = captureHostAdmissibility(effectiveKind, host);
+    if (!admission.capturable) {
+      v.push(
+        `${where}: "${effectiveKind}" is recorded as composition-only on "${host}" — ` +
+          admission.reason,
+      );
+      return v;
+    }
+  }
 
   // GRADED. `build` is this tier's own field; the canonical driver records the
   // runtime in prose (`runtime`) instead. A record that names a build must name
@@ -1469,6 +1517,23 @@ export function validateWalkPlan(plan) {
     }
     if (cell.kind !== undefined && !LIFECYCLE_KINDS.includes(cell.kind)) {
       v.push(`${at}: kind "${cell.kind}" is not one of ${LIFECYCLE_KINDS.join("/")}`);
+    }
+    {
+      // A CELL WITH NO REACHABLE SUBJECT costs a parse rather than a walk. The
+      // reason travels with the refusal, because "this cannot be photographed"
+      // is a recorded fact about the shipped code and a reader is owed it.
+      //
+      // READ OFF THE EFFECTIVE KIND (convergence): `kind` is optional on a plan
+      // cell, so a rule that only fired on a declared one could be stepped
+      // around by leaving it off while the cell NAME still names the kind.
+      const effectiveKind = cell.kind ?? kindTokenInCell(cell.cell);
+      const admission = captureHostAdmissibility(effectiveKind, cell.declaredHost);
+      if (!admission.capturable) {
+        v.push(
+          `${at}: "${effectiveKind}" is recorded as composition-only on "${cell.declaredHost}" — ` +
+            admission.reason,
+        );
+      }
     }
     if (cell.state !== undefined && !CAPTURE_STATES.includes(cell.state)) {
       v.push(`${at}: state "${cell.state}" is not one of ${CAPTURE_STATES.join("/")}`);
