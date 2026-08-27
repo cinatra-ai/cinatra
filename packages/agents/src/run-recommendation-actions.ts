@@ -44,6 +44,7 @@ import { confirmRunSkillSelectionAction } from "./server-actions";
 export type {
   RunRecommendationDecisionResult,
   RunRecommendationHoldState,
+  RunRecommendationSettledCandidate,
 } from "./run-recommendation-core";
 
 import type {

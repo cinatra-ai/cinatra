@@ -40,6 +40,7 @@ import {
   mergeWalkRecords,
   observeWalkCell,
   validateWalkPlan,
+  walkCellState,
   walkCellsOf,
 } from "../lib/chat-hitl-capture-recorder.mjs";
 
@@ -428,5 +429,39 @@ describe("a walk MERGES into the index it did not write", () => {
     });
     expect(merged.records.map((r) => r.cell)).toEqual(index.records.map((r) => r.cell));
     expect(merged.records[2].walked).toBe(true);
+  });
+});
+
+describe("the preflight and the walk derive ONE state", () => {
+  // The audit card resolves `advisory` and nothing else, so a cell of that kind
+  // named `__advisory` is the case where a preflight that reads the name and a
+  // walk that does not come apart: the plan was admitted and the record was
+  // then stamped `pending`, which the per-kind vocabulary refuses.
+  const ADVISORY_CELL = {
+    cell: "G7__audit-card__run_card__advisory",
+    declaredHost: "run_card",
+    kind: "verification_summary",
+    framing: "window",
+    build: "development",
+    screenshot: PNG,
+  };
+
+  it("derives the state from the NAME when the cell declares none", () => {
+    expect(walkCellState(ADVISORY_CELL)).toBe("advisory");
+    expect(walkCellState({ ...ADVISORY_CELL, state: "advisory" })).toBe("advisory");
+    // A cell claiming nothing either way keeps observeCapture's own default.
+    expect(walkCellState({ cell: "Z__audit-card__run_card__zoomed" })).toBeUndefined();
+  });
+
+  it("STAMPS that state on the record, so the walk produces what the preflight admitted", async () => {
+    const requirements = captureRequirementsFor("run_card", "verification_summary", "advisory");
+    const page = pageAnswering(requirements, {
+      url: "http://localhost:3000/agents/v/p/fd104b43-19fd-4404-9d74-0896bba371f5",
+    });
+    // `observeWalkCell` THROWS on a record the index would refuse, so reaching
+    // the assertions below is itself the audit tier accepting it.
+    const record = await observe(ADVISORY_CELL, page);
+    expect(record.declaredState).toBe("advisory");
+    expect(validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })).toEqual([]);
   });
 });

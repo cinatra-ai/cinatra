@@ -315,44 +315,31 @@ export function verifiedHumanPresence(input: {
 // The schedule default — the coordinator's own, not an organization rule
 // ---------------------------------------------------------------------------
 
-/** What the schedule screen offers before a person's run begins. */
-export type ScheduleDefault =
-  | { readonly kind: "run_after_setup" }
-  | { readonly kind: "stated"; readonly schedule: unknown }
-  | { readonly kind: "none"; readonly why: string };
-
 /**
- * The schedule moment's own default, stated once and here.
- *
- * Run right after setup, UNLESS the person stated a schedule in the conversation
- * or changed it on the screen — and NEVER for a run nobody is present for. A
+ * THE SCHEDULE MOMENT'S DEFAULT, which this module owns and exports: run right
+ * after setup, unless the person stated a schedule in the conversation or
+ * changed it on the screen, and never for a run nobody is present for. A
  * schedule has no artifact type, destination or origin, so it is not a row in
- * the policy table and no organization rule governs it.
+ * the policy table and no organization rule governs it — the decision is the
+ * coordinator's own, and `scheduleScreenSelection` is the one mapping from that
+ * answer to the row a screen opens on.
  *
- * Nothing this function returns ARMS anything, and `launchAgentRun` does not
- * call it. It answers what the SCREEN would offer, and the screen is W3's
- * (cinatra#2930) — this slice changes no screen and parks no run that does not
- * park today, so a launch that applied this default would be inventing a wait
- * with no card to release it. What lives here is the DECISION, stated once and
- * in the coordinator rather than as a row in the policy table; what consumes it
- * is the slice that draws the card.
+ * IT NOW HAS ITS CONSUMER, AND ONE STATEMENT (cinatra#2936). The decision used
+ * to be stated in this file and consumed by nothing but its own unit test, while
+ * the scheduling step preselected "Run right after setup" from a local default
+ * of its own — the same decision, stated twice, with nothing keeping the two
+ * agreed. It could not be otherwise: this module is `server-only` and both
+ * surfaces that draw a schedule are client modules, so the statement moved to
+ * the tier-neutral card registry, which every tier reads and which is already on
+ * every locked route graph. The coordinator goes on declaring and exporting it
+ * under its own name; the schedule step's form and the held schedule's card
+ * both derive what they preselect from it.
  */
-export function scheduleDefaultForLaunch(input: {
-  humanPresent: boolean;
-  /** A schedule the person already stated, if any. */
-  statedSchedule?: unknown;
-}): ScheduleDefault {
-  if (!input.humanPresent) {
-    return {
-      kind: "none",
-      why: "nobody is present for this run — the schedule it was given applies and no screen is shown",
-    };
-  }
-  if (input.statedSchedule !== undefined && input.statedSchedule !== null) {
-    return { kind: "stated", schedule: input.statedSchedule };
-  }
-  return { kind: "run_after_setup" };
-}
+export {
+  scheduleDefaultForLaunch,
+  scheduleScreenSelection,
+  type ScheduleDefault,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 // ---------------------------------------------------------------------------
 // The moment triple

@@ -416,8 +416,15 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
     }
   });
 
-  it("leaves the four other kinds' decided records exactly as they were", () => {
-    for (const other of LIFECYCLE_KINDS.filter((k) => k !== KIND)) {
+  it("leaves the other kinds that HAVE a decided reading exactly as they were", () => {
+    // `verification_summary` is not one of them and never was: its card draws
+    // `advisory` or nothing at all, so a `decided` record of it describes a
+    // screen the shipped component cannot render. It is excluded here and
+    // refused explicitly in the case below (cinatra#2936), rather than left
+    // standing as a state this suite asserts is acceptable.
+    for (const other of LIFECYCLE_KINDS.filter(
+      (k) => k !== KIND && k !== "verification_summary",
+    )) {
       const record = {
         cell: `HF__${CARD_KINDS[other].cellTokens[0]}__chat_thread__decided`,
         declaredHost: "chat_thread",
@@ -449,6 +456,49 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
         other,
       ).toEqual([]);
     }
+  });
+
+  it("REFUSES a decided record of the kind that has no decided reading", () => {
+    // The audit card's own component: two states draw, and only two —
+    // `advisory`, the reading, or `absent`, which draws no DOM at all. So this
+    // is the one kind whose `decided` capture could never be honest, and both
+    // halves say so rather than grading it against a requirement set for a
+    // screen that does not exist.
+    const record = {
+      cell: "HF__audit-card__chat_thread__decided",
+      declaredHost: "chat_thread",
+      declaredKind: "verification_summary",
+      declaredState: "decided",
+      finalUrl: URL_FOR.chat_thread,
+      build: "development",
+      screenshot: PNG,
+      sha256: HASH,
+      capturedAt: "2026-08-27T09:00:00.000Z",
+      recordedBy: RECORDER_ID,
+      assertions: captureRequirementsFor("chat_thread", "verification_summary", "decided").map(
+        (r) => ({
+          ...r,
+          expect: r.expect ?? "present",
+          count: (r.expect ?? "present") === "absent" ? 0 : 1,
+          visible: (r.expect ?? "present") === "absent" ? 0 : 1,
+        }),
+      ),
+      instance: {
+        selector: CARD_KINDS.verification_summary.root,
+        matched: 1,
+        index: 0,
+        id: null,
+        attributes: { "data-lifecycle-card": "verification_summary" },
+      },
+    };
+    expect(validateCaptureRecord(record, { hashOf, tier: "audit" }).join("\n")).toMatch(
+      /is not one "verification_summary" resolves \(advisory\)/,
+    );
+    expect(
+      validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH }).map(
+        (v) => v.code,
+      ),
+    ).toContain("record/state-not-in-kind-vocabulary");
   });
 });
 

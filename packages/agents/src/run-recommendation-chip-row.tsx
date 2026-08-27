@@ -36,6 +36,7 @@ import {
   skipRunRecommendationAction,
   type RunRecommendationDecisionResult,
   type RunRecommendationHoldState,
+  type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 
@@ -138,10 +139,17 @@ export type RunRecommendationDecision =
       skillNames: string[];
       /** Per-skill settled marks, derived from the run's durable evidence. */
       decided?: RunRecommendationDecidedSkill[];
+      /**
+       * THE SKILLS THE HOLD ASKED ABOUT (cinatra#2790). One chip is drawn for
+       * each of them; see `settledChipsForRow`.
+       */
+      candidates?: RunRecommendationSettledCandidate[];
     }
   | {
       kind: "skipped";
       decided?: RunRecommendationDecidedSkill[];
+      /** The same offer, for the same reason — see the `confirmed` arm above. */
+      candidates?: RunRecommendationSettledCandidate[];
       /**
        * The decider as a SURFACE-SAFE DISPLAY NAME, for §V's zero-chip settled
        * reading (cinatra#2893) — never an id and never an address. Absent on
@@ -315,6 +323,69 @@ function MarkIcon({ mark }: { mark: RunRecommendationChipMark }): ReactElement {
   if (mark === "confirmed") return <Check className="h-3 w-3" aria-hidden />;
   if (mark === "adjusted") return <SlidersHorizontal className="h-3 w-3" aria-hidden />;
   return <X className="h-3 w-3" aria-hidden />;
+}
+
+/**
+ * THE SETTLED ROW'S OWN SET — one chip per skill the hold ASKED ABOUT, each
+ * stating what it recorded (cinatra#2790, epic #2784 S9f).
+ *
+ * §V, on the reading this builds:
+ *
+ *   "SETTLED — ONE CHIP PER SKILL, EACH SHOWING WHAT IT RECORDED · The settled
+ *    row is still the whole card: each chip states its own outcome in place.
+ *    Nothing is summarised above it, and there is nothing left to press."
+ *
+ * and its own settled drawing is `Enrich contacts ✓ Confirmed`, `Draft email
+ * ⇄ Adjusted`, `Schedule send ✕ Skipped` — three skills asked about, three
+ * chips, and the skipped one drawn in the skipped treatment (the dashed edge
+ * and the muted ground, never a status colour).
+ *
+ * WHAT THIS FIXES. The decided evidence names only the skills that left a row:
+ * a confirm writes a selection row, an adjust writes one, and a SKIP writes
+ * neither — the rejected half is recorded only for a candidate the scorer
+ * RECOMMENDED. A row whose chips were all force-adds therefore settled one chip
+ * short for every Skip that was pressed on it, and the skill the reader had just
+ * decided about disappeared from the card that is supposed to state its outcome.
+ *
+ * THE RULE, stated as the drawing states it: a candidate of the hold's own
+ * offer with NO decision row after the hold settled was SKIPPED, because that is
+ * the only thing a settled hold can mean by it — the run is not using it.
+ *
+ * ONE ROW, EVERY HOST. This is the shared §V row: `RecommendationHoldCard` is
+ * the one renderer of `recommendation_hold` (cinatra#2573) and it is what the
+ * chat transcript, the widget's own conversation column, the run panel and the
+ * review page's gate region each mount. Fixing the reading here fixes it on all
+ * four by construction, and no host carries a settled reading of its own.
+ *
+ * A DECIDED ROW THE OFFER DOES NOT NAME IS STILL DRAWN, appended after the
+ * offer's own chips: durable evidence is never dropped because the claim it
+ * belongs to could not be read. With NO offer at all the answer is the decided
+ * evidence unchanged, which is exactly the reading a pre-cinatra#2906 hold has
+ * today.
+ */
+export function settledChipsForRow(
+  candidates: ReadonlyArray<RunRecommendationSettledCandidate> | undefined,
+  decided: ReadonlyArray<RunRecommendationDecidedSkill>,
+): RunRecommendationDecidedSkill[] {
+  // ONE CHIP PER SKILL is what the drawing says, so the skill id is what
+  // identifies a chip and a repeated id is one skill, not two. BOTH inputs are
+  // normalized FIRST-WINS before anything is drawn. Neither durable source can
+  // produce a repeat today — the offer is unique on `(hold_id, skill_id)` and
+  // `decidedSkillsFromEvidence` keys a map by skill id — but a reading that
+  // would draw the same skill twice, under two React keys and possibly two
+  // different outcomes, is not something to leave resting on a caller's
+  // invariant that this function's own signature does not state.
+  const rowBySkillId = new Map<string, RunRecommendationDecidedSkill>();
+  for (const row of decided) if (!rowBySkillId.has(row.skillId)) rowBySkillId.set(row.skillId, row);
+  const recorded = [...rowBySkillId.values()];
+  if (!candidates || candidates.length === 0) return recorded;
+  const offered = new Map<string, RunRecommendationSettledCandidate>();
+  for (const c of candidates) if (!offered.has(c.skillId)) offered.set(c.skillId, c);
+  const drawn = [...offered.values()].map(
+    (c) => rowBySkillId.get(c.skillId) ?? { skillId: c.skillId, name: c.name, mark: "skipped" as const },
+  );
+  for (const row of recorded) if (!offered.has(row.skillId)) drawn.push(row);
+  return drawn;
 }
 
 /**
@@ -502,7 +573,7 @@ export function RunRecommendationChipRow({
   // ── The SETTLED row (a released hold) — one chip per skill, each with its
   //    own recorded outcome. No heading, no summary line, nothing to press.
   if (decision.kind !== "pending") {
-    const settled: RunRecommendationDecidedSkill[] =
+    const recorded: RunRecommendationDecidedSkill[] =
       decision.decided ??
       (decision.kind === "confirmed"
         ? decision.skillNames.map((name) => ({
@@ -514,6 +585,9 @@ export function RunRecommendationChipRow({
             mark: "confirmed" as const,
           }))
         : []);
+    // §V's settled row is one chip per skill the hold ASKED ABOUT, not one per
+    // skill that happened to leave a row — see `settledChipsForRow`.
+    const settled = settledChipsForRow(decision.candidates, recorded);
     // A settled hold whose durable evidence names no skill at all has nothing
     // PER-SKILL to state — and since cinatra#2893 §V draws the reading for
     // exactly that row: the outcome panel below, in place of the chips. The card
@@ -1431,8 +1505,17 @@ export function RecommendationHoldCard({
         state.state === "held"
           ? { kind: "pending" }
           : state.state === "confirmed"
-            ? { kind: "confirmed", skillNames: state.skillNames, decided: state.decided }
-            : { kind: "skipped", decided: state.decided }
+            ? {
+                kind: "confirmed",
+                skillNames: state.skillNames,
+                decided: state.decided,
+                ...(state.candidates ? { candidates: state.candidates } : {}),
+              }
+            : {
+                kind: "skipped",
+                decided: state.decided,
+                ...(state.candidates ? { candidates: state.candidates } : {}),
+              }
       }
       variant="inline"
       submit={submit}
