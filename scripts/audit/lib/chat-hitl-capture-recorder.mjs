@@ -91,10 +91,13 @@ import { join } from "node:path";
 // selectors. Zero runtime dependencies on both sides, so the audit tier stays
 // installable-free.
 import {
+  CANONICAL_CAPTURE_STATES,
   CAPTURE_HOSTS as CANONICAL_CAPTURE_HOSTS,
   CAPTURE_INDEX_PATH,
   CARD_KINDS,
+  captureStatesFor,
   DECIDED_SUMMARY_SELECTOR,
+  parseCellName,
   RECORDER_ID,
   absenceInstanceViolations,
   captureHostAdmissibility,
@@ -251,8 +254,24 @@ export const LIFECYCLE_KINDS = Object.freeze(Object.keys(CARD_KINDS));
  * and its own decided summary. Requiring the controls on every capture would
  * make an honest decided screenshot unindexable, and requiring nothing would let
  * a placeholder pass as either.
+ *
+ * IT IS NOW THE CANONICAL LIST ITSELF, not a second copy of it -- and it is NOT
+ * "the states every kind resolves". It is the pair a card that asks for a
+ * decision resolves, and the default for a kind the canonical contract's
+ * `KIND_CAPTURE_STATES` does not name. The arms below read
+ * `captureStatesFor(kind)`, which is exact per kind: the audit card resolves
+ * `advisory` and nothing else, on every host it draws on. Two of its advisory
+ * records stand in the index; the third was refused HERE, on `chat_thread`
+ * alone, by an arm that enumerated this list for all four kinds (the driven
+ * refusal is recorded in `evidence/2791-s9g-conformance/capture-results.json`).
+ *
+ * THIS LIST STAYS THE TWO, deliberately. The anchor contract builds one ratified
+ * anchor set per (host, kind, state) from it, so moving it would move the
+ * digest; the per-kind vocabulary adds no anchor at all -- an advisory capture
+ * owes exactly the set both ratified sets are built from -- so the digest stands
+ * where it was ratified.
  */
-export const CAPTURE_STATES = Object.freeze(["pending", "decided"]);
+export const CAPTURE_STATES = CANONICAL_CAPTURE_STATES;
 
 /** The scopes an observation can be counted in, per the canonical contract. */
 export const CAPTURE_SCOPES = Object.freeze(["page", "frame", "root"]);
@@ -768,17 +787,17 @@ export async function observeCapture({
   // called `__decided` silently answers for a capture photographed pending, and
   // the two halves disagree about what the record even claims.
   //
-  // THE ASYMMETRY, DISCLOSED HERE RATHER THAN DISCOVERED. What is DECLARED for
-  // four hosts is OBSERVED for one. `captureRequirementsFor` derives anchors
-  // from the state for chat_thread ONLY: a pending chat capture owes its
-  // decision controls and a decided one owes their measured absence, and no
-  // other host has a requirement set that reads `state` at all. So a run_card
-  // record declaring `decided` is checked for AGREEMENT with its cell name by
-  // both halves — a contradiction is caught — and for nothing else. The
-  // declaration is a claim under a name, not a claim under a measurement, and
-  // the difference is worth naming at the line that writes it. It closes when
-  // those hosts get a state-derived requirement set of their own, which is the
-  // slice that produces their records, not this one.
+  // THE ASYMMETRY, DISCLOSED HERE RATHER THAN DISCOVERED — and it is smaller
+  // than this comment used to say. What is OBLIGATORY for one host is OPTIONAL
+  // for four: only a chat_thread record MUST carry a `declaredState`. What is
+  // derived from it is NOT chat-only — `captureRequirementsFor(host, kind,
+  // state)` is called with the declared state on every host (see
+  // `hostRequirements` in `validateCaptureRecord`), so a run_card record
+  // declaring `decided` owes the ABSENCE of its decision controls exactly as a
+  // chat one does. The earlier text said the anchors were derived for
+  // chat_thread alone; that stopped being true when the observer was widened to
+  // read a kind's anchors on whatever host it declares, and it is corrected here
+  // rather than left to be discovered by someone trusting it.
   if (state) record.declaredState = state;
   // ADDITIVE, and declined by every record written before the field existed.
   if (framing) record.framing = framing;
@@ -849,9 +868,37 @@ const CELL_KIND_LABELS = Object.freeze({
  * The binding uses this so a record cannot answer a cell that says `decided`
  * with pending evidence, where the decision controls are REQUIRED rather than
  * required-absent and the bar is therefore lower.
+ *
+ * IT GRADES. Two callers read it: `validateWalkPlan`, where it refuses a plan
+ * whose cell name contradicts what the plan says it will photograph, and
+ * `chatThreadCellClaims` in `scripts/audit/chat-hitl-acceptance-gate.mjs`, whose
+ * `claimedState` the gate compares against the record that answers the cell. A
+ * wrong answer here is a wrong grade there, which is why it defers to the
+ * canonical parser below rather than keeping its own opinion.
  */
 export function stateTokenInCell(cell) {
   if (typeof cell !== "string") return null;
+  // THE CANONICAL READING FIRST, and it wins whenever it reads anything.
+  //
+  // This matters because the two readers scan differently: `parseCellName`
+  // splits on `__` and takes the first mapped token AFTER the host token, while
+  // the arms below scan `[-_]` boundaries anywhere with a fixed precedence.
+  // Those two rules answer `X__review-card__chat_thread__advisory__pending`
+  // differently — `advisory` canonically, `pending` here — and a name the two
+  // halves read differently is exactly what lets a walk's preflight admit a
+  // cell the record validator then refuses. Deferring to the canonical parser
+  // closes that class rather than describing it.
+  //
+  // It is NOT a no-op and it is NOT total. The arms below still answer the
+  // names the canonical parser declines: names with no host token at all, and
+  // names whose state is buried in a hyphenated phrase
+  // (`…__held-at-recommendation-checkpoint`) — five committed names read that
+  // way, and their readings are unchanged. This tier also keeps two spellings
+  // the canonical map does not carry (`confirmed`, `skipped`). Where the two
+  // still differ, this reader claims a state the canonical one does not, which
+  // adds a check rather than dropping one.
+  const claim = parseCellName(cell);
+  if (claim?.state) return claim.state;
   const lower = cell.toLowerCase();
   // Normalized to the CANONICAL spelling: the ratified contract maps a cell's
   // `settled` token to `decided`, so returning "settled" here made every record
@@ -860,7 +907,27 @@ export function stateTokenInCell(cell) {
     return "decided";
   }
   if (/(^|[-_])(pending|held|open)([-_]|$)/.test(lower)) return "pending";
+  if (/(^|[-_])advisory([-_]|$)/.test(lower)) return "advisory";
   return null;
+}
+
+/**
+ * THE STATE A WALK CELL WILL PHOTOGRAPH, derived ONCE.
+ *
+ * The plan is judged before the browser opens and the record is written after
+ * it closes, and the two must be judging the same claim. They were not: the
+ * preflight read `cell.state ?? <the name>` while `observeWalkCell` forwarded
+ * `cell.state` alone, and `observeCapture` defaults an omitted state to
+ * `pending`. So a cell named `…__advisory` with no declared state passed the
+ * preflight and was then stamped `pending` — a walk the preflight admits and
+ * the record validator cannot accept, which is the preflight promising
+ * something it does not keep.
+ *
+ * `undefined` is a real answer: a cell that claims no state either way keeps
+ * `observeCapture`'s own default, exactly as before.
+ */
+export function walkCellState(cell) {
+  return cell?.state ?? stateTokenInCell(cell?.cell) ?? undefined;
 }
 
 export function kindTokenInCell(cell) {
@@ -1135,16 +1202,37 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // --- a chat_thread record names the KIND it photographed ---
   // Without it the record proves a transcript was on screen, not that a card
   // was in it, which is the whole distance between a capture and evidence.
-  // …AND IT IS ENFORCED, as a requirement set, for chat_thread ALONE. Every host
-  // writes `declaredState` (see `observeCapture`); this arm is where the
-  // asymmetry lives — only chat_thread must carry one that is a valid state, and
-  // only chat_thread's anchors are derived from it. For the other three the
-  // declaration is checked against the cell name and no further.
+  //
+  // WHAT IS ACTUALLY CHAT-ONLY, stated after this change made the old sentence
+  // wrong twice over: the OBLIGATION to declare a kind and a state at all. It is
+  // not the vocabulary — the arm above reads that on every host — and it is not
+  // the anchors: `hostRequirements` below derives a kind's requirement set from
+  // `record.declaredState` on whatever host the record declares, and has since
+  // the observer was widened. The earlier sentence claimed both, and both were
+  // untrue.
+  // THE VOCABULARY IS THE KIND'S, AND IT IS READ ON EVERY HOST. A kind that
+  // resolves a state resolves it wherever it draws, and a kind that does not
+  // resolve one does not acquire it by being photographed on a page instead of
+  // in a thread. This arm used to live inside the chat_thread block below,
+  // which is exactly how the audit card became recordable on two hosts and
+  // unrecordable on a third. What stays chat-only is the obligation to DECLARE
+  // a state at all — that asymmetry is real and is documented below.
+  {
+    const statesHere = captureStatesFor(record?.declaredKind);
+    const declared = record?.declaredState;
+    if (declared !== undefined && declared !== null && !statesHere.includes(declared)) {
+      v.push(
+        `${where}: \`declaredState\` "${declared}" is not one "${record?.declaredKind}" resolves ` +
+          `(${statesHere.join("/")}) — the vocabulary is the KIND's, on every host it draws on`,
+      );
+    }
+  }
   if (host === "chat_thread") {
-    if (!CAPTURE_STATES.includes(record?.declaredState)) {
+    const statesHere = captureStatesFor(record?.declaredKind);
+    if (record?.declaredState === undefined || record?.declaredState === null) {
       v.push(
         `${where}: a chat_thread record must declare the \`declaredState\` it photographed ` +
-          `(${CAPTURE_STATES.join("/")}) — a decided card owes the ABSENCE of its controls, ` +
+          `(${statesHere.join("/")}) — a decided card owes the ABSENCE of its controls, ` +
           `not their presence; it declares "${record?.declaredState}"`,
       );
     }
@@ -1589,8 +1677,17 @@ export function validateWalkPlan(plan) {
         );
       }
     }
-    if (cell.state !== undefined && !CAPTURE_STATES.includes(cell.state)) {
-      v.push(`${at}: state "${cell.state}" is not one of ${CAPTURE_STATES.join("/")}`);
+    // The same per-kind vocabulary the RECORD is judged by, applied to the plan
+    // that will produce it, so a state this tier would refuse costs a parse
+    // rather than a walk. The state judged is `walkCellState`'s — the SAME
+    // derivation the walk itself uses, so a preflight cannot admit a cell the
+    // walk will then photograph under a different state, and the vocabulary is
+    // read off the EFFECTIVE kind for the same reason the arm above is: a plan
+    // cell may leave `kind` off while its NAME still names one.
+    const plannedStates = captureStatesFor(cell.kind ?? kindTokenInCell(cell.cell));
+    const plannedState = walkCellState(cell);
+    if (plannedState !== undefined && !plannedStates.includes(plannedState)) {
+      v.push(`${at}: state "${plannedState}" is not one of ${plannedStates.join("/")}`);
     }
     if (cell.build !== undefined && !CAPTURE_BUILDS.includes(cell.build)) {
       v.push(`${at}: build "${cell.build}" is not one of ${CAPTURE_BUILDS.join("/")}`);
@@ -1647,7 +1744,7 @@ export async function observeWalkCell({
     cell: cell.cell,
     declaredHost: cell.declaredHost,
     kind: cell.kind,
-    state: cell.state,
+    state: walkCellState(cell),
     instance: cell.instance ?? null,
     screenshot: cell.screenshot,
     build: cell.build ?? "development",

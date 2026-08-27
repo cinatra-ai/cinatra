@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import {
   CAPTURE_HOSTS,
   CAPTURE_INDEX_SCHEMA_VERSION,
+  CAPTURE_STATES,
   DECIDED_SUMMARY_SELECTOR,
   HOST_ANCHOR_REQUIREMENTS,
   KIND_REQUIRED_ACTIONS,
@@ -45,6 +46,7 @@ import {
   stateTokenInCell,
   validateCaptureIndex,
   validateCaptureRecord,
+  validateWalkPlan,
 } from "../lib/chat-hitl-capture-recorder.mjs";
 import {
   CAPTURE_INDEX_PATH,
@@ -54,7 +56,10 @@ import {
   screenshotProofInventory,
 } from "../chat-hitl-acceptance-gate.mjs";
 import { playwrightPage } from "../lib/chat-hitl-capture-driver.mjs";
-import { validateCaptureRecord as validateCanonicalRecord } from "../../ci/lib/capture-record-contract.mjs";
+import {
+  parseCellName as parseCanonicalCellName,
+  validateCaptureRecord as validateCanonicalRecord,
+} from "../../ci/lib/capture-record-contract.mjs";
 import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-contract";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -726,6 +731,166 @@ describe("a SETTLED capture owes the absence of its controls", () => {
     expect(validateCaptureRecord(chatRecord({ declaredState: undefined }), { hashOf }).join("\n")).toMatch(
       /must declare the `declaredState` it photographed/,
     );
+  });
+});
+
+describe("the advisory state — the tier refused it, not the screen", () => {
+  // The audit card resolves `advisory` on every host it draws on, and the
+  // ratchet records it on all four. Two of its records stand in the committed
+  // index; the chat_thread one was DRIVEN and refused HERE, by a state list
+  // that read one vocabulary for four kinds
+  // (evidence/2791-s9g-conformance/capture-results.json).
+  function advisoryChat(over = {}) {
+    return chatRecord({
+      cell: "G7__audit-card__chat_thread__advisory",
+      declaredKind: "verification_summary",
+      declaredState: "advisory",
+      assertions: chatAssertions("verification_summary", "advisory"),
+      instance: chatInstance("verification_summary"),
+      ...over,
+    });
+  }
+
+  it("ACCEPTS the audit card's advisory record on chat_thread", () => {
+    expect(validateCaptureRecord(advisoryChat(), { hashOf })).toEqual([]);
+  });
+
+  it("and the canonical half accepts the same record", () => {
+    expect(
+      validateCanonicalRecord(advisoryChat(), {
+        fileExists: () => true,
+        hashFile: () => HASH,
+      }),
+    ).toEqual([]);
+  });
+
+  it("REFUSES `advisory` on a kind that never resolves it", () => {
+    expect(
+      validateCaptureRecord(chatRecord({ declaredState: "advisory" }), { hashOf }).join("\n"),
+    ).toMatch(/is not one "recommendation_hold" resolves \(pending\/decided\)/);
+  });
+
+  it("REFUSES it on a NON-chat host too — the vocabulary is not chat_thread's", () => {
+    // The arm that read the vocabulary used to sit inside the chat_thread
+    // block, which is precisely how one kind became recordable on two hosts and
+    // unrecordable on a third.
+    for (const host of ["run_card", "page_gate_region"]) {
+      const record = {
+        ...chatRecord(),
+        cell: `Y1__recommendation-card__${host}__advisory`,
+        declaredHost: host,
+        declaredState: "advisory",
+        finalUrl:
+          host === "run_card"
+            ? "http://localhost:3000/agents/v/p/fd104b43-19fd-4404-9d74-0896bba371f5"
+            : "http://localhost:3000/agents/v/p/fd104b43-19fd-4404-9d74-0896bba371f5/review/t%3A1",
+        assertions: hostAssertions(host, "recommendation_hold", "pending"),
+        instance: chatInstance("recommendation_hold", {
+          attributes: {
+            "data-lifecycle-card": "recommendation_hold",
+            "data-lifecycle-card-host": host,
+          },
+        }),
+      };
+      expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+        /is not one "recommendation_hold" resolves \(pending\/decided\)/,
+      );
+    }
+  });
+
+  it("REFUSES the audit card declaring a state its card never draws", () => {
+    for (const state of ["pending", "decided"]) {
+      expect(
+        validateCaptureRecord(advisoryChat({ declaredState: state }), { hashOf }).join("\n"),
+      ).toMatch(/is not one "verification_summary" resolves \(advisory\)/);
+    }
+  });
+
+  it("reads the token off a cell name the same way the canonical half does", () => {
+    expect(stateTokenInCell("G5__audit-card__run_card__advisory")).toBe("advisory");
+  });
+
+  it("and agrees with it on a name carrying TWO state tokens, in either order", () => {
+    // The disagreement this closes is one the widening itself would otherwise
+    // have created: with `advisory` mapped canonically and this reader keeping
+    // a fixed precedence, `…__advisory__pending` read `advisory` to one half
+    // and `pending` to the other — which is a walk preflight admitting a cell
+    // the record validator then refuses.
+    for (const name of [
+      "X__review-card__chat_thread__advisory__pending",
+      "X__review-card__chat_thread__pending__advisory",
+      "X__audit-card__run_card__advisory__decided",
+    ]) {
+      expect(stateTokenInCell(name)).toBe(parseCanonicalCellName(name).state);
+    }
+  });
+
+  it("still answers the names the canonical parser declines, unchanged", () => {
+    // Names with no host token at all, and a state buried in a hyphenated
+    // phrase. Five committed names read this way; this reader keeps them, and
+    // keeps two spellings the canonical map does not carry.
+    for (const [name, state] of [
+      ["A1__run-detail__held-at-recommendation-checkpoint", "pending"],
+      ["A2__run-detail__decided-summary-exactly-once", "decided"],
+      ["V6-widget-card-decided", "decided"],
+      ["S9b-4__recommendation-card__chat_thread__skipped", "decided"],
+    ]) {
+      expect(parseCanonicalCellName(name)?.state ?? null).toBe(null);
+      expect(stateTokenInCell(name)).toBe(state);
+    }
+  });
+
+  it("admits it in a WALK PLAN for that kind, and refuses it for another", () => {
+    // Built by rewriting ONE cell of a committed, valid plan, so the only thing
+    // this case can be failing on is the state vocabulary.
+    const base = JSON.parse(
+      readFileSync(join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json"), "utf8"),
+    );
+    expect(validateWalkPlan(base)).toEqual([]);
+    const withCell = (kind) => {
+      const plan = JSON.parse(JSON.stringify(base));
+      const step = plan.steps.find((st) => (st.cells ?? []).length > 0);
+      step.cells = [
+        {
+          ...step.cells[0],
+          cell: "Z1__audit-card__chat_thread__advisory",
+          declaredHost: "chat_thread",
+          kind,
+          state: "advisory",
+          screenshot: "evidence/2788-s9d-rework/captures/z1-advisory.png",
+        },
+      ];
+      return plan;
+    };
+    expect(validateWalkPlan(withCell("verification_summary")).join("\n")).not.toMatch(
+      /is not one of/,
+    );
+    expect(validateWalkPlan(withCell("artifact_review_gate")).join("\n")).toMatch(
+      /state "advisory" is not one of pending\/decided/,
+    );
+
+    // AND THE NAME ANSWERS WHEN THE CELL DOES NOT: omitting `state` used to
+    // skip both this arm and the name-vs-declaration arm, so an `__advisory`
+    // name on a kind that resolves no such state was graded against nothing.
+    const withoutDeclaredState = (kind) => {
+      const plan = withCell(kind);
+      const step = plan.steps.find((st) => (st.cells ?? []).length > 0);
+      delete step.cells[0].state;
+      return plan;
+    };
+    expect(validateWalkPlan(withoutDeclaredState("artifact_review_gate")).join("\n")).toMatch(
+      /state "advisory" is not one of pending\/decided/,
+    );
+    expect(validateWalkPlan(withoutDeclaredState("verification_summary")).join("\n")).not.toMatch(
+      /is not one of/,
+    );
+  });
+
+  it("CAPTURE_STATES — the anchor contract's own input — still reads the two", () => {
+    // The anchor digest is computed over one ratified anchor set per
+    // (host, kind, state) drawn from THIS list, so it is deliberately not the
+    // list the per-kind widening touches.
+    expect(CAPTURE_STATES).toEqual(["pending", "decided"]);
   });
 });
 
