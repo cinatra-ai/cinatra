@@ -1,5 +1,46 @@
 import { z } from "zod";
 
+/** UTF-8 byte length of a caller-supplied string. Byte-exact, not code units. */
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/**
+ * Cap on a caller-supplied `projectId`, in UTF-8 BYTES.
+ *
+ * A project id is an identifier, not a payload. Uncapped it reaches the derived
+ * lane strings, the semantic index `group_ids` and a bound SQL parameter, and a
+ * caller the project gate lets through (a grant holder, or a platform admin who
+ * needs no grant) can make all three megabytes wide. 200 bytes sits far above a
+ * UUID and every slug this repo issues.
+ */
+export const PROJECT_ID_MAX_BYTES = 200;
+
+/**
+ * A caller-supplied `projectId`, validated the same way on every primitive that
+ * accepts one.
+ *
+ * NON-BLANK is the load-bearing half. Each of these handlers normalizes with
+ * `.trim()` and reads an empty result as "no project", so a blank id does not
+ * refuse: it silently becomes an AMBIENT call. On a read that is a widening on
+ * the field the sealed room is built out of. `.min(1)` alone does not close it
+ * (`" "`, `"\t"` and `"\n"` all pass it), so the refinement uses the SAME
+ * `String.prototype.trim` the handlers use, which makes the schema and the
+ * handler agree on every whitespace form JS recognizes, U+00A0 included.
+ *
+ * Callers add `.nullish()` themselves: omitted and explicit `null` stay the two
+ * legitimate ambient states and are deliberately NOT narrowed here.
+ */
+function projectIdField() {
+  return z
+    .string()
+    .min(1)
+    .refine((p) => p.trim().length > 0, { message: "projectId must not be blank" })
+    .refine((p) => utf8Bytes(p) <= PROJECT_ID_MAX_BYTES, {
+      message: `projectId exceeds the ${PROJECT_ID_MAX_BYTES}-byte cap`,
+    });
+}
+
 export const objectsSaveSchema = z.object({
   rawData: z.record(z.string(), z.unknown()).optional().describe("REQUIRED: the actual data payload as a plain JSON object. Put ALL data here — never inside typeHint."),
   // The legacy `payload` alias (of rawData) and top-level `type` alias
@@ -37,7 +78,7 @@ export const objectsSaveSchema = z.object({
   //
   // `orgId` remains actor-derived and is deliberately NOT accepted from the
   // caller on this or any other objects primitive.
-  projectId: z.string().min(1).nullish(),
+  projectId: projectIdField().nullish(),
 }).strict();
 
 export const objectsListSchema = z.object({
@@ -57,7 +98,7 @@ export const objectsListSchema = z.object({
   // Graphiti candidate IDs from project/query/ambient inputs are
   // re-filtered to project-only inside `listObjectsByFilter`.
   // Null is interpreted as ambient (no project filter), same as omission.
-  projectId: z.string().nullish(),
+  projectId: projectIdField().nullish(),
   // cinatra#1456: indexed equality filters over the JSONB `data` column, backing
   // the email thread / campaign / contact query seam. Keys are a CLOSED enum
   // (each backed by a partial expression index on `objects.data`); values are
@@ -241,10 +282,6 @@ export const MEMORY_RECALL_DEFAULT_LIMIT = 10;
  *  meaningful against a bounded row count. */
 export const MEMORY_RECALL_MAX_LIMIT = 50;
 
-function memoryRecallUtf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
 export const memoryRecallSchema = z
   .object({
     // REQUIRED. Trimmed and non-empty: a blank query would fall straight
@@ -256,7 +293,7 @@ export const memoryRecallSchema = z
       .refine((q) => q.trim().length > 0, {
         message: "query must not be blank",
       })
-      .refine((q) => memoryRecallUtf8Bytes(q) <= MEMORY_RECALL_QUERY_MAX_BYTES, {
+      .refine((q) => utf8Bytes(q) <= MEMORY_RECALL_QUERY_MAX_BYTES, {
         message: `query exceeds the ${MEMORY_RECALL_QUERY_MAX_BYTES}-byte cap`,
       }),
     // Frontmatter type filter — matched against the envelope's `okfType` in
@@ -269,7 +306,7 @@ export const memoryRecallSchema = z
       .string()
       .min(1)
       .refine((k) => k.trim().length > 0, { message: "kind must not be blank" })
-      .refine((k) => memoryRecallUtf8Bytes(k) <= MEMORY_RECALL_KIND_MAX_BYTES, {
+      .refine((k) => utf8Bytes(k) <= MEMORY_RECALL_KIND_MAX_BYTES, {
         message: `kind exceeds the ${MEMORY_RECALL_KIND_MAX_BYTES}-byte cap`,
       })
       .optional(),
@@ -286,7 +323,12 @@ export const memoryRecallSchema = z
     // A supplied id is NOT a grant — the handler 404-hides it through
     // `assertProjectReadAccess` and the SQL re-filter lives in
     // `listObjectsByFilter`.
-    projectId: z.string().nullish(),
+    //
+    // Non-blank and byte-capped through the shared `projectIdField()`: a blank
+    // id would trim to null in the handler and answer an UNSEALED ambient
+    // recall instead of refusing, which is a widening on the one field this
+    // whole passage is about.
+    projectId: projectIdField().nullish(),
     limit: z
       .number()
       .int()
@@ -296,3 +338,67 @@ export const memoryRecallSchema = z
       .default(MEMORY_RECALL_DEFAULT_LIMIT),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// The memory_recall RESPONSE, as a schema.
+//
+// `mode` is the point of this primitive, so it is required by something rather
+// than by convention. Two return paths happen to carry it today because the
+// author wrote them that way; a third one would compile clean and every test
+// would stay green. Both halves are closed here:
+//
+//   - the handler is annotated `Promise<MemoryRecallResponse>`, so a return
+//     that omits `mode` is a TYPE error at the moment it is written;
+//   - every return is parsed through `memoryRecallResponseSchema`, so a path
+//     that gets past the type system still fails at runtime.
+//
+// `.strict()` on both objects: a recall answer is a fixed projection, and an
+// extra key riding out of it is the leak the projection exists to prevent.
+// ---------------------------------------------------------------------------
+
+/** One row of a `memory_recall` response — the FIXED, CAPPED projection. */
+export const memoryRecallItemSchema = z
+  .object({
+    id: z.string(),
+    conceptPath: z.string().nullable(),
+    title: z.string().nullable(),
+    kind: z.string().nullable(),
+    scope: z
+      .object({
+        ownerLevel: z.string(),
+        ownerId: z.string().nullable(),
+        visibility: z.string(),
+        projectId: z.string().nullable(),
+      })
+      .strict(),
+    excerpt: z.string(),
+    excerptTruncated: z.boolean(),
+  })
+  .strict();
+
+/**
+ * The whole response.
+ *
+ * `meta` reuses `objects_list`'s degradation vocabulary and carries one
+ * addition, `responseCeiling`, which reports that the aggregate byte ceiling
+ * dropped trailing rows. It is optional on BOTH paths: a plain ranked answer
+ * still has no `meta` at all.
+ */
+export const memoryRecallResponseSchema = z
+  .object({
+    items: z.array(memoryRecallItemSchema),
+    mode: z.enum(["semantic", "degraded-recent"]),
+    ordering: z.enum(["semantic-rank", "lexical-fallback"]),
+    meta: z
+      .object({
+        semanticSearch: z.enum(["unavailable", "no_ids_extracted"]).optional(),
+        fallback: z.literal("postgres_filter").optional(),
+        responseCeiling: z.literal("applied").optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export type MemoryRecallItem = z.infer<typeof memoryRecallItemSchema>;
+export type MemoryRecallResponse = z.infer<typeof memoryRecallResponseSchema>;

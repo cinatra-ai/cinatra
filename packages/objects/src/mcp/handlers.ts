@@ -638,6 +638,48 @@ function buildObjectResourceCheck(row: ObjectRecord): ResourceForAccessCheck {
 export const MEMORY_RECALL_EXCERPT_MAX_BYTES = 512;
 
 /**
+ * Hard caps on the OTHER projected free-text fields, in UTF-8 BYTES.
+ *
+ * The excerpt cap above is only half a bound. `title`, `kind` and `conceptPath`
+ * ride out of the same projection and an author controls all three, so an
+ * uncapped projection lets the payload the excerpt cap refuses move one key
+ * over: a 32 KiB frontmatter title is admissible at ingest and rode out intact.
+ * The ingest ceilings these inherit are the serialized-frontmatter cap (title),
+ * nothing at all (`okfType`) and 1024 bytes (`conceptId`) — none of them a
+ * recall-sized bound. Each field here is a LABEL, not a document: a caller that
+ * wants the row reads `objects_get`.
+ *
+ * `kind` reuses the FILTER cap, so what a caller may ask for and what it may be
+ * told cannot drift apart.
+ */
+export const MEMORY_RECALL_TITLE_MAX_BYTES = 256;
+export const MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES = 1024;
+export const MEMORY_RECALL_ITEM_KIND_MAX_BYTES = schemas.MEMORY_RECALL_KIND_MAX_BYTES;
+
+/**
+ * Aggregate ceiling on ONE SERIALIZED recall response, in UTF-8 BYTES.
+ *
+ * Per-field caps bound a ROW; nothing bounds the sum, and `MEMORY_RECALL_MAX_LIMIT`
+ * multiplies whatever a row costs. This is the backstop that makes the next
+ * field added to the projection inherit a bound instead of needing one written
+ * for it. 64 KiB sits above every recall the caps above can produce at the
+ * default limit and well inside a context window.
+ *
+ * It bounds the WHOLE response, not the sum of the rows: the accounting below
+ * charges the array brackets, every separator and the fixed envelope, because a
+ * ceiling that measures something smaller than what it claims to measure is the
+ * same kind of untrue statement as the rest of this file is about.
+ */
+export const MEMORY_RECALL_RESPONSE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Bytes charged for everything around the items array: `{"items":[...]}` plus
+ * `mode`, `ordering` and the widest `meta`. The real envelope is under 200
+ * bytes; 256 is the rounded reservation, asserted by test rather than assumed.
+ */
+const MEMORY_RECALL_RESPONSE_ENVELOPE_BYTES = 256;
+
+/**
  * Over-fetch factor for a recall whose result is narrowed AFTER ranking.
  *
  * Two filters narrow after the ranked fetch and neither can be pushed into it:
@@ -686,21 +728,14 @@ function truncateToUtf8Bytes(
   return { text: out, truncated: true };
 }
 
-/** One row of a `memory_recall` response. */
-type MemoryRecallItem = {
-  id: string;
-  conceptPath: string | null;
-  title: string | null;
-  kind: string | null;
-  scope: {
-    ownerLevel: string;
-    ownerId: string | null;
-    visibility: string;
-    projectId: string | null;
-  };
-  excerpt: string;
-  excerptTruncated: boolean;
-};
+/**
+ * One row of a `memory_recall` response.
+ *
+ * Derived from `memoryRecallResponseSchema` rather than declared beside it:
+ * the shape the handler builds and the shape the response is parsed against are
+ * then the same object by construction, not by two authors agreeing.
+ */
+type MemoryRecallItem = schemas.MemoryRecallItem;
 
 function memoryRowData(row: ObjectRecord): Record<string, unknown> {
   return (row.data as Record<string, unknown> | null) ?? {};
@@ -724,6 +759,11 @@ function memoryRowMatchesKind(row: ObjectRecord, kind: string | null): boolean {
   return readString(memoryRowData(row).okfType) === kind;
 }
 
+/** Cap a nullable projected label to a UTF-8 byte budget. */
+function capProjectedString(value: string | null, maxBytes: number): string | null {
+  return value === null ? null : truncateToUtf8Bytes(value, maxBytes).text;
+}
+
 /** Canonical row -> the capped recall projection. */
 function toMemoryRecallItem(row: ObjectRecord): MemoryRecallItem {
   const data = memoryRowData(row);
@@ -735,9 +775,16 @@ function toMemoryRecallItem(row: ObjectRecord): MemoryRecallItem {
   const { text, truncated } = truncateToUtf8Bytes(body, MEMORY_RECALL_EXCERPT_MAX_BYTES);
   return {
     id: row.id,
-    conceptPath: readString(data.conceptId),
-    title: readString(frontmatter.title),
-    kind: readString(data.okfType),
+    // Every free-text field is capped, not just the excerpt — see the constants
+    // above. `excerptTruncated` stays specific to the excerpt: it tells a caller
+    // that the LEDE is short of the body, which is the only one of these a
+    // caller would go and fetch the rest of.
+    conceptPath: capProjectedString(
+      readString(data.conceptId),
+      MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES,
+    ),
+    title: capProjectedString(readString(frontmatter.title), MEMORY_RECALL_TITLE_MAX_BYTES),
+    kind: capProjectedString(readString(data.okfType), MEMORY_RECALL_ITEM_KIND_MAX_BYTES),
     // The scope SUMMARY, not a widening: the row has already passed
     // `object.read`, and `objects_list` on the same row returns strictly more
     // (the whole envelope plus the actor block). It is here because a recall
@@ -784,6 +831,48 @@ function rankRecallItemsLexically(
   });
   scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
   return scored.map((s) => s.item);
+}
+
+/**
+ * Apply the aggregate response ceiling.
+ *
+ * Rows are kept in order until the next one would cross
+ * `MEMORY_RECALL_RESPONSE_MAX_BYTES`, and the drop is REPORTED
+ * (`meta.responseCeiling: "applied"`) rather than silent: a recall that quietly
+ * returns fewer rows than it recovered is the same soft dishonesty `mode` exists
+ * to prevent, one layer down.
+ *
+ * The accounting is EXACT and the bound has no exceptions. Two things follow,
+ * and both are deliberate:
+ *
+ *   - the envelope, the array brackets and every `,` separator are charged, so
+ *     the ceiling bounds the serialized response and not a smaller number that
+ *     resembles it;
+ *   - there is no "always keep the first row" escape. `id` and the `scope`
+ *     fields are canonical database columns rather than capped projections, so
+ *     a single row CAN in principle exceed the ceiling alone; keeping it anyway
+ *     would make the bound advisory. A recall that drops every row still says
+ *     so, which is the honest answer to "your one hit does not fit".
+ */
+function applyMemoryRecallResponseCeiling(items: MemoryRecallItem[]): {
+  items: MemoryRecallItem[];
+  ceilingApplied: boolean;
+} {
+  const encoder = new TextEncoder();
+  const kept: MemoryRecallItem[] = [];
+  // The envelope plus `[` and `]`.
+  let bytes = MEMORY_RECALL_RESPONSE_ENVELOPE_BYTES + 2;
+  for (const item of items) {
+    // The item, plus the `,` that joins it to the previous one.
+    const size =
+      encoder.encode(JSON.stringify(item)).length + (kept.length > 0 ? 1 : 0);
+    if (bytes + size > MEMORY_RECALL_RESPONSE_MAX_BYTES) {
+      return { items: kept, ceilingApplied: true };
+    }
+    bytes += size;
+    kept.push(item);
+  }
+  return { items: kept, ceilingApplied: false };
 }
 
 type SaveOwnership = {
@@ -2839,7 +2928,9 @@ export function createObjectsPrimitiveHandlers() {
     // miniature, so the response names both facts: what the candidates are
     // (`mode`) and how they were ordered (`ordering`).
     // -----------------------------------------------------------------
-    "memory_recall": async (request: PrimitiveInvocationRequest<unknown>) => {
+    "memory_recall": async (
+      request: PrimitiveInvocationRequest<unknown>,
+    ): Promise<schemas.MemoryRecallResponse> => {
       // STRICT parse (schemas.memoryRecallSchema). This is where a forged
       // `group_ids` / `groupIds` / `lanes` / `orgId` dies: lanes are derived
       // below from the AUTHENTICATED actor and there is no input surface for
@@ -2993,17 +3084,38 @@ export function createObjectsPrimitiveHandlers() {
       // and the mode is decided on what it RECOVERED.
       let ordered: ObjectRecord[] = [];
       if (!unavailable && objectIds !== null && objectIds.length > 0) {
+        // BOUND THE CANDIDATE SET, THEN ASK FOR ALL OF IT. Two facts meet here
+        // and the read is wrong without both.
+        //
+        // `resolveObjectIds` can return MORE ids than `max_nodes` asked for — a
+        // merged anchor names several rows — so the id list is not already
+        // bounded by `candidateLimit`. And `listObjectsByFilter` suppresses
+        // `ORDER BY` whenever `ids` is set (the caller re-imposes rank) and
+        // falls back to `LIMIT 100` when no limit is passed. Pass no limit and
+        // beyond 100 candidates the database keeps an arbitrary 100 of them in
+        // no defined order: the top-ranked row can be the one it drops, while
+        // the response still answers `mode: "semantic"`, `ordering:
+        // "semantic-rank"`. That is this primitive's own failure arriving
+        // through the read.
+        //
+        // So: slice to `candidateLimit` first — a DETERMINISTIC drop of the
+        // LOWEST-ranked ids, which is the bound the over-fetch already promised
+        // — and then pass `limit: candidateIds.length`, which covers every id
+        // that survived it. Same rule the degraded read below states, now
+        // applied on the path that ranks.
+        const candidateIds = objectIds.slice(0, candidateLimit);
         const rows = listObjectsByFilter(
           {
             orgId,
-            ids: objectIds,
+            ids: candidateIds,
             type: MEMORY_CONCEPT_TYPE_ID,
             projectId,
+            limit: candidateIds.length,
           },
           scopeActor,
         );
         const byId = new Map<string, ObjectRecord>(rows.map((r) => [r.id, r]));
-        ordered = objectIds
+        ordered = candidateIds
           .map((id) => byId.get(id))
           .filter((r): r is ObjectRecord => r != null);
       }
@@ -3015,15 +3127,21 @@ export function createObjectsPrimitiveHandlers() {
         // an honest empty search result. Relabelling it degradation would be the
         // same dishonesty pointing the other way.
         const visible = await filterByAuthz(ordered);
-        const items = visible
-          .filter((r) => memoryRowMatchesKind(r, kind))
-          .map(toMemoryRecallItem)
-          .slice(0, limit);
-        return {
+        const { items, ceilingApplied } = applyMemoryRecallResponseCeiling(
+          visible
+            .filter((r) => memoryRowMatchesKind(r, kind))
+            .map(toMemoryRecallItem)
+            .slice(0, limit),
+        );
+        // Parsed, not just returned: `mode` is required by the schema AND by
+        // the handler's declared return type, so neither a new path nor a
+        // reshaped one can drop it quietly.
+        return schemas.memoryRecallResponseSchema.parse({
           items,
-          mode: "semantic" as const,
-          ordering: "semantic-rank" as const,
-        };
+          mode: "semantic",
+          ordering: "semantic-rank",
+          ...(ceilingApplied ? { meta: { responseCeiling: "applied" } } : {}),
+        });
       }
 
       // ---------------- DEGRADED PATH ----------------
@@ -3045,18 +3163,22 @@ export function createObjectsPrimitiveHandlers() {
         scopeActor,
       );
       const recentVisible = await filterByAuthz(recent);
-      const recentItems = rankRecallItemsLexically(
-        recentVisible.filter((r) => memoryRowMatchesKind(r, kind)).map(toMemoryRecallItem),
-        query,
-      ).slice(0, limit);
-      return {
+      const { items: recentItems, ceilingApplied } = applyMemoryRecallResponseCeiling(
+        rankRecallItemsLexically(
+          recentVisible.filter((r) => memoryRowMatchesKind(r, kind)).map(toMemoryRecallItem),
+          query,
+        ).slice(0, limit),
+      );
+      return schemas.memoryRecallResponseSchema.parse({
         items: recentItems,
-        mode: "degraded-recent" as const,
-        ordering: "lexical-fallback" as const,
-        meta: unavailable
-          ? { semanticSearch: "unavailable" as const, fallback: "postgres_filter" as const }
-          : { semanticSearch: "no_ids_extracted" as const, fallback: "postgres_filter" as const },
-      };
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: {
+          semanticSearch: unavailable ? "unavailable" : "no_ids_extracted",
+          fallback: "postgres_filter",
+          ...(ceilingApplied ? { responseCeiling: "applied" } : {}),
+        },
+      });
     },
 
     "objects_get": async (request: PrimitiveInvocationRequest<unknown>) => {

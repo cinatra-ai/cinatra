@@ -47,6 +47,33 @@ vi.mock("@/lib/better-auth-db", () => ({
   readTeamsForUser: vi.fn(async () => [] as Array<{ id: string; name: string }>),
 }));
 
+// The kernel, DENYING by default (round 1, item 6). Without this the
+// package-wide alias stub answers allow-by-default, every row the per-row
+// `object.read` probe sees is admitted, and the drop assertions below assert
+// nothing. `enforceResourceAccess` short-circuits a user-owned row for its OWN
+// owner before it consults the kernel, so a denying `can` still lets the caller
+// read its own rows — which is exactly the asymmetry these tests need. A test
+// that wants a NON-owned row admitted opts in explicitly with
+// `mockCan.mockReturnValue(true)`.
+vi.mock("@/lib/authz", () => ({
+  can: vi.fn(() => false),
+  canDo: vi.fn(() => false),
+  buildActorContext: vi.fn(() => ({})),
+  AuthzError: class AuthzError extends Error {
+    statusCode: number;
+    reason: string;
+    constructor(opts: { statusCode: number; reason: string; message?: string }) {
+      super(opts.message ?? opts.reason);
+      this.name = "AuthzError";
+      this.statusCode = opts.statusCode;
+      this.reason = opts.reason;
+    }
+  },
+  EFFECTIVE_GRANTS: {},
+  POLICY_VERSION: "test",
+  logAuditEvent: vi.fn(),
+}));
+
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { searchNodes } from "../graphiti-client";
 import {
@@ -54,15 +81,26 @@ import {
   resolveObjectIdsByAnchorNodeUuids,
 } from "@/lib/objects-store";
 import { readTeamsForUser } from "@/lib/better-auth-db";
+import { can } from "@/lib/authz";
 import { deriveProjectionGroupId } from "../graphiti-projection-policy";
 import {
   MEMORY_RECALL_CANDIDATE_FETCH_MAX,
+  MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES,
   MEMORY_RECALL_EXCERPT_MAX_BYTES,
+  MEMORY_RECALL_ITEM_KIND_MAX_BYTES,
+  MEMORY_RECALL_RESPONSE_MAX_BYTES,
+  MEMORY_RECALL_TITLE_MAX_BYTES,
+  onInternalReadAuthzDrop,
 } from "../mcp/handlers";
 import {
   MEMORY_RECALL_KIND_MAX_BYTES,
   MEMORY_RECALL_MAX_LIMIT,
   MEMORY_RECALL_QUERY_MAX_BYTES,
+  PROJECT_ID_MAX_BYTES,
+  memoryRecallResponseSchema,
+  memoryRecallSchema,
+  objectsListSchema,
+  objectsSaveSchema,
 } from "../mcp/schemas";
 
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
@@ -74,6 +112,7 @@ const mockSearch = searchNodes as unknown as ReturnType<typeof vi.fn>;
 const mockList = listObjectsByFilter as unknown as ReturnType<typeof vi.fn>;
 const mockAnchors = resolveObjectIdsByAnchorNodeUuids as unknown as ReturnType<typeof vi.fn>;
 const mockTeams = readTeamsForUser as unknown as ReturnType<typeof vi.fn>;
+const mockCan = can as unknown as ReturnType<typeof vi.fn>;
 
 const ACTOR = {
   actorType: "model",
@@ -165,7 +204,7 @@ type RecallResponse = {
   }>;
   mode: "semantic" | "degraded-recent";
   ordering: "semantic-rank" | "lexical-fallback";
-  meta?: { semanticSearch?: string; fallback?: string };
+  meta?: { semanticSearch?: string; fallback?: string; responseCeiling?: string };
 };
 
 /** Wire `searchNodes` so `resolveObjectIds` deterministically yields `ids`. */
@@ -186,6 +225,8 @@ beforeEach(() => {
   mockList.mockReturnValue([]);
   mockTeams.mockReset();
   mockTeams.mockResolvedValue([]);
+  mockCan.mockReset();
+  mockCan.mockReturnValue(false);
 });
 
 // ---------------------------------------------------------------------------
@@ -297,6 +338,9 @@ describe("memory_recall — scoped lanes and limit (AC1, doubles)", () => {
   });
 
   it("projects the capped recall row, not the whole envelope", async () => {
+    // A TEAM-owned row: the owner short-circuit does not apply, so the denying
+    // kernel double has to be told to admit it.
+    mockCan.mockReturnValue(true);
     semanticHit(["r1"]);
     mockList.mockReturnValue([
       memoryRow("r1", {
@@ -560,5 +604,460 @@ describe("memory_recall — honest degradation (AC2, doubles)", () => {
     mockList.mockReturnValue([memoryRow("r1"), memoryRow("r2"), memoryRow("r3")]);
     const res = (await recall({ query: "q", limit: 2 })) as RecallResponse;
     expect(res.items).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 1, item 1 — the ranked read must not be truncated by the database.
+//
+// `listObjectsByFilter` suppresses `ORDER BY` whenever `ids` is set and applies
+// `LIMIT 100` when the caller passes no limit. The double below reproduces both
+// facts, so a ranked read that hands over more than 100 candidates without a
+// limit loses rows in an order it did not choose — and the response still says
+// `semantic` / `semantic-rank`. Captured RED against the handler before the
+// `limit: candidateIds.length` argument existed: the top-ranked row was absent
+// and the answer was ranks 50-59.
+// ---------------------------------------------------------------------------
+
+type StoreFilter = { ids?: string[]; limit?: number };
+
+/** The store, behaving the way the SQL does on an id read. */
+function storeBehavesLikeSql(rows: Array<ReturnType<typeof memoryRow>>) {
+  mockList.mockImplementation((filter: StoreFilter) => {
+    const pool = filter.ids ? rows.filter((r) => filter.ids!.includes(r.id)) : rows;
+    // With no ORDER BY the database is free to return any order. Reversed is a
+    // legal one, and it is the one that puts the top rank at the far end.
+    const arbitrary = [...pool].reverse();
+    return arbitrary.slice(0, filter.limit ?? 100);
+  });
+}
+
+describe("memory_recall — the ranked read is bounded, not truncated (item 1)", () => {
+  it("keeps the TOP rank on a 150-candidate read (the measured regression)", async () => {
+    // Round 1's measurement, reproduced: 150 ranked ids at the default limit.
+    // Unfixed, all 150 went to the store with no limit, the SQL kept an
+    // arbitrary 100 of them and the answer was ranks 50-59 labelled `semantic`.
+    const ids = Array.from({ length: 150 }, (_, i) => `r${i}`);
+    semanticHit(ids);
+    storeBehavesLikeSql(ids.map((id) => memoryRow(id)));
+
+    const res = (await recall({ query: "q", kind: "note" })) as RecallResponse;
+
+    // `kind` widens the budget to 5 x 10; the id list is cut to it BEFORE the
+    // read, and the read asks for exactly that many.
+    const call = mockList.mock.calls[0]![0] as StoreFilter;
+    expect(call.ids).toHaveLength(50);
+    expect(call.limit).toBe(50);
+    expect(call.ids![0]).toBe("r0");
+    expect(res.items.map((i) => i.id)).toEqual(ids.slice(0, 10));
+    expect(res.mode).toBe("semantic");
+    expect(res.ordering).toBe("semantic-rank");
+  });
+
+  it("asks for EVERY candidate when the budget exceeds the SQL default of 100", async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `r${i}`);
+    semanticHit(ids);
+    storeBehavesLikeSql(ids.map((id) => memoryRow(id)));
+
+    // limit 50 + `kind` puts candidateLimit at the 250 ceiling, so all 150 ids
+    // are legitimate candidates and none may be lost to the default LIMIT 100.
+    const res = (await recall({
+      query: "q",
+      kind: "note",
+      limit: MEMORY_RECALL_MAX_LIMIT,
+    })) as RecallResponse;
+
+    const call = mockList.mock.calls[0]![0] as StoreFilter;
+    expect(call.ids).toHaveLength(150);
+    expect(call.limit).toBe(150);
+    expect(res.items.map((i) => i.id)).toEqual(ids.slice(0, MEMORY_RECALL_MAX_LIMIT));
+  });
+
+  it("caps the candidate set at candidateLimit and drops the LOWEST ranks only", async () => {
+    const ids = Array.from({ length: 300 }, (_, i) => `r${i}`);
+    semanticHit(ids);
+    storeBehavesLikeSql(ids.map((id) => memoryRow(id)));
+
+    const res = (await recall({
+      query: "q",
+      kind: "note",
+      limit: MEMORY_RECALL_MAX_LIMIT,
+    })) as RecallResponse;
+
+    const call = mockList.mock.calls[0]![0] as StoreFilter;
+    expect(call.ids).toHaveLength(MEMORY_RECALL_CANDIDATE_FETCH_MAX);
+    expect(call.limit).toBe(MEMORY_RECALL_CANDIDATE_FETCH_MAX);
+    expect(call.ids![0]).toBe("r0");
+    expect(call.ids![MEMORY_RECALL_CANDIDATE_FETCH_MAX - 1]).toBe(
+      `r${MEMORY_RECALL_CANDIDATE_FETCH_MAX - 1}`,
+    );
+    expect(res.items.map((i) => i.id)).toEqual(ids.slice(0, MEMORY_RECALL_MAX_LIMIT));
+  });
+
+  it("stays bounded when one merged anchor names MORE rows than max_nodes asked for", async () => {
+    // `resolveObjectIds` takes every row a merged anchor names, so the id list
+    // is NOT already bounded by `max_nodes`. Without the slice the read would
+    // ask for 124 ids on a 10-candidate budget.
+    const many = Array.from({ length: 120 }, (_, i) => `m${i}`);
+    mockSearch.mockResolvedValue({
+      nodes: [
+        { uuid: "anchor-0", name: "n0" },
+        { uuid: "anchor-1", name: "n1" },
+      ],
+    });
+    mockAnchors.mockReturnValue(
+      new Map([
+        ["anchor-0", many],
+        ["anchor-1", ["m-last"]],
+      ]),
+    );
+    storeBehavesLikeSql([...many, "m-last"].map((id) => memoryRow(id)));
+
+    const res = (await recall({ query: "q", limit: 10 })) as RecallResponse;
+
+    const call = mockList.mock.calls[0]![0] as StoreFilter;
+    // No `kind` and no project seal, so candidateLimit === limit === 10.
+    expect(call.ids).toHaveLength(10);
+    expect(call.limit).toBe(10);
+    expect(res.items.map((i) => i.id)).toEqual(many.slice(0, 10));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 1, item 2 — `mode` is required by something.
+// ---------------------------------------------------------------------------
+
+describe("memory_recall — the response shape is enforced (item 2)", () => {
+  it("the response schema REFUSES a response with no `mode`", () => {
+    const noMode = memoryRecallResponseSchema.safeParse({
+      items: [],
+      ordering: "semantic-rank",
+    });
+    expect(noMode.success).toBe(false);
+  });
+
+  it("the response schema refuses an unknown `mode`, `ordering` or extra key", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items: [],
+        mode: "ranked",
+        ordering: "semantic-rank",
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items: [],
+        mode: "semantic",
+        ordering: "recency",
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items: [],
+        mode: "semantic",
+        ordering: "semantic-rank",
+        nextCursor: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  // Not "the two paths that exist": every path a caller can reach is bound to
+  // the SAME parse the handler returns through, so a third one inherits it.
+  it("EVERY reachable path returns a response that satisfies the schema", async () => {
+    const paths: Array<() => Promise<unknown>> = [
+      // a real ranked hit
+      async () => {
+        semanticHit(["r1"]);
+        mockList.mockReturnValue([memoryRow("r1")]);
+        return recall({ query: "q" });
+      },
+      // the index threw
+      async () => {
+        mockSearch.mockRejectedValue(new Error("down"));
+        mockList.mockReturnValue([memoryRow("r1")]);
+        return recall({ query: "q" });
+      },
+      // ranked ids recovered no row
+      async () => {
+        semanticHit(["ghost"]);
+        mockList.mockReturnValueOnce([]).mockReturnValueOnce([memoryRow("r1")]);
+        return recall({ query: "q" });
+      },
+      // an empty corpus
+      async () => {
+        mockSearch.mockResolvedValue({ nodes: [] });
+        mockList.mockReturnValue([]);
+        return recall({ query: "q" });
+      },
+      // a ranked hit that `kind` then empties
+      async () => {
+        semanticHit(["r1"]);
+        mockList.mockReturnValue([memoryRow("r1", { okfType: "note" })]);
+        return recall({ query: "q", kind: "decision" });
+      },
+    ];
+
+    for (const path of paths) {
+      mockSearch.mockReset();
+      mockAnchors.mockReset();
+      mockAnchors.mockReturnValue(new Map());
+      mockList.mockReset();
+      const res = await path();
+      const parsed = memoryRecallResponseSchema.safeParse(res);
+      expect(parsed.success).toBe(true);
+      expect((res as RecallResponse).mode).toBeDefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 1, item 3 — every projected field is capped, and so is the total.
+// ---------------------------------------------------------------------------
+
+const utf8 = (v: string) => new TextEncoder().encode(v).length;
+
+describe("memory_recall — the projection caps EVERY field (item 3)", () => {
+  it("caps `title`, `kind` and `conceptPath`, not only the excerpt", async () => {
+    semanticHit(["r1"]);
+    mockList.mockReturnValue([
+      memoryRow("r1", {
+        title: "T".repeat(30 * 1024),
+        okfType: "K".repeat(4096),
+        conceptId: "C".repeat(8192),
+        body: "b".repeat(4096),
+      }),
+    ]);
+    const item = ((await recall({ query: "q" })) as RecallResponse).items[0]!;
+
+    expect(utf8(item.title!)).toBeLessThanOrEqual(MEMORY_RECALL_TITLE_MAX_BYTES);
+    expect(utf8(item.kind!)).toBeLessThanOrEqual(MEMORY_RECALL_ITEM_KIND_MAX_BYTES);
+    expect(utf8(item.conceptPath!)).toBeLessThanOrEqual(MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES);
+    expect(utf8(item.excerpt)).toBeLessThanOrEqual(MEMORY_RECALL_EXCERPT_MAX_BYTES);
+  });
+
+  it("caps on BYTES, not code units, and never splits a code point", async () => {
+    semanticHit(["r1"]);
+    mockList.mockReturnValue([
+      memoryRow("r1", { title: "ä".repeat(MEMORY_RECALL_TITLE_MAX_BYTES) }),
+    ]);
+    const item = ((await recall({ query: "q" })) as RecallResponse).items[0]!;
+    expect(utf8(item.title!)).toBeLessThanOrEqual(MEMORY_RECALL_TITLE_MAX_BYTES);
+    expect(item.title).not.toContain("�");
+  });
+
+  it("bounds the WHOLE response and says so when it drops rows", async () => {
+    const rows = Array.from({ length: MEMORY_RECALL_MAX_LIMIT }, (_, i) =>
+      memoryRow(`r${i}`, {
+        title: "T".repeat(4096),
+        okfType: "K".repeat(4096),
+        conceptId: "C".repeat(8192),
+        body: "b".repeat(8192),
+      }),
+    );
+    semanticHit(rows.map((r) => r.id));
+    mockList.mockReturnValue(rows);
+
+    const res = (await recall({
+      query: "q",
+      limit: MEMORY_RECALL_MAX_LIMIT,
+    })) as RecallResponse;
+
+    // The WHOLE serialized response, not the sum of the rows: the accounting
+    // charges the envelope, the brackets and every separator.
+    expect(utf8(JSON.stringify(res))).toBeLessThanOrEqual(
+      MEMORY_RECALL_RESPONSE_MAX_BYTES,
+    );
+    expect(res.items.length).toBeLessThan(MEMORY_RECALL_MAX_LIMIT);
+    expect(res.items.length).toBeGreaterThan(0);
+    // Reported, not silent — and reported on the SEMANTIC path too.
+    expect(res.mode).toBe("semantic");
+    expect(res.meta?.responseCeiling).toBe("applied");
+  });
+
+  it("holds the bound with NO exception when a single row cannot fit", async () => {
+    // `id` and the `scope` fields are canonical columns, not capped
+    // projections, so one row can exceed the ceiling on its own. The bound has
+    // no "keep the first row anyway" escape, and the empty answer says why.
+    const giant = "i".repeat(MEMORY_RECALL_RESPONSE_MAX_BYTES + 1);
+    semanticHit([giant]);
+    mockList.mockReturnValue([memoryRow(giant)]);
+    const res = (await recall({ query: "q" })) as RecallResponse;
+
+    expect(utf8(JSON.stringify(res))).toBeLessThanOrEqual(
+      MEMORY_RECALL_RESPONSE_MAX_BYTES,
+    );
+    expect(res.items).toEqual([]);
+    expect(res.meta?.responseCeiling).toBe("applied");
+  });
+
+  it("reserves enough envelope for the widest response the schema allows", async () => {
+    // The reservation is asserted, not assumed: the widest envelope is the
+    // degraded one with a full `meta`.
+    mockSearch.mockRejectedValue(new Error("down"));
+    mockList.mockReturnValue([memoryRow("r1")]);
+    const res = (await recall({ query: "q" })) as RecallResponse;
+    const envelopeOnly = { ...res, items: [] as unknown[] };
+    expect(
+      utf8(JSON.stringify(envelopeOnly)) + "responseCeiling:applied".length,
+    ).toBeLessThanOrEqual(256);
+  });
+
+  it("leaves `meta` absent on a ranked answer that fits", async () => {
+    semanticHit(["r1"]);
+    mockList.mockReturnValue([memoryRow("r1")]);
+    const res = (await recall({ query: "q" })) as RecallResponse;
+    expect(res.meta).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 1, items 4 + 5 — a blank projectId must REFUSE, not silently unseal,
+// and an oversized one must not reach the lanes.
+// ---------------------------------------------------------------------------
+
+describe("memory_recall — projectId is non-blank and capped (items 4, 5)", () => {
+  // `.min(1)` alone admits every one of these except "". The last two are the
+  // unicode spaces `String.prototype.trim` also removes, which is why the
+  // refinement uses trim rather than a hand-rolled character class.
+  const BLANK = ["", " ", "   ", "\t", "\n", "\r\n", "\u00a0", "\u2003"];
+
+  it.each(BLANK)("REFUSES a blank projectId (%j) instead of unsealing", async (blank) => {
+    await expect(recall({ query: "q", projectId: blank })).rejects.toThrow();
+    // The refusal is at the door: no lane was derived and no read was issued.
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it("still ACCEPTS omitted and explicit null — the ambient states are correct", async () => {
+    mockList.mockReturnValue([memoryRow("r1")]);
+    semanticHit(["r1"]);
+    const omitted = (await recall({ query: "q" })) as RecallResponse;
+    expect(omitted.items.map((i) => i.id)).toEqual(["r1"]);
+
+    semanticHit(["r1"]);
+    const explicitNull = (await recall({ query: "q", projectId: null })) as RecallResponse;
+    expect(explicitNull.items.map((i) => i.id)).toEqual(["r1"]);
+    // Ambient: no project filter reached the store on either call.
+    for (const call of mockList.mock.calls) {
+      expect((call[0] as { projectId?: string | null }).projectId).toBeNull();
+    }
+  });
+
+  it("refuses a projectId over the BYTE cap before it can reach a lane", async () => {
+    await expect(
+      recall({ query: "q", projectId: "p".repeat(PROJECT_ID_MAX_BYTES + 1) }),
+    ).rejects.toThrow();
+    // Multibyte: 100 three-byte code points are 300 bytes, not 100 units.
+    await expect(
+      recall({ query: "q", projectId: "中".repeat(100) }),
+    ).rejects.toThrow();
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it("accepts a projectId AT the cap (the ceiling is not off by one)", () => {
+    expect(
+      memoryRecallSchema.safeParse({
+        query: "q",
+        projectId: "p".repeat(PROJECT_ID_MAX_BYTES),
+      }).success,
+    ).toBe(true);
+  });
+
+  // The same gap is inherited by the two neighbouring read/write surfaces that
+  // normalize projectId the same way. Fixed in the same edit, pinned here.
+  it("closes the same blank/oversize gap on objects_list and objects_save", () => {
+    for (const blank of BLANK) {
+      expect(objectsListSchema.safeParse({ projectId: blank }).success).toBe(false);
+      expect(objectsSaveSchema.safeParse({ projectId: blank }).success).toBe(false);
+    }
+    const huge = "p".repeat(PROJECT_ID_MAX_BYTES + 1);
+    expect(objectsListSchema.safeParse({ projectId: huge }).success).toBe(false);
+    expect(objectsSaveSchema.safeParse({ projectId: huge }).success).toBe(false);
+    // Ambient stays legal on both.
+    expect(objectsListSchema.safeParse({ projectId: null }).success).toBe(true);
+    expect(objectsListSchema.safeParse({}).success).toBe(true);
+    expect(objectsSaveSchema.safeParse({ projectId: null }).success).toBe(true);
+    expect(objectsSaveSchema.safeParse({}).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 1, item 6 — the per-row `object.read` probe actually drops rows.
+//
+// Every assertion here is vacuous without the denying kernel double installed
+// at the top of this file: under the package-wide allow-by-default alias all of
+// them pass with the probe removed.
+// ---------------------------------------------------------------------------
+
+/** A row the caller does NOT own — the owner short-circuit cannot admit it. */
+function foreignRow(id: string) {
+  return memoryRow(id, { ownerId: "user-2" });
+}
+
+describe("memory_recall — the per-row authz probe drops rows (item 6)", () => {
+  it("returns the caller's own row and DROPS the row it may not read", async () => {
+    semanticHit(["mine", "theirs"]);
+    mockList.mockReturnValue([memoryRow("mine"), foreignRow("theirs")]);
+    const res = (await recall({ query: "q" })) as RecallResponse;
+    expect(res.items.map((i) => i.id)).toEqual(["mine"]);
+  });
+
+  it("answers 0 items and KEEPS mode `semantic` when every ranked row is denied", async () => {
+    semanticHit(["a", "b", "c"]);
+    mockList.mockReturnValue([foreignRow("a"), foreignRow("b"), foreignRow("c")]);
+    const res = (await recall({ query: "q" })) as RecallResponse;
+    // Rows WERE recovered for this query; a filter removed them. That is an
+    // honest empty search result, not degradation.
+    expect(res.items).toEqual([]);
+    expect(res.mode).toBe("semantic");
+    expect(res.meta).toBeUndefined();
+  });
+
+  it("drops denied rows on the DEGRADED path too", async () => {
+    mockSearch.mockRejectedValue(new Error("down"));
+    mockList.mockReturnValue([
+      ...Array.from({ length: 5 }, (_, i) => memoryRow(`mine-${i}`)),
+      ...Array.from({ length: 15 }, (_, i) => foreignRow(`theirs-${i}`)),
+    ]);
+    const res = (await recall({ query: "q", limit: 10 })) as RecallResponse;
+    expect(res.items).toHaveLength(5);
+    expect(res.items.every((i) => i.id.startsWith("mine-"))).toBe(true);
+  });
+
+  it("emits the loud internal-read drop diagnostic for a system actor", async () => {
+    const events: Array<{ primitive: string; droppedCount: number; totalCount: number }> = [];
+    const off = onInternalReadAuthzDrop((e) => events.push(e));
+    try {
+      const SYSTEM_ACTOR = {
+        actorType: "system",
+        source: "worker",
+        ...({ orgId: ORG } as unknown as Record<string, unknown>),
+      } as never;
+      semanticHit(["a", "b"]);
+      mockList.mockReturnValue([foreignRow("a"), foreignRow("b")]);
+      const res = (await recall({ query: "q" }, SYSTEM_ACTOR)) as RecallResponse;
+      expect(res.items).toEqual([]);
+    } finally {
+      off();
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      primitive: "memory_recall",
+      droppedCount: 2,
+      totalCount: 2,
+    });
+  });
+
+  it("stays silent for an INTERACTIVE caller's ordinary drop", async () => {
+    const events: unknown[] = [];
+    const off = onInternalReadAuthzDrop((e) => events.push(e));
+    try {
+      semanticHit(["a"]);
+      mockList.mockReturnValue([foreignRow("a")]);
+      await recall({ query: "q" });
+    } finally {
+      off();
+    }
+    expect(events).toHaveLength(0);
   });
 });
