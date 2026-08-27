@@ -10,6 +10,7 @@ import {
   renderRunWindowFrame,
   RUN_WINDOW_FRAME_MAX_FIELDS,
   RUN_WINDOW_FRAME_MAX_VALUE,
+  RUN_WINDOW_FRAME_MAX_REVIEW_GATES,
   RUN_WINDOW_FRAME_MAX_REVIEW_TARGETS,
 } from "../run-window-frame";
 
@@ -441,6 +442,135 @@ describe("the frame is bounded, and it is this run's only", () => {
       (f) => f.name === "reviewed target",
     );
     expect(targets).toHaveLength(RUN_WINDOW_FRAME_MAX_REVIEW_TARGETS);
+  });
+
+  it("the cap carries the review that is OPEN, never a run's settled history instead", async () => {
+    // The store hands the gates back OLDEST FIRST, and a run collects them over
+    // its life. A plain cut of the first few would carry a run's settled
+    // history and drop the review that is open — "Waiting on Nothing" again, on
+    // exactly the runs that have been reviewed most.
+    const settled = Array.from({ length: RUN_WINDOW_FRAME_MAX_REVIEW_GATES + 2 }, (_v, i) => ({
+      ...REVIEW_GATE,
+      id: `gate-old-${i}`,
+      reviewTaskId: `lg-old-${i}`,
+      status: "resolved" as const,
+      disposition: "approve",
+      createdAt: new Date(`2026-07-0${(i % 9) + 1}T00:00:00Z`),
+    }));
+    const { ports: p } = ports({
+      deriveHitlContext: async () => null,
+      // Oldest first, and the OPEN one arrived last — the store's own order.
+      listReviewGates: async () => [...settled, REVIEW_GATE],
+    });
+    const frame = await buildRunWindowFrame({
+      run: RUN,
+      template: TEMPLATE,
+      surface: "review",
+      viewer: VIEWER,
+      ports: p,
+    });
+    const reviews = frame.gates.filter((g) => g.kind === "review");
+    expect(reviews).toHaveLength(RUN_WINDOW_FRAME_MAX_REVIEW_GATES);
+    expect(reviews.filter((g) => g.waiting).map((g) => g.reference)).toEqual(["lg-run-7"]);
+    const text = renderRunWindowFrame(frame);
+    expect(text).toContain("- Waiting on: review, task lg-run-7");
+    expect(text).not.toContain("not waiting for a person right now");
+  });
+
+  it("names the decision in the drawing's own terms — the bar's three, and changes typed into the window", async () => {
+    // The decision bar offers EXACTLY Approve, Reject and Comment; the first two
+    // are terminal and need approve access on the run, while this window is
+    // drawn for anyone who may respond. And requesting changes "is a
+    // conversation, not a fourth button" — it is typed into the prompt window.
+    // A frame that put a request for changes on the bar, or handed every reader
+    // Approve, would describe controls their own screen does not offer them.
+    const { ports: p } = ports({
+      deriveHitlContext: async () => null,
+      listReviewGates: async () => [REVIEW_GATE],
+    });
+    const text = renderRunWindowFrame(
+      await buildRunWindowFrame({
+        run: RUN,
+        template: TEMPLATE,
+        surface: "review",
+        viewer: VIEWER,
+        ports: p,
+      }),
+    );
+    expect(text).toContain("your review decision");
+    expect(text).toContain("Approve or Reject on this review's own decision bar");
+    expect(text).toContain("needing approve access on the run");
+    expect(text).toContain("Comment there, which records a note and leaves the gate pending");
+    expect(text).toContain("Asking for CHANGES is not a button: it is typed into this window");
+    // Never a fourth button on the bar, and never a flat promise of Approve.
+    expect(text).not.toContain("Approve, Reject, or a request for changes");
+    expect(text).not.toContain("decision bar — a request for changes");
+  });
+
+  it("points a reader away from this window when the review is not the screen they are on", async () => {
+    // Same run, a different mount: the change request is typed into the review's
+    // OWN window, and this one is not it.
+    const { ports: p } = ports({
+      deriveHitlContext: async () => null,
+      listReviewGates: async () => [REVIEW_GATE],
+    });
+    const text = renderRunWindowFrame(
+      await buildRunWindowFrame({
+        run: RUN,
+        template: TEMPLATE,
+        surface: "run-page",
+        viewer: VIEWER,
+        ports: p,
+      }),
+    );
+    expect(text).toContain("typed into the prompt window on this review's own screen");
+    expect(text).not.toContain("typed into this window");
+  });
+
+  it("says how many reviews are waiting but not listed, rather than carrying a few in silence", async () => {
+    // A run can hold more reviews open at once than a prompt fragment should
+    // carry. Carrying the first few and saying nothing would let the model
+    // answer as though they were all of them.
+    const open = Array.from({ length: RUN_WINDOW_FRAME_MAX_REVIEW_GATES + 2 }, (_v, i) => ({
+      ...REVIEW_GATE,
+      id: `gate-open-${i}`,
+      reviewTaskId: `lg-open-${i}`,
+      createdAt: new Date(`2026-08-0${(i % 9) + 1}T00:00:00Z`),
+    }));
+    const { ports: p } = ports({
+      deriveHitlContext: async () => null,
+      listReviewGates: async () => open,
+    });
+    const frame = await buildRunWindowFrame({
+      run: RUN,
+      template: TEMPLATE,
+      surface: "review",
+      viewer: VIEWER,
+      ports: p,
+    });
+    expect(frame.gates.filter((g) => g.kind === "review")).toHaveLength(
+      RUN_WINDOW_FRAME_MAX_REVIEW_GATES,
+    );
+    const text = renderRunWindowFrame(frame);
+    expect(text).toContain("2 more review(s) on this run are ALSO waiting");
+    expect(text).not.toContain("not waiting for a person right now");
+  });
+
+  it("says nothing about reviews not listed when every open one fits", async () => {
+    const { ports: p } = ports({
+      deriveHitlContext: async () => null,
+      listReviewGates: async () => [REVIEW_GATE],
+    });
+    const text = renderRunWindowFrame(
+      await buildRunWindowFrame({
+        run: RUN,
+        template: TEMPLATE,
+        surface: "review",
+        viewer: VIEWER,
+        ports: p,
+      }),
+    );
+    expect(text).not.toContain("reviews not listed here");
   });
 
   it("a review target's own title cannot forge the fence", async () => {

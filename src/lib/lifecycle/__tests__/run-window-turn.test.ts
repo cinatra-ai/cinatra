@@ -505,6 +505,11 @@ describe("the window hands the assistant the run it sits under", () => {
       // on the very screen waiting for the person's decision.
       expect(frame).toContain("- Waiting on: review, task lg-run-1");
       expect(frame).toContain("your review decision");
+      // …and no more than is true: the bar's three affordances, the access a
+      // terminal decision needs, and a request for changes that is typed rather
+      // than pressed — never a control this reader's own screen does not offer.
+      expect(frame).toContain("needing approve access on the run");
+      expect(frame).toContain("Asking for CHANGES is not a button");
       expect(frame).toContain("Q3 launch announcement");
       expect(frame).toContain("Email");
       // Read by the run's own id, and the target as this reader.

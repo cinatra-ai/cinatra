@@ -332,7 +332,29 @@ export async function buildRunWindowFrame(args: {
   // state and worth answering about — but under "also recorded", never as
   // something the run waits on.
   const reviewGates = await ports.listReviewGates(run.id).catch(() => []);
-  for (const gate of reviewGates.slice(0, RUN_WINDOW_FRAME_MAX_REVIEW_GATES)) {
+  // WHAT THE CAP CUTS FIRST. The store returns a run's gates OLDEST FIRST, and
+  // a run collects them over its life, so a plain cut of the first few would
+  // hand the model a run's history and hide the review that is open — the very
+  // "Waiting on Nothing" this repairs, brought back by a run with enough
+  // settled reviews behind it. PENDING GATES ARE CARRIED FIRST, each group
+  // still in the store's own order, and only then is the fragment cut. A run
+  // may still hold more open at once than the cap carries; that is not hidden
+  // either — the count left out is named below.
+  const pendingReviewGates = reviewGates.filter((gate) => gate.status === "pending");
+  const orderedReviewGates = [
+    ...pendingReviewGates,
+    ...reviewGates.filter((gate) => gate.status !== "pending"),
+  ];
+  const carriedReviewGates = orderedReviewGates.slice(0, RUN_WINDOW_FRAME_MAX_REVIEW_GATES);
+  // AND WHAT THE CAP STILL LEAVES OUT IS SAID OUT LOUD. A run may hold more
+  // reviews open at once than a prompt fragment should carry (one gate per
+  // review task, and a run can open several). Carrying the first few silently
+  // would let the model answer as though they were all of them, so the count
+  // that did not fit is named on the first gate carried.
+  const pendingNotCarried =
+    pendingReviewGates.length -
+    carriedReviewGates.filter((gate) => gate.status === "pending").length;
+  for (const [index, gate] of carriedReviewGates.entries()) {
     const pending = gate.status === "pending";
     const fields: RunWindowGateField[] = [
       { name: "state", value: pending ? "pending" : "resolved" },
@@ -342,11 +364,29 @@ export async function buildRunWindowFrame(args: {
       // the decision is the reader's and it is taken on the decision bar, not
       // by this window (the fragment's closing sentence says the same thing
       // about every gate).
+      //
+      // AND NOT MORE THAN IS TRUE, in the drawing's own terms. The decision bar
+      // offers EXACTLY three affordances — Approve, Reject, Comment — and the
+      // first two are terminal and need approve access on the run
+      // (`review-surface-model.ts`: a terminal decision "requires approve access
+      // on the run"), while this window is drawn for anyone who may respond. And
+      // requesting changes "is a conversation, not a fourth button": it is typed
+      // into the prompt window, which resolves the gate changes-requested and
+      // sends a repair. Naming a request for changes as a decision-bar control,
+      // or Approve as everyone's, would both be a window telling a reader about
+      // controls their own screen does not offer them.
       fields.push({
         name: "waiting for",
         value:
-          "your review decision — Approve, Reject, or a request for changes, " +
-          "on this review's own decision bar",
+          "your review decision — Approve or Reject on this review's own " +
+          "decision bar, both terminal and both needing approve access on the " +
+          "run, or Comment there, which records a note and leaves the gate " +
+          "pending. Asking for CHANGES is not a button: it is typed into " +
+          (args.surface === "review"
+            ? "this window"
+            : "the prompt window on this review's own screen") +
+          ", and on submit the gate resolves changes-requested and a repair " +
+          "goes in flight.",
       });
     } else if (gate.disposition) {
       fields.push({ name: "decided", value: renderValue(gate.disposition) });
@@ -358,6 +398,14 @@ export async function buildRunWindowFrame(args: {
         value: renderValue(
           describeReviewTarget(ports.readArtifact, args.viewer, target.artifactId),
         ),
+      });
+    }
+    if (index === 0 && pendingNotCarried > 0) {
+      fields.push({
+        name: "reviews not listed here",
+        value:
+          `${pendingNotCarried} more review(s) on this run are ALSO waiting and are ` +
+          "not listed here; each is decided on its own review screen",
       });
     }
     gates.push({
