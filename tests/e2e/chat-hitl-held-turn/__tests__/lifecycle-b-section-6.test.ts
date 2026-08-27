@@ -161,8 +161,17 @@ const read = (relative: string) =>
  * for code. Both are shapes neither scanned module has; a fixture that had to
  * rule them out would belong in the compiler's own tier, and neither residual
  * replaces the behavioural coverage this arm cites.
+ *
+ * ONE OF THE TWO STRIPPERS IN THIS FILE, AND NOT INTERCHANGEABLE WITH IT.
+ * `withoutComments` further down DELETES a comment, newlines and all; this
+ * one BLANKS it in place. Each arm needs exactly one of the two. The arms
+ * here match within a single line, so a deletion that closed the gap between
+ * two lines could spell a pattern the module does not carry. The reads
+ * further down go the other way: they scan config files whose glob literals
+ * contain the two characters a block comment opens with, which the blanking
+ * sweep below is not quote-aware enough to tell from a real comment.
  */
-const withoutComments = (source: string) => {
+const withCommentsBlanked = (source: string) => {
   const cutTrailing = (line: string) => {
     let quote: string | null = null;
     for (let i = 0; i < line.length; i += 1) {
@@ -441,7 +450,7 @@ describe("§6 The runner — the schedule moment for a run a person starts", () 
     // import EDGE and to a call, IN ITS CODE — comments stripped first, or a
     // commented-out pair would answer for a retired edge.
     for (const surface of [SCHEDULING_STEP, HELD_SCHEDULE_CARD]) {
-      const text = withoutComments(read(surface));
+      const text = withCommentsBlanked(read(surface));
       expect(text, `${surface} no longer imports the mapping`).toMatch(
         /import \{ scheduleScreenSelection \} from "@cinatra-ai\/agent-ui-protocol\/renderable-views";/,
       );
