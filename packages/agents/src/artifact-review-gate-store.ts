@@ -18,7 +18,9 @@ import "server-only";
 //                              DIFFERENT set (never silently overwrite a pin a
 //                              reviewer may already be acting on).
 //   readGatePinnedTargets    — the PREPARATION core's gate port: pending (+ the
-//                              frozen pinned set) | not-pending | not-found.
+//                              frozen pinned set) | resolved (+ the SAME frozen
+//                              set, which the read-only history reading draws) |
+//                              not-found.
 //   readReviewGateState      — the DECISION core's gate port: pending (+ pinned
 //                              set) | resolved (+ resolving fingerprint) |
 //                              unavailable (absent → folded, so existence is not
@@ -507,7 +509,16 @@ export async function readGatePinnedTargets(
 ): Promise<GatePinnedOutcome> {
   const gate = await readReviewGate(runId, reviewTaskId);
   if (!gate) return { status: "not-found" };
-  if (gate.status !== "pending") return { status: "not-pending" };
+  // A DECIDED gate still names its frozen pinned set, because the reviewed work
+  // stays on screen after the decision: "A resolved gate opens read-only: what
+  // was decided, and the reviewed target(s), kept for the run's audit trail."
+  // So this answers `resolved` rather than a bare "not pending" that throws the
+  // set away — and it is the SAME immutable set the gate froze, never the
+  // artifact's latest. Preparing from it is OPT-IN at the core
+  // (`acceptResolvedGate`), so every decision path still fails closed here.
+  if (gate.status !== "pending") {
+    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets) };
+  }
   return { status: "pending", targets: rowsToTargets(gate.pinnedTargets) };
 }
 

@@ -1711,8 +1711,8 @@ describe("a settled card that knows its outcome", () => {
     }
   });
 
-  it("DROPS the Refresh affordance — and the generic reading with it", async () => {
-    // The button existed to resolve "decided, or did the run move on?". A named
+  it("DROPS the Refresh affordance and the floor — but NOT the target: \"A resolved gate opens read-only: what was decided, and the reviewed target(s), kept for the run's audit trail\"", async () => {
+    // The Refresh existed to resolve "decided, or did the run move on?". A named
     // outcome has already answered that, so a Refresh beside it would offer to
     // resolve an ambiguity that is not there.
     const container = await settledWith("rejected", "Dana Okonkwo");
@@ -1721,11 +1721,15 @@ describe("a settled card that knows its outcome", () => {
       container.querySelector('[data-conformance-id="review-gate-blocked"]'),
     ).toBeNull();
     expect(container.textContent).not.toContain("This review is no longer open");
-    // Still a settled card: no floor to press, no target to draw.
+    // No floor to press...
     expect(
       container.querySelector('[data-conformance-id="review-decision-bar"]'),
     ).toBeNull();
-    expect(container.querySelector("iframe")).toBeNull();
+    // ...and the reviewed target still on screen, drawn by its own renderer.
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island"]'),
+    ).not.toBeNull();
     expect(
       container.querySelector('[data-lifecycle-card-state="settled"]'),
     ).not.toBeNull();
@@ -1780,6 +1784,131 @@ describe("a settled card that knows its outcome", () => {
     );
     expect(container.textContent).toContain("content.body");
     expect(container.textContent).toContain("Approved by Dana Okonkwo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §I — THE DECIDED READING KEEPS THE REVIEWED TARGET (cinatra#2931 W4)
+//
+// "A resolved gate opens read-only: what was decided, and the reviewed
+// target(s), kept for the run's audit trail." The card that settles after an
+// Approve used to drop the target entirely and leave the decision line standing
+// alone, on every host it settles in. What is pinned below is the whole clause:
+// the target is there and drawn by its own renderer, nothing on the card can
+// decide anything any more, and the decision line names the disposition.
+// ---------------------------------------------------------------------------
+
+describe("the decided reading — \"what was decided, AND the reviewed target(s)\"", () => {
+  const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
+
+  async function decidedOn(
+    outcome: "approved" | "rejected" | "changes_requested",
+    host: (typeof HOSTS)[number] = "chat_thread",
+  ) {
+    mockResolve({ state: "settled", outcome, decidedByName: "Dana Okonkwo" });
+    const { container } = renderOn(host);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    return container;
+  }
+
+  // The two TERMINAL dispositions the issue was measured on, plus the third the
+  // spec holds distinct from both.
+  const DISPOSITIONS = [
+    ["approved", "Approved by Dana Okonkwo"],
+    ["rejected", "Rejected by Dana Okonkwo"],
+    ["changes_requested", "Changes requested by Dana Okonkwo"],
+  ] as const;
+
+  for (const [outcome, line] of DISPOSITIONS) {
+    it(`${outcome}: the target panel is drawn by its own renderer, the controls are gone, the decision line stands`, async () => {
+      const container = await decidedOn(outcome);
+
+      // THE TARGET — the same island the pending reading mounts, addressed by
+      // the SAME ref, which is what pins it to the revision the gate froze and
+      // the decision was taken on ("You approve exactly what you saw").
+      const island = container.querySelector(
+        '[data-conformance-id="review-target-island"]',
+      );
+      expect(island, "the reviewed target is kept").not.toBeNull();
+      const frame = container.querySelector("iframe");
+      expect(frame).not.toBeNull();
+      expect(frame?.getAttribute("src")).toBe(
+        `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(VIEW.ref)}`,
+      );
+
+      // NO DECISION CONTROLS — not the floor, not one of its three buttons, not
+      // the rationale field, not the composer binding.
+      expect(
+        container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /comment/i })).toBeNull();
+      expect(container.querySelector("textarea")).toBeNull();
+      expect(
+        container.querySelector('[data-conformance-id="review-composer-focus"]'),
+      ).toBeNull();
+
+      // THE DECISION LINE — the recorded disposition, read distinctly.
+      const settled = container.querySelector(
+        '[data-conformance-id="review-gate-settled"]',
+      );
+      expect(settled?.getAttribute("data-review-outcome")).toBe(outcome);
+      expect(container.textContent).toContain(line);
+    });
+  }
+
+  it("draws the SAME decided reading on all four hosts — the conversation, the run page, the review page and the third-party application", async () => {
+    for (const host of HOSTS) {
+      const container = await decidedOn("approved", host);
+      expect(
+        container.querySelector('[data-conformance-id="review-target-island"]'),
+        `the target is kept on ${host}`,
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[data-conformance-id="review-decision-bar"]'),
+        `no floor on ${host}`,
+      ).toBeNull();
+      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      cleanup();
+    }
+  });
+
+  it("keeps the recorded chips BETWEEN the target and the decision line", async () => {
+    mockResolve({
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+      suggestions: [
+        {
+          id: "sug-1",
+          label: "content.body",
+          op: "replace",
+          message: "Tighten the opening sentence.",
+          mark: "accepted",
+        },
+      ],
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    const order = Array.from(
+      container.querySelectorAll(
+        '[data-conformance-id="review-target-island"],[data-conformance-id="suggestion-chips"],[data-conformance-id="review-gate-settled"]',
+      ),
+    ).map((el) => el.getAttribute("data-conformance-id"));
+    expect(order).toEqual([
+      "review-target-island",
+      "suggestion-chips",
+      "review-gate-settled",
+    ]);
   });
 });
 

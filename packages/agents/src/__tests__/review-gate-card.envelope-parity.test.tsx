@@ -128,6 +128,15 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
   // pre-envelope capture and do not claim to be — they were recorded against the
   // component on this branch, and what they pin from here on is that the four
   // hosts keep drawing them identically.
+  //
+  // RE-RECORDED for cinatra#2931 W4, deliberately, because what these three
+  // entries pinned had become false: "A resolved gate opens read-only: what was
+  // decided, and the reviewed target(s), kept for the run's audit trail" — and
+  // the captured DOM held the decision line ALONE, with the reviewed target
+  // dropped. The new captures hold the gate header, the target island and the
+  // decision line, and no decision control on any of the four hosts. The
+  // outcome-less `settled` entry above is untouched: that reading draws the
+  // generic panel, as it always did.
   {
     name: "settled-approved",
     state: { state: "settled", outcome: "approved", decidedByName: "Ada Lovelace" },

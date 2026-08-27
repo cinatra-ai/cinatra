@@ -7,7 +7,17 @@
  * The three trust guarantees, enforced HERE, in order:
  *   1. GATE PROVENANCE — the run is access-checked and the gate must be a
  *      PENDING gate on that run; a caller cannot prepare a review against a run
- *      it may not read or a gate that already resolved.
+ *      it may not read. PENDING BY DEFAULT, and resolved ONLY for the read-only
+ *      history reading: a caller that sets `acceptResolvedGate` may prepare a
+ *      DECIDED gate's own frozen pinned set, because the reviewed work stays on
+ *      screen after the decision ("A resolved gate opens read-only: what was
+ *      decided, and the reviewed target(s), kept for the run's audit trail").
+ *      That flag is default-closed and no decision path sets it, so a gate that
+ *      already resolved is still unpreparable to everything that could act on
+ *      it — and preparing it grants nothing but the drawing: the decision floor
+ *      lives on the card, and the decided card draws none. The run access check
+ *      is unchanged and runs first either way, and an ABSENT gate stays closed
+ *      to both readings.
  *   2. NO CLIENT TARGET SUBSTITUTION — every caller target must belong to the
  *      gate's PINNED set (resolved at gate creation, frozen). A target the gate
  *      never pinned is a HARD rejection (never a render-degrade), so the client
@@ -59,10 +69,30 @@ export type ReviewMountFloorReason =
   /** The artifact's type ships no semantic detail renderer — the generic floor. */
   | "no-semantic-renderer";
 
+/**
+ * The FORM-RENDERING RUNG's first-party arm (plan `PLAN: Agents Lifecycle (B)`
+ * §5): the declared text forms the HOST itself renders — markdown and escaped
+ * plain text. This is the rung the card was missing: the artifact page consumed
+ * it before its fallback and the review path did not, so the same markdown draft
+ * that renders on its own page showed "cannot render" under review.
+ *
+ * A CLOSED SET, and deliberately a local one. The pure core must not import the
+ * route-scoped `pickHandler` (it reaches the server-only artifact-read module),
+ * so the arm names are declared here and a structural test pins them to the
+ * handler kinds `pickHandler` can actually return. Widening the host floor
+ * therefore fails that test rather than silently drifting the two apart.
+ *
+ * It is an ARM, not the rung: once an artifact extension ships its own renderer
+ * for a text type, the semantic tier wins above this and the arm is only a
+ * floor — which is exactly why it is consumed BEFORE the fallback and not
+ * instead of a package's renderer.
+ */
+export type ReviewFormArm = "markdown" | "text";
+
 /** The single renderer the review surface mounts for a target. Semantic `detail`
- * slot this release. Every field (generatedKey / packageName / descriptor) is
- * HOST-resolved from the artifact type — the client receives it, it never
- * supplies it. */
+ * slot this release. Every field (generatedKey / packageName / descriptor /
+ * form) is HOST-resolved from the artifact type — the client receives it, it
+ * never supplies it. */
 export type ReviewTargetMount =
   | { kind: "build-map"; slot: "detail"; packageName: string; generatedKey: string }
   | {
@@ -71,6 +101,10 @@ export type ReviewTargetMount =
       packageName: string;
       descriptor: SerializedRuntimeRendererDescriptor;
     }
+  /** The form-rendering rung: the host's own renderer for a declared text form,
+   * server-rendered against the PINNED revision. `arm` names which arm of the
+   * rung was consumed, so a later package arm is a new arm and not a new kind. */
+  | { kind: "form"; slot: "detail"; arm: "first-party"; form: ReviewFormArm }
   | { kind: "floor"; slot: "detail"; packageName: string | null; reason: ReviewMountFloorReason };
 
 /** One prepared target: its display props (null when there is no artifact /
@@ -89,6 +123,14 @@ export type RunAccessOutcome = { ok: true } | { ok: false; status: number };
 
 export type GatePinnedOutcome =
   | { status: "pending"; targets: ArtifactReviewTarget[] }
+  /**
+   * A gate that EXISTS on this run and has been decided, with the same frozen
+   * pinned set it was decided on. Only the read-only history reading may prepare
+   * from it (`acceptResolvedGate`); to every decision path it is exactly as
+   * closed as `not-pending`.
+   */
+  | { status: "resolved"; targets: ArtifactReviewTarget[] }
+  /** A port that cannot name a non-pending gate's set. Always closed. */
   | { status: "not-pending" }
   | { status: "not-found" };
 
@@ -106,14 +148,16 @@ export type RevisionMemberOutcome = { mime: string } | null;
 export type ResolvedRendererMount =
   | { kind: "build-map"; packageName: string; generatedKey: string }
   | { kind: "runtime"; packageName: string; descriptor: SerializedRuntimeRendererDescriptor }
+  | { kind: "form"; arm: "first-party"; form: ReviewFormArm }
   | { kind: "floor"; packageName: string | null; reason: "requires-rebuild" | "no-semantic-renderer" };
 
 export interface PrepareReviewPorts {
   /** Verify the reviewing actor may READ the run (enforceRunAccess "read"). */
   verifyRunAccess(runId: string): Promise<RunAccessOutcome> | RunAccessOutcome;
-  /** The gate's PINNED target set (frozen at gate creation) — or the gate's
-   * non-pending / absent status. `not-found` is folded into gate-not-pending by
-   * the core so gate existence is never leaked. */
+  /** The gate's PINNED target set (frozen at gate creation) — for a pending
+   * gate, and for a RESOLVED one whose set the read-only history reading draws.
+   * `not-found` is folded into gate-not-pending by the core so gate existence is
+   * never leaked. */
   readGatePinnedTargets(
     runId: string,
     reviewTaskId: string,
@@ -164,6 +208,23 @@ export interface PrepareReviewInput {
   targets: unknown;
   /** Optional cap override (defaults to MAX_REVIEW_TARGETS via normalize). */
   maxTargets?: number;
+  /**
+   * Accept a RESOLVED gate's frozen pinned set as well as a pending gate's.
+   *
+   * DEFAULT CLOSED, and only the read-only history reading turns it on: "A
+   * resolved gate opens read-only: what was decided, and the reviewed
+   * target(s), kept for the run's audit trail." That reading draws the decided
+   * work exactly as it was reviewed — the same never-blank ladder, the same
+   * frozen revision — so it prepares the same set through the same core rather
+   * than growing a second ladder beside it.
+   *
+   * EVERY DECISION PATH LEAVES THIS OFF, which is why it is a flag and not a
+   * widening: a gate that is no longer pending still fails closed before any
+   * target is read, and preparing a decided gate's targets never makes them
+   * decidable — the decision floor is drawn by the card, and the decided reading
+   * draws none.
+   */
+  acceptResolvedGate?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,9 +233,14 @@ export interface PrepareReviewInput {
 
 /**
  * Prepare the caller's review targets. Order matters and is security-load-bearing:
- * run access → pending gate → substitution check (ALL hard failures) run BEFORE
- * any per-target artifact work, so an unauthorized / substituted request never
- * reaches a read or a renderer resolve.
+ * run access → gate provenance → substitution check (ALL hard failures) run
+ * BEFORE any per-target artifact work, so an unauthorized / substituted request
+ * never reaches a read or a renderer resolve.
+ *
+ * Gate provenance is PENDING BY DEFAULT; a RESOLVED gate's frozen set is
+ * preparable only when the caller asked for the read-only history reading
+ * (`acceptResolvedGate`). Neither the run access check nor the substitution
+ * check moves for it.
  */
 export async function prepareReviewTargetsCore(
   input: PrepareReviewInput,
@@ -194,17 +260,30 @@ export async function prepareReviewTargetsCore(
     return { ok: false, error: { kind: "run-access-denied", status: access.status } };
   }
 
-  // 3. Pending gate (gate provenance, half 2): the gate must be a PENDING gate
-  //    on this run, and it carries the frozen pinned target set. A non-pending /
-  //    absent gate is a single "not pending" outcome (gate existence not leaked).
+  // 3. Gate provenance, half 2: the gate must be a PENDING gate on this run, and
+  //    it carries the frozen pinned target set. A non-pending / absent gate is a
+  //    single "not pending" outcome (gate existence not leaked).
+  //
+  //    ONE EXCEPTION, OPT-IN AND READ-ONLY: a caller that asked for the history
+  //    reading (`acceptResolvedGate`) may prepare a RESOLVED gate's frozen set,
+  //    because the reviewed work stays on screen after the decision — "A
+  //    resolved gate opens read-only: what was decided, and the reviewed
+  //    target(s), kept for the run's audit trail." An absent gate, and a port
+  //    that cannot name the resolved set, stay closed either way.
   const gate = await ports.readGatePinnedTargets(input.runId, input.reviewTaskId);
-  if (gate.status !== "pending") {
+  const pinned =
+    gate.status === "pending"
+      ? gate.targets
+      : gate.status === "resolved" && input.acceptResolvedGate === true
+        ? gate.targets
+        : null;
+  if (pinned === null) {
     return { ok: false, error: { kind: "gate-not-pending" } };
   }
 
   // 4. NO CLIENT TARGET SUBSTITUTION: every caller target must be in the pinned
   //    set. Any that is not is a HARD rejection — never a per-target degrade.
-  const { member, substituted } = partitionAgainstPinnedTargets(normalized.targets, gate.targets);
+  const { member, substituted } = partitionAgainstPinnedTargets(normalized.targets, pinned);
   if (substituted.length > 0) {
     return { ok: false, error: { kind: "target-substitution", substituted } };
   }
@@ -259,6 +338,16 @@ async function prepareOneTarget(
       target,
       props,
       mount: { kind: "runtime", slot: "detail", packageName: resolved.packageName, descriptor: resolved.descriptor },
+    };
+  }
+  if (resolved.kind === "form") {
+    // The form rung reaches the reviewer with the SAME pinned props every other
+    // mount kind carries — the host renders the frozen revision, never the
+    // artifact's latest.
+    return {
+      target,
+      props,
+      mount: { kind: "form", slot: "detail", arm: resolved.arm, form: resolved.form },
     };
   }
   return { target, props, mount: floor(resolved.packageName, resolved.reason) };
