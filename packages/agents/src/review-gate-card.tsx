@@ -74,8 +74,11 @@
 //   restricted → target(s) + the floor with the terminal affordances disabled
 //                and the reason on screen (§IV: a withheld card must never be
 //                drawn as a disabled one);
-//   settled    → "This review is no longer open", with a Refresh instead of a
-//                stale decision;
+//   settled    → the DECIDED reading: the reviewed target(s), kept read-only in
+//                the same island, under the line that records who decided and
+//                how — and no decision controls at all. A gate whose disposition
+//                this build cannot read falls back to "This review is no longer
+//                open", with a Refresh instead of a stale decision;
 //   advisory   → nothing. A review gate has no advisory reading (that is §VII's
 //                verification card); drawing one here would put a card with no
 //                floor where a decision is expected. Fail closed.
@@ -162,6 +165,7 @@ import type {
 import {
   useComposerFocusBinding,
   useLifecycleCardAuth,
+  useLifecycleCardColorScheme,
   useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardResolve,
@@ -169,6 +173,7 @@ import {
   type ComposerCommentResult,
   type ComposerFocusBinding,
   type LifecycleCardFrame,
+  type LifecycleColorScheme,
 } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
 import {
@@ -206,11 +211,23 @@ export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
  * and paints blank; the client cannot mint one, and it never invents one. A
  * same-site host receives no such URL and this composes exactly what it
  * composed before.
+ *
+ * EVERY HOST, THE PALETTE IT IS PAINTING IN (cinatra#2931). The island is a
+ * nested document, so it cannot see the surface around it; left to itself it
+ * resolves a palette from its OWN theme state. On a first-party page that store
+ * is the app's own and the answer came out right by coincidence; inside a
+ * third-party application it is a partitioned store nothing writes, so the
+ * island painted the DEFAULT palette — a light panel inside a dark widget, which
+ * is the defect this closes. The scheme rides here for EVERY host, from the same
+ * read, so no host is a special case and the widget is not a patch. A host whose
+ * document declares no palette names none, and the island keeps the resolution
+ * it always had.
  */
 export function reviewTargetIslandSrc(
   ref: string,
   frame: LifecycleCardFrame | null,
   serverIslandSrc?: string | null,
+  colorScheme?: LifecycleColorScheme | null,
 ): string {
   const params = new URLSearchParams({ ref });
   const credential = islandCredentialFrom(serverIslandSrc, ref);
@@ -219,12 +236,20 @@ export function reviewTargetIslandSrc(
     params.set("assistant", frame.assistant);
     params.set("instanceId", frame.instanceId);
   }
+  if (colorScheme) params.set(REVIEW_ISLAND_COLOR_SCHEME_PARAM, colorScheme);
   return `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
 }
 
 /** The query parameter the island reads its credential from — the client half
  *  of `src/lib/lifecycle/review-island-credential.ts`. */
 const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
+
+/** The query parameter the island reads the HOST's palette from — the client
+ *  half of `src/app/lifecycle/review-island/island-color-scheme.ts`, mirrored
+ *  here for the same reason the credential's key is. The literal is pinned on
+ *  this side by `__tests__/review-island-host-color-scheme.test.tsx` and on the
+ *  server side by the island page's own suite. */
+const REVIEW_ISLAND_COLOR_SCHEME_PARAM = "scheme";
 
 /**
  * The credential OUT of a server-issued island URL — never the URL itself.
@@ -433,6 +458,11 @@ export function ReviewGateCard({
   // The host's embedding context, when it has one (cinatra#2577). Only an
   // embedded host declares it; it addresses the island and nothing else.
   const cardFrame = useLifecycleCardFrame();
+  // The palette THIS host is painting in (cinatra#2931). It addresses the island
+  // and nothing else: the card itself is drawn by the host's own stylesheet and
+  // has never needed to know. Read for every host from the one read, so the
+  // island cannot follow one host and not another.
+  const cardColorScheme = useLifecycleCardColorScheme();
   // The FIRST absence: a subtree that declared no host is not a lifecycle
   // surface at all. Every DECLARED host — the chat thread, the run card, the
   // page gate region and the site widget — draws this card, identically.
@@ -464,6 +494,52 @@ export function ReviewGateCard({
   const state: LifecycleCardState | null = resolved?.state ?? null;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  // THE ADDRESS THE ISLAND IS FRAMED AT — which is not always what the newest
+  // answer and the current palette would compose (cinatra#2931).
+  //
+  // A credentialed island URL is a SINGLE-USE bearer: the grant is spent the
+  // moment the frame paints from it. `ReviewTargetIsland` keys the iframe on the
+  // `src` STRING, so ANY rewrite after that paint remounts the frame — on a
+  // spent grant, or on no grant at all — and the island goes blank in front of
+  // the reader. That is a worse defect than the one the palette is here to fix,
+  // and it has two ways to happen: the surface repaints, or an answer arrives
+  // that carries no grant (the mint can fail while the gate is still perfectly
+  // pending). So the card holds the address it framed and lets it move on ONE
+  // condition only — a grant it has not seen before.
+  //
+  //   • A FRESH GRANT adopts the palette in force at that moment. The frame
+  //     remounts once, on a grant nothing has spent.
+  //   • NOTHING TO SPEND on either side is the cookie-authenticated island: no
+  //     grant, no remount cost, so a repaint lands immediately — exactly what
+  //     this surface did before the mechanism existed.
+  //   • OTHERWISE the held address stands, and a repaint asks ONCE PER PALETTE
+  //     for a fresh one. An answer that fails, or that carries no grant, leaves
+  //     the island painted as it is rather than blanking it, and the next
+  //     palette the reader chooses asks again.
+  const liveIslandSrc = resolved?.islandSrc ?? null;
+  const liveCredential = islandCredentialFrom(liveIslandSrc, view.ref);
+  const [islandAddress, setIslandAddress] = useState<{
+    scheme: LifecycleColorScheme | null;
+    islandSrc: string | null;
+    askedFor: LifecycleColorScheme | null | undefined;
+  }>({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  const heldCredential = islandCredentialFrom(islandAddress.islandSrc, view.ref);
+  if (liveCredential !== null && liveCredential !== heldCredential) {
+    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  } else if (islandAddress.scheme === cardColorScheme) {
+    // Nothing is outstanding — the frame is already in the host's palette. Drop
+    // any standing request, so a reader who returns to a palette whose ask went
+    // unanswered is asked for again rather than left latched on it.
+    if (islandAddress.askedFor !== undefined) {
+      setIslandAddress({ ...islandAddress, askedFor: undefined });
+    }
+  } else if (heldCredential === null && liveCredential === null) {
+    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  } else if (islandAddress.askedFor !== cardColorScheme) {
+    setIslandAddress({ ...islandAddress, askedFor: cardColorScheme });
+    refresh();
+  }
 
   // The ref-bound fallback action. Built once per ref so the decision bar's
   // identity is stable across re-resolves.
@@ -652,11 +728,14 @@ export function ReviewGateCard({
   // use: the held copy is spent the moment the island paints from it, which
   // makes the copy in this state — and every other copy of the address — inert
   // rather than merely short-lived.
-  const serverIslandSrc = resolved?.islandSrc ?? null;
+  // THE HELD ONE, not the newest one — see the address state above. On a cookie
+  // host the two are the same `null` and this composes byte-for-byte what it
+  // composed before.
+  const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
-    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc),
-    islandCredentialed: islandCredentialFrom(serverIslandSrc, view.ref) !== null,
+    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
+    islandCredentialed: heldCredential !== null,
     expanded,
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,
@@ -739,35 +818,79 @@ function renderState(args: {
       );
 
     case "settled":
-      // §IV settled — and, when the gate carried suggestions, the partition that
-      // was RECORDED against them, drawn in the same chips with no live
-      // affordance. The decision stays readable on the surface it was made on.
+      // THE DECIDED READING KEEPS WHAT WAS REVIEWED. "A resolved gate opens
+      // read-only: what was decided, and the reviewed target(s), kept for the
+      // run's audit trail." So this is the pending reading with the decision
+      // taken out of it and the decision itself put in its place:
+      //
+      //   THE TARGET STAYS, drawn by its own renderer, in the SAME island, from
+      //     the SAME ref. That is what makes it the revision that was decided
+      //     rather than whatever the artifact says now — the gate froze the
+      //     pinned set and the island prepares that set ("You approve exactly
+      //     what you saw ... a later re-materialization of the artifact can
+      //     never silently change what was approved"). A decision line over an
+      //     empty box records who pressed a button; it does not keep the work.
+      //
+      //   NO DECISION CONTROLS, ANYWHERE. No Approve, no Reject, no Comment, no
+      //     rationale field, and no composer binding: there is nothing left to
+      //     decide, and a control that cannot act is a control that fails on
+      //     press. §II's settled schedule reading is this same shape — the form,
+      //     read-only, "with no controls at all". The header loses its
+      //     awaiting-your-decision pill for the same reason.
+      //
+      //   THE DISPOSITION READS DISTINCTLY. Approve, reject and changes-
+      //     requested are three outcomes and are named as three ("Reject is not
+      //     a quiet approve" — a rejection "can never be mistaken for or routed
+      //     as an approval"; a change request "is neither approve nor reject").
+      //     `ReviewGateSettled` draws the recorded one and its decider where one
+      //     can be named — and, when the gate carried suggestions, the partition
+      //     RECORDED against them, in the same chips with no live affordance.
       //
       // TWO READINGS, AND THE RESOLVER PICKS (cinatra#2855; plan §4.2).
       //
-      //   WITH an outcome — the card names it and its decider and draws NO
-      //     Refresh. The button existed to resolve an ambiguity ("decided, or the
-      //     run moved on?") that a named outcome has already resolved; leaving it
-      //     there would offer a re-pull that can only return the same answer.
+      //   WITH an outcome — the decided reading above, and NO Refresh. The
+      //     button existed to resolve an ambiguity ("decided, or the run moved
+      //     on?") that a named outcome has already resolved; leaving it there
+      //     would offer a re-pull that can only return the same answer.
       //
       //   WITHOUT one — byte-for-byte what shipped before: the generic "This
       //     review is no longer open", its one line naming both possibilities,
       //     and the Refresh. A gate resolved before the outcome travelled, and a
       //     disposition this build cannot read, both land here, and neither is a
-      //     card that may guess.
-      return (
+      //     card that may guess. Neither may present a target as decided either,
+      //     when it cannot say what the decision was — so that reading draws the
+      //     panel it always drew, and no island.
+      return state.outcome ? (
+        <>
+          <ReviewGateHeader pending={false} />
+          {/* §III — the reviewed target(s), read-only, exactly as the pending
+              reading drew them: one island, every pinned target, the renderer
+              resolved from the artifact's own type. The island carries no
+              decision chrome on either reading. */}
+          <ReviewTargetIsland
+            src={islandSrc}
+            credentialed={islandCredentialed}
+            expanded={expanded}
+            onToggleExpanded={onToggleExpanded}
+            onRetryResolve={onRefresh}
+          />
+          {/* §VIII — the RECORDED partition, in the place it annotated: between
+              the target it is about and the decision it rode on. */}
+          {state.suggestions && state.suggestions.length > 0 ? (
+            <SuggestionChips suggestions={state.suggestions} recorded />
+          ) : null}
+          {/* The decision line — who decided, and how. Where the floor was. */}
+          <ReviewGateSettled
+            outcome={state.outcome}
+            decidedByName={state.decidedByName}
+          />
+        </>
+      ) : (
         <>
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          {state.outcome ? (
-            <ReviewGateSettled
-              outcome={state.outcome}
-              decidedByName={state.decidedByName}
-            />
-          ) : (
-            <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
-          )}
+          <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
         </>
       );
 

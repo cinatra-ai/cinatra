@@ -139,10 +139,16 @@ async function resolveWidgetBranchActor(
  * reader's real access from scratch, so a credential that arrives without the
  * standing behind it still paints nothing.
  *
- * ONLY FOR A STATE THAT DRAWS AN ISLAND. `pending` and `restricted` are the two
- * states whose card frames one. A settled or absent answer gets no credential,
- * because a reader whose card draws no island has no use for one and a minted
- * bearer that nothing consumes is a bearer for free.
+ * ONLY FOR A STATE THAT DRAWS AN ISLAND, which is now three states rather than
+ * two. `pending` and `restricted` frame one, and so does the DECIDED reading of
+ * a settled gate: "A resolved gate opens read-only: what was decided, and the
+ * reviewed target(s), kept for the run's audit trail." Inside a third-party
+ * application that island is authenticated by this credential and nothing else,
+ * so withholding it there would blank the decided target on exactly one host —
+ * the host-parity break the one-renderer rule exists to prevent. A settled
+ * answer whose disposition this build cannot read draws no island (it draws the
+ * generic panel), and an absent one draws no card, so both still get nothing: a
+ * minted bearer that nothing consumes is a bearer for free.
  *
  * TTL AND RELOAD, THE POLICY IN ONE PLACE. Every resolve mints a FRESH
  * credential; nothing is cached and nothing is stored. Within one resolve the
@@ -161,7 +167,14 @@ function mintIslandSrcForWidget(
   state: LifecycleCardState,
 ): string | null {
   if (viewType !== "artifact_review_gate") return null;
-  if (state.state !== "pending" && state.state !== "restricted") return null;
+  // Exactly the states whose card frames an island — read off the same
+  // discriminant the card branches on, so the two cannot disagree about which
+  // reading has a frame to authenticate.
+  const framesIsland =
+    state.state === "pending" ||
+    state.state === "restricted" ||
+    (state.state === "settled" && state.outcome !== undefined);
+  if (!framesIsland) return null;
   const gate = decodeLifecycleGateRef(ref);
   if (!gate) return null;
   return mintWidgetReviewIslandUrl({

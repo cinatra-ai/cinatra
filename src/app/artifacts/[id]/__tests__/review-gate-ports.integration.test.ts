@@ -173,9 +173,17 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       reviewTaskId,
       actorCtx: actorCtxFor(OWNER_ID),
     });
-    // It carries NOTHING: the settled reading is the card's, resolved from the
-    // ref against the live reader, never a second projection made here.
-    expect(surface).toEqual({ kind: "settled" });
+    // It carries THE REVIEWED TARGETS, read-only: "A resolved gate opens
+    // read-only: what was decided, and the reviewed target(s), kept for the run's
+    // audit trail." The frozen pinned set, prepared through the same never-blank
+    // ladder — and the decision itself is still the card's, resolved from the ref
+    // against the live reader, never a second projection made here.
+    expect(surface.kind).toBe("settled");
+    expect(surface.kind === "settled" && surface.targets.map((p) => p.target)).toEqual([
+      target,
+    ]);
+    expect(surface.kind === "settled" && surface.agentSummary).toBeNull();
+    expect(surface).not.toHaveProperty("permissions");
   });
 
   it("SURFACE: a gate that does not exist stays BLOCKED — never a settled reading", async () => {

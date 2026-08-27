@@ -416,6 +416,31 @@
   --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
   --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
 
+  /* THE ALIAS LAYER IS RE-DECLARED HERE, so this palette resolves wherever the
+     class lands (cinatra#2931).
+     `:root` above declares an ALIAS layer over the raw tokens — `--border` is
+     `var(--line)`, `--card` is `var(--surface)`, and so on. A custom property is
+     substituted where it is DECLARED and then inherits its COMPUTED value, so an
+     alias declared on the document root resolves against the ROOT's raw tokens
+     once and hands the answer down. On this class that is invisible: it sits on
+     the same element `:root` matches, so the aliases already see the values
+     above. One element down it is not — a wrapper carrying this class inside a
+     document whose root resolved the light palette keeps every alias it does not
+     re-declare at its LIGHT value while the raw token beneath it goes dark, and
+     a hairline drawn in light ink over a dark ground is no hairline at all.
+     `.cinatra` re-declares the same aliases for exactly this reason. Each line
+     below is textually the `:root` declaration it completes, so on the document
+     root every computed value is unchanged. */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-strong);
+  --popover-foreground: var(--foreground);
+  --primary: var(--accent);
+  --secondary: var(--surface-muted);
+  --muted-foreground: var(--muted);
+  --border: var(--line);
+  --ring: var(--accent);
+
   /* Sidebar dark mode — must override :root values which are light (#eceeea) */
   --sidebar: oklch(0.16 0.04 264);
   --sidebar-foreground: oklch(0.984 0.003 247.858);

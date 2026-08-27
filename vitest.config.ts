@@ -547,6 +547,11 @@ export default defineConfig({
       // dependency gate, run by its own step in build-image.yml's
       // perpetual-loops-invariants job.
       "scripts/audit/__tests__/extension-produces-deps-gate.test.mjs",
+      // artifact-review-floor-gate (cinatra#2931 W4) — same convention: a
+      // dependency-free `node --test` companion to the floor gate, run by its
+      // own "Artifact-review floor gate tests" step in build-image.yml's
+      // perpetual-core job (and locally by `pnpm gate:artifact-review-floor:test`).
+      "scripts/audit/__tests__/artifact-review-floor-gate.test.mjs",
       // exec-compose-scoping-check is the same convention: a dependency-free
       // `node --test` gate (it must run without a pnpm install, like the
       // actions-pin gate above), run by the "Execution-plane compose scoping

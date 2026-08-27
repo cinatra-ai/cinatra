@@ -658,6 +658,93 @@ export function useLifecycleCardFrame(): LifecycleCardFrame | null {
 }
 
 // ---------------------------------------------------------------------------
+// THE HOST'S COLOUR SCHEME (cinatra#2931, epic #2926 W4)
+// ---------------------------------------------------------------------------
+//
+// A lifecycle card may frame a nested first-party document (the review card's
+// target island). That document is a separate browsing context with its own
+// theme state, and until this hook nothing told it which palette the surface
+// around it is painting in. On a first-party page it landed on the right answer
+// by accident — same origin, same unpartitioned theme store as the app, so it
+// read the very choice the app's theme control had written. Inside a third-party
+// application the frame's store is partitioned away from the app's and nothing
+// ever writes it, so the nested document fell back to the app's DEFAULT palette
+// and painted light inside a dark widget.
+//
+// So the card reads the palette of the document IT is mounted in and names it
+// downstream. There is no host branch here and none downstream: every host is a
+// document, every document declares its palette the same way, and the widget is
+// simply the host where the declaration was never being read.
+
+/** The two palettes the app paints in. `light` is the app's `cinatra` palette. */
+export type LifecycleColorScheme = "light" | "dark";
+
+/** The class each palette is painted with — the `.cinatra` / `.dark` token
+ *  blocks in `src/app/globals.css`, which is also the attribute the app's theme
+ *  provider writes on the document root. */
+const PALETTE_CLASS: Record<LifecycleColorScheme, string> = {
+  light: "cinatra",
+  dark: "dark",
+};
+
+/**
+ * The palette a document root is painting, read off its class list.
+ *
+ * Pure, and the ONLY rule this mechanism has. The class on the root IS the
+ * palette, whoever wrote it — the app's theme provider on every shipped surface,
+ * or a host that sets it directly.
+ *
+ * `null` is not "light": it is "this document declares no palette". A card that
+ * reads null names nothing downstream, which leaves every consumer exactly where
+ * it stood before this mechanism existed.
+ */
+export function colorSchemeOfRoot(
+  root: { classList: DOMTokenList } | null | undefined,
+): LifecycleColorScheme | null {
+  if (!root) return null;
+  if (root.classList.contains(PALETTE_CLASS.dark)) return "dark";
+  if (root.classList.contains(PALETTE_CLASS.light)) return "light";
+  return null;
+}
+
+function subscribeToHostPalette(onChange: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return () => {};
+  }
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class"],
+  });
+  return () => observer.disconnect();
+}
+
+function readHostPalette(): LifecycleColorScheme | null {
+  return typeof document === "undefined" ? null : colorSchemeOfRoot(document.documentElement);
+}
+
+function noHostPalette(): LifecycleColorScheme | null {
+  return null;
+}
+
+/**
+ * The colour scheme of the document THIS card is mounted in.
+ *
+ * Read synchronously on the very first client render, so a consumer that turns
+ * it into an address composes that address ONCE. That matters: the review card's
+ * island URL can carry a single-use credential, and a value that arrived one
+ * render late would change the address after the frame had already spent it.
+ *
+ * It follows a live change (the app's theme control) through the same store, so
+ * a surface that repaints does not leave a nested document behind in the old
+ * palette. The server snapshot is `null` — a document that has not been rendered
+ * yet declares nothing.
+ */
+export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
+  return useSyncExternalStore(subscribeToHostPalette, readHostPalette, noHostPalette);
+}
+
+// ---------------------------------------------------------------------------
 // The refetch hook
 // ---------------------------------------------------------------------------
 

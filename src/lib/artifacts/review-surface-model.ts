@@ -136,13 +136,24 @@ export type ReviewProvenanceConformanceId =
 /** The design conformance id for a target's provenance region, from its host
  * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
  * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). */
+ * anchor (§III). `null` means the target has NO provenance region — the strip is
+ * not rendered at all.
+ *
+ * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
+ * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
+ * the work, or that nothing did. The host's own rendering of a declared text
+ * form is neither: there is no package to name, and the work did render. Rather
+ * than reuse a package tier that would name an extension that never ran, or
+ * invent a fourth strip the drawing does not carry, the reviewer is shown the
+ * draft with nothing above it. */
 export function reviewProvenanceConformanceId(
   mount: ReviewTargetMount,
-): ReviewProvenanceConformanceId {
+): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
       return "review-provenance-native";
+    case "form":
+      return null;
     case "runtime":
       return "review-provenance-marketplace";
     case "floor":
@@ -152,19 +163,23 @@ export function reviewProvenanceConformanceId(
 
 /** The provenance label shown beside the chip (§III). build-time / runtime carry
  * the extension chip; a runtime additionally shows its package identity; a floor
- * reads "Floor". Pure copy — no type keying. */
+ * reads "Floor". `null` for the form rung, which has no region to label at all
+ * (see `reviewProvenanceConformanceId`). Pure copy — no type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   kind: "build-time" | "runtime" | "floor";
   slot: string;
   packageName: string | null;
-} {
-  if (mount.kind === "build-map") {
-    return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
+} | null {
+  switch (mount.kind) {
+    case "build-map":
+      return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
+    case "form":
+      return null;
+    case "runtime":
+      return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
+    case "floor":
+      return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
   }
-  if (mount.kind === "runtime") {
-    return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
-  }
-  return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +203,39 @@ export function reviewTypeLabel(objectType: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
   return pretty || objectType;
+}
+
+/**
+ * The read-only row facts the header's meta line carries (§II) — the ones the
+ * drawing names: "the read-only row facts the host authorized — owner level /
+ * visibility, MIME, and updated time"
+ * (design@fe2182547d4a specs/app-artifact-review.html §IV).
+ *
+ * THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line printed the
+ * two scope facts BARE, one after the other, so the ordinary case read
+ * "organization · organization" — the same word twice for two facts that are not
+ * the same thing at all: which scope HOLDS the artifact, and who can SEE it. The
+ * plan's fix is that "the line gets labels or drops the storage fact". The
+ * drawing keeps BOTH facts on the line ("… · Team · Private · text/html ·
+ * updated 8 min ago", specs/app-lifecycle-cards.html §II), so dropping the
+ * storage fact would delete a fact the drawing draws: the facts are LABELLED
+ * instead, in the drawing's own order, with the label the host already uses for
+ * ownership on its other screens.
+ *
+ * Pure copy, no type keying — every artifact type reads the same line.
+ */
+export function reviewTargetRowFacts(artifact: {
+  ownerLevel: string;
+  visibility: string;
+  mime: string;
+  updatedAt: string;
+}): string[] {
+  return [
+    `Ownership: ${artifact.ownerLevel}`,
+    `Visibility: ${artifact.visibility}`,
+    artifact.mime,
+    `updated ${artifact.updatedAt}`,
+  ];
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
@@ -250,12 +298,19 @@ export type ReviewSurfaceModel =
    * from its own ref. Collapsing the two is what made the page contradict the
    * transcript about the same gate at the same moment.
    *
-   * IT CARRIES NOTHING. Deliberately: the settled reading is resolved by the
-   * CARD, from the ref, against the live reader (`lifecycle-card-refetch` →
-   * `lifecycle-settled-outcome`), which is the same path every other host
-   * resolves it on. A payload here would be a second projection of the same
-   * facts, on one host only, and the two would drift. This kind says one thing —
-   * "mount the card" — and the card says the rest.
+   * IT CARRIES THE REVIEWED TARGETS. "A resolved gate opens read-only: what was
+   * decided, and the reviewed target(s), kept for the run's audit trail." So the
+   * decided reading keeps the work on screen: the same frozen pinned set,
+   * prepared through the same never-blank ladder, drawn by the same panel and
+   * the same type renderer the pending reading drew. It is the revision the gate
+   * pinned and the decision was taken on, never a later one.
+   *
+   * IT STILL CARRIES NO DECISION. The outcome, its decider and the recorded
+   * chips are resolved by the CARD, from the ref, against the live reader
+   * (`lifecycle-card-refetch` → `lifecycle-settled-outcome`), which is the same
+   * path every other host resolves them on. A second projection of THOSE facts,
+   * on one host only, is what would drift — and the card draws no floor here, so
+   * nothing on this reading can be decided again.
    *
    * WHAT IT IS NOT. It is NOT reached for an `unavailable` gate. A ref that
    * names nothing and a row too corrupt to read stay `blocked`: they are not a
@@ -264,7 +319,16 @@ export type ReviewSurfaceModel =
    * (`resolved` → `settled`, `unavailable` → `absent`); this kind is that line,
    * drawn one layer up so the page reaches the card at all.
    */
-  | { kind: "settled" }
+  | {
+      kind: "settled";
+      /** The frozen pinned set, prepared READ-ONLY — the reviewed target(s) the
+       * decided reading keeps, in gate order. */
+      targets: PreparedReviewTarget[];
+      /** As `ready`: the pinned before/after pair per target, where one exists. */
+      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+      /** As `ready`: the producing agent's one-line summary, when present. */
+      agentSummary: string | null;
+    }
   /** The pending gate, prepared: the targets to review + the decision chrome. */
   | {
       kind: "ready";
