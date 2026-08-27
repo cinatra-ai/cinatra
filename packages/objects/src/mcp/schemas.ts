@@ -91,7 +91,16 @@ export const objectsListSchema = z.object({
   // exactly the misreading that turns a skip into a duplicate write. An EMPTY
   // array is rejected rather than read as "no filter" — a filter that silently
   // disappears would widen the read to the whole type.
-  externalIds: z.array(z.string().min(1)).min(1).max(500).optional(),
+  //
+  // The 500 ceiling is the ARRAY cap; the handler additionally refuses a batch
+  // larger than the call's EFFECTIVE `limit`, whose default is 100
+  // (cinatra#1378 review item 7) — the array cap alone does not bind.
+  //
+  // Each id is capped too: an external id is a key, and 500 unbounded strings
+  // reaching the array parameter is an author-controlled surface with no
+  // ceiling. 256 bytes sits far above every key this filter is built for (the
+  // memory preflight's are 64-character sha256 hex digests).
+  externalIds: z.array(z.string().min(1).max(256)).min(1).max(500).optional(),
 });
 
 export const objectsGetSchema = z.object({

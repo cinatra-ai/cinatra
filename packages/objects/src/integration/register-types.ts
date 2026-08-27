@@ -798,6 +798,28 @@ export const MEMORY_CONCEPT_LINK_TARGET_MAX_BYTES = 2048;
 /** Cap on `conceptId` (a bundle-relative path), in UTF-8 bytes. */
 export const MEMORY_CONCEPT_ID_MAX_BYTES = 1024;
 
+/** `okfVersion` cap (cinatra#1378 review item 3): a version string, not a payload. */
+export const MEMORY_CONCEPT_OKF_VERSION_MAX_BYTES = 64;
+
+/**
+ * Aggregate cap on the SERIALIZED envelope (cinatra#1378 review item 3).
+ *
+ * The per-field caps below bound each surface the schema knows about today.
+ * This one bounds the WHOLE object, so the property "every author-controlled
+ * surface is capped" keeps holding when a field is added later and its author
+ * forgets a cap — the failure mode this review round found three times in a
+ * row. It is the backstop, not the primary rule: a payload that trips only
+ * this cap gets a message naming the total, which is less actionable than a
+ * per-field message, so the per-field caps stay.
+ *
+ * 512 KiB sits above every legitimate envelope and below every abusive one.
+ * The arithmetic: a maximal legitimate concept is a 64 KiB body plus 32 KiB of
+ * frontmatter plus the identity and version fields — well under 128 KiB. The
+ * headroom above that covers `links`, whose own caps (512 entries x a 2 KiB
+ * target x a 1 KiB resolved id) would otherwise permit roughly 1.5 MiB.
+ */
+export const MEMORY_CONCEPT_ENVELOPE_MAX_BYTES = 512 * 1024;
+
 /** UTF-8 byte length — the caps above are byte caps, not JS-char caps. */
 function memoryUtf8Bytes(value: string): number {
   return new TextEncoder().encode(value).length;
@@ -847,8 +869,27 @@ const memoryConceptLinkSchema = z
       .refine((t) => memoryUtf8Bytes(t) <= MEMORY_CONCEPT_LINK_TARGET_MAX_BYTES, {
         message: `link target exceeds the ${MEMORY_CONCEPT_LINK_TARGET_MAX_BYTES}-byte cap`,
       }),
-    /** Present when the sync layer resolved the target to a concept id. */
-    resolvedConceptId: z.string().min(1).optional(),
+    /**
+     * Present when the sync layer resolved the target to a concept id.
+     *
+     * Capped and VALIDATED like the envelope's own `conceptId`
+     * (cinatra#1378 review item 3). Untyped and uncapped, this field carried
+     * 64 KiB per link across the 512-entry cap — 33 MB of author-controlled
+     * text handed to the writer through a schema that claimed to cap every
+     * author-controlled surface. It names the same kind of thing `conceptId`
+     * names, so it answers to the same rule.
+     */
+    resolvedConceptId: z
+      .string()
+      .min(1)
+      .refine((id) => memoryUtf8Bytes(id) <= MEMORY_CONCEPT_ID_MAX_BYTES, {
+        message: `resolvedConceptId exceeds the ${MEMORY_CONCEPT_ID_MAX_BYTES}-byte cap`,
+      })
+      .refine(isValidMemoryConceptId, {
+        message:
+          "resolvedConceptId must be a relative POSIX path without `.`/`..` segments, backslashes, or a `.md` suffix",
+      })
+      .optional(),
   })
   .strict();
 
@@ -874,19 +915,23 @@ const memoryConceptProvenanceSchema = z
 /**
  * Envelope schema for `@cinatra-ai/memory:concept` rows.
  *
- * Validation-only on the write path: the handler safeParses the SAME enriched
- * shape that gets stored, so unknown TOP-LEVEL keys (e.g. the system-injected
- * `cinatraAgentRunId`) are tolerated, `frontmatter` preserves unknown keys
- * (tolerant OKF consumption), and `links` entries are strict (the fixed
- * `{ target, resolvedConceptId? }` contract).
+ * STRICT at the top level (cinatra#1378 review item 2/3): an unknown key is a
+ * rejection, not a tolerated stray. The handler strips the SERVER-INJECTED
+ * keys before parsing and merges them back afterwards, so the strictness falls
+ * only on what the client sent. `frontmatter` still preserves unknown keys
+ * (tolerant OKF consumption is a rule about concept CONTENT), and `links`
+ * entries stay strict (the fixed `{ target, resolvedConceptId? }` contract).
  *
  * Cross-field invariants:
  * - `externalId` must equal `sha256(UTF-8(bundleId + NUL + conceptId))`
  *   (case-sensitive; the server recomputes and rejects mismatches),
  * - `okfType` must equal `frontmatter.type` (the sole required OKF field),
  * - `bodyMarkdown` is capped at 64 KiB of UTF-8 bytes, `frontmatter` at 32 KiB
- *   of serialized UTF-8 bytes, `links` at 512 entries, and `conceptId` at 1 KiB
- *   (cinatra#1378 — an uncapped surface makes the body cap decorative).
+ *   of serialized UTF-8 bytes, `links` at 512 entries, `conceptId` and each
+ *   `resolvedConceptId` at 1 KiB, `okfVersion` at 64 bytes, and the SERIALIZED
+ *   envelope at 512 KiB in aggregate (cinatra#1378 — an uncapped surface makes
+ *   the body cap decorative, and the aggregate cap keeps that true for a field
+ *   added later).
  */
 export const memoryConceptEnvelopeSchema = z
   .object({
@@ -935,9 +980,23 @@ export const memoryConceptEnvelopeSchema = z
     links: z.array(memoryConceptLinkSchema).max(MEMORY_CONCEPT_MAX_LINKS, {
       message: `links exceeds the ${MEMORY_CONCEPT_MAX_LINKS}-entry cap`,
     }),
-    okfVersion: z.string().min(1).default("0.1"),
+    okfVersion: z
+      .string()
+      .min(1)
+      .refine((v) => memoryUtf8Bytes(v) <= MEMORY_CONCEPT_OKF_VERSION_MAX_BYTES, {
+        message: `okfVersion exceeds the ${MEMORY_CONCEPT_OKF_VERSION_MAX_BYTES}-byte cap`,
+      })
+      .default("0.1"),
     provenance: memoryConceptProvenanceSchema.optional(),
   })
+  // STRICT (cinatra#1378 review item 2/3). An unknown top-level key used to
+  // validate, ride through the gate unscanned, and land in the persisted row —
+  // measured at 2 MiB in one key, and at a credential-shaped literal in
+  // another. The system-injected fields are NOT client input and never reach
+  // this schema: the handler splits them off before parsing and merges them
+  // back explicitly afterwards (see MEMORY_SERVER_INJECTED_KEYS in
+  // mcp/handlers.ts), which is what lets this be strict without losing them.
+  .strict()
   .superRefine((env, ctx) => {
     const computed = computeMemoryConceptExternalId(env.bundleId, env.conceptId);
     if (env.externalId !== computed) {
@@ -954,6 +1013,22 @@ export const memoryConceptEnvelopeSchema = z
         code: "custom",
         path: ["okfType"],
         message: "okfType must equal frontmatter.type (a non-empty string)",
+      });
+    }
+    // Aggregate backstop. Measured on the serialized form, which is what the
+    // row stores; an envelope that cannot be serialized at all fails the cap
+    // rather than passing it, for the same reason the frontmatter cap does.
+    let serializedBytes: number;
+    try {
+      serializedBytes = memoryUtf8Bytes(JSON.stringify(env) ?? "");
+    } catch {
+      serializedBytes = Number.POSITIVE_INFINITY;
+    }
+    if (serializedBytes > MEMORY_CONCEPT_ENVELOPE_MAX_BYTES) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["(root)"],
+        message: `the serialized envelope exceeds the ${MEMORY_CONCEPT_ENVELOPE_MAX_BYTES}-byte (512 KiB) aggregate cap`,
       });
     }
   });

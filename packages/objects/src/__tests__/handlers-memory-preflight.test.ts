@@ -267,3 +267,56 @@ describe("objectsListSchema — the batch bounds are part of the contract", () =
     expect(batchMax).toBe(limitMax);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round-3 review item 7 (PR #3017). The bound that is PINNED must be the bound
+// that BINDS. `limit` defaults to 100 while the batch cap is 500, `LIMIT` is
+// applied in SQL after the WHERE, and this handler always answers
+// `nextCursor: null` — so an over-limit batch was truncated with nothing to say
+// so, and a truncated preflight reports present rows as absent. That is exactly
+// the misreading the store's own doc comment says the cap prevents.
+// ---------------------------------------------------------------------------
+
+describe("objects_list — a batch larger than the effective limit is refused", () => {
+  const ids = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      computeMemoryConceptExternalId(BUNDLE_ID, `convention/c-${i}`),
+    );
+
+  it("refuses a batch that exceeds the DEFAULT limit, not just the maximum", async () => {
+    // The default is what the reviewer's probe hit: `{ type, externalIds: [500
+    // ids] }` parses to `limit: 100`, so 400 present rows would have come back
+    // as absent.
+    const parsed = objectsListSchema.parse({
+      type: MEMORY_CONCEPT_TYPE_ID,
+      externalIds: ids(500),
+    });
+    expect(parsed.limit).toBe(100);
+    await expect(list(parsed as unknown as Record<string, unknown>)).rejects.toThrow(
+      /carries 500 ids but limit is 100/,
+    );
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it("refuses an explicitly tiny limit against a large batch", async () => {
+    await expect(
+      list({ type: MEMORY_CONCEPT_TYPE_ID, externalIds: ids(500), limit: 1 }),
+    ).rejects.toThrow(/would report present rows as absent/);
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it("accepts the shipped client's own call — batch sized to the limit", async () => {
+    mockList.mockReturnValue([]);
+    await list({ type: MEMORY_CONCEPT_TYPE_ID, externalIds: ids(500), limit: 500 });
+    expect(mockList).toHaveBeenCalledOnce();
+  });
+
+  it("caps the length of an individual id", () => {
+    expect(() =>
+      objectsListSchema.parse({
+        type: MEMORY_CONCEPT_TYPE_ID,
+        externalIds: ["a".repeat(257)],
+      }),
+    ).toThrow();
+  });
+});

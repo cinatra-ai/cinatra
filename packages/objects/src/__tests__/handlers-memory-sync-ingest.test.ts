@@ -436,3 +436,450 @@ describe("a forged bundle field cannot widen, move, or re-identify a row", () =>
     expect(upsertInput.visibility).toBe("private");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round-3 review probes (PR #3017). Every case below is one the reviewer
+// carried through the server gate into the persisted row on the first attempt,
+// reproduced here at the shape level. The literals follow this file's fixture
+// convention — ordered alphabet runs, never a real-looking credential — so the
+// organization's own secret-scan and source-leak gates stay green on them.
+// ---------------------------------------------------------------------------
+
+const SHAPED_PAT = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+const SHAPED_ANTHROPIC = "sk-ant-0123456789abcdefghijklmnopqrstuvwxyz";
+/** A 64-character hex run over the full hex alphabet — maximal normalized entropy. */
+const SHAPED_HEX_KEY = "0123456789abcdef".repeat(4);
+
+describe("item 1 — a placeholder does not un-scan the value it sits in", () => {
+  it("still stores the documentation shapes an author legitimately writes", async () => {
+    await save(
+      makeEnvelope({
+        bodyMarkdown: "Set `export OPENAI_API_KEY=${OPENAI_API_KEY}` and pass <API_TOKEN>.",
+      }),
+    );
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+
+  it("rejects the SAME body once a credential-shaped literal is also present", async () => {
+    // The sibling of the test above. Both properties have to hold at once:
+    // tolerate the placeholder, and still see the literal beside it.
+    await expect(
+      save(
+        makeEnvelope({
+          bodyMarkdown: `Set \`export OPENAI_API_KEY=\${OPENAI_API_KEY}\` and pass <API_TOKEN>. Real: ${SHAPED_PAT}`,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a ${VAR} placeholder ahead of it", `Set \${HOME} first. ${SHAPED_PAT}`],
+    ["a <VAR> placeholder ahead of it", `See <TODO>. ${SHAPED_PAT}`],
+    ["a mustache wrapper around it", `{{ ${SHAPED_PAT} }}`],
+  ])("rejects a body with %s", async (_label, bodyMarkdown) => {
+    await expect(save(makeEnvelope({ bodyMarkdown }))).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SECRET_DETECTED",
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a placeholder-shielded credential in frontmatter and in a link", async () => {
+    await expect(
+      save(makeEnvelope({ frontmatter: { type: "convention", note: `<X> ${SHAPED_PAT}` } })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    await expect(
+      save(
+        makeEnvelope({
+          links: [{ target: `https://example.test/?a=\${T}&token=${SHAPED_PAT}` }],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("item 2 — the scan reads every author-controlled field, not three", () => {
+  it("refuses an unknown top-level key rather than storing it unscanned", async () => {
+    await expect(
+      save(makeEnvelope({ smuggled: SHAPED_PAT })),
+    ).rejects.toThrow(/invalid memory concept envelope/);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("scans provenance.tool", async () => {
+    await expect(
+      save(makeEnvelope({ provenance: { tool: SHAPED_PAT, toolVersion: "0.1.0" } })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("scans conceptId, which is the external-id preimage and is stored", async () => {
+    const conceptId = `convention/${SHAPED_PAT}`;
+    await expect(
+      save(
+        makeEnvelope({
+          conceptId,
+          externalId: computeMemoryConceptExternalId(BUNDLE_ID, conceptId),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("does NOT flag the envelope's own identity fields", async () => {
+    // externalId is a 64-char sha256 digest and bundleId is a UUID; both score
+    // high under the alphabet-aware entropy rule, so both are excluded BY NAME.
+    // If that exclusion regressed, every well-formed envelope would refuse.
+    await save(makeEnvelope());
+    expect(mockUpsert).toHaveBeenCalledOnce();
+    const written = mockUpsert.mock.calls[0][0].upsertInput.data;
+    expect(written.externalId).toBe(computeMemoryConceptExternalId(BUNDLE_ID, CONCEPT_ID));
+    expect(written.bundleId).toBe(BUNDLE_ID);
+  });
+
+  it("persists exactly the parsed envelope plus the server-injected run id", async () => {
+    await save(makeEnvelope());
+    const written = mockUpsert.mock.calls[0][0].upsertInput.data as Record<string, unknown>;
+    expect(Object.keys(written).sort()).toEqual(
+      [
+        "bodyMarkdown",
+        "bundleId",
+        "cinatraAgentRunId",
+        "conceptId",
+        "externalId",
+        "frontmatter",
+        "links",
+        "okfType",
+        "okfVersion",
+        "provenance",
+      ].sort(),
+    );
+    expect(written.cinatraAgentRunId).toBe("run-42");
+  });
+});
+
+describe("item 3 — every author-controlled surface is capped", () => {
+  it("caps and validates resolvedConceptId", async () => {
+    await expect(
+      save(
+        makeEnvelope({
+          links: [
+            { target: "./a", resolvedConceptId: "a".repeat(MEMORY_CONCEPT_ID_MAX_BYTES + 1) },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/resolvedConceptId exceeds/);
+    await expect(
+      save(makeEnvelope({ links: [{ target: "./a", resolvedConceptId: "../escape" }] })),
+    ).rejects.toThrow(/resolvedConceptId must be a relative POSIX path/);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("caps okfVersion", async () => {
+    await expect(
+      save(makeEnvelope({ okfVersion: "0".repeat(200) })),
+    ).rejects.toThrow(/okfVersion exceeds/);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("caps the serialized envelope in aggregate, whatever field carries the bytes", async () => {
+    // 512 links each just under the per-link target cap: every per-field cap is
+    // respected and the total is still megabytes. The aggregate cap is what
+    // keeps the property true for a field nobody has added yet.
+    const target = `./${"a".repeat(MEMORY_CONCEPT_LINK_TARGET_MAX_BYTES - 4)}`;
+    await expect(
+      save(
+        makeEnvelope({
+          links: Array.from({ length: MEMORY_CONCEPT_MAX_LINKS }, () => ({ target })),
+        }),
+      ),
+    ).rejects.toThrow(/aggregate cap/);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("item 4 — a bundle cannot request an ownership tuple it cannot hold", () => {
+  it("refuses a named owning principal", async () => {
+    await expect(
+      save(makeEnvelope(), { ownerLevel: "user", ownerId: "user-VICTIM" }),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_OWNERSHIP_REFUSED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a level whose authority is not derivable from the actor", async () => {
+    for (const ownerLevel of ["team", "workspace"]) {
+      await expect(save(makeEnvelope(), { ownerLevel })).rejects.toMatchObject({
+        code: "OBJECTS_MEMORY_OWNERSHIP_REFUSED",
+      });
+    }
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request to publish at create time", async () => {
+    await expect(
+      save(makeEnvelope(), { visibility: "public" }),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_OWNERSHIP_REFUSED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("accepts user and organization, resolving the principal from the ACTOR", async () => {
+    await save(makeEnvelope(), { ownerLevel: "user" });
+    expect(mockUpsert.mock.calls[0][0].upsertInput).toMatchObject({
+      ownerLevel: "user",
+      ownerId: "user-1",
+    });
+    mockUpsert.mockClear();
+    await save(makeEnvelope(), { ownerLevel: "organization" });
+    // The principal is the caller's own organization — never a user id paired
+    // with an organization level, which is what the generic default produced.
+    expect(mockUpsert.mock.calls[0][0].upsertInput).toMatchObject({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+    });
+  });
+});
+
+describe("item 5 — the entropy branch is alphabet-aware", () => {
+  it.each([
+    ["a hex-encoded key", SHAPED_HEX_KEY],
+    ["a longer hex-encoded key", SHAPED_HEX_KEY.repeat(2)],
+  ])("rejects %s in the body", async (_label, token) => {
+    await expect(
+      save(makeEnvelope({ bodyMarkdown: `The key is ${token}` })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a PEM private-key block", async () => {
+    await expect(
+      save(
+        makeEnvelope({
+          bodyMarkdown: "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED", details: { pattern: "pem-private-key" } });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a password carried in a connection URL's userinfo", async () => {
+    await expect(
+      save(makeEnvelope({ bodyMarkdown: "postgres://app:hunter2@db.internal:5432/main" })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED", details: { pattern: "url-credential" } });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still stores a connection URL whose password is a placeholder", async () => {
+    await save(
+      makeEnvelope({ bodyMarkdown: "postgres://app:${PGPASSWORD}@db.internal:5432/main" }),
+    );
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe("item 6 — an embedded placeholder word does not disable the scan", () => {
+  it("rejects a credential-shaped token with `example` spliced into its middle", async () => {
+    await expect(
+      save(makeEnvelope({ bodyMarkdown: "key: 0123456789abcdexampleefghijklmnopqr" })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still tolerates the word as a whole token or a delimited word", async () => {
+    await save(makeEnvelope({ bodyMarkdown: "See https://example.test/ and sk-EXAMPLE." }));
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe("item 8 — a memory row's identity triple is immutable", () => {
+  const OTHER_BUNDLE = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
+
+  it.each(["externalId", "bundleId", "conceptId"])(
+    "refuses an update that rewrites %s",
+    async (field) => {
+      mockGet.mockReturnValue(makeMemoryRecord());
+      const otherConceptId = "convention/somebody-elses-file";
+      const rewritten: Record<string, unknown> = {
+        externalId: computeMemoryConceptExternalId(OTHER_BUNDLE, otherConceptId),
+        bundleId: OTHER_BUNDLE,
+        conceptId: otherConceptId,
+      };
+      await expect(
+        update("obj-mem-1", { [field]: rewritten[field] }),
+      ).rejects.toMatchObject({
+        code: "OBJECTS_MEMORY_IDENTITY_IMMUTABLE",
+        details: { field },
+      });
+      expect(mockUpsert).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a COHERENT triple belonging to another bundle", async () => {
+    // The envelope's superRefine passes: the triple is internally consistent.
+    // What it is not is THIS row's identity, and `data->>'externalId'` is a
+    // lookup key, so accepting it would point the other bundle's preflight at
+    // this row.
+    mockGet.mockReturnValue(makeMemoryRecord());
+    const otherConceptId = "convention/somebody-elses-file";
+    await expect(
+      update("obj-mem-1", {
+        bundleId: OTHER_BUNDLE,
+        conceptId: otherConceptId,
+        externalId: computeMemoryConceptExternalId(OTHER_BUNDLE, otherConceptId),
+      }),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_IDENTITY_IMMUTABLE" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still allows an ordinary content update that keeps the identity", async () => {
+    mockGet.mockReturnValue(makeMemoryRecord());
+    await update("obj-mem-1", { bodyMarkdown: "Keys live in the environment. Always." });
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe("item 13 — the refusal names the most specific credential prefix", () => {
+  it("reports an Anthropic-shaped key as anthropic-key", async () => {
+    await expect(
+      save(makeEnvelope({ bodyMarkdown: `key ${SHAPED_ANTHROPIC}` })),
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SECRET_DETECTED",
+      details: { pattern: "anthropic-key" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex convergence round (PR #3017 fix round): the SIXTH credential
+// pass-through, and the gap the resolved-type re-assertion left open.
+// ---------------------------------------------------------------------------
+
+describe("cinatraAgentRunId is server-derived, not a smuggling channel", () => {
+  it("refuses a caller-supplied run id on a memory save", async () => {
+    // The generic save path preserves a `cinatraAgentRunId` the caller sent
+    // (it injects the authenticated run id only when the key is ABSENT). On a
+    // memory write that field is lifted past the strict parse and skipped by
+    // the scan as "server-injected" — so a caller-supplied value would ride
+    // both exemptions into the persisted row, unscanned and uncapped.
+    await expect(
+      save(makeEnvelope({ cinatraAgentRunId: SHAPED_PAT })),
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SERVER_FIELD_REFUSED",
+      details: { field: "cinatraAgentRunId" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses any caller-supplied value, credential-shaped or not", async () => {
+    // The refusal is about PROVENANCE, not about the value: a run id the
+    // caller chose is a false provenance record even when it is harmless text.
+    await expect(
+      save(makeEnvelope({ cinatraAgentRunId: "run-somebody-elses" })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SERVER_FIELD_REFUSED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still stamps the run id from the authenticated actor", async () => {
+    await save(makeEnvelope());
+    const written = mockUpsert.mock.calls[0][0].upsertInput.data as Record<string, unknown>;
+    expect(written.cinatraAgentRunId).toBe("run-42");
+  });
+
+  it("refuses an update that changes the stamped run id", async () => {
+    // The update path is the other way to reach the unparsed, unscanned field.
+    mockGet.mockReturnValue(
+      makeMemoryRecord({ data: { ...makeEnvelope(), cinatraAgentRunId: "run-42" } }),
+    );
+    await expect(
+      update("obj-mem-1", { cinatraAgentRunId: SHAPED_PAT }),
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SERVER_FIELD_REFUSED",
+      details: { field: "cinatraAgentRunId" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses an update that ADDS a run id to a row that carries none", async () => {
+    // The seventh pass-through. An immutability check that compares against the
+    // STORED value skips a row whose payload has no run id — which is exactly
+    // the row an attacker picks, because the field is lifted past the strict
+    // parse and excluded from the scan. The rule is therefore about who
+    // SUPPLIED the field, not about what the row holds today.
+    const { cinatraAgentRunId: _absent, ...withoutRunId } = {
+      ...makeEnvelope(),
+      cinatraAgentRunId: undefined,
+    } as Record<string, unknown>;
+    mockGet.mockReturnValue(makeMemoryRecord({ data: withoutRunId }));
+    await expect(
+      update("obj-mem-1", { cinatraAgentRunId: SHAPED_PAT }),
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SERVER_FIELD_REFUSED",
+      details: { field: "cinatraAgentRunId" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still allows an ordinary content update on a row that carries no run id", async () => {
+    const { cinatraAgentRunId: _absent, ...withoutRunId } = {
+      ...makeEnvelope(),
+      cinatraAgentRunId: undefined,
+    } as Record<string, unknown>;
+    mockGet.mockReturnValue(makeMemoryRecord({ data: withoutRunId }));
+    await update("obj-mem-1", { bodyMarkdown: "Keys live in the environment. Always." });
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a memory row cannot be written without declaring the type", () => {
+  it("refuses a save that reaches the memory type by classification", async () => {
+    // The memory ownership and provenance gates key on the DECLARED typeHint,
+    // which is how every real memory write arrives. A save that resolved to the
+    // type without declaring it would have had its tuple derived and probed
+    // before any gate could shape it, so re-asserting the gate here could only
+    // validate what it can no longer change. Refusing is the honest answer.
+    const handlers = createObjectsPrimitiveHandlers();
+    await expect(
+      handlers.objects_save({
+        primitiveName: "objects_save",
+        input: { rawData: makeEnvelope(), typeHint: "@cinatra-ai/objects:object" },
+        actor: ACTOR,
+        mode: "agentic",
+      } as never),
+    ).rejects.toThrow();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex round — the detector shapes that survived the first fix", () => {
+  it("rejects a high-entropy token with a delimited placeholder word inside", async () => {
+    await expect(
+      save(makeEnvelope({ bodyMarkdown: "key Ab3Cd5Ef7Gh9-example-Jk2Lm4Np6Qr8St0Uv" })),
+    ).rejects.toMatchObject({ code: "OBJECTS_MEMORY_SECRET_DETECTED" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a standard-base64 credential the token splitter would take apart", async () => {
+    await expect(
+      save(
+        makeEnvelope({
+          bodyMarkdown: "secret wJalrXUtnFEMI+K7MDENG/bPxRfiCYzEXAMPLEKEYaZ",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_SECRET_DETECTED",
+      details: { pattern: "standard-base64-token" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still stores prose carrying ordinary slash-separated paths", async () => {
+    await save(
+      makeEnvelope({
+        bodyMarkdown:
+          "See packages/objects/src/mcp/handlers.ts and docs/internals/workflows/memory-conventions.md.",
+      }),
+    );
+    expect(mockUpsert).toHaveBeenCalledOnce();
+  });
+});
