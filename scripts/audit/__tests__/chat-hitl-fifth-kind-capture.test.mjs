@@ -367,6 +367,55 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
     ).toMatch(/has no absence to pin/);
   });
 
+  it("refuses an absence that still names WHICH card, or what was read off it", () => {
+    // Half-checking the shape is how a forged pin gets in: an absence that
+    // carries an index, an id or attributes is claiming a measurement of
+    // something that was not on the screen.
+    const symbolKeyed = {};
+    symbolKeyed[Symbol("data-lifecycle-card")] = KIND;
+    const hiddenKeyed = {};
+    Object.defineProperty(hiddenKeyed, "data-lifecycle-card", {
+      value: KIND,
+      enumerable: false,
+    });
+    const forged = [
+      ["an index", { index: 7 }, /pins index/],
+      ["an id", { id: "forged" }, /names instance/],
+      ["an array where the attribute set belongs", { attributes: [] }, /attributes` OBJECT/],
+      // `typeof` calls all three of these an object, which is why the check is
+      // on the PROTOTYPE rather than on the word.
+      ["a Date", { attributes: new Date() }, /attributes` OBJECT/],
+      ["a Map", { attributes: new Map() }, /attributes` OBJECT/],
+      [
+        "an instance of something of its own",
+        { attributes: Object.create({ inherited: true }) },
+        /attributes` OBJECT/,
+      ],
+      [
+        "attributes read off nothing",
+        { attributes: { "data-lifecycle-card": KIND } },
+        /cannot have been read/,
+      ],
+      // Both of these are invisible to `Object.keys`, which is why the check is
+      // on EVERY own key.
+      ["a symbol-keyed attribute", { attributes: symbolKeyed }, /cannot have been read/],
+      ["a non-enumerable attribute", { attributes: hiddenKeyed }, /cannot have been read/],
+    ];
+    for (const [what, over, matcher] of forged) {
+      const record = {
+        ...recordOn("chat_thread", "decided"),
+        instance: { ...ABSENCE_INSTANCE, ...over },
+      };
+      expect(validateCaptureRecord(record, { hashOf }).join("\n"), what).toMatch(matcher);
+      expect(
+        validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })
+          .map((x) => x.detail)
+          .join("\n"),
+        what,
+      ).toMatch(matcher);
+    }
+  });
+
   it("leaves the four other kinds' decided records exactly as they were", () => {
     for (const other of LIFECYCLE_KINDS.filter((k) => k !== KIND)) {
       const record = {

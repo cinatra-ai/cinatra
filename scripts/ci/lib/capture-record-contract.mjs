@@ -377,15 +377,43 @@ export function absenceInstanceViolations({ instance, kind, state }) {
         "that is still on the screen is not a settled reading, whatever the record calls it",
     );
   }
-  if (inst.attributes === null || typeof inst.attributes !== "object") {
+  // THE WHOLE SHAPE, not only the parts that are easy to check. An absence that
+  // still names WHICH card it was (an index, an id) or what was read off it
+  // (attributes) is claiming a measurement of something that was not on the
+  // screen, and half-checking the shape is how a forged one gets in.
+  if (inst.index !== null) {
+    out.push(
+      `the recorded absence pins index ${JSON.stringify(inst.index)} — there is no card for it to ` +
+        "be the nth of, so an absence records `index: null`",
+    );
+  }
+  if (inst.id !== null && inst.id !== undefined) {
+    out.push(
+      `the recorded absence names instance ${JSON.stringify(inst.id)} — a card that was not on ` +
+        "the screen cannot have been identified",
+    );
+  }
+  // A PLAIN, EMPTY OBJECT — checked as such rather than by `typeof`, which a
+  // Date, a Map, an array and anything with a prototype of its own all satisfy,
+  // and by EVERY own key rather than the enumerable string ones, which a symbol
+  // key or a non-enumerable one both slip past.
+  const attrs = inst.attributes;
+  const proto =
+    attrs !== null && typeof attrs === "object" ? Object.getPrototypeOf(attrs) : undefined;
+  if (
+    attrs === null ||
+    typeof attrs !== "object" ||
+    (proto !== Object.prototype && proto !== null)
+  ) {
     out.push(
       "identity is read OFF the element and there was no element — an absence records an empty " +
-        "`attributes` object rather than omitting it",
+        "plain `attributes` OBJECT rather than omitting it or standing something else in its place",
     );
-  } else if (Object.keys(inst.attributes).length > 0) {
+  } else if (Reflect.ownKeys(attrs).length > 0) {
     out.push(
-      `the recorded absence carries attributes ${JSON.stringify(inst.attributes)} — an element ` +
-        "that was not on the screen cannot have been read",
+      `the recorded absence carries attributes ${Reflect.ownKeys(attrs)
+        .map(String)
+        .join(", ")} — an element that was not on the screen cannot have been read`,
     );
   }
   return out;

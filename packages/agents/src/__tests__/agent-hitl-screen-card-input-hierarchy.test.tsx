@@ -63,7 +63,7 @@ vi.mock("../hitl-actions", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
-import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
+import { AgentHitlScreenCard, hitlGateKey } from "../agent-hitl-screen-card";
 import { Textarea } from "@/components/ui/textarea";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
@@ -488,13 +488,37 @@ describe("§I — the shipped fallback renderer, drawn inside the region", () =>
 });
 
 // ---------------------------------------------------------------------------
-// 5. THE MID-RUN GATE IS UNCHANGED
+// 5. THE MID-RUN GATE IS UNCHANGED — measured against a renderer that HAS a
+//    control of its own, so the arm can actually fail if one is suppressed.
 // ---------------------------------------------------------------------------
 
-describe("§I — the mid-run gate keeps the shape it already had", () => {
-  it.each(SUBORDINATE_HOSTS)(
-    "%s: the card's own Continue, outside a region that holds no send",
+describe("§I — the mid-run gate keeps the shape it already had, on every host", () => {
+  /** A mid-run renderer that draws its own control and reports the props it was
+   *  given, so "unchanged" is a measurement rather than a fixture that could not
+   *  have noticed. */
+  function registerMidRunWithItsOwnControl(): void {
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id: "@cinatra-ai/test:mid-run-with-control",
+      priority: 90,
+      condition: (_f, _s, ctx) => ctx.xRenderer === ASKING.gate.xRenderer,
+      renderer: ({ hideSubmit }: { hideSubmit?: boolean }) => (
+        <div data-testid="mid-run-body" data-hide-submit={String(hideSubmit === true)}>
+          {hideSubmit === true ? null : (
+            <button type="button" data-testid="renderer-own-control">
+              Continue
+            </button>
+          )}
+        </div>
+      ),
+      credentialSafe: true,
+    });
+  }
+
+  it.each([...SUBORDINATE_HOSTS, ...PRIMARY_HOSTS])(
+    "%s: the renderer keeps its own control and the card keeps its own Continue",
     async (host) => {
+      registerMidRunWithItsOwnControl();
       const mounted = mountOn(host);
       await settle();
       const card = await waitFor(() => {
@@ -504,25 +528,185 @@ describe("§I — the mid-run gate keeps the shape it already had", () => {
         if (!found) throw new Error(`no card on ${host}`);
         return found;
       });
-      expect(card.querySelectorAll(CONTINUE), "the card's control").toHaveLength(1);
       const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
-      expect(region.querySelectorAll("button"), "no send in the field").toHaveLength(0);
+      // NOT SUPPRESSED. The takeover is the SETUP gate's; a mid-run screen is
+      // not this fix's to change, and the prop it receives says so.
+      expect(
+        region.querySelector('[data-testid="mid-run-body"]')?.getAttribute("data-hide-submit"),
+        "the mid-run renderer is not told to hide its submit",
+      ).toBe("false");
+      expect(
+        region.querySelector('[data-testid="renderer-own-control"]'),
+        "the mid-run renderer's own control",
+      ).not.toBeNull();
+      expect(region.getAttribute("data-send-affordance"), "no takeover declared").toBeNull();
+      expect(card.querySelectorAll(CONTINUE), "the card's own Continue, as before").toHaveLength(1);
     },
   );
+});
 
-  it.each(PRIMARY_HOSTS)("%s: the card's own Continue, and no declaration", async (host) => {
-    const mounted = mountOn(host);
-    await settle();
-    const card = await waitFor(() => {
-      const found = mounted.container.querySelector<HTMLElement>(
-        '[data-lifecycle-card="agent_hitl_screen"]',
-      );
-      if (!found) throw new Error(`no card on ${host}`);
-      return found;
+// ---------------------------------------------------------------------------
+// 5b. THE SETUP TAKEOVER, IN THE SHAPES IT HAS TO SURVIVE
+// ---------------------------------------------------------------------------
+
+describe("§I — the setup takeover only happens where the card can answer", () => {
+  /** A renderer that emits on every keystroke and registers NO flush — the
+   *  other half of the shared props contract, and the one whose send would be
+   *  taken away with nothing put in its place if the card cleared what was
+   *  already handed to it before asking again. */
+  function registerKeystrokeRenderer(): void {
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id: "@cinatra-ai/test:keystroke",
+      priority: 90,
+      condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
+      renderer: ({ onChange }: { onChange: (next: unknown) => void }) => (
+        <input
+          data-testid="keystroke-field"
+          onChange={(e) => onChange((e.target as HTMLInputElement).value)}
+        />
+      ),
+      credentialSafe: true,
     });
-    expect(card.querySelectorAll(CONTINUE), "the card's control").toHaveLength(1);
-    const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+  }
+
+  it("a renderer that emits on change and registers no flush is still answerable", async () => {
+    registerKeystrokeRenderer();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const card = mounted.container.querySelector<HTMLElement>(
+      '[data-lifecycle-card="agent_hitl_screen"]',
+    )!;
+    await act(async () => {
+      fireEvent.change(card.querySelector('[data-testid="keystroke-field"]')!, {
+        target: { value: "typed, never flushed" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(card.querySelector<HTMLButtonElement>(CONTINUE)!);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-2930",
+      { idea: "typed, never flushed" },
+      "idea",
+    );
+  });
+
+  it("two presses in one tick submit ONCE", async () => {
+    registerKeystrokeRenderer();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const card = mounted.container.querySelector<HTMLElement>(
+      '[data-lifecycle-card="agent_hitl_screen"]',
+    )!;
+    await act(async () => {
+      fireEvent.change(card.querySelector('[data-testid="keystroke-field"]')!, {
+        target: { value: "answered once" },
+      });
+    });
+    const button = card.querySelector<HTMLButtonElement>(CONTINUE)!;
+    await act(async () => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("the gate identity cannot collide, so one question's answer cannot cross into another", () => {
+    // The key decides whether a staged answer or a registered flush still
+    // belongs to the gate on screen. A separator-joined key is not injective:
+    // these two gates are different questions and used to share one key.
+    const gateOf = (reviewTaskId, xRenderer, fieldName) =>
+      hitlGateKey({
+        reviewTaskId,
+        xRenderer,
+        fieldName,
+        inputSchema: {},
+        currentValues: {},
+      } as never);
+    expect(gateOf("r", "x::y", "z")).not.toBe(gateOf("r::x", "y", "z"));
+    // …and a gate that names NO field is not the gate that names an empty one.
+    expect(gateOf("r", "x", undefined)).not.toBe(gateOf("r", "x", ""));
+  });
+
+  it("a gate that resolves to NO renderer gets no takeover: no declaration, no card Continue", async () => {
+    // Nothing to hand the card an answer through, so nothing is taken away and
+    // no control is drawn that could not deliver one.
+    fieldRendererRegistry.clear();
+    screenStateMock.mockImplementation(async () => SHIPPED_GATE);
+    const region = await fieldsRegionOn("chat_thread");
+    expect(region.getAttribute("data-send-affordance"), "no takeover").toBeNull();
+    const card = region.closest('[data-lifecycle-card="agent_hitl_screen"]')!;
+    expect(card.querySelectorAll(CONTINUE), "no Continue the card cannot answer with").toHaveLength(
+      0,
+    );
+  });
+
+  it("a PRESENTATION-HINT gate keeps its own path, untouched", async () => {
+    // The hint short-circuits to the card's own dispatch renderer, which is
+    // handed neither `onChange` nor a flush — so the card has no way to answer
+    // and does not pretend to. A renderer IS registered and would otherwise
+    // resolve, so this can only pass through the short-circuit.
+    registerKeystrokeRenderer();
+    screenStateMock.mockImplementation(async () => ({
+      ...SHIPPED_GATE,
+      gate: {
+        ...SHIPPED_GATE.gate,
+        currentValues: { presentation: { type: "text", text: "Look at this" } },
+      },
+    }));
+    const region = await fieldsRegionOn("chat_thread");
+    expect(
+      region.querySelector('[data-testid="keystroke-field"]'),
+      "the hint took the dispatch path, not the registry one",
+    ).toBeNull();
     expect(region.getAttribute("data-send-affordance")).toBeNull();
+    const card = region.closest('[data-lifecycle-card="agent_hitl_screen"]')!;
+    expect(card.querySelectorAll(CONTINUE)).toHaveLength(0);
+  });
+
+  it("an OBJECT-typed setup field travels under its own field name, unchanged", async () => {
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id: "@cinatra-ai/test:object-field",
+      priority: 90,
+      condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
+      renderer: ({ onChange }: { onChange: (next: unknown) => void }) => (
+        <button
+          type="button"
+          data-testid="emit-object"
+          onClick={() => onChange({ title: "A title", body: "A body" })}
+        >
+          emit
+        </button>
+      ),
+      credentialSafe: true,
+    });
+    screenStateMock.mockImplementation(async () => ({
+      ...SHIPPED_GATE,
+      gate: { ...SHIPPED_GATE.gate, inputSchema: { type: "object", title: "Idea" } },
+    }));
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const card = mounted.container.querySelector<HTMLElement>(
+      '[data-lifecycle-card="agent_hitl_screen"]',
+    )!;
+    await act(async () => {
+      fireEvent.click(card.querySelector('[data-testid="emit-object"]')!);
+    });
+    await act(async () => {
+      fireEvent.click(card.querySelector<HTMLButtonElement>(CONTINUE)!);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-2930",
+      { idea: { title: "A title", body: "A body" } },
+      "idea",
+    );
   });
 });
 
