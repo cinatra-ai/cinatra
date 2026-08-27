@@ -21,7 +21,7 @@ export {
   type WalkMemoryTreeOptions,
 } from "./bundle.ts";
 export { checkMemoryTree, type MemoryCheckResult } from "./check.ts";
-export { runMemoryCli, type MemoryCliIo } from "./cli.ts";
+export { runMemoryCli, runMemoryCliAsync, type MemoryCliIo } from "./cli.ts";
 export {
   buildMemoryConcept,
   memoryConceptIdFromPath,
@@ -47,6 +47,52 @@ export {
   buildMemoryManifest,
   serializeMemoryManifest,
 } from "./manifest.ts";
+export {
+  collectMemoryScannableStrings,
+  detectMemoryCredentialPattern,
+  scanMemoryConceptForSecrets,
+  MemorySecretScanError,
+} from "./secret-scan.ts";
+export {
+  memoryConceptScopeRefusals,
+  memoryVisibilityRank,
+  parseMemorySyncBinding,
+  resolveMemoryConceptScopeRequest,
+} from "./sync-binding.ts";
+export {
+  buildMemoryConceptEnvelope,
+  computeMemoryConceptExternalId,
+  memoryConceptContentDigest,
+  remoteMemoryConceptDigest,
+  MEMORY_CONCEPT_TYPE_ID,
+  type MemoryConceptEnvelope,
+  type MemoryConceptEnvelopeLink,
+} from "./sync-envelope.ts";
+export {
+  emptyMemorySyncLedger,
+  loadMemorySyncLedger,
+  serializeMemorySyncLedger,
+  writeMemorySyncLedger,
+  MEMORY_SYNC_LEDGER_FILENAME,
+} from "./sync-ledger.ts";
+export {
+  assertMemorySyncEndpointUrl,
+  createHttpMemorySyncTransport,
+  redactMemorySyncUrl,
+  type HttpMemorySyncTransportOptions,
+  type MemorySyncTransport,
+} from "./sync-transport.ts";
+export {
+  buildMemorySaveInput,
+  planMemorySync,
+  runMemorySync,
+  scanMemoryBundleLocally,
+  MEMORY_SYNC_PREFLIGHT_BATCH,
+  MEMORY_SYNC_TOOL_ID,
+  MEMORY_SYNC_TOOL_VERSION,
+  type MemorySyncPlanInput,
+  type RunMemorySyncOptions,
+} from "./sync.ts";
 export {
   buildMemoryAdapterBlock,
   buildMemoryAdapterDescription,
@@ -82,6 +128,20 @@ export {
   type MemoryDiagnosticSeverity,
   type MemoryLink,
   type MemoryManifest,
+  type MemoryScopeOwnerLevel,
+  type MemoryScopeRequest,
+  type MemoryScopeVisibility,
+  MemorySyncError,
+  type MemorySyncAction,
+  type MemorySyncBinding,
+  type MemorySyncDiagnostic,
+  type MemorySyncDiagnosticCode,
+  type MemorySyncDiagnosticSeverity,
+  type MemorySyncItem,
+  type MemorySyncLedger,
+  type MemorySyncOrphan,
+  type MemorySyncPlan,
+  type MemorySyncResult,
   type MemoryTree,
 } from "./types.ts";
 export {

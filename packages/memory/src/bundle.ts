@@ -24,6 +24,8 @@ import {
 } from "./concept.ts";
 import { exclusiveWriteMemoryFile } from "./fs-safe.ts";
 import { generateMemoryIndexMarkdown } from "./index-file.ts";
+import { parseMemorySyncBinding } from "./sync-binding.ts";
+import { MEMORY_SYNC_LEDGER_FILENAME } from "./sync-ledger.ts";
 import {
   DEFAULT_MEMORY_CAPS,
   MemoryError,
@@ -92,6 +94,28 @@ export function initMemoryBundle(
     exclusiveWriteMemoryFile(
       path.join(root, "index.md"),
       generateMemoryIndexMarkdown([], { okfVersion: MEMORY_FORMAT_OKF_VERSION }),
+      root,
+    );
+  }
+  // Ignore the sync ledger (cinatra#1378 review item 11).
+  //
+  // A sync run writes `sync-ledger.json` into the bundle ROOT, so the first
+  // thing an author sees after their first sync is an untracked file holding
+  // server object ids — with nothing telling them what to do with it. It is a
+  // per-checkout CACHE of what the last run pushed, not bundle content: the
+  // object ids in it are minted per organization by the server that answered,
+  // so committing it hands one team's row ids to everyone who clones the
+  // bundle, and it is authoritative for nothing (the preflight is what
+  // decides; the ledger only reports drift).
+  //
+  // Written at init and only when absent, like the index above. A sync run
+  // does NOT write this file: sync's write surface stays exactly one file, the
+  // ledger itself. An author whose bundle predates this line adds it by hand —
+  // the conventions page says so.
+  if (!existsSync(path.join(root, ".gitignore"))) {
+    exclusiveWriteMemoryFile(
+      path.join(root, ".gitignore"),
+      `# Written by \`memory init\`. The sync ledger is a per-checkout cache of\n# what the last \`memory sync\` pushed: server-minted object ids and content\n# digests. It is not part of the bundle and is not meant to be committed.\n${MEMORY_SYNC_LEDGER_FILENAME}\n`,
       root,
     );
   }
@@ -165,9 +189,17 @@ export function loadMemoryBundleConfig(root: string): MemoryBundleConfig {
     );
   }
   const name = typeof doc["name"] === "string" ? doc["name"] : undefined;
+  // Strict on purpose: the block that decides WHERE a sync run writes is not
+  // read tolerantly. A malformed or forged `sync:` block fails the load rather
+  // than degrading to a default the author never asked for.
+  const sync = parseMemorySyncBinding(
+    doc,
+    `invalid ${MEMORY_BUNDLE_CONFIG_FILENAME}`,
+  );
   return {
     bundleId,
     ...(name === undefined ? {} : { name }),
+    ...(sync === undefined ? {} : { sync }),
     caps: {
       maxConceptFileBytes: readCap(
         doc,

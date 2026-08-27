@@ -782,6 +782,536 @@ function resolveMemoryConceptDefOrThrow() {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Memory ingest secret scan (cinatra#1378, epic #1373) — FAIL-CLOSED.
+// ---------------------------------------------------------------------------
+//
+// A memory bundle is written by coding agents into a working tree, so a concept
+// file is exactly where an API key ends up by accident. The sync client scans
+// before it uploads and reports a local diagnostic naming the file — but a
+// bundle is untrusted input end-to-end, so the client's scan can never be the
+// thing that decides. This is the gate that decides.
+//
+// Fail-closed in both directions:
+//   - a credential-shaped literal REJECTS the write, and the payload is never
+//     persisted (this runs on the same seam as the envelope schema, before any
+//     commit);
+//   - a scan that cannot COMPLETE also rejects. "Could not look" and "looked
+//     and found nothing" must never produce the same answer, so the walk is
+//     bounded and exceeding a bound throws rather than returning what it had.
+//
+// Inlined here rather than imported for the same reason MEMORY_CONCEPT_TYPE_ID
+// is: this handler is reachable from the locked route-graph budgets, and a new
+// first-party module would grow every locked route by one. It has no imports.
+//
+// It is deliberately NOT a copy of a shared helper with a kill-switch: there is
+// no env flag, no org opt-out, and no claim probe. A memory-typed write whose
+// content cannot be cleared is refused, full stop.
+
+/** Stable refusal codes for the memory ingest secret scan (cinatra#1378). */
+const OBJECTS_MEMORY_SECRET_DETECTED = "OBJECTS_MEMORY_SECRET_DETECTED" as const;
+const OBJECTS_MEMORY_SECRET_SCAN_FAILED =
+  "OBJECTS_MEMORY_SECRET_SCAN_FAILED" as const;
+
+/**
+ * Known credential prefixes — flagged regardless of entropy.
+ *
+ * ORDER IS THE REPORTED ANSWER (cinatra#1378 review item 13): the first match
+ * wins and its name is the only thing the author can act on, so the MORE
+ * SPECIFIC prefix comes first. `sk-ant-…` is also a valid `sk-…`, and telling
+ * an author their Anthropic key is an OpenAI key sends them to the wrong file.
+ */
+const MEMORY_SECRET_PREFIXES: ReadonlyArray<{ name: string; re: RegExp }> = [
+  { name: "anthropic-key", re: /^sk-ant-[A-Za-z0-9_-]{16,}$/ },
+  { name: "openai-sk", re: /^sk-[A-Za-z0-9_-]{16,}$/ },
+  { name: "github-pat", re: /^(gho|ghp|gha|ghs|ghr)_[A-Za-z0-9]{20,}$/ },
+  { name: "google-oauth", re: /^ya29\.[A-Za-z0-9_-]{20,}$/ },
+  { name: "slack-token", re: /^(xoxb|xoxp|xoxa|xoxr|xoxs)-[A-Za-z0-9-]{16,}$/ },
+  { name: "aws-access-key", re: /^(AKIA|ASIA)[A-Z0-9]{12,}$/ },
+];
+
+/**
+ * Documentation shapes that must not be flagged, or the gate trains bypasses.
+ *
+ * ANCHORED, and applied PER TOKEN (cinatra#1378 review item 1). The earlier
+ * shape tested these against the whole trimmed value and returned "no finding"
+ * for the ENTIRE string on a match. Two of the patterns were unanchored, and a
+ * concept body is scanned as one value — so a single `${VAR}` or `<VAR>`
+ * anywhere in a file switched the scan off for the whole file. Tolerance
+ * belongs to the TOKEN that is a placeholder, never to its neighbours.
+ *
+ * There is no whole-value branch any more and none is needed: the token
+ * splitter consumes `{}`, `<>` and the URL punctuation, so a value that IS a
+ * placeholder arrives here as a single token and matches on its own. A
+ * placeholder WRAPPER (`{{ … }}`) therefore no longer launders its contents.
+ */
+const MEMORY_SECRET_PLACEHOLDER_TOKENS: ReadonlyArray<RegExp> = [
+  /^\$\{[A-Z0-9_]+\}$/,
+  /^\$[A-Z0-9_]+$/,
+  /^<[A-Z0-9_]+>$/,
+  /^\{\{[A-Z0-9_. -]+\}\}$/,
+  /^\*+$/,
+  /^REDACTED$/i,
+];
+
+/**
+ * Placeholder WORDS. Matched as a whole token or as a delimited word inside
+ * one (cinatra#1378 review item 6) — never as a bare substring. A
+ * credential-shaped token with `example` spliced into its middle is a
+ * credential, not documentation.
+ */
+const MEMORY_SECRET_PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
+  "example",
+  "redacted",
+  "placeholder",
+]);
+
+/** Word delimiters inside a single token, for the placeholder-word test. */
+const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
+
+/**
+ * Opaque-token entropy, ALPHABET-AWARE (cinatra#1378 review item 5).
+ *
+ * The previous rule was "Shannon entropy >= 4.5 bits per character". Shannon
+ * entropy over a 16-symbol alphabet is bounded by log2(16) = 4.0, so that
+ * branch was STRUCTURALLY UNREACHABLE for any hex string of any length — a
+ * hex-encoded key rode through no matter how long it was.
+ *
+ * The rule here scores a token against the alphabet it is actually drawn from:
+ *
+ *   score = H(token) / min(log2(|charset class|), log2(token length))
+ *
+ * The second term makes short tokens comparable: a 24-character string cannot
+ * exceed log2(24) bits per character however wide its alphabet is.
+ *
+ * The threshold and the digit+letter requirement were calibrated against this
+ * repository's own token corpus (every tracked file under packages/memory,
+ * packages/objects and docs): at 0.85, no ordinary path or prose word in that
+ * corpus flags. Random keys are caught at 93% (32 hex chars), 100% (64 hex
+ * chars) and 96-98% (24-43 base64url chars).
+ *
+ * This rule CANNOT tell an opaque credential apart from a common high-entropy
+ * IDENTIFIER by shape alone, and a memory concept is full of the latter — a
+ * bundle id, an object id, a run id, a commit SHA. Measured against this
+ * detector (5000 samples per shape): a random v4 UUID flags 94.0% of the time
+ * (93.7% inside a prose sentence, 93.5% inside a link target), and a
+ * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags
+ * about 99% of the time; a 12-character short SHA does not, because it is
+ * under the length floor below. Nothing here excludes an identifier shape by
+ * name — only `externalId`, `bundleId` and `cinatraAgentRunId`, and only at
+ * the top level (see `MEMORY_SCAN_EXCLUDED_KEYS`) — so a concept body or a
+ * nested frontmatter value that quotes one is refused exactly like a
+ * credential would be.
+ * Whether to exclude identifier shapes is a separate call this detector
+ * deliberately does not make; buying author ergonomics with a hole is a trade
+ * that should be made on purpose.
+ *
+ * DELIBERATELY OUT OF SCOPE, so this comment does not read as broader than the
+ * code (cinatra#1378 review item 5):
+ *   - A HEX DIGEST IS FLAGGED. A sha256 digest and a hex API key are the same
+ *     shape and nothing in the string separates them, so this gate resolves the
+ *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
+ *     a false positive: `externalId`, `bundleId` and `cinatraAgentRunId` are
+ *     excluded from the scan BY NAME — each is either server-set or
+ *     shape-constrained to something with no room for a credential (see
+ *     MEMORY_SCAN_EXCLUDED_KEYS for the per-key reasons).
+ *   - A token shorter than 24 characters is not entropy-scored at all. Short
+ *     credentials are covered by the prefix list, not by this branch.
+ *   - Standard base64 (`+` and `/`) is not a charset class here: the token
+ *     splitter consumes `/`, so such a token arrives already broken up.
+ *   - A credential with no digit or no letter is not entropy-scored: that
+ *     requirement is what keeps camelCase identifiers out, and the probability
+ *     a random 32-character key lacks a digit is under half a percent.
+ */
+const MEMORY_SECRET_ENTROPY_MIN_LENGTH = 24;
+const MEMORY_SECRET_ENTROPY_THRESHOLD = 0.85;
+
+/** Charset classes an opaque credential is drawn from, most specific first. */
+const MEMORY_SECRET_CHARSET_CLASSES: ReadonlyArray<{ re: RegExp; size: number }> = [
+  { re: /^[0-9a-f]+$/, size: 16 },
+  { re: /^[0-9A-F]+$/, size: 16 },
+  { re: /^[A-Z2-7]+$/, size: 32 },
+  { re: /^[A-Za-z0-9_-]+$/, size: 64 },
+];
+
+/**
+ * A PEM private-key block. No entropy rule reaches this: the armour is
+ * readable ASCII and the base64 payload is split across newlines.
+ */
+const MEMORY_PEM_PRIVATE_KEY = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/;
+
+// URL punctuation (`/ ? = & #`) is in the split set alongside whitespace and
+// JSON punctuation: the common way a credential reaches a concept file is
+// inside a URL, and without those separators the whole URL is one token that
+// matches no anchored prefix and whose entropy is diluted by the readable host
+// and path — so a real key would ride through.
+const MEMORY_SECRET_TOKEN_SPLIT = /[\s,;:|()\[\]<>{}"'`/?=&#]+/;
+
+/** Anchored segment tests: linear, so hostile input cannot make the scan blow up. */
+const MEMORY_JWT_SEGMENT = /^[A-Za-z0-9_-]+$/;
+const MEMORY_JWT_LEADING = /^[A-Za-z0-9_-]+/;
+
+/**
+ * Bounds that make the WALK itself fail-closed. Frontmatter is arbitrary
+ * author-supplied YAML, so it can nest and fan out without limit; a walk that
+ * quietly stopped would clear content it never read.
+ */
+const MEMORY_SCAN_MAX_DEPTH = 32;
+const MEMORY_SCAN_MAX_VALUES = 20_000;
+
+function memorySecretEntropy(value: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of value) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const c of counts.values()) {
+    const p = c / value.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+/**
+ * Normalized, alphabet-aware entropy score for one token, or null when the
+ * token is not drawn from any recognized credential charset.
+ */
+function memorySecretEntropyScore(token: string): number | null {
+  const klass = MEMORY_SECRET_CHARSET_CLASSES.find((c) => c.re.test(token));
+  if (klass === undefined) return null;
+  const ceiling = Math.min(Math.log2(klass.size), Math.log2(token.length));
+  if (ceiling <= 0) return null;
+  return memorySecretEntropy(token) / ceiling;
+}
+
+/** Is this token an opaque credential by the alphabet-aware entropy rule? */
+function isMemoryHighEntropyToken(token: string): boolean {
+  if (token.length < MEMORY_SECRET_ENTROPY_MIN_LENGTH) return false;
+  if (!/[0-9]/.test(token) || !/[A-Za-z]/.test(token)) return false;
+  const score = memorySecretEntropyScore(token);
+  return score !== null && score >= MEMORY_SECRET_ENTROPY_THRESHOLD;
+}
+
+/**
+ * A token with its placeholder WORDS removed.
+ *
+ * `example-<32 opaque chars>` is not documentation with a credential-shaped
+ * name; it is a credential with a documentation word glued on. Stripping the
+ * word is what lets the caller ask the honest question — "is what REMAINS
+ * credential-shaped?" — instead of taking the word's presence as an answer.
+ */
+/**
+ * A contiguous STANDARD-base64 run (`+` and `/` in the alphabet).
+ *
+ * The token splitter consumes `/`, so a standard-base64 credential arrives at
+ * the token loop already broken into fragments too short to score — an AWS
+ * secret access key is the everyday example. This runs on the WHOLE value
+ * before splitting and scores the run as one token.
+ *
+ * Narrow on purpose. The run must actually CONTAIN a `+` or a `/`, because a
+ * run without either is plain alphanumeric and the token loop already scores it
+ * well; it must carry a digit and a letter, which is what keeps a
+ * slash-separated PATH out; and it must clear the same normalized threshold.
+ * Measured over every tracked file in this repository, that combination selects
+ * 20 runs, all of them base64-encoded binary (inline SVG data URIs and test key
+ * material) and none of them concept prose.
+ *
+ * The numbers, measured through the WHOLE detector rather than this rule alone,
+ * because the two branches cover each other: a 40-character standard-base64 key
+ * is caught 97.6% of the time (70.2% by this rule, 27.4% by the token loop —
+ * roughly 28% of such keys happen to contain neither `+` nor `/`, and those are
+ * exactly the ones the token loop sees intact). At 44 characters it is 96.8%.
+ * Coverage falls to 83.6% at 64 characters, where the length ceiling starts to
+ * bite: a longer run needs proportionally more entropy to clear 0.85. Those are
+ * the honest measured numbers, not a claim that the shape is fully covered.
+ */
+const MEMORY_STANDARD_BASE64_RUN = /[A-Za-z0-9+/]{32,}/g;
+
+function MEMORY_STANDARD_BASE64_RUNHit(value: string): boolean {
+  for (const run of value.match(MEMORY_STANDARD_BASE64_RUN) ?? []) {
+    if (!/[+/]/.test(run)) continue;
+    if (!/[0-9]/.test(run) || !/[A-Za-z]/.test(run)) continue;
+    const ceiling = Math.min(Math.log2(64), Math.log2(run.length));
+    if (ceiling > 0 && memorySecretEntropy(run) / ceiling >= MEMORY_SECRET_ENTROPY_THRESHOLD) return true;
+  }
+  return false;
+}
+
+function isMemorySecretPlaceholderTokenResidue(token: string): string {
+  return token
+    .split(MEMORY_SECRET_WORD_SPLIT)
+    .filter((part) => !MEMORY_SECRET_PLACEHOLDER_WORDS.has(part.toLowerCase()))
+    .join("");
+}
+
+/**
+ * Is this token documentation rather than a credential?
+ *
+ * A placeholder WORD skips the token only when what remains after removing it
+ * is too short to be a credential. Matching the word alone — as a bare
+ * substring, and equally as a delimited word — is a one-word bypass anyone can
+ * find: `<12 opaque chars>-example-<17 opaque chars>` is a 38-character
+ * high-entropy token that the word switched the detector off for. `sk-EXAMPLE`
+ * leaves `sk`, and `token.example.placeholder-value` leaves `tokenvalue`; both
+ * stay skipped, which is the tolerance that keeps the gate believed.
+ */
+function isMemorySecretPlaceholderToken(token: string): boolean {
+  if (MEMORY_SECRET_PLACEHOLDER_TOKENS.some((re) => re.test(token))) return true;
+  const lower = token.toLowerCase();
+  if (MEMORY_SECRET_PLACEHOLDER_WORDS.has(lower)) return true;
+  const parts = lower.split(MEMORY_SECRET_WORD_SPLIT);
+  if (!parts.some((word) => MEMORY_SECRET_PLACEHOLDER_WORDS.has(word))) return false;
+  return isMemorySecretPlaceholderTokenResidue(token).length < MEMORY_SECRET_ENTROPY_MIN_LENGTH;
+}
+
+/**
+ * A credential carried in a URL's userinfo: a scheme, then `user:password`, then `@host`.
+ *
+ * Scanned on the WHOLE value before token splitting, because the splitter
+ * consumes `:` and `/` and would take the pair apart. Parsed procedurally
+ * rather than with a regex: the value is untrusted concept content, and a
+ * pattern with two adjacent unbounded runs is a reachable denial of service.
+ * A placeholder password is documentation and is tolerated.
+ */
+function memoryUrlUserinfoCredential(value: string): boolean {
+  let from = 0;
+  for (;;) {
+    const marker = value.indexOf("://", from);
+    if (marker === -1) return false;
+    from = marker + 3;
+    let schemeStart = marker;
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(value[schemeStart - 1] ?? "")) {
+      schemeStart -= 1;
+    }
+    if (schemeStart === marker) continue;
+    let i = from;
+    let colon = -1;
+    while (i < value.length) {
+      const ch = value[i] ?? "";
+      if (ch === "@") break;
+      if (ch === "/" || ch === "?" || ch === "#" || /\s/.test(ch)) break;
+      if (ch === ":" && colon === -1) colon = i;
+      i += 1;
+    }
+    if (i >= value.length || value[i] !== "@") continue;
+    if (colon === -1) continue;
+    const password = value.slice(colon + 1, i);
+    if (password === "" || isMemorySecretPlaceholderToken(password)) continue;
+    return true;
+  }
+}
+
+/** Linear JWT-shape scan (split on ".", check consecutive triples). */
+function memoryJwtShape(value: string): string | null {
+  if (!value.includes("eyJ")) return null;
+  const parts = value.split(".");
+  for (let i = 0; i + 2 < parts.length; i++) {
+    const head = parts[i] ?? "";
+    const idx = head.indexOf("eyJ");
+    if (idx === -1) continue;
+    const seg0 = head.slice(idx);
+    if (seg0.length < 4 || !MEMORY_JWT_SEGMENT.test(seg0)) continue;
+    const seg1 = parts[i + 1] ?? "";
+    if (seg1.length < 4 || !seg1.startsWith("eyJ") || !MEMORY_JWT_SEGMENT.test(seg1)) continue;
+    const tail = (parts[i + 2] ?? "").match(MEMORY_JWT_LEADING);
+    if (tail === null) continue;
+    return `${seg0}.${seg1}.${tail[0]}`;
+  }
+  return null;
+}
+
+/**
+ * Return the credential-pattern LABEL for one string, or null.
+ * The label names the SHAPE, never the matched text — a refusal message that
+ * echoed the secret would copy it into run history and error logs.
+ */
+function detectMemorySecretPattern(value: string): string | null {
+  if (value.length === 0) return null;
+
+  // Shapes that survive token splitting only as a whole: checked first, on the
+  // WHOLE value. Neither is reachable by an entropy rule (item 5).
+  if (MEMORY_PEM_PRIVATE_KEY.test(value)) return "pem-private-key";
+  if (memoryUrlUserinfoCredential(value)) return "url-credential";
+  if (MEMORY_STANDARD_BASE64_RUNHit(value)) return "standard-base64-token";
+
+  const jwt = memoryJwtShape(value);
+  if (jwt !== null && !isMemorySecretPlaceholderToken(jwt)) return "jwt";
+
+  const bearer = /^\s*Bearer\s+(\S+)\s*$/i.exec(value);
+  if (bearer) {
+    const inner = bearer[1] ?? "";
+    if (isMemorySecretPlaceholderToken(inner)) return null;
+    return detectMemorySecretPattern(inner);
+  }
+
+  // Per-token from here down. There is deliberately NO whole-value placeholder
+  // short-circuit (item 1): tolerance applies to the token that IS a
+  // placeholder and to nothing else in the value.
+  for (const token of value.split(MEMORY_SECRET_TOKEN_SPLIT)) {
+    if (token.length === 0) continue;
+    for (const { name, re } of MEMORY_SECRET_PREFIXES) {
+      if (re.test(token)) return name;
+    }
+    if (isMemorySecretPlaceholderToken(token)) continue;
+    if (isMemoryHighEntropyToken(token)) return "high-entropy-token";
+    // A token that survived the placeholder check because its residue is long
+    // is scored on that RESIDUE too: the glued-on documentation word dilutes
+    // the whole token's entropy, which is the other half of the same bypass.
+    const residue = isMemorySecretPlaceholderTokenResidue(token);
+    if (residue !== token && isMemoryHighEntropyToken(residue)) return "high-entropy-token";
+  }
+  return null;
+}
+
+/**
+ * Object keys a location string may echo verbatim: short, ordinary identifier
+ * shapes. Anything else is rendered positionally.
+ */
+const MEMORY_SAFE_KEY_RE = /^[A-Za-z0-9_.\- ]{1,64}$/;
+
+/**
+ * Render one object key as a location segment WITHOUT echoing it unless it is
+ * obviously safe to.
+ *
+ * A location ends up inside a refusal message, and a refusal message ends up
+ * in terminal scrollback and CI logs. An object KEY is author-controlled text
+ * exactly like a value, so `{ "ghp_<real token>": "note" }` would otherwise
+ * copy the credential into the very message that promises to name only the
+ * shape. A key is echoed only when it is a short ordinary identifier that the
+ * credential detector itself does not flag; everything else is positional.
+ */
+function memoryLocationSegment(key: string, index: number): string {
+  if (!MEMORY_SAFE_KEY_RE.test(key)) return `[key#${index}]`;
+  try {
+    return detectMemorySecretPattern(key) === null ? key : `[key#${index}]`;
+  } catch {
+    return `[key#${index}]`;
+  }
+}
+
+/**
+ * Keys the scan SKIPS, each excluded BY NAME with its reason
+ * (cinatra#1378 review item 2).
+ *
+ * The earlier shape enumerated the three fields to scan, which made every
+ * field added later unscanned BY DEFAULT — and the row already stored more
+ * than three fields, so a credential in `provenance.tool`, in `conceptId`, or
+ * in an unknown top-level key reached the persisted row untouched. The
+ * polarity is now inverted: the scan walks the WHOLE object about to be
+ * written and skips only what is named here.
+ *
+ *   - `externalId` — sha256 of (bundleId + NUL + conceptId), recomputed and
+ *     re-checked by the schema. It is a 64-character hex digest, which the
+ *     alphabet-aware entropy rule flags by design, so scanning it would refuse
+ *     every well-formed envelope.
+ *   - `bundleId` — a UUID the schema constrains. Same reason: high normalized
+ *     entropy over its own charset, and no room in the shape for anything else.
+ *   - `cinatraAgentRunId` — server-injected from the authenticated run. This
+ *     exclusion is only safe because the field is genuinely server-derived on
+ *     this type: the generic save path preserves a value the CALLER supplied
+ *     (`handlers.ts` injects the run id only when the key is absent, so an
+ *     agent can name its own for retry dedup), which on a memory write would
+ *     have made "excluded because the server set it" false — an unscanned,
+ *     uncapped, caller-controlled string in the persisted row. So a memory
+ *     write REFUSES a caller-supplied value outright
+ *     (`enforceMemoryServerProvenance`) and refuses a change to it on update.
+ *     Only then is skipping it skipping our own value.
+ *
+ * Nothing else is excluded. `conceptId`, `okfType`, `okfVersion`,
+ * `provenance`, `frontmatter` (values AND keys) and `links` are all
+ * author-controlled and all scanned.
+ */
+const MEMORY_SCAN_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
+  "externalId",
+  "bundleId",
+  "cinatraAgentRunId",
+]);
+
+/**
+ * Scan a memory envelope's content surface. THROWS a PrimitiveInvocationError
+ * on a hit and on a scan that could not complete.
+ *
+ * The scanned surface is everything a bundle author controls and a reader will
+ * later be shown. It is the whole object minus {@link MEMORY_SCAN_EXCLUDED_KEYS},
+ * walked to the bottom — VALUES and KEYS alike, because a key hides a
+ * credential just as well.
+ */
+function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): void {
+  const values: Array<{ location: string; value: string }> = [];
+  const seen = new Set<object>();
+  const walk = (node: unknown, location: string, depth: number): void => {
+    if (depth > MEMORY_SCAN_MAX_DEPTH) {
+      throw new Error(`nesting deeper than ${MEMORY_SCAN_MAX_DEPTH} levels at ${location}`);
+    }
+    if (values.length > MEMORY_SCAN_MAX_VALUES) {
+      throw new Error(`more than ${MEMORY_SCAN_MAX_VALUES} scannable values`);
+    }
+    if (typeof node === "string") {
+      values.push({ location, value: node });
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    if (seen.has(node as object)) throw new Error(`the value at ${location} is cyclic`);
+    seen.add(node as object);
+    if (Array.isArray(node)) {
+      node.forEach((entry, i) => walk(entry, `${location}[${i}]`, depth + 1));
+      return;
+    }
+    Object.entries(node as Record<string, unknown>).forEach(([key, entry], i) => {
+      const segment = memoryLocationSegment(key, i);
+      // The KEY is author-controlled text too. `{ "<a real token>": "note" }`
+      // hides a credential exactly as well as a value does, so every key is
+      // scanned as a value in its own right at its own (echo-safe) location.
+      values.push({ location: `${location}.${segment}`, value: key });
+      walk(entry, `${location}.${segment}`, depth + 1);
+    });
+  };
+
+  try {
+    // Whole-object walk. Enumerating fields to SCAN is what let three of them
+    // through; enumerating the fields to SKIP fails closed for every field
+    // added later.
+    Object.entries(data).forEach(([key, entry], i) => {
+      if (MEMORY_SCAN_EXCLUDED_KEYS.has(key)) return;
+      const segment = memoryLocationSegment(key, i);
+      values.push({ location: segment, value: key });
+      walk(entry, segment, 0);
+    });
+  } catch (err) {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+      message: `the memory secret scan could not complete, so this concept was not stored: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      retryable: false,
+      details: {},
+    });
+  }
+
+  for (const { location, value } of values) {
+    let label: string | null;
+    try {
+      label = detectMemorySecretPattern(value);
+    } catch (err) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+        message: `the memory secret scan could not complete at ${location}, so this concept was not stored: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        retryable: false,
+        details: {},
+      });
+    }
+    if (label !== null) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_MEMORY_SECRET_DETECTED,
+        message: `this memory concept carries a credential-shaped literal (${label}) at ${location} and was not stored; remove it from the source file and sync again`,
+        retryable: false,
+        // Shape + location only. The matched text is never echoed back.
+        details: { location, pattern: label },
+      });
+    }
+  }
+}
+
 /**
  * Memory-envelope enforcement (cinatra#1376, epic #1373). Memory rows take
  * the deterministic static-type path; this gate wires the type's REGISTERED
@@ -807,11 +1337,19 @@ function resolveMemoryConceptDefOrThrow() {
  * objects_update needs no such guard: it keys on the existing row's stored
  * type and always reaches this gate.
  *
- * Returns the data TO PERSIST. For a valid memory envelope this is the input
- * with the schema's `okfVersion` default ("0.1") materialized when the caller
- * omitted it — the parsed output itself is NOT stored because Zod's strip
- * mode would drop unknown top-level keys (the system-injected
- * `cinatraAgentRunId`). Non-memory types pass through untouched.
+ * Returns the data TO PERSIST: the STRICTLY parsed client envelope with the
+ * server-injected fields merged back explicitly (cinatra#1378 review item 2).
+ *
+ * The earlier shape returned the ORIGINAL input rather than the parsed output,
+ * so that the system-injected `cinatraAgentRunId` would survive Zod's strip
+ * mode. That made the schema's tolerance of unknown top-level keys load-bearing
+ * — and an unknown key then rode into the persisted row unscanned and uncapped.
+ * The split below gets both properties instead of trading one for the other:
+ * the server-injected keys are lifted OFF before parsing, the remainder is
+ * parsed strictly (so an unknown CLIENT key is a rejection), and the injected
+ * keys are put back afterwards from the values the server itself supplied.
+ *
+ * Non-memory types pass through untouched.
  */
 function enforceMemoryConceptEnvelope(
   objectTypeId: string,
@@ -819,7 +1357,18 @@ function enforceMemoryConceptEnvelope(
 ): Record<string, unknown> {
   if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return data;
   const def = resolveMemoryConceptDefOrThrow();
-  const parsed = def.schema.safeParse(data);
+
+  // Split server-injected from client-supplied. A key in this set is never
+  // read from the caller's payload as authorization or identity; it is here
+  // only so a strict parse does not reject the server's own enrichment.
+  const injected: Record<string, unknown> = {};
+  const clientData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (MEMORY_SERVER_INJECTED_KEYS.has(key)) injected[key] = value;
+    else clientData[key] = value;
+  }
+
+  const parsed = def.schema.safeParse(clientData);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
@@ -828,11 +1377,270 @@ function enforceMemoryConceptEnvelope(
       `[objects:memory-concept] invalid memory concept envelope: ${issues}`,
     );
   }
-  if (data.okfVersion === undefined) {
-    const parsedOkfVersion = (parsed.data as { okfVersion?: unknown }).okfVersion;
-    return { ...data, okfVersion: parsedOkfVersion ?? "0.1" };
+
+  // The object that is about to be persisted, assembled explicitly. This exact
+  // object is what the scan below reads, so "what was scanned" and "what was
+  // written" cannot drift apart.
+  const toPersist: Record<string, unknown> = {
+    ...(parsed.data as Record<string, unknown>),
+    ...injected,
+  };
+
+  // Fail-closed ingest secret scan (cinatra#1378). Runs AFTER the schema so it
+  // scans a shape it can rely on, and BEFORE every caller's commit — this
+  // function's return value is what gets persisted, so a throw here means
+  // nothing was written.
+  scanMemoryConceptEnvelopeForSecrets(toPersist);
+  return toPersist;
+}
+
+/**
+ * Top-level envelope keys the SERVER injects, which a strict client parse must
+ * not reject (cinatra#1378 review item 2). Kept next to the gate that splits
+ * on them so the two can never disagree.
+ */
+const MEMORY_SERVER_INJECTED_KEYS: ReadonlySet<string> = new Set([
+  "cinatraAgentRunId",
+]);
+
+/** Refusal code for an ownership tuple a memory bundle may not request. */
+const OBJECTS_MEMORY_OWNERSHIP_REFUSED = "OBJECTS_MEMORY_OWNERSHIP_REFUSED" as const;
+
+/**
+ * Authorize the ownership tuple a memory-typed save REQUESTS
+ * (cinatra#1378 review item 4).
+ *
+ * WHY THIS EXISTS. Issue #1378 and epic #1373 both fix the contract: a bundle's
+ * `sync:` block and a concept's frontmatter carry a scope REQUEST for rows the
+ * run CREATES, "evaluated under the caller's normal authorization at save time
+ * (a request, never a grant)". The only thing standing behind that sentence was
+ * the `object.create` probe below — and that probe does not decide what the
+ * comments said it decides. `enforceResourceAccess` short-circuits only when the
+ * resource is user-owned by the ACTOR; everything else falls through to `can()`,
+ * which evaluates the cross-org guard and role->permission and never reads
+ * `ownerType`, `ownerId` or `visibility` at all. `object.create` sits in the
+ * plain member set, so for any same-org member a create naming ANOTHER user as
+ * owner, or a team they are not in, or `visibility: "public"`, passed on the
+ * strength of the member grant alone.
+ *
+ * That kernel gap is not this type's to close. What IS this type's to close is
+ * that memory bundles are UNTRUSTED FILES end-to-end (the epic's first binding
+ * decision), so this is the one save path whose ownership request originates in
+ * a file rather than in a caller's own intent. The rule below is therefore
+ * memory-scoped and deliberately narrow: it does not change `objects_save` for
+ * any other type.
+ *
+ * THE RULE. The request may choose the LEVEL and may narrow the VISIBILITY. It
+ * may never name a PRINCIPAL, and it may never reach a scope whose authority
+ * cannot be derived from the authenticated actor:
+ *
+ *   - `ownerId` is REFUSED outright, exactly as `orgId` already is on every
+ *     objects primitive. The owning principal is derived from the caller. A
+ *     file naming one is either a misunderstanding or a forgery attempt, and
+ *     refusing loudly is the only honest answer — accepting it silently is how
+ *     a member wrote a row owned by a colleague.
+ *   - `ownerLevel: "user"` resolves the owner to the AUTHENTICATED user, so the
+ *     tuple is one the caller could always write. It needs a user to resolve
+ *     to; a machine caller asking for it is refused.
+ *   - `ownerLevel: "organization"` resolves the owner to the caller's own
+ *     organization, which is actor-derived and cross-org-guarded already.
+ *   - `ownerLevel: "team"` and `"workspace"` are REFUSED. No team or workspace
+ *     membership is derivable from the actor at this seam, so there is nothing
+ *     here that could evaluate the request — and a request that cannot be
+ *     evaluated must not be granted. Widening a row past what its author can
+ *     write is what PROMOTION is for (epic #1373), and promotion is reviewed.
+ *   - `visibility: "public"` is REFUSED for the same reason: publishing is a
+ *     promotion outcome the notifications feed reviews, not something a file
+ *     can ask for at create time. `private`, `team` and `organization` pass.
+ *
+ * Returns the ownership OVERRIDE to apply, with the owning principal filled in
+ * from the actor. Refusals are terminal and cause-neutral.
+ */
+function enforceMemoryOwnershipRequest(
+  isMemoryWrite: boolean,
+  input: { ownerLevel?: string; ownerId?: string; visibility?: string },
+  actor: PrimitiveActorContext,
+  orgId: string | null,
+): {
+  ownerLevel?: "user" | "team" | "organization" | "workspace";
+  ownerId?: string;
+  visibility?: "private" | "team" | "organization" | "public";
+} {
+  if (!isMemoryWrite) {
+    return {
+      ...(input.ownerLevel === undefined
+        ? {}
+        : { ownerLevel: input.ownerLevel as "user" | "team" | "organization" | "workspace" }),
+      ...(input.ownerId === undefined ? {} : { ownerId: input.ownerId }),
+      ...(input.visibility === undefined
+        ? {}
+        : { visibility: input.visibility as "private" | "team" | "organization" | "public" }),
+    };
   }
-  return data;
+
+  const refuse = (message: string, field: string): never => {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_OWNERSHIP_REFUSED,
+      message,
+      retryable: false,
+      details: { field },
+    });
+  };
+
+  if (input.ownerId !== undefined) {
+    refuse(
+      "a memory concept may not name an owning principal: `ownerId` is derived from the authenticated caller and is never read from a bundle file. Remove it from the bundle's sync block or the concept's frontmatter.",
+      "ownerId",
+    );
+  }
+  if (input.visibility === "public") {
+    refuse(
+      "a memory concept may not request `visibility: \"public\"` at create time. Publishing memory is a reviewed promotion, not something a bundle file asks for.",
+      "visibility",
+    );
+  }
+
+  const level = input.ownerLevel;
+  if (level !== undefined && level !== "user" && level !== "organization") {
+    refuse(
+      `a memory concept may not request \`ownerLevel: "${level}"\`: no ${level} authority is derivable from the authenticated caller at this seam, so the request cannot be evaluated. Use "user" or "organization", and widen the row through promotion.`,
+      "ownerLevel",
+    );
+  }
+
+  const actorUserId = getActorExt(actor).userId ?? null;
+  if (level === "user" && !actorUserId) {
+    refuse(
+      'a memory concept requested `ownerLevel: "user"`, but this caller has no user identity to own the row.',
+      "ownerLevel",
+    );
+  }
+
+  // The owning principal is filled in from the ACTOR, never from the request.
+  // Filling it in here (rather than leaving it to the generic defaults) is what
+  // keeps the written tuple coherent: the generic default for an omitted
+  // ownerId is the caller's userId, which paired with `organization` would
+  // write an organization-level row owned by a user id.
+  if (level === "user") {
+    return { ownerLevel: "user", ownerId: actorUserId as string, ...(input.visibility === undefined ? {} : { visibility: input.visibility as "private" | "team" | "organization" }) };
+  }
+  if (level === "organization") {
+    if (!orgId) {
+      refuse(
+        'a memory concept requested `ownerLevel: "organization"`, but this caller has no organization context.',
+        "ownerLevel",
+      );
+    }
+    return { ownerLevel: "organization", ownerId: orgId as string, ...(input.visibility === undefined ? {} : { visibility: input.visibility as "private" | "team" | "organization" }) };
+  }
+  return {
+    ...(input.visibility === undefined
+      ? {}
+      : { visibility: input.visibility as "private" | "team" | "organization" }),
+  };
+}
+
+/** Refusal code for a caller-supplied value on a server-derived memory field. */
+const OBJECTS_MEMORY_SERVER_FIELD_REFUSED =
+  "OBJECTS_MEMORY_SERVER_FIELD_REFUSED" as const;
+
+/**
+ * Keep the server-injected envelope fields server-derived on a memory write.
+ *
+ * `objects_save` deliberately preserves a `cinatraAgentRunId` the caller
+ * supplied — the generic path injects the authenticated run id only when the
+ * key is ABSENT, so an agent can pass its own for retry dedup. That is fine for
+ * a type whose payload the caller is trusted to compose. It is not fine for a
+ * memory concept, which is an untrusted FILE: the key is on the
+ * server-injected list, so it is lifted past the strict parse and skipped by
+ * the scan, and a caller-supplied value would ride both of those exemptions
+ * straight into the persisted row.
+ *
+ * Memory rows do not need the field from a caller in any case: their identity
+ * is `externalId`, resolved by the type's own `identityKey`, so the run id is
+ * pure provenance here — and provenance on this path is actor-derived, exactly
+ * like the row's organization, creator and agent columns.
+ */
+function enforceMemoryServerProvenance(
+  isMemoryWrite: boolean,
+  data: Record<string, unknown>,
+): void {
+  if (!isMemoryWrite) return;
+  for (const key of MEMORY_SERVER_INJECTED_KEYS) {
+    if (!(key in data)) continue;
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SERVER_FIELD_REFUSED,
+      message:
+        `a memory concept may not supply \`${key}\`: it is stamped from the authenticated run and is never read from a bundle file.`,
+      retryable: false,
+      details: { field: key },
+    });
+  }
+}
+
+/**
+ * The identity triple a memory row carries for its whole life.
+ *
+ * The server-stamped `cinatraAgentRunId` is deliberately NOT in this list, and
+ * the difference matters. This check is lenient by design: it skips a field the
+ * stored row does not carry, so a row written before a field existed is still
+ * editable. That leniency is right for identity — a legacy row missing a
+ * `conceptId` should not become unwritable — and it is exactly WRONG for the
+ * run id, because "the stored row has none" is the case an attacker wants: it
+ * would let an update ADD a caller-controlled value to a field the strict parse
+ * skips and the scan excludes. So the run id answers to
+ * `enforceMemoryServerProvenance` instead, which refuses a caller-supplied
+ * value unconditionally, on both write paths, whatever the row holds today.
+ */
+const MEMORY_IDENTITY_FIELDS = ["externalId", "bundleId", "conceptId"] as const;
+
+/** Refusal code for an in-place rewrite of a memory row's identity. */
+const OBJECTS_MEMORY_IDENTITY_IMMUTABLE =
+  "OBJECTS_MEMORY_IDENTITY_IMMUTABLE" as const;
+
+/**
+ * Pin a memory row's identity triple across an update (cinatra#1378 review
+ * item 8).
+ *
+ * The envelope's own `superRefine` checks INTERNAL consistency — that
+ * `externalId` equals sha256(bundleId + NUL + conceptId) — and never compares
+ * any of the three against the identity the row ALREADY carries. A coherent
+ * triple belonging to a DIFFERENT bundle therefore validated, and the row kept
+ * its physical id while its stored `externalId` became the other bundle's key.
+ *
+ * That used to be a latent inconsistency. Since #1378 `data->>'externalId'` is
+ * a LOOKUP KEY: the other bundle's next preflight finds this row, classifies it
+ * `update`, and writes its content into a row it never created, while the
+ * original bundle's key resolves to a fresh row. So the triple is immutable.
+ *
+ * There is no rebind flow. Re-syncing the same concept file resolves to the
+ * same row through the identity key; MOVING a concept to another bundle or
+ * another path is a new identity and therefore a new row, which is what "path
+ * = identity" means in OKF. Refusal is terminal and cause-neutral.
+ */
+function enforceMemoryIdentityImmutable(
+  objectTypeId: string,
+  storedData: Record<string, unknown> | null,
+  mergedData: Record<string, unknown>,
+): void {
+  if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return;
+  if (storedData === null) return;
+  for (const field of MEMORY_IDENTITY_FIELDS) {
+    const stored = storedData[field];
+    if (typeof stored !== "string" || stored.length === 0) continue;
+    const incoming = mergedData[field];
+    if (incoming === stored) continue;
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_IDENTITY_IMMUTABLE,
+      message:
+        `this memory row's identity is fixed; \`${field}\` cannot be changed on an existing row. ` +
+        "A concept that moved to another bundle or another path is a new identity and a new row.",
+      retryable: false,
+      // The FIELD NAME only. Echoing either value would put one bundle's key
+      // into the other bundle's error output.
+      details: { field },
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,14 +1810,28 @@ export function createObjectsPrimitiveHandlers() {
       // carried OBO ceiling chain), not the human-user default. Null for every
       // other caller (chat/session/machine) → human-user defaults preserved.
       const scopeDefault = deriveAgentRunScopeOwnership(request.actor, orgId);
+      // Memory ownership-authority gate (cinatra#1378 review item 4). Runs
+      // BEFORE the defaults and the create probe, because it decides what the
+      // requested tuple even is; the probe then evaluates the tuple this
+      // returned rather than the one an untrusted file asked for.
+      enforceMemoryServerProvenance(
+        input.typeHint === MEMORY_CONCEPT_TYPE_ID,
+        (input.rawData ?? {}) as Record<string, unknown>,
+      );
+      const memoryOwnershipOverride = enforceMemoryOwnershipRequest(
+        input.typeHint === MEMORY_CONCEPT_TYPE_ID,
+        {
+          ...(input.ownerLevel === undefined ? {} : { ownerLevel: input.ownerLevel }),
+          ...(input.ownerId === undefined ? {} : { ownerId: input.ownerId }),
+          ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+        },
+        request.actor,
+        orgId,
+      );
       const ownership = deriveSaveDefaults(
         request.actor,
         orgId,
-        {
-          ownerLevel: input.ownerLevel,
-          ownerId: input.ownerId,
-          visibility: input.visibility,
-        },
+        memoryOwnershipOverride,
         scopeDefault,
       );
 
@@ -1385,6 +2207,32 @@ export function createObjectsPrimitiveHandlers() {
       // type BEFORE it is persisted. No-op for the generic fallback type (its
       // schema accepts any object) and for unclaimed types.
       await enforceActivatedTypePayload(persistedType, orgId, persistedData);
+      // The memory gates above key on the DECLARED `typeHint`, which is how
+      // every memory write actually arrives — the type resolves statically on
+      // an exact typeHint and the sync client always sends it. A save that
+      // reaches the memory type WITHOUT declaring it would have skipped both
+      // gates: its ownership tuple was never evaluated (so the generic defaults
+      // could write an organization level paired with a user id, the incoherent
+      // tuple the gate exists to prevent) and its server-injected fields were
+      // never checked.
+      //
+      // Asserting the gates a second time here is not enough: by this point the
+      // tuple has already been derived and probed, so a second call could only
+      // validate what it can no longer change. The honest answer at this depth
+      // is to refuse. A memory concept is written by `memory sync`, which
+      // declares the type; nothing legitimate arrives here undeclared.
+      if (
+        persistedType === MEMORY_CONCEPT_TYPE_ID &&
+        input.typeHint !== MEMORY_CONCEPT_TYPE_ID
+      ) {
+        throw new PrimitiveInvocationError({
+          code: OBJECTS_MEMORY_SERVER_FIELD_REFUSED,
+          message:
+            "a memory concept must be saved with an explicit `typeHint`; a save that reaches this type by classification has bypassed the memory ownership and provenance gates and is refused rather than written under defaults they never evaluated.",
+          retryable: false,
+          details: { field: "typeHint" },
+        });
+      }
       // Memory-envelope gate (cinatra#1376): validates the SAME shape that gets
       // stored; a no-op for any non-memory type (including the generic
       // fallback), which passes through untouched.
@@ -1498,6 +2346,50 @@ export function createObjectsPrimitiveHandlers() {
       const hasQuery =
         typeof input.query === "string" && input.query.trim().length > 0;
 
+      // cinatra#1378: `externalIds` is a KEY lookup, so it belongs to the
+      // Postgres-only path. Two refusals keep it honest rather than
+      // approximately right:
+      //
+      //   - WITHOUT a `type`, the filter would scan `data->>'externalId'`
+      //     across every type in the org. External ids are only unique within
+      //     the type that defines them, so an unqualified match could return a
+      //     row of an unrelated type that happens to carry the same key.
+      //   - WITH a `query`, the answer would come from the ranked semantic path
+      //     — relevance-ordered and truncated — while the caller asked
+      //     "which of these exact keys exist". A preflight that silently lost
+      //     rows to a relevance cut would report present rows as absent, and a
+      //     sync run reads absent as "create".
+      //
+      // Both are refusals, not silent corrections: a preflight that quietly
+      // answered a different question is what a duplicate write is made of.
+      if (input.externalIds !== undefined) {
+        if (typeof input.type !== "string" || input.type.trim() === "") {
+          throw new Error(
+            "objects_list: externalIds requires an explicit `type` (an external id is unique only within its type)",
+          );
+        }
+        if (hasQuery) {
+          throw new Error(
+            "objects_list: externalIds is an exact key lookup and cannot be combined with a semantic `query`",
+          );
+        }
+        // cinatra#1378 review item 7: the bound that BINDS is `limit`, and its
+        // schema default is 100 while the batch cap is 500. `LIMIT` is applied
+        // in SQL after the WHERE and this handler always answers
+        // `nextCursor: null`, so a batch larger than the effective limit was
+        // truncated with nothing to say so — and a truncated preflight reports
+        // present rows as absent, which is exactly the misreading that turns a
+        // skip into a duplicate write. The store's own doc comment says this
+        // cap prevents that; it only does if the call is refused.
+        if (input.externalIds.length > input.limit) {
+          throw new Error(
+            `objects_list: externalIds carries ${input.externalIds.length} ids but limit is ${input.limit}; ` +
+              "a batch larger than the number of rows the call can return would report present rows as absent — " +
+              "raise limit to at least the batch size or split the batch",
+          );
+        }
+      }
+
       // Actor-scoped ownership filter (cinatra#1428): the same SQL filter the
       // artifact read surface splices; the kernel post-filter below stays as
       // the role-permission axis. Both surfaces now scope reads identically.
@@ -1583,6 +2475,10 @@ export function createObjectsPrimitiveHandlers() {
             // cinatra#1456: indexed data.* correlation filter (thread/campaign/
             // contact seam). Pushed into SQL; per-row object.read still gates below.
             dataEquals: input.dataEquals,
+            // cinatra#1378: the memory-sync preflight's batch key lookup.
+            // Pushed into SQL alongside the type filter; per-row object.read
+            // still gates below, so this narrows the read and never widens it.
+            externalIds: input.externalIds,
             limit: input.limit,
             // Pass projectId straight through; the store appends
             // `AND project_id = $projectId` when the per-table feature flag is
@@ -1821,6 +2717,27 @@ export function createObjectsPrimitiveHandlers() {
         // non-draftable types and unlocked drafts. A move-only update (input.data
         // undefined) is metadata, not a content revision — never gated here.
         await enforceDraftableLock(existing.type, orgId, existing.id);
+        // The server-injected fields stay server-derived on an update too.
+        // Checked against the RAW client patch, not the merged payload: the
+        // question is whether the CALLER supplied the field, and the answer
+        // must not depend on what the stored row happens to hold — a row with
+        // no run id stored is precisely the case where an update could ADD a
+        // caller-controlled value to a field the strict parse skips and the
+        // scan excludes.
+        enforceMemoryServerProvenance(
+          existing.type === MEMORY_CONCEPT_TYPE_ID,
+          incomingData,
+        );
+        // Memory identity is immutable (cinatra#1378 review item 8). Checked
+        // BEFORE the envelope gate: an update that rewrites the triple is
+        // refused for what it is, rather than passing the envelope's
+        // internal-consistency check and silently rebinding the row's lookup
+        // key to another bundle.
+        enforceMemoryIdentityImmutable(
+          existing.type,
+          (existing.data as Record<string, unknown> | null) ?? null,
+          mergedData,
+        );
         // Memory-envelope gate (cinatra#1376): a partial update of a memory
         // row must still yield a VALID merged envelope — rejected before any
         // commit (ahead of the project-move branch below, mirroring the
