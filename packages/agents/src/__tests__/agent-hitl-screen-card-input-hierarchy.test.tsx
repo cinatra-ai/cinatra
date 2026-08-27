@@ -64,6 +64,8 @@ vi.mock("../hitl-actions", () => ({
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { AgentHitlScreenCard, hitlGateKey } from "../agent-hitl-screen-card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
@@ -505,9 +507,9 @@ describe("§I — the mid-run gate keeps the shape it already had, on every host
       renderer: ({ hideSubmit }: { hideSubmit?: boolean }) => (
         <div data-testid="mid-run-body" data-hide-submit={String(hideSubmit === true)}>
           {hideSubmit === true ? null : (
-            <button type="button" data-testid="renderer-own-control">
+            <Button type="button" data-testid="renderer-own-control">
               Continue
-            </button>
+            </Button>
           )}
         </div>
       ),
@@ -561,7 +563,7 @@ describe("§I — the setup takeover only happens where the card can answer", ()
       priority: 90,
       condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
       renderer: ({ onChange }: { onChange: (next: unknown) => void }) => (
-        <input
+        <Input
           data-testid="keystroke-field"
           onChange={(e) => onChange((e.target as HTMLInputElement).value)}
         />
@@ -676,13 +678,13 @@ describe("§I — the setup takeover only happens where the card can answer", ()
       priority: 90,
       condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
       renderer: ({ onChange }: { onChange: (next: unknown) => void }) => (
-        <button
+        <Button
           type="button"
           data-testid="emit-object"
           onClick={() => onChange({ title: "A title", body: "A body" })}
         >
           emit
-        </button>
+        </Button>
       ),
       credentialSafe: true,
     });
