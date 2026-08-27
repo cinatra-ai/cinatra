@@ -102,14 +102,32 @@ export type BoundScreenFillOutcome =
  * fill sits with the conversation it came out of, and falls back to the run page
  * when the fill is the run's first window row (a message typed in the chat, for
  * instance, where the window itself is the chat).
+ *
+ * THE SAME READ ANSWERS WHAT THIS MESSAGE HAS ALREADY PLACED (convergence round
+ * 3). A turn may fill twice, and the second fill has to be computed against the
+ * fields as they stand AFTER the first — otherwise an object-valued control
+ * filled twice loses whatever the first fill put in it, on the screen and in
+ * what the press sends. One read, both answers.
  */
-async function surfaceForFill(runId: string): Promise<RunWindowSurface> {
+async function readRunWindowState(
+  runId: string,
+  ref: string,
+  messageId: string,
+): Promise<{ surface: RunWindowSurface; placedThisMessage: Record<string, unknown> }> {
   try {
     const rows = await readRunWindowMessages(runId);
-    const last = rows[rows.length - 1];
-    return last?.surface ?? "run-page";
+    const placedThisMessage: Record<string, unknown> = {};
+    for (const row of rows) {
+      if (row.messageId !== messageId) continue;
+      if (!row.fill || row.fill.ref !== ref) continue;
+      Object.assign(placedThisMessage, row.fill.values);
+    }
+    return {
+      surface: rows[rows.length - 1]?.surface ?? "run-page",
+      placedThisMessage,
+    };
   } catch {
-    return "run-page";
+    return { surface: "run-page", placedThisMessage: {} };
   }
 }
 
@@ -171,7 +189,13 @@ export async function recordBoundScreenFill(input: {
   // note atop `bound-screen-controls.ts`): a setup-loop screen draws ONE control
   // named by the gate's `fieldName`, and placing that control's INNER keys wrote
   // a row the screen in front of the person could not read.
-  const values = selectDrawnFillValues(bound.form, input.values);
+  // WHAT THE FIELDS ARE SHOWING RIGHT NOW: the screen's own values with
+  // everything THIS MESSAGE has already placed over them. That is what the
+  // person can see, so it is what a further fill is computed against and what
+  // the no-op rule compares to.
+  const state = await readRunWindowState(bound.runId, input.ref, input.messageId);
+  const shown = { ...bound.form.values, ...state.placedThisMessage };
+  const values = selectDrawnFillValues({ ...bound.form, values: shown }, input.values);
   const applied = Object.keys(values);
   if (applied.length === 0) {
     return { kind: "no-fields", fields: drawnScreenControls(bound.form) };
@@ -188,7 +212,7 @@ export async function recordBoundScreenFill(input: {
   await append({
     runId: bound.runId,
     role: "assistant",
-    surface: input.deps?.surface ?? (await surfaceForFill(bound.runId)),
+    surface: input.deps?.surface ?? state.surface,
     // A FILL IS NOT A BUBBLE. The assistant's own answer is what the person
     // reads; the row exists so the SCREEN can write the values into its fields
     // and so the submit can read back what was shown.

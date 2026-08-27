@@ -354,6 +354,108 @@ describe("only a value the control could hold is placed", () => {
     ).toEqual({ brief: { notes: { anything: 1 } } });
   });
 
+  it("an object row says for itself whether it is a closed set, below the first level", () => {
+    // The TOP level is decided by what the screen DRAWS — only a key with a
+    // sub-control is placed, whatever the schema allows. Below it there is one
+    // value to answer about, so the row's own words decide: `additionalProperties:
+    // false` closes an object that names no properties, any other
+    // `additionalProperties` opens one that does, and `properties: {}` declares
+    // no control at all (convergence round 3).
+    const nested = {
+      schema: {
+        type: "object",
+        properties: {
+          brief: {
+            type: "object",
+            properties: {
+              sealed: { type: "object", additionalProperties: false },
+              opened: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                additionalProperties: true,
+              },
+              empty: { type: "object", properties: {} },
+            },
+          },
+        },
+      },
+      values: {},
+    };
+    expect(selectDrawnFillValues(nested, { brief: { sealed: { admin: true } } })).toEqual({});
+    expect(selectDrawnFillValues(nested, { brief: { opened: { extra: 1 } } })).toEqual({
+      brief: { opened: { extra: 1 } },
+    });
+    expect(selectDrawnFillValues(nested, { brief: { empty: { anything: 1 } } })).toEqual({
+      brief: { empty: { anything: 1 } },
+    });
+  });
+
+  it("a second fill of one message builds on what the first put in the field", async () => {
+    // The person asks twice in one message. The second fill is computed against
+    // what the FIELD IS SHOWING — the screen's values with this message's first
+    // fill over them — so an object-valued control filled twice keeps both
+    // (convergence round 3, finding 1).
+    const form = { ...IDEA_FORM, values: {} };
+    const resolve = (async () => ({
+      kind: "hitl_screen",
+      runId: RUN,
+      screenRef: SCREEN,
+      xRenderer: "setup-field",
+      form,
+    })) as never;
+    const first = await recordBoundScreenFill({
+      ref: GATE_REF,
+      values: { idea: { title: "A weekly rhythm", summary: "kept" } },
+      actorCtx: ACTOR,
+      messageId: "msg_1",
+      deps: { resolve, surface: "run-page" },
+    });
+    expect(first.kind).toBe("filled");
+    const second = await recordBoundScreenFill({
+      ref: GATE_REF,
+      values: { idea: { outline: ["one", "two"] } },
+      actorCtx: ACTOR,
+      messageId: "msg_1",
+      deps: { resolve, surface: "run-page" },
+    });
+    expect(second.kind).toBe("filled");
+    expect((appended[1]!.fill as { values: Record<string, unknown> }).values).toEqual({
+      idea: {
+        title: "A weekly rhythm",
+        summary: "kept",
+        outline: ["one", "two"],
+      },
+    });
+  });
+
+  it("another message's fill is NOT what this one builds on", async () => {
+    const form = { ...IDEA_FORM, values: {} };
+    const resolve = (async () => ({
+      kind: "hitl_screen",
+      runId: RUN,
+      screenRef: SCREEN,
+      xRenderer: "setup-field",
+      form,
+    })) as never;
+    await recordBoundScreenFill({
+      ref: GATE_REF,
+      values: { idea: { title: "an earlier message" } },
+      actorCtx: ACTOR,
+      messageId: "msg_0",
+      deps: { resolve, surface: "run-page" },
+    });
+    await recordBoundScreenFill({
+      ref: GATE_REF,
+      values: { idea: { summary: "mine" } },
+      actorCtx: ACTOR,
+      messageId: "msg_1",
+      deps: { resolve, surface: "run-page" },
+    });
+    expect((appended[1]!.fill as { values: Record<string, unknown> }).values).toEqual({
+      idea: { summary: "mine" },
+    });
+  });
+
   it("clearing the single-text control is what its own empty box emits", () => {
     const held = { ...IDEA_FORM, values: { idea: { title: "old", summary: "kept" } } };
     expect(selectDrawnFillValues(held, { idea: null })).toEqual({
@@ -609,6 +711,13 @@ describe("the schedule screen binds the scheduler form", () => {
     expect(selectDrawnFillValues(form, { scheduledAt: "2026-02-30T09:00" })).toEqual({});
     expect(selectDrawnFillValues(form, { scheduledAt: "2028-02-29T09:00" })).toEqual({
       scheduledAt: "2028-02-29T09:00",
+    });
+    // The seconds are DROPPED, so they are checked too, and year zero is not a
+    // year this box holds (convergence round 3).
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-08-28T09:00:99" })).toEqual({});
+    expect(selectDrawnFillValues(form, { scheduledAt: "0000-08-28T09:00" })).toEqual({});
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-08-28T09:00:30.500" })).toEqual({
+      scheduledAt: "2026-08-28T09:00",
     });
   });
 

@@ -192,6 +192,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Does this object row draw a fixed set of controls, or take what it is given? */
+function isClosedObjectRow(row: Record<string, unknown>): boolean {
+  const additional = (row as { additionalProperties?: unknown }).additionalProperties;
+  if (additional === false) return true;
+  if (additional !== undefined) return false;
+  const properties = (row as { properties?: unknown }).properties;
+  return isPlainObject(properties) && Object.keys(properties).length > 0;
+}
+
 /** The two formats a row may declare, and what each control accepts. */
 export const IANA_TIMEZONE_FORMAT = "iana-timezone";
 export const LOCAL_DATE_TIME_FORMAT = "local-date-time";
@@ -206,7 +215,7 @@ export const LOCAL_DATE_TIME_FORMAT = "local-date-time";
  * refused, and so is a date the calendar does not have.
  */
 const LOCAL_DATE_TIME_SPELLING =
-  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/;
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
 
 let ianaZones: Set<string> | null | undefined;
 function isIanaTimezone(value: string): boolean {
@@ -253,10 +262,16 @@ function normalizeForRow(row: Record<string, unknown> | null, value: unknown): u
 function readLocalDateTime(value: string): string | null {
   const parts = LOCAL_DATE_TIME_SPELLING.exec(value.trim());
   if (!parts) return null;
-  const [, year, month, day, hour, minute] = parts as unknown as string[];
+  const [, year, month, day, hour, minute, second] = parts as unknown as string[];
   const m = Number(month);
   if (m < 1 || m > 12) return null;
   if (Number(hour) > 23 || Number(minute) > 59) return null;
+  // THE SECONDS ARE DROPPED, SO THEY ARE ALSO CHECKED (convergence round 3): a
+  // spelling this reshapes must be a time to begin with, or `09:00:99` would be
+  // silently accepted as `09:00`.
+  if (second !== undefined && Number(second) > 59) return null;
+  // Year zero is not a year this box can hold.
+  if (Number(year) < 1) return null;
   const daysInMonth = new Date(Date.UTC(Number(year), m, 0)).getUTCDate();
   const d = Number(day);
   if (d < 1 || d > daysInMonth) return null;
@@ -316,12 +331,15 @@ function valueFitsRow(row: Record<string, unknown> | null, value: unknown): bool
     // refused — the top level drops such a key because it iterates them; here
     // there is one value to answer about, and the fail-closed answer is no.
     //
-    // An object that declares NO properties is not a closed set at all — it is a
-    // free-form value the form takes as it comes — so it is passed through, the
-    // same reading `fillableFieldNames` takes of it.
-    const declaresProperties = isPlainObject(
-      (row as { properties?: unknown }).properties,
-    );
+    // WHICH OBJECTS ARE CLOSED, in JSON Schema's own terms (convergence round 3):
+    // `additionalProperties: false` closes an object even when it names no
+    // properties at all, and any other `additionalProperties` — `true` or a
+    // schema — opens one that does. An object that simply declares a non-empty
+    // `properties` and says nothing about the rest is read as closed here, which
+    // is narrower than JSON Schema validation and is the right reading for a
+    // FORM: what is drawn is what is declared, and a key with no control behind
+    // it is not one a person could have filled.
+    const declaresProperties = isClosedObjectRow(row);
     for (const [key, inner] of Object.entries(value)) {
       const declared = propertySchema(row, key);
       if (!declared) {
