@@ -28,6 +28,11 @@
  *   5. THE ROW ITSELF IS UNCHANGED. The card composes the shipped
  *      `RunRecommendationChipRow`; the held/confirmed/skipped drawings are the
  *      ones that already shipped.
+ *   6. THE HOST DECLARATION SELECTS THE TRANSPORT, AND ONLY THE TRANSPORT
+ *      (cinatra#2790). A credential-declaring host draws the same row, reads it
+ *      through the broker and decides it through the broker, carrying its own
+ *      proof and omitting cookies on every single call; a cookie host is
+ *      byte-for-byte what it was and never touches either broker path.
  *
  * Plus source assertions that no second chip-row mount and no repeating timer
  * survived on the hosts the riders touched — the "no parallel mount" half of
@@ -42,6 +47,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+
+import {
+  LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
+  LIFECYCLE_RECOMMENDATION_HOLD_PATH,
+} from "../lifecycle-card-runtime";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -168,6 +178,94 @@ async function mountCard(props: {
     ),
   );
 }
+
+/**
+ * THE BROKER TRANSPORT, ANSWERED AS THE SHIPPED ROUTES ANSWER IT
+ * (cinatra#2790, epic #2784 S9f).
+ *
+ * WHY A STUB AT ALL, AND WHY A FAITHFUL ONE. The card's two transports are
+ * chosen by the host's own declaration: a cookie host calls the server actions
+ * this suite already mocks, and a credential-declaring host POSTs to the two
+ * broker routes. jsdom has no origin a relative URL can resolve against, so an
+ * unstubbed run of the second transport THROWS inside the card's own catch and
+ * draws nothing — silence that reads exactly like a refusal. A suite that does
+ * not answer these two paths therefore cannot tell "the widget is fail-closed"
+ * from "the widget was never asked", which is precisely how the absence pin
+ * this file used to carry survived the slice that deleted its subject.
+ *
+ * So the stub answers what the routes answer, and nothing more generous:
+ *   - the READ returns the `RunRecommendationHoldState` itself
+ *     (`/api/lifecycle-views/recommendation-hold` → `Response.json(state)`);
+ *   - the DECISION returns `{ outcome }` wrapping the core's own result.
+ *
+ * AN UNEXPECTED PATH IS A FAILURE, NEVER A NULL. A request this stub does not
+ * recognise rejects, so a card that starts calling somewhere else is caught here
+ * instead of quietly drawing nothing.
+ */
+function installBrokerStub(
+  options: {
+    hold?: () => HoldState;
+    decide?: (body: Record<string, unknown>) => unknown;
+  } = {},
+) {
+  type Recorded = {
+    url: string;
+    init: RequestInit;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  };
+  const calls: Recorded[] = [];
+  const answer = (payload: unknown) =>
+    ({ ok: true, json: async () => payload }) as unknown as Response;
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const i = init ?? {};
+    const body = (() => {
+      try {
+        return JSON.parse(String(i.body ?? "{}")) as Record<string, unknown>;
+      } catch {
+        return {} as Record<string, unknown>;
+      }
+    })();
+    const headers = (i.headers ?? {}) as Record<string, string>;
+    calls.push({ url, init: i, headers, body });
+    // THE ROUTE CONTRACT, ENFORCED BY THE STUB (and not only by the assertions
+    // that happen to be written beside each arm). Both routes are POST-only and
+    // both 401 a request with no widget proof — there is no session fallback to
+    // fall back TO — so a stub that answered a GET, or answered a request that
+    // carried no proof, would let a transport that dropped its credential pass
+    // for the wrong reason. That is the failure mode this whole change exists to
+    // remove, so it is refused HERE, once, for every arm.
+    if (i.method !== "POST") {
+      throw new Error(`the card used ${String(i.method)} on a POST-only route: ${url}`);
+    }
+    if (!headers["X-Cinatra-Widget-User-Token"]) {
+      throw new Error(`the card reached ${url} with no widget proof — the route answers 401`);
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_HOLD_PATH) {
+      return answer(options.hold ? options.hold() : { state: "none" });
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_DECIDE_PATH) {
+      return answer({
+        outcome: options.decide ? options.decide(body) : { ok: true, dispatched: true },
+      });
+    }
+    throw new Error(`the card requested an unstubbed path: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return {
+    fetchMock,
+    calls,
+    callsTo: (path: string) => calls.filter((c) => c.url === path),
+    restore: () => vi.unstubAllGlobals(),
+  };
+}
+
+/** The widget's declaration: its own proof, and cookies OMITTED. */
+const WIDGET_DECLARATION = {
+  headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
+  credentials: "omit" as RequestCredentials,
+};
 
 describe("RecommendationHoldCard — the poll is gone (cinatra#2568 AC-1)", () => {
   it("resolves ONCE and never again on a timer — 20 seconds produce no second read", async () => {
@@ -411,24 +509,68 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(holdStateMock).not.toHaveBeenCalled();
   });
 
-  it("draws nothing on a host that declares a CREDENTIAL — its actions cannot carry one", async () => {
-    // codex round 0, finding 4. This card's state read and its Confirm/Skip are
-    // cookie-bound server actions. On a broker surface (same-origin to the app)
-    // a drawn card would read and act as whoever else is signed in on that
-    // browser — the ambient-session fallback the contract forbids. Fail closed
-    // until the broker-aware entry lands; the guard keys on the CREDENTIAL, not
-    // on the surface, so it disappears with that slice rather than with a matrix.
-    holdStateMock.mockImplementation(async () => HELD);
-    const { container } = await mountCard({
-      wireRef: "hold-ref-1",
-      host: "site_widget",
-      auth: { headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }), credentials: "omit" },
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(container.innerHTML).toBe("");
-    expect(holdStateMock).not.toHaveBeenCalled();
+  // THE PRESENCE PIN, FLIPPED FROM AN ABSENCE PIN (cinatra#2790, epic #2784 S9f).
+  //
+  // WHAT STOOD HERE. Until the broker entry landed, this arm pinned the exact
+  // opposite — "draws nothing on a host that declares a CREDENTIAL" — because
+  // the card's state read and its two decisions were cookie-bound server
+  // actions, and on a frame that is same-origin to the app a drawn card would
+  // have read and acted as whoever else was signed in on that browser. The
+  // guard keyed on the CREDENTIAL rather than on the surface, and its own
+  // comment named the condition for deleting it: the broker-aware entry.
+  //
+  // WHY FLIPPING IT IS THE WORK, NOT A FORMALITY. The entry landed and the guard
+  // went with it — but the pin stayed, and it kept passing for a reason with
+  // nothing to do with the product: jsdom cannot fetch a relative URL, so the
+  // broker transport threw, the card drew nothing, and the absence assertion
+  // read that silence as a refusal. It therefore asserted the ratified §IX
+  // parity was NOT met while the tree met it, and it would have stayed green
+  // with the whole broker read deleted. Stubbed faithfully — the shipped route
+  // answers a held run with the state itself — the old arm fails against the
+  // shipped card. That failure is what this pin replaces.
+  it("DRAWS on a host that declares a CREDENTIAL — read through the broker, never a session", async () => {
+    const broker = installBrokerStub({ hold: () => HELD });
+    try {
+      holdStateMock.mockImplementation(async () => HELD);
+      const { container } = await mountCard({
+        wireRef: "hold-ref-1",
+        host: "site_widget",
+        auth: {
+          headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
+          credentials: "omit",
+        },
+      });
+
+      // IT DRAWS — the whole §V row, on the host that declared itself.
+      const root = await waitFor(() => {
+        const found = container.querySelector("[data-run-recommendation-chip-row]");
+        if (!found) throw new Error("the credential-declaring host drew no card");
+        return found;
+      });
+      expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+
+      // …AND THE OUTGOING REQUEST IS ASSERTED BESIDE IT, which is what stops
+      // this pin from becoming the mirror of the one it replaces: a card that
+      // drew from an ambient session would satisfy every line above.
+      const reads = broker.callsTo(LIFECYCLE_RECOMMENDATION_HOLD_PATH);
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads[0].init.method).toBe("POST");
+      expect(reads[0].headers["X-Cinatra-Widget-User-Token"]).toBe("cwu_x");
+      expect(reads[0].init.credentials).toBe("omit");
+      expect(reads[0].body).toEqual({ runId: "run-2568" });
+
+      // The cookie-bound reader was never asked. On this host there is no
+      // session to fall back to, and the point of the slice is that there is no
+      // fallback to fall back TO.
+      expect(holdStateMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
   });
 
   it("draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone", async () => {
@@ -1314,5 +1456,266 @@ describe("finding 3 — the card root declares its kind, its host and its state"
     }
     // …and a decided capture owes the ABSENCE of every decision control.
     for (const f of forbidden) expect(count(f.selector, f.scope)).toBe(0);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE BROKER TRANSPORT (cinatra#2790, epic #2784 S9f)
+// ---------------------------------------------------------------------------
+//
+// WHAT WAS UNPINNED, AND WHY IT MATTERED. The slice's whole point is that WHO a
+// decision is recorded as is the host's question: a cookie host keeps the
+// shipped server actions, and a credential-declaring host posts to the broker
+// with its own proof and cookies omitted, because a server action cannot carry
+// a credential and would ride the ambient cookie of a same-origin frame. The
+// READ half of that had a pin. The DECISION half had none — nothing anywhere in
+// the tree pressed a chip on a credential-declaring host — so the row could have
+// fallen back to the cookie-bound actions on the widget, which is the exact
+// defect the slice exists to remove, and every suite would still have been
+// green.
+//
+// ONE ROW, TWO TRANSPORTS, NEVER TWO ROWS. Each arm below therefore asserts
+// BOTH directions: the request that was made, and the road that was NOT taken.
+// A card that decided through a server action satisfies "the row settled"; only
+// "and the action was never called" tells the two apart.
+describe("§V on a credential-declaring host — the broker carries the decision too", () => {
+  it("CONFIRM is recorded through the broker, with the host's own proof and no cookie", async () => {
+    const broker = installBrokerStub({ hold: () => HELD_THREE });
+    try {
+      holdStateMock.mockImplementation(async () => HELD_THREE);
+      await mountCard({
+        wireRef: "hold-ref-3",
+        host: "site_widget",
+        auth: WIDGET_DECLARATION,
+      });
+      await waitFor(() => expect(chips()).toHaveLength(3));
+
+      await press("skill-enrich", "confirm");
+      await press("skill-draft", "confirm");
+      await press("skill-send", "confirm");
+
+      const decisions = await waitFor(() => {
+        const found = broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH);
+        if (found.length === 0) throw new Error("no decision reached the broker");
+        return found;
+      });
+      // ONE release for the whole row — the named store deviation, unchanged by
+      // which transport carried it.
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].init.method).toBe("POST");
+      expect(decisions[0].headers["X-Cinatra-Widget-User-Token"]).toBe("cwu_x");
+      expect(decisions[0].init.credentials).toBe("omit");
+      expect(decisions[0].body).toEqual({
+        runId: "run-2568",
+        decision: "confirm",
+        confirmedSkillIds: ["skill-enrich", "skill-draft", "skill-send"],
+        promptText: "{}",
+        // The hold the decision was taken AGAINST rides with it, so a run that
+        // was decided, dispatched and parked again refuses a decision meant for
+        // the previous hold instead of applying it to the new one.
+        holdRef: "hold-ref-3",
+      });
+
+      // …and the cookie-bound roads were not taken.
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(skipMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
+  });
+
+  it("SKIP takes the same road — one decision, one transport", async () => {
+    const broker = installBrokerStub({ hold: () => HELD_THREE });
+    try {
+      holdStateMock.mockImplementation(async () => HELD_THREE);
+      await mountCard({
+        wireRef: "hold-ref-3",
+        host: "site_widget",
+        auth: WIDGET_DECLARATION,
+      });
+      await waitFor(() => expect(chips()).toHaveLength(3));
+
+      await press("skill-enrich", "skip");
+      await press("skill-draft", "skip");
+      await press("skill-send", "skip");
+
+      const decisions = await waitFor(() => {
+        const found = broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH);
+        if (found.length === 0) throw new Error("no decision reached the broker");
+        return found;
+      });
+      expect(decisions).toHaveLength(1);
+      // The same three properties the CONFIRM arm asserts, written out rather
+      // than assumed to follow from it: a skip that dropped its proof, or that
+      // stopped being a POST, would answer 401 at the real route.
+      expect(decisions[0].init.method).toBe("POST");
+      expect(decisions[0].headers["X-Cinatra-Widget-User-Token"]).toBe("cwu_x");
+      expect(decisions[0].init.credentials).toBe("omit");
+      // A row whose every chip was skipped releases through SKIP, not through an
+      // empty confirm — an empty selection writes no row and reads back as no
+      // decision at all.
+      expect(decisions[0].body).toEqual({
+        runId: "run-2568",
+        decision: "skip",
+        holdRef: "hold-ref-3",
+      });
+      expect(skipMock).not.toHaveBeenCalled();
+      expect(confirmMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
+  });
+
+  it("RE-AUTHORIZES on every read and every decision — the card holds no header", async () => {
+    // The issue's words: "the broker re-authorizing that run on every read and
+    // decision". Structurally that means the proof is built at the moment of the
+    // call from the host's declaration, never captured into React state, a prop
+    // or a closure that outlives it — otherwise a rotated or revoked credential
+    // would keep working for as long as the card stayed mounted.
+    //
+    // A DECLARATION THAT ROTATES ITS ANSWER IS THE MEASUREMENT, AND TWO
+    // DECISIONS ARE WHAT MAKE IT ONE. With a single decision, a submitter that
+    // captured its headers ONCE — at the moment the submitter was built, which
+    // happens before the first read — would still produce three distinct tokens
+    // and pass. So the row decides TWICE through the same mounted submitter: the
+    // first release is REFUSED (which leaves the hold live and every chip still
+    // pressable, and does NOT re-read, because only a landed decision does), and
+    // the second is pressed straight after it. A captured header repeats across
+    // those two; a proof built per call cannot.
+    let minted = 0;
+    const rotating = {
+      headers: () => ({ "X-Cinatra-Widget-User-Token": `cwu_${++minted}` }),
+      credentials: "omit" as RequestCredentials,
+    };
+    let decisions = 0;
+    const broker = installBrokerStub({
+      hold: () => HELD_THREE,
+      decide: () => {
+        decisions += 1;
+        return decisions === 1
+          ? { ok: false, error: "Could not record that decision." }
+          : { ok: true, dispatched: true };
+      },
+    });
+    try {
+      holdStateMock.mockImplementation(async () => HELD_THREE);
+      await mountCard({ wireRef: "hold-ref-3", host: "site_widget", auth: rotating });
+      await waitFor(() => expect(chips()).toHaveLength(3));
+
+      await press("skill-enrich", "confirm");
+      await press("skill-draft", "confirm");
+      await press("skill-send", "confirm");
+      // The first release is refused: the row stays live, nothing settled.
+      await waitFor(() => {
+        if (broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH).length < 1) {
+          throw new Error("the first decision never reached the broker");
+        }
+      });
+      expect(chips()).toHaveLength(3);
+
+      // Press again — the same mounted card, the same submitter, a second call.
+      await press("skill-enrich", "confirm");
+      await waitFor(() => {
+        if (broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH).length < 2) {
+          throw new Error("the retry never reached the broker");
+        }
+      });
+
+      const sent = broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH);
+      expect(sent.length).toBeGreaterThanOrEqual(2);
+      // THE ARM'S POINT: two decisions through one submitter, two proofs.
+      expect(sent[0].headers["X-Cinatra-Widget-User-Token"]).not.toBe(
+        sent[1].headers["X-Cinatra-Widget-User-Token"],
+      );
+
+      // And the same property across every call the card made, reads included.
+      const proofs = broker.calls.map((c) => c.headers["X-Cinatra-Widget-User-Token"]);
+      expect(proofs.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(proofs).size).toBe(proofs.length);
+      expect(proofs.every((t) => typeof t === "string" && t.startsWith("cwu_"))).toBe(true);
+      // Every call omitted cookies. One that did not would be the whole defect.
+      expect(broker.calls.every((c) => c.init.credentials === "omit")).toBe(true);
+      // The cookie-bound roads were never taken, on either attempt.
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(skipMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
+  });
+
+  it("NEGATIVE CONTROL: a cookie host never touches either broker path", async () => {
+    // The other half of "the declaration selects the transport". Without this,
+    // every arm above would still pass with the card posting to the broker from
+    // EVERY host — which would send a first-party surface's decision through a
+    // route that answers 401 to anything without a widget credential.
+    const broker = installBrokerStub({ hold: () => HELD_THREE });
+    try {
+      holdStateMock.mockImplementation(async () => HELD_THREE);
+      await mountCard({ wireRef: "hold-ref-3", host: "run_card" });
+      await waitFor(() => expect(chips()).toHaveLength(3));
+
+      await press("skill-enrich", "confirm");
+      await press("skill-draft", "confirm");
+      await press("skill-send", "confirm");
+
+      await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+      expect(holdStateMock).toHaveBeenCalled();
+      // Not one request left the cookie host. The stub rejects unknown paths, so
+      // this is a count of everything the card asked for, not of two paths.
+      expect(broker.calls).toHaveLength(0);
+    } finally {
+      broker.restore();
+    }
+  });
+
+  it("REPLAY: the held row comes back after a reload, re-read through the broker", async () => {
+    // The durable arm for this host. A reload tears the frame down and rebuilds
+    // it; the hold is a store row and the card re-derives live state from the
+    // run, so what comes back must be what was there — and it must come back
+    // through the host's OWN transport, not through a session the reloaded frame
+    // still does not have.
+    const broker = installBrokerStub({ hold: () => HELD });
+    try {
+      holdStateMock.mockImplementation(async () => HELD);
+      const first = await mountCard({
+        wireRef: "hold-ref-1",
+        host: "site_widget",
+        auth: WIDGET_DECLARATION,
+      });
+      await waitFor(() => {
+        if (!first.container.querySelector("[data-run-recommendation-chip-row]")) {
+          throw new Error("no card before the reload");
+        }
+      });
+      const readsBefore = broker.callsTo(LIFECYCLE_RECOMMENDATION_HOLD_PATH).length;
+      expect(readsBefore).toBeGreaterThan(0);
+
+      cleanup();
+
+      const second = await mountCard({
+        wireRef: "hold-ref-1",
+        host: "site_widget",
+        auth: WIDGET_DECLARATION,
+      });
+      const root = await waitFor(() => {
+        const found = second.container.querySelector("[data-run-recommendation-chip-row]");
+        if (!found) throw new Error("the held row did not come back after the reload");
+        return found;
+      });
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      // The second mount asked the authority for itself — a card that re-drew
+      // from a cached answer would prove nothing about a reloaded frame.
+      expect(
+        broker.callsTo(LIFECYCLE_RECOMMENDATION_HOLD_PATH).length,
+      ).toBeGreaterThan(readsBefore);
+      expect(holdStateMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
   });
 });
