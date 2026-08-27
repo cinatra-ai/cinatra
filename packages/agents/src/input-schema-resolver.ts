@@ -4,6 +4,12 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
+import {
+  PLATFORM_SUPPLIED_FLOW_INPUTS,
+  isExemptFromUnsatisfiableInputCheck,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs data module (allowJs)
+} from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
 
 /**
  * Runtime resolver for agent_templates.inputSchema.
@@ -390,4 +396,129 @@ export function assertValuesMatchDeclaredObjectTypes(
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-dispatch satisfiability guard (cinatra#3003).
+//
+// The RUNTIME refuses to start a conversation when a declared flow input has no
+// `default` and is absent from the start message ("Cannot start conversation
+// because of missing inputs ..."). The APP only ever collects the fields named
+// in `metadata.cinatra.required`. A HIDDEN input in neither — no `default`, not
+// app-required — is therefore unsatisfiable unless the platform writes it
+// unprompted, and a run of such an agent arms, fires, and dies at the runtime
+// naming an input nobody was shown.
+//
+// OAS-RUNTIME-014 refuses that shape at install/registration. This is the same
+// rule at the OTHER chokepoint, for a package that was already installed before
+// the invariant existed: it fails the run BEFORE dispatch with a message that
+// names the agent and the input, instead of a runtime refusal on a failed child
+// run minutes after a tick.
+// ---------------------------------------------------------------------------
+
+/** A hidden input the run can never carry, with the agent it belongs to. */
+export type UnsatisfiableHiddenInput = { agent: string; input: string };
+
+/**
+ * List the hidden inputs this run can never carry. Pure + exported so both the
+ * dispatch chokepoint and its tests read the same rule.
+ *
+ * `alreadySupplied` is the run's stored `inputParams`: a caller that CAN see a
+ * hidden input (the `agent_run` MCP tool, chat extraction, the API) may
+ * pre-supply it, and a pre-supplied value satisfies the runtime. That — NOT
+ * membership of `required` — is the only door a hidden input has here: the
+ * setup loop's `pendingFields` filter drops every `x-hidden` field BEFORE it
+ * checks presence, so a hidden input is never collected by the form even when
+ * the schema marks it required.
+ */
+export function findUnsatisfiableHiddenInputs(input: {
+  properties: Record<string, Record<string, unknown>>;
+  alreadySupplied: Record<string, unknown>;
+  packageName: string;
+  packageVersion?: string | null;
+}): UnsatisfiableHiddenInput[] {
+  const agent = input.packageVersion
+    ? `${input.packageName}@${input.packageVersion}`
+    : input.packageName;
+  const out: UnsatisfiableHiddenInput[] = [];
+  for (const [name, schema] of Object.entries(input.properties ?? {})) {
+    if (!schema || typeof schema !== "object") continue;
+    if ((schema as { "x-hidden"?: boolean })["x-hidden"] !== true) continue;
+    if ("default" in schema) continue;
+    if (Object.prototype.hasOwnProperty.call(input.alreadySupplied ?? {}, name)) continue;
+    if ((PLATFORM_SUPPLIED_FLOW_INPUTS as readonly string[]).includes(name)) continue;
+    if (isExemptFromUnsatisfiableInputCheck(input.packageName, name)) continue;
+    out.push({ agent, input: name });
+  }
+  return out;
+}
+
+/**
+ * Throw when the run declares a hidden input nothing can supply. The thrown
+ * message is what lands on the failed run row, so it names the agent
+ * (`vendor/package@version`) and every offending input.
+ *
+ * CONFIRM-BEFORE-REFUSE. `resolveTemplateInputSchema` hands back a non-empty
+ * STORED schema verbatim, and schemas compiled before `default` was carried
+ * through (`oas-compiler.ts` step 7) simply do not have the key — so a stored
+ * schema alone cannot distinguish "the package declares no default" from "the
+ * compiler of the day dropped it". Re-reading the package's own mounted
+ * `cinatra/oas.json` settles it.
+ *
+ * The confirmation reads the FLOW's own `inputs`, because that is the
+ * descriptor pyagentspec starts the conversation from — the StartNode copy the
+ * compiler reads can drift from it. And it corroborates only the RUNTIME-
+ * EFFECTIVE fact ("does the Flow declare this input without a default?"), not
+ * hiddenness, which the stored schema already established: re-proving hiddenness
+ * against possibly-drifted OAS metadata would clear a suspicion that is real.
+ *
+ * The extra I/O is paid ONLY on the path that is about to fail a run, and a
+ * package whose OAS cannot be read is given the benefit of the doubt: this guard
+ * exists to turn a late runtime refusal into an early named one, never to invent
+ * a new way for a working run to die.
+ */
+export async function assertUnsatisfiableHiddenInputs(input: {
+  properties: Record<string, Record<string, unknown>>;
+  alreadySupplied: Record<string, unknown>;
+  packageName: string;
+  packageVersion?: string | null;
+  /**
+   * Reads the package's mounted `cinatra/oas.json`. Defaults to the real
+   * runtime-mount reader; injected by tests, which have no mount tree, so the
+   * confirm step is exercised rather than short-circuited.
+   */
+  readOas?: (packageName: string) => Promise<Record<string, unknown> | null>;
+}): Promise<void> {
+  const suspected = findUnsatisfiableHiddenInputs(input);
+  if (suspected.length === 0) return;
+
+  const read = input.readOas ?? readInstalledOasAsync;
+  const oas = await read(input.packageName);
+  const flowInputs = Array.isArray((oas as { inputs?: unknown } | null)?.inputs)
+    ? ((oas as { inputs: unknown[] }).inputs.filter(
+        (i): i is Record<string, unknown> =>
+          !!i && typeof i === "object" && !Array.isArray(i),
+      ))
+    : null;
+  if (!flowInputs) return;
+  // CONFIRM, never re-open: only the inputs the stored schema already suspected
+  // are considered, and only the runtime-effective fact is corroborated.
+  const bad = suspected.filter(({ input: name }) => {
+    const declared = flowInputs.find((i) => i.title === name);
+    if (!declared) return false; // the Flow does not declare it — cannot confirm
+    return !("default" in declared);
+  });
+  if (bad.length === 0) return;
+  const names = bad.map((b) => `"${b.input}"`).join(", ");
+  throw new Error(
+    `Run cannot start: ${bad[0].agent} declares hidden input(s) ${names} with ` +
+      `no default on the Flow descriptor, not supplied on this run, and ` +
+      `written by no product path. The agent runtime would refuse this run ` +
+      `with \`Cannot start conversation because of missing inputs\` before ` +
+      `any model call. Fix the package — give the Flow input a default ` +
+      `(mirroring it onto the StartNode descriptor, whose inputs and outputs ` +
+      `pyagentspec requires to stay equal) or drop the input — and reinstall ` +
+      `it. Naming it in metadata.cinatra.required does NOT work: the setup ` +
+      `loop drops every hidden field whether or not it is required.`,
+  );
 }

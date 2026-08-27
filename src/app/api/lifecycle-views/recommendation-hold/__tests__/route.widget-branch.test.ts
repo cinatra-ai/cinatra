@@ -289,6 +289,30 @@ describe("behind the door it is the ONE core, taking the widget's actor", () => 
     await expect(res.json()).resolves.toMatchObject({ state: "skipped" });
   });
 
+  it("READ: the SETTLED answer reaches the widget with the hold's own offer intact", async () => {
+    // §V's settled row is one chip per skill the hold ASKED ABOUT, and a skill
+    // settled by its own Skip leaves no decision row — so the offer is what
+    // lets the row state its outcome (cinatra#2790). The widget's transport
+    // must therefore carry the WHOLE settled answer, not a projection of the
+    // fields this route happened to know about when it was written: a route
+    // that narrows the shape gives the widget a different settled card from
+    // the one the cookie hosts draw, which is the parity §IX forbids.
+    const settled = {
+      state: "confirmed" as const,
+      skillNames: ["Kept skill"],
+      decided: [{ skillId: "skill-kept", name: "Kept skill", mark: "confirmed" as const }],
+      candidates: [
+        { skillId: "skill-kept", name: "Kept skill" },
+        { skillId: "skill-skipped", name: "Skipped skill" },
+      ],
+    };
+    resolveRecommendationHoldStateForActor.mockResolvedValue(settled);
+    const res = await READ(
+      request(WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH, { runId: RUN_ID }, WIDGET_HEADERS),
+    );
+    await expect(res.json()).resolves.toEqual(settled);
+  });
+
   it("DECIDE/confirm: the core gets the kept set, the hold ref and the BROKER write", async () => {
     await DECIDE(
       request(

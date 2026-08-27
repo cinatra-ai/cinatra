@@ -410,7 +410,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     composes: [],
     body: {
       // A typed INTERRUPT, so its authorized state comes from the hold's own
-      // cookie-bound read rather than the data-part resolve seam.
+      // read rather than from the data-part resolve seam.
+      //
+      // THAT READ HAS TWO TRANSPORTS AND ONE AUTHORITY (cinatra#2790, S9f), and
+      // this line said "cookie-bound" after the second one landed. A cookie host
+      // calls the server action; a credential-declaring host posts to the broker
+      // route with its own proof and cookies omitted. Both land in the same
+      // resolver, so the validator named below is unchanged — but a gate that
+      // certifies this kind must not describe a road the widget cannot take.
       //
       // UNCHANGED BY #2870, and checked rather than assumed: the owner still
       // calls this reader (`run-recommendation-chip-row.tsx:633`), and this row
@@ -950,45 +957,109 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     },
   },
 
-  // Registered by cinatra#2928 (lifecycle-b W2a) as the FIFTH kind, and NOT
-  // drawn by it: that slice changes no screen. The moment the agent pauses to
-  // ask for input had no name in this vocabulary, so every surface told it
-  // apart from a review by pattern-matching the shape of the pause. Naming it
-  // is what lets a run STATE it; drawing it is W3's (cinatra#2930).
+  // Registered by cinatra#2928 (lifecycle-b W2a) as the FIFTH kind and drawn by
+  // W3 (cinatra#2930). The moment the agent pauses to ask for input had no name
+  // in this vocabulary, so every surface told it apart from a review by
+  // pattern-matching the shape of the pause. Naming it is what lets a run STATE
+  // it; the card below is what lets a person see one card for it on every host.
   agent_hitl_screen: {
-    status: "PLACEHOLDER",
+    status: "DRAWN",
+    // DRAWN by W3 (cinatra#2930), which is why this row no longer reads as a
+    // placeholder. Its PLACEHOLDER obligation was re-read against the drawing
+    // rather than transcribed, per the header's "a placeholder's anchor list is
+    // not a ratification". The ANCHOR list survived that re-reading unchanged —
+    // the fields region and the Continue are exactly the two things the screen
+    // has always been — and the BODY list did not: the placeholder guessed
+    // `useLifecycleCardResolve`, which is the DATA_PART resolve seam this kind
+    // has no envelope for. The correction is recorded where it occurs, below.
     design:
-      "the HITL screen the run page already shows — fields with a Continue button. It carries no card identity of its own today, which is exactly what the plan's section 3 gives it.",
+      "the pause screen in specs/app-components.html, drawn inside the base page's section-I card chrome — fields with a Continue, which is what the run page has always shown",
     component: "AgentHitlScreenCard",
     wireCarriage: "interrupt",
     deliveries: ["platform_injected"],
-    owner: null,
+    owner: "packages/agents/src/agent-hitl-screen-card.tsx",
     composes: [],
     body: {
-      // A typed INTERRUPT like `recommendation_hold`, so its authorized state
-      // does not come from the data-part resolve seam. The obligation the
-      // drawing slice inherits is named for the reader that exists.
-      validator: "useLifecycleCardResolve",
-      params: ["view"],
-      fields: ["state"],
+      // THE PLACEHOLDER'S GUESS, CORRECTED. It named `useLifecycleCardResolve`
+      // beside a comment saying the opposite in as many words — "a typed
+      // INTERRUPT like `recommendation_hold`, so its authorized state does not
+      // come from the data-part resolve seam". The comment was right and the
+      // value was wrong: an interrupt kind mints no resolve envelope, so there
+      // is nothing for that hook to POST. The reader that exists is this one,
+      // and it carries the same posture the resolve seam does — the run access
+      // door first, a failed read left as a failure rather than turned into a
+      // state, and no answer at all until an authorized one lands.
+      validator: "useAgentHitlScreenState",
+      params: ["runId"],
+      fields: ["state", "gate"],
     },
     // The two the plan states in prose — the fields the screen asks for, and
-    // the Continue that submits them. Named here so the drawing slice has a
-    // target to be measured against; this is the obligation W3 inherits, not a
-    // description of anything shipped.
+    // the Continue that submits them — VERBATIM from the placeholder, because
+    // re-reading them against the drawing changed neither.
     anchors: ["hitl-screen-fields", '[data-action="submit-hitl-screen"]'],
-    instanceRootSelector: '[data-lifecycle-card="agent_hitl_screen"]',
-    instanceProof: null,
+    openObligations: [],
     hosts: {
-      chat_thread: null,
-      site_widget: null,
-      run_card: null,
-      page_gate_region: null,
+      // THE CONVERSATION HOSTS, both served by the ONE shared column
+      // (packages/chat/src/chat-messages-view.tsx). `/chat` mounts it under the
+      // module's `chat_thread` default; the widget embed passes
+      // `host: "site_widget"` down to the same column. One adapter, two hosts —
+      // enumerated once per host because a host is what R8 counts instances on.
+      chat_thread: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          region: "transcript",
+          surface: "production",
+          why: "the parked dispatch turn: the card mounts on the run identity read off the `agent_run` tool result, as a SIBLING of the inline run card, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part",
+        },
+      ],
+      site_widget: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          region: "transcript",
+          surface: "production",
+          why: "the same column on the widget arm draws the same card for the same `agent_run` part; the card's host declaration selects its transport, so the read travels on that host's own credential and the mount is not gated on the surface kind",
+        },
+      ],
+      run_card: [
+        {
+          module: "packages/agents/src/agentic-run-panel.tsx",
+          adapter: "mount",
+          region: "run_panel",
+          surface: "production",
+          why: "the agentic panel wraps its own pause screen — the gate renderer's fields and the Continue that submits them — in this card's root, so the run page draws the screen it always drew and the card is its identity rather than a second drawing",
+        },
+      ],
+      // THE FOURTH HOST, for the epic's own reason rather than for a product
+      // flow that produces it often: §IX's "every card appears on every host" is
+      // the structural thesis this gate's done-check enforces, and a card that
+      // draws on three hosts and is absent from the fourth is a card a reader
+      // can be sent to a page that will not show it.
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+          adapter: "mount",
+          region: "gate_region",
+          surface: "production",
+          why: "the review page mounts the same card inside its gate region, above the review card and under that region's own `page_gate_region` host declaration, keyed by the run and nothing else; a run that is not parked asking a question draws nothing, so the mount costs the page nothing and shows the question to a reviewer who arrives while the run is waiting",
+        },
+      ],
     },
     hostGap:
-      "No host mounts this kind as a card, because no component draws it as one. The run page shows the screen today, but not through this vocabulary. W3 (cinatra#2930) draws the card and binds it to the moment the run now records, on the hosts the parity ratchet already owes.",
-    renderedProof: null,
-    gap: "The card is not drawn. W2a registers the kind so a run can state the moment it is paused at, and changes no screen; the run page keeps the HITL screen it already renders, unchanged and outside this vocabulary. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
+      "NO HOST CARRIES A GAP. All four are mounted and each is counted: the two conversation hosts by the ONE shared column, the run page by the panel that already draws the pause screen, and the review page's gate region by its own composition. The panel's copy stands down inside either conversation host (`runCardOwnsLifecycleCopy`), which is what keeps one mount per host true where two adapters are in scope.",
+    instanceRootSelector: '[data-lifecycle-card="agent_hitl_screen"]',
+    renderedProof: {
+      file: "packages/agents/src/__tests__/agent-hitl-screen-card.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws the fields and the Continue",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/agent-hitl-screen-card.test.tsx",
+      testName: "every host with a production adapter draws EXACTLY ONE screen card",
+      hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
+    },
   },
 });
 
@@ -1284,7 +1355,7 @@ export const LIFECYCLE_MOUNT_REGIONS = Object.freeze([
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
 const CARD_MOUNT_RE =
-  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard|ScheduleProposalCard)\b/g;
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard|ScheduleProposalCard|AgentHitlScreenCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**

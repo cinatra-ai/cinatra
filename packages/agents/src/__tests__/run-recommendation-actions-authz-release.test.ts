@@ -32,6 +32,7 @@ const enforceRunAccess = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
 const writeRunRecommendationSkip = vi.fn();
 const publishRecommendationHoldResume = vi.fn();
+const readRunRecommendationOfferedSet = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
@@ -44,6 +45,9 @@ vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => ({
   readRunSelectedSkillRevisions: (...a: unknown[]) => readRunSelectedSkillRevisions(...a),
   readRunRejectedRecommendations: (...a: unknown[]) => readRunRejectedRecommendations(...a),
   hasRunRecommendationSkip: (...a: unknown[]) => hasRunRecommendationSkip(...a),
+  // cinatra#2790 — the hold's OWN offer, which the settled reading carries so
+  // the row can state an outcome for a skill that left no decision row.
+  readRunRecommendationOfferedSet: (...a: unknown[]) => readRunRecommendationOfferedSet(...a),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
   writeRunRecommendationSkip: (...a: unknown[]) => writeRunRecommendationSkip(...a),
   SKIP_RECOMMENDATION_SOURCE: "user_skipped",
@@ -147,6 +151,9 @@ beforeEach(() => {
   // marker read back (cinatra#2794); the happy path is "it landed".
   writeRunRecommendationSkip.mockReturnValue(true);
   readRunCoOwners.mockResolvedValue([]);
+  // The DEFAULT is a hold that owns no claim — one parked before cinatra#2906 —
+  // so every arm written before this field existed keeps its exact reading.
+  readRunRecommendationOfferedSet.mockResolvedValue([]);
   enforceRunAccess.mockResolvedValue(undefined);
 });
 
@@ -351,6 +358,9 @@ describe("the settled reading — one mark per skill, derived from the run's own
         { skillId: "s-a", name: "s-a", mark: "skipped" },
         { skillId: "s-b", name: "s-b", mark: "skipped" },
       ],
+      // This hold owns no claim, so there is no offer to carry and the settled
+      // row reads exactly the evidence, as it did before cinatra#2790.
+      candidates: [],
     });
   });
 
@@ -387,6 +397,82 @@ describe("the settled reading — one mark per skill, derived from the run's own
   // -------------------------------------------------------------------------
   // THE GRADED §V FINDINGS (cinatra#2841 / PR #2866), server side
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // THE HOLD'S OWN OFFER, carried into the settled reading (cinatra#2790 S9f)
+  //
+  // §V: "SETTLED — ONE CHIP PER SKILL, EACH SHOWING WHAT IT RECORDED". A skill
+  // settled by pressing its own Skip writes NO decision row — the selection
+  // store records what the run will use, and the rejected half is written only
+  // for a candidate the scorer RECOMMENDED — so on a force-add offer the
+  // evidence alone cannot name it. The offer can, and it is durable.
+  // -------------------------------------------------------------------------
+
+  it("carries the hold's OFFER, so a skill that left no decision row can still be drawn", async () => {
+    readRunRecommendationOfferedSet.mockResolvedValue([
+      { skillId: "org-scoped-skill", skillRevisionId: "rev-1", recommended: false, rank: 1 },
+      { skillId: "s-kept", skillRevisionId: "rev-2", recommended: false, rank: 2 },
+    ]);
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+    resolveRecommendationCandidateSkillIds.mockResolvedValue(["org-scoped-skill", "s-kept"]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      // ONE entry per skill the reader was ASKED about, in the order the hold
+      // offered them, each carrying the label the held chip carried.
+      candidates: [
+        { skillId: "org-scoped-skill", name: "Org Scoped" },
+        { skillId: "s-kept", name: "s-kept" },
+      ],
+      // The evidence itself is unchanged — the offer is carried BESIDE it.
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
+    });
+    // It is read for THIS hold, not for the run.
+    expect(readRunRecommendationOfferedSet).toHaveBeenCalledWith("park-1");
+  });
+
+  it("INTERSECTS the offer with the viewer's own entitlement, as the held row does", async () => {
+    readRunRecommendationOfferedSet.mockResolvedValue([
+      { skillId: "org-scoped-skill", skillRevisionId: "rev-1", recommended: false, rank: 1 },
+      { skillId: "not-mine", skillRevisionId: "rev-9", recommended: false, rank: 2 },
+    ]);
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "org-scoped-skill", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+    // The VIEWER-scoped call is the narrower one; the unscoped call (used only
+    // to resolve labels) still answers with the wider set.
+    resolveRecommendationCandidateSkillIds.mockImplementation(
+      async (input: { viewer?: unknown }) =>
+        input.viewer ? ["org-scoped-skill"] : ["org-scoped-skill", "not-mine"],
+    );
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      candidates: [{ skillId: "org-scoped-skill", name: "Org Scoped" }],
+    });
+    // The skill this reader may not see is not named to them by the settled row.
+    expect(JSON.stringify(state)).not.toContain("not-mine");
+  });
+
+  it("an UNREADABLE offer costs the extra chips, never the settled card", async () => {
+    readRunRecommendationOfferedSet.mockRejectedValue(new Error("offer store down"));
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
+      candidates: [],
+    });
+  });
 
   it("finding 1 — a `user_adjusted` selection row reads back as ADJUSTED", async () => {
     // The mark the redraw could not reach. `user_forced` is stamped only for an

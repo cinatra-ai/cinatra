@@ -21,14 +21,25 @@ round by round and each part still describes the round that wrote it.
 | `S5a` (+ dark), `S5` (+ dark), `R7a` (+ dark), `R7` (+ dark) | `c0614eeb-07ed-4e16-9a1e-88133a780cfa` | 2026-08-26 | **YES** — the placeholder round (cinatra#2997), `drivers/22-placeholder-and-replacement-sequence.mjs`: one run, started by the app's own dispatch from a person's typed turn, its own question answered through the card's own Continue, its step executed with a real provider connection configured, its output written, and the review opened on it by the shipped sweeper. Same negative screens as the rows below (`preRouterShortCircuits` / `preRouterAttempts` / `scriptedRuntimeLines` / `noProviderRefusals` / `mcpDependencyFailures` all 0, process-chain read at every shutter), same stated attribution limit |
 | `S4` (+ dark), `R2`, `R4` | `aa84c060-15e9-4298-90fe-8cb33c130d6b` | 2026-08-25 | **YES** — a run the app's own dispatch created from a person's turn, decided by real presses, executed its own step with a real provider connection configured, with no scripted-runtime line anywhere in the app server's log and the scripted switch not found one hop above the listening process — a null there is consistent with absence, not a proof of it — and reviewed by the shipped sweeper. Nothing is seeded and nothing is stood in for. *Which* runtime answered a given model call is not recorded by any row — see *The REVIEW-CELL re-shoot* below for exactly how far the attribution goes |
 | `S1` (+ dark), `S2` (+ dark), `R5` (+ dark), `R6` (+ dark) | `aef0f05a-94c9-41ed-a497-798603ecd6bc` | 2026-08-25 | **YES** — the stood-in-legs re-shoot, `drivers/12-real-chain-sequence.mjs` |
-| `H1` `H2` `H3` `H4` `W1` `W2` `W3` (the widget) | a run SEEDED and parked by the walk, read into the widget by a turn naming it | 2026-08-21 | **NO — SCRIPTED-RUNTIME ERA, kept as dated history.** The card, the presses and the settle in them are real; the assistant reply above them came from the deterministic provider and the run under them was seeded rather than dispatched. They are NOT proof of the chain, and the obstacle that keeps them un-re-shootable is code, not effort — see the next section |
+| `H1` `H2` `H3` `H4` `W1` `W2` `W3` (the widget) | `5bd19ca1-4ac2-4575-b17c-2f72b6b45f79` | 2026-08-27 | **YES** — the widget round, RE-SHOT after the fix, `drivers/24-widget-real-hold-sequence.mjs`: a person typed one sentence into the embedded widget's own composer, the app's own dispatch created the run **human-present** through the #2996 named-agent start, the shipped hold parked it at the recommendation moment, a real provider answered inside the turn's window, and the four chips were decided by real presses on the card's own controls — each travelling the broker routes with the widget's own `cwu_` and no cookie. Nothing is seeded. See *The WIDGET round, RE-SHOT AT THE FIXED HEAD* at the foot of this file: the §V clause the previous round graded **FAIL** now passes, and the settled row draws four chips |
 
-Nothing in this directory claims a widget cell is a real-run cell. The seven
-widget PNGs are left in place, at their own commit, because they are the only
-pictures of the card on that host that exist and the round that took them said
-truthfully what it did; what has changed is that they are now labelled.
+**Every cell in this directory is now a real-run cell.** The seven widget PNGs
+that carried the note above have been REPLACED, at the commit that carries this
+paragraph, by pictures of a run the widget itself started; the note is kept below
+as the history of why they could not be re-shot before, marked as superseded
+where it is no longer true.
 
-## The one cell set this round could NOT re-shoot, and why it is a code fact
+## The one cell set THAT round could not re-shoot, and why it was a code fact
+
+> **SUPERSEDED 2026-08-27, and kept verbatim as history.** Everything in this
+> section was true of the branch it was written on and of the road it measured:
+> the widget's only run-creating road then was the kind's own content-editor
+> carrier, and that carrier's run is launched with no present human. Pull request
+> #2996 (plan (B) W5d, merged as `d13050cd8c82`) added a SECOND road — the
+> widget assistant's own `agent_named_start`, whose actor envelope is
+> human-present — and the seven cells were re-shot through it. Read *The
+> WIDGET round* at the foot of this file for what actually stands behind them
+> now.
 
 The re-shoot was asked for as ONE chain that starts in the widget's own
 conversation: the visitor asks the Blog Draft Writer Agent for a draft, the
@@ -1806,3 +1817,514 @@ capture-record contract tests **124/124**. `gate:chat-hitl-acceptance:strict`,
 their whole output is BYTE-IDENTICAL to the same three commands run at the commit
 this round started from, so those three exits are the branch's pre-existing state
 and not something this round introduced.
+
+---
+
+# The WIDGET round — seven cells from a run STARTED INSIDE THE WIDGET, 2026-08-27
+
+> **SUPERSEDED 2026-08-27 by the re-shoot at the fixed head, and kept verbatim as
+> history.** Everything in this section was true of the pictures it described.
+> Its road is the road the re-shoot drove again, unchanged. What it could not
+> state is the outcome: it graded §V's settled clause **FAIL**, because the
+> settled row drew three chips for four decided skills. That defect is now fixed
+> in the product, the seven cells were re-shot from a NEW run against the fixed
+> row, and every sha256, every verdict and the settled chip count in this section
+> are those of the pictures that were REPLACED. Read *The WIDGET round, RE-SHOT
+> AT THE FIXED HEAD* at the foot of this file for what stands behind the seven
+> cells now.
+
+**The seven `site_widget` cells in this directory are real-run proof from this
+round on.** They were re-shot from run
+`740c28fd-c6c1-496b-9a97-f8b2085c0076`, which a person started by typing one
+sentence into the embedded widget's own composer on a third-party page. Nothing
+was seeded: the run row, the recommendation park, the four decisions and the
+release were all written by the app's own dispatch, and every one of them is
+read back from the lane database below.
+
+## What changed since #2890 said this could not be done
+
+#2890's own words, quoted because they are what this round had to answer:
+
+> Two pieces of shipped code each independently prevent it — the carrier is
+> deliberately never registered on the MCP tool surface (`registry.ts:22`,
+> `relay.ts:11`, `registry-omission.test.ts`), and its run is launched with no
+> present human (`host-content-editor-dispatch.ts:353`/`:356` →
+> `lifecycle-coordinator.ts:291`/`:675`/`:723`, and `recommendation-hold.ts:655`).
+
+Both statements were true of the road #2890 measured — the kind's own
+content-editor carrier. **They are no longer the only road.** Pull request #2996
+(plan (B) W5d, merged 2026-08-27 as `d13050cd8c82`) gave the widget's assistant a
+second, narrowly scoped one:
+
+| Fact | Where, on this branch |
+|---|---|
+| the widget's own start primitive | `src/lib/lifecycle/named-agent-start-mcp.ts:110` (`agent_named_start`), registered at `:421` |
+| it is on the widget perimeter, as a named exception | `packages/mcp-server/src/delegated-widget-tool-policy.ts:130` |
+| the actor envelope it starts with is **human-present** | `named-agent-start-mcp.ts:206` (`readonly humanPresent: true`) and `:235`; `buildStartActorEnvelope` at `:259` stamps `launchOrigin: "chat"` |
+| that envelope satisfies the presence test | `packages/agents/src/lifecycle-coordinator.ts:283` `verifiedHumanPresence` — `frame.launchOrigin === "chat"` is the interactive half, the run's own `runBy` is the owner half |
+| and a human-present run is offered to the hold | `lifecycle-coordinator.ts:735` → `packages/agents/src/recommendation-hold.ts:667`; the immediate-trigger road does the same at `packages/agents/src/trigger-service.ts:994` |
+| the park's own conditions, in order | `recommendation-hold.ts:688` fence · `:692` `humanPresent !== true → "headless"` · `:774` `no recommendation candidates` |
+
+So the obstacle #2890 recorded was real and is now removed by a shipped change,
+not by a lane trick. **No source file in this branch was touched to make this
+round work.**
+
+## The road, exactly as it was driven
+
+`drivers/24-widget-real-hold-sequence.mjs`, verbatim in
+`logs/widget-real-hold.txt`.
+
+| # | Step | Driven how | Measured outcome |
+|---|---|---|---|
+| 1 | The third-party page | `drivers/host-page.html`, served on its own origin, mounting the frame in `.cw-frame` and speaking the shipped embed bridge | one `.cw-frame`, the bridge's `ready` → `context` handshake in the page's own log |
+| 2 | The frame's own sign-in | one press on the frame's `Sign in`, which runs the shipped hosted-PKCE flow in its own window (`/widget-auth`) | the frame left the anonymous state; the widget holds its own `cwu_` credential |
+| 3 | **The turn that started the agent** | typed into the widget's OWN composer: *“Please start the agent `@cinatra-ai/blog-draft-writer-agent` for me.”* | the assistant answered with the platform's own report — *“Dispatched `@cinatra-ai/blog-draft-writer-agent` (runId: `740c28fd-…`, status: `pending_input`). The run paused for a decision on the recommended skills.”* |
+| 4 | The run the app's own dispatch created | nothing else pressed | `agent_runs` `740c28fd-c6c1-496b-9a97-f8b2085c0076`, `human_present = true`, `status = pending_input`, `created_at 16:13:58.570Z` |
+| 5 | **The park** | the shipped hold, unprompted | `lifecycle_continuation_park` `6c181441-ee7a-4d6b-8d75-d41fa813a32d`, `checkpoint = recommendation`, `status = parked`, `created_at 16:14:00.221Z`, `event_id recommendation:run-start:740c28fd-…` |
+| 6 | The model | the real provider, through the real hosted toolbox at the instance's public origin | `usage_events` `provider = openai`, `model = gpt-5.5`, `16:14:02.273Z` — inside the turn's own window |
+| 7 | The card | drawn by itself in the widget transcript | `data-lifecycle-card="recommendation_hold"`, `data-lifecycle-card-host="site_widget"`, `data-lifecycle-card-state="held"`, `data-can-decide="true"`, four chips × three affordances |
+| 8 | **The four decisions** | four real presses on the card's OWN per-chip controls, inside the frame — `confirm`, `adjust` → *“Keep it in this run”*, `skip`, `confirm` | the row released itself on the fourth press and settled IN PLACE; no reload |
+| 9 | The release | the shipped decide route | park `status = released`, `resolved_at 16:15:04.350Z`; `agent_runs.status` `pending_input` → **`pending_approval`**; the run card underneath advanced to *Awaiting input · Idea (optional) · Continue* |
+
+**The decision rows, read from the database, never off the screen**
+(`cinatra.run_selected_skill_revisions`, `selected_at 16:15:03.901Z`):
+
+| Skill | `selection_source` |
+|---|---|
+| `@cinatra-ai/blog-post-matcher-skill:blog-post-matcher` | `recommended_confirmed` |
+| `@cinatra-ai/blog-writing-skill:blog-writing` | **`user_adjusted`** |
+| `@cinatra-ai/web-research-skill:web-research` | `recommended_confirmed` |
+
+`@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher` was **skipped**, and
+carries no selection row — which is correct: the table records what the run will
+use. The offered set is durable and complete beside it
+(`run_recommendation_offered_set`, four rows, `hold_id 6c181441-…`,
+`offered_at 16:14:08.347Z`, `recommended = false` on all four, so every chip is a
+force-add — the run was created with no input params, exactly as this directory's
+run-page round records for the same reason).
+
+**The actor on every read and every decision.** The broker routes were called
+with the widget's own proof and no ambient session, per request:
+
+| Path | Method | `Cookie` | `X-Cinatra-Widget-User-Token` | Status |
+|---|---|---|---|---|
+| `/api/lifecycle-views/recommendation-hold` | POST | **absent** | **present (`cwu_`)** | 200 |
+| `/api/lifecycle-views/recommendation-hold` | POST | **absent** | **present (`cwu_`)** | 200 |
+| `/api/lifecycle-views/recommendation-hold/decide` | POST | **absent** | **present (`cwu_`)** | 200 |
+| `/api/lifecycle-views/recommendation-hold` | POST | **absent** | **present (`cwu_`)** | 200 |
+
+The decide route's own answer: `outcome.ok = true`, `outcome.error = null`,
+`outcome.dispatched = true`. A `better-auth.session_token` **did** exist in the
+browser's jar for the app origin — the sign-in window is a top-level window on it
+— and the card's requests carried it on none of them. That is the property this
+slice exists to hold, measured on a live decision rather than a stub.
+
+## The palette, through the app's OWN control
+
+There is no theme control in a third-party page's chrome; a reader's palette is
+the one they chose in Cinatra. The app's shipped `ThemeSwitch`
+(`src/components/theme-switch.tsx`) drives next-themes, mounted with
+`attribute="class"` and the two themes `cinatra` / `dark`
+(`src/app/providers.tsx:48`), and it persists that choice for the app ORIGIN —
+which the embed document is on.
+
+So the dark cells were taken after a **real press on that shipped control** in an
+app tab of the same browser, and the frame was then POLLED until it reported the
+palette itself. Both directions are recorded: to dark, `pressed: true`,
+`followed: true`, frame class ends `… dark`; back to light, `pressed: true`,
+`followed: true`, frame class ends `… cinatra`. Nothing in the driver writes a
+class onto the embed document.
+
+## REQUIRES — what every one of the seven cells is graded against
+
+**A. The ratified drawing, section V**, rendered from the base page at the
+contract's pin (`specs/app-lifecycle-cards.html` at
+`458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f`) with this lane's own capture browser
+and committed beside these cells as
+`captures/section-V-ratified-drawing.png`. Its clauses, copied character for
+character from that render:
+
+> **Shaping the work before it starts.** Where the assistant proposes the skills
+> it means to use, the turn carries a **chip-row: one chip per skill**, each
+> carrying its own **Confirm**, **Adjust** and **Skip**, so the reader shapes the
+> run one skill at a time before it runs.
+
+> **The row is the whole card.** There is **no heading plate** above it and **no
+> row-level submit** beneath it — nothing states the question a second time, and
+> nothing decides every skill at once. A skill is settled by pressing one of *its
+> own* three affordances, and each chip then shows what it recorded.
+
+> SETTLED — ONE CHIP PER SKILL, EACH SHOWING WHAT IT RECORDED
+
+> The settled row is still the whole card: each chip states its own outcome in
+> place. Nothing is summarised above it, and there is nothing left to press.
+
+> The row is the whole card — **no heading plate** above it, **no gate-level
+> submit** beneath it. Each chip carries its own **Confirm**, **Adjust** and
+> **Skip**, and each of those three is its own press with its own recorded
+> outcome. The row is never decided as a unit.
+
+**B. The epic's rule** — *every card appears in every one of the four channels
+(design §IX, “Yes” in all sixteen cells) — same card, same states, same data, and
+the same actions its reader is authorized to take. Only the frame changes.* A run
+at a moment shows its card on every host.
+
+**C. This pull request's own words** — the `site_widget` row of its
+per-host table: *draws yes · reads through the broker read, own proof, cookies
+omitted · decides through the broker decide route, own proof, cookies omitted*.
+
+**D. The capture contract's anchors for this exact record class**, read from
+`scripts/ci/lib/capture-record-contract.mjs` and stated before anything was
+recorded. A `site_widget` record of kind `recommendation_hold` needs:
+
+| Anchor | Scope | Source |
+|---|---|---|
+| `.cw-frame` | page | `requiredAssertionsFor`, the `site_widget` branch |
+| `[data-embed-assistant][data-phase="active"]` | frame | same |
+| `[data-conversation-list]` | frame | same |
+| `[data-lifecycle-card-host="site_widget"]` | frame | the host declaration, every host |
+| `[data-lifecycle-card="recommendation_hold"]` | frame | `CARD_KINDS.recommendation_hold.root` |
+| one of `[data-skill-action="confirm"\|"adjust"\|"skip"]` | **root** | required only when the state is `pending` |
+| `[data-lifecycle-card-state]` | **root** | required when the state is `decided` |
+| all three `[data-skill-action]` controls | **root** | **FORBIDDEN** when the state is `decided` |
+
+plus the URL class: `site_widget` may only be photographed on `embed_assistant`
+(`/^\/embed\/assistant(?:[/?#]|$)/`), tested against the record's `frameUrl`.
+**The contract admits this record class, and it admitted all seven** — the
+shipped evidence gate and the acceptance gate both exit `0` with them in the
+canonical index (81 records; 74 untouched, digest `5007d534e6429c21`).
+
+## The seven cells — SHOWS and VERDICT
+
+Two framings, both uncropped, both at `deviceScaleFactor: 2`. **`W`** is the
+whole embedded widget shot as the `.cw-frame` element on the third-party page, so
+the card is visible IN the real transcript column with the widget's own composer
+in frame; **`H`** is the card root alone, so the drawing can be graded against §V
+with nothing else in the picture. The names are #2890's and are unchanged.
+
+| Cell | Pixels | sha256 | Palette |
+|---|---|---|---|
+| `W1__recommendation-card__site_widget__held__column` | 1244×2364 | `b5984a7ea5324b54754bfbd780c84f34e327a07a7c0764e1f95439e090818a4a` | light |
+| `H1__recommendation-card__site_widget__held` | 1176×290 | `d198d11d88ae15487e29c90831f1c9975143b4ca17126262bd5fcf7704dd14cc` | light |
+| `W2__recommendation-card__site_widget__held__column__dark` | 1244×2364 | `b6cd41ea89b119566db43bf09dc8d8416311f2f3a018055a583cf2b50da0fbfc` | dark |
+| `H2__recommendation-card__site_widget__held__dark` | 1176×290 | `9cae507d28b2815f8eec24994e0bf5e4f2110b7032b361bad892227bf7dae3f8` | dark |
+| `H3__recommendation-card__site_widget__held__mid-decision` | 1176×290 | `52140e89061dc8634c30a09920202b6f7ef799a4e812cba6cb62ac2becda5b22` | light |
+| `W3__recommendation-card__site_widget__settled__column` | 1244×2364 | `e0a559f81d9b98d8366003edb5ae4af8a42865a403c4b5eeec75b06bc6c21791` | light |
+| `H4__recommendation-card__site_widget__settled` | 1176×122 | `7ae816cf510144b8a22fb0f58f12d1972453794a8dc4b93def783718accbb28c` | light |
+
+**Measured on every one of the seven, and carried in each record's
+`assertions`:** `.cw-frame` (page) = 1 · `[data-embed-assistant][data-phase="active"]`
+(frame) = 1 · `[data-conversation-list]` (frame) = 1 ·
+`[data-lifecycle-card-host="site_widget"]` (frame) = 1 ·
+`[data-lifecycle-card="recommendation_hold"]` (frame) = 1 ·
+`[data-conformance-id="run-chip-row"]` (frame) = 1 ·
+`[data-lifecycle-card="artifact_review_gate"]` (frame) = **0** ·
+`[data-lifecycle-card-state]` (root) = 1.
+
+| Cells | `[data-recommendation-chip]` (root) | `[data-skill-action]` confirm / adjust / skip (root) | `data-lifecycle-card-state` | `data-can-decide` |
+|---|---|---|---|---|
+| `W1` `H1` `W2` `H2` `H3` | **4** | **4 / 4 / 4** | `held` | `true` |
+| `W3` `H4` | **3** | **0 / 0 / 0** | `decided` | absent |
+
+### Cell by cell
+
+**`W1` — the held column, light. VERDICT: PASS.**
+*Shows:* the third-party page's embedded widget, top to bottom in one frame — the
+visitor's own turn (*“Please start the agent @cinatra-ai/blog-draft-writer-agent
+for me.”*), the assistant's reply carrying the platform's report sentence, the
+held card with four chips (`Blog Post Matcher Skill`, `Blog Writing Skill`,
+`Brand Voice Matcher Skill`, `Web Research Skill`), each carrying its own
+`Confirm` `Adjust` `Skip`, and the widget's own composer (*“Type a message…”*) at
+the foot of the column.
+*Against §V:* one chip per skill ✔ · each carrying its own three affordances
+(4 × 3 = 12 buttons, per chip) ✔ · no heading plate above the row and no
+row-level submit beneath it ✔.
+*Against §IX / the epic:* the same card the chat and run-page cells in this
+directory show, on the widget host, only the frame different ✔.
+*Against this PR's row:* the card drew, and the read that filled it was
+`POST /api/lifecycle-views/recommendation-hold` with the widget's own `cwu_` and
+**no cookie** ✔.
+
+**`H1` — the held card root, light. VERDICT: PASS.**
+*Shows:* the row alone — four pills, each printing its skill's manifest
+displayName, each with `Confirm` `Adjust` `Skip`. Nothing above it, nothing below
+it, no `Skills (n/m)` selector, no card-level submit.
+*Against §V's “the row is the whole card”:* the root IS the row ✔.
+
+**`W2` / `H2` — the same column and the same root in dark. VERDICT: PASS.**
+*Shows:* the identical transcript and the identical row, in the dark palette.
+*Requires met:* the palette was chosen by a real press on the app's own shipped
+theme control, and the frame followed it (`followed: true`, frame class ends
+`dark`) — the widget does not carry a palette of its own ✔. Both readings resolve
+in both palettes ✔.
+
+**`H3` — held, mid-decision. VERDICT: PASS.**
+*Shows:* after ONE chip was decided by pressing **its own** `Confirm` in a real
+browser, `Blog Post Matcher Skill` carries its confirmed mark
+(`data-chip-mark="confirmed"`) and its confirmed tint; the other three chips are
+still `undecided` and still show all three affordances each.
+*Against §V's “A skill is settled by pressing one of its own three affordances”
+and “The row is never decided as a unit”:* both ✔ — one chip settled, the row
+still `held`, `data-can-decide` still `true`.
+*The in-flight state, measured rather than claimed:* the window between the press
+and the chip's own mark changing is **33 ms** (polled at 25 ms). That is a
+sub-frame state; this cell therefore shows the decided-one-chip reading the
+#2890 README defines for `H3`, and the 33 ms figure is recorded here in place of a
+photograph of the in-flight moment.
+
+**`W3` — the settled column. VERDICT: FAIL (one clause), and the failure is
+stated rather than framed out.**
+*Shows:* the row settled IN PLACE in the same embedded column — same page load,
+same frame instance, same card instance that drew the held row, no `page.goto`
+between them (`settledInPlace: true`, `reloadedBeforeReading: false`). It reads
+`Blog Post Matcher Skill ✓ CONFIRMED`, `Blog Writing Skill ⇄ ADJUSTED`,
+`Web Research Skill ✓ CONFIRMED`, with nothing left to press
+(`0 / 0 / 0` affordances). Below it the run card has advanced — *Agentic Run
+Progress · Awaiting input · Idea (optional) · Continue* — which is plan §6.4's
+*“the card settles in place showing what you chose, and the run card underneath
+advances”*, met ✔. The database agrees on either side: `pending_input` →
+`pending_approval`.
+***The clause it fails.*** §V says of the settled reading: **“SETTLED — ONE CHIP
+PER SKILL, EACH SHOWING WHAT IT RECORDED”**, and **“each chip states its own
+outcome in place”**; the drawing's own settled example draws three chips for
+three skills and the third is `Schedule send ✕ SKIPPED`, in the skipped treatment
+(dashed edge, muted ground). **The widget's settled row draws THREE chips for
+FOUR decided skills.** `Brand Voice Matcher Skill` — the skill that was
+**skipped** by a real press on its own `Skip` — is not drawn at all:
+`[data-recommendation-chip]` counts **3**, and the chip readout names only the
+confirmed, adjusted and confirmed skills. The skipped skill's recorded outcome is
+absent from the settled card. This is a defect against the ratified drawing, it
+is not a lane artifact, and it is not patched here: this lane records, it does
+not change the card.
+
+**`H4` — the settled card root. VERDICT: FAIL, the same clause, and PASS on the
+rest.**
+*Shows:* the same three settled pills alone — `CONFIRMED`, `ADJUSTED`,
+`CONFIRMED` — `data-lifecycle-card-state="decided"`, `data-can-decide` absent,
+nothing to press. §V's *“nothing is summarised above it, and there is nothing
+left to press”* ✔. The missing fourth chip is the same defect as `W3`.
+
+### The one defect, stated once more so it cannot be read as a limitation
+
+> **The settled recommendation row omits every SKIPPED skill.** Section V
+> requires one chip per skill on the settled row, each stating its own recorded
+> outcome, and draws the skipped one in its own treatment. On the `site_widget`
+> host the settled row drew 3 chips for 4 decided skills; the skipped skill has a
+> real recorded decision (no `run_selected_skill_revisions` row, which is the
+> record of a skip) and no chip. Grade: **FAIL** on §V's settled clause for `W3`
+> and `H4`. Every other clause of §V passes on all seven cells.
+
+This is reported, not repaired. The same reading was named on #2890 as *“the
+decided row drawing three chips rather than four”*; it is graded as a failure
+here rather than listed as an observation, because the drawing is explicit about
+what a settled row owes.
+
+## Honest notes
+
+- **The four chips are all force-add** (`recommended = false` on every offered
+  row). A run started this way carries no input params, so nothing scores over the
+  recommend threshold and the row offers the agent's whole assigned set. That is
+  the shipped force-add behaviour and it is the same reading this directory's
+  run-page round records, for the same reason.
+- **The lane's skill assignments were written by this lane**, through the shipped
+  writer `upsertCustomSkillAssignment` and read back through the shipped
+  `getAssignedSkillIdsForAgent` (four ids in, the same four out). Without them the
+  checkpoint answers `no recommendation candidates` and the run dispatches unheld.
+  No SQL was written by hand — this is lane data, created the way the product
+  creates it.
+- **The lane database is a clone**, so the instance identity, the registered
+  widget instance and the sealed provider connection travelled with it rather than
+  being re-entered this round; each was verified by readback before the run (the
+  instance identity through the shipped `readInstanceIdentity`, which answered
+  `present: true, hasNamespace: true`). The instance's public origin was already
+  the lane's funnel URL, `publicBaseUrlSource: "manual"`, set through the app's own
+  `/configuration/development?tab=tunnel` form in the lane this one was cloned
+  from; it was read back, not re-typed.
+- **The provider evidence binds a provider to a window, not to a call.**
+  `usage_events` recorded `openai` / `gpt-5.5` at `16:14:02.273Z`, inside this
+  turn's window; it does not name the call. `CINATRA_TEST_LLM_PROVIDER` is unset
+  in this lane's environment (measured: zero matching lines in `.env.local`), and
+  the scripted provider was never armed. That is the same limit this directory
+  states for every other round, stated again rather than quietly dropped.
+- **This is the dev build**, not a production-equivalent one, as every round in
+  this directory has been.
+
+---
+
+# The WIDGET round, RE-SHOT AT THE FIXED HEAD — 2026-08-27
+
+**The round above graded one clause of §V a failure. The clause was right and the
+card was wrong, so the card was fixed — and these seven cells are the same set,
+re-shot from a NEW run against the fixed row.** Nothing was carried over: every
+one of the seven was photographed again in one sequence, and every record in the
+canonical index was replaced with this run's own readings.
+
+The defect and the fix are on the pull request; stated once here because the
+pictures are evidence of it:
+
+> The settled row drew one chip per DECISION ROW rather than one per skill. A
+> skill settled by pressing its own `Skip` writes no decision row — the selection
+> store records what the run will use, and the efficacy half is written only for
+> a skill the scorer RECOMMENDED — so on an offer where nothing scored over the
+> recommend threshold, a skipped skill left no row at all and vanished from the
+> card that exists to state its outcome. The hold's own OFFER is the missing
+> half, it is already durable, and the settled state now carries it: the ONE
+> shared row draws a chip per offered skill and marks any candidate with no
+> decision row SKIPPED.
+
+## The run behind every picture in this round
+
+| Row | Value |
+|---|---|
+| `agent_runs` | `5bd19ca1-4ac2-4575-b17c-2f72b6b45f79`, **`human_present = true`**, `source_type agent_builder`, `created_at 18:24:11.388Z`; `pending_input` → **`pending_approval`** |
+| `lifecycle_continuation_park` | `a1fd0925-20c4-4bad-bf1a-2ca3597761e8`, `checkpoint recommendation`, `created 18:24:12.782Z` → **`released` `18:24:58.108Z`**, `event_id recommendation:run-start:5bd19ca1-…` |
+| `run_recommendation_offered_set` | **four rows**, `hold_id a1fd0925-…`, `offered_at 18:24:20.849Z`, `recommended = false` on all four — every chip is a force-add, because a run started this way carries no input params |
+| `run_selected_skill_revisions` | **three rows**, `selected_at 18:24:58.087Z` — `blog-post-matcher` `recommended_confirmed` · `blog-writing` **`user_adjusted`** · `web-research` `recommended_confirmed` |
+| `run_recommendation_skips` | **empty**, and correct — the ROW was not skipped, one skill of it was |
+| `run_rejected_recommendations` | **empty**, and correct — it records a skill the scorer RECOMMENDED and the reader did not keep, and nothing here was recommended |
+| `usage_events` | `provider openai`, `model gpt-5.5`, `18:24:14.688Z` — inside the turn's own window |
+
+Read back verbatim in `logs/widget-reshoot-db-readback.json`, by
+`drivers/27-widget-reshoot-db-readback.mjs`, which issues nothing but SELECTs.
+
+**`@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher` — the skill settled
+by a real press on its own `Skip` — has NO row in any of the three decision
+tables.** That is exactly why the settled card could not name it before, and it
+is why the fix reads the offer: the offer is the only durable record that this
+skill was ever asked about.
+
+**The broker proof, per request**, unchanged from the round above and measured
+again on this run:
+
+| # | Path | Method | `Cookie` | `X-Cinatra-Widget-User-Token` | Status |
+|---|---|---|---|---|---|
+| 1 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | 200 |
+| 2 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | 200 |
+| 3 | `/api/lifecycle-views/recommendation-hold/decide` | POST | **absent** | present (`cwu_`) | 200 |
+| 4 | `/api/lifecycle-views/recommendation-hold` | POST | **absent** | present (`cwu_`) | 200 |
+
+`decide` answered `outcome.ok = true`, `outcome.dispatched = true`. A
+`better-auth.session_token` for the app origin sat in the same browser's jar
+throughout, and none of the four requests carried it.
+
+## The seven cells — SHOWS and VERDICT
+
+| Cell | Pixels | sha256 | Palette | Chips (root) | Verdict |
+|---|---|---|---|---|---|
+| `W1__recommendation-card__site_widget__held__column` | 1244×2364 | `37482bf668e35da6e8067eb1e37441276d8a86918f03b09639de64980c323400` | light | 4 | **PASS** |
+| `H1__recommendation-card__site_widget__held` | 1176×290 | `d198d11d88ae15487e29c90831f1c9975143b4ca17126262bd5fcf7704dd14cc` | light | 4 | **PASS** |
+| `W2__recommendation-card__site_widget__held__column__dark` | 1244×2364 | `a25587ed998819f88717666f6ea5fa29abdbd6074b4473c8c5f822c8e8f0a175` | dark | 4 | **PASS** |
+| `H2__recommendation-card__site_widget__held__dark` | 1176×290 | `9cae507d28b2815f8eec24994e0bf5e4f2110b7032b361bad892227bf7dae3f8` | dark | 4 | **PASS** |
+| `H3__recommendation-card__site_widget__held__mid-decision` | 1176×290 | `52140e89061dc8634c30a09920202b6f7ef799a4e812cba6cb62ac2becda5b22` | light | 4 | **PASS** |
+| `W3__recommendation-card__site_widget__settled__column` | 1244×2364 | `3ed2e53450e0c6ee3fa13fbd8c8a970d9f4cb24cd6c5629a7847197dcec85c19` | light | **4** | **PASS** |
+| `H4__recommendation-card__site_widget__settled` | 1176×122 | `51baf67a688d3f7b3805e2d1ce7bb1ad1dbba90eb34f2b25600173594f5d656a` | light | **4** | **PASS** |
+
+**Three of the seven carry the same sha256 as the round above** — `H1`, `H2` and
+`H3`. They were re-shot, not carried over: they were photographed again in this
+sequence, from this run, and the pixels came out identical because the HELD
+reading of the card root is exactly what the fix does not touch. That is a result
+worth having rather than an accident to hide: the change is confined to the
+settled reading, and the three held-root cells prove it at the pixel.
+
+**Measured on every one of the seven, and carried in each record's
+`assertions`:** `.cw-frame` (page) = 1 · `[data-embed-assistant][data-phase="active"]`
+(frame) = 1 · `[data-conversation-list]` (frame) = 1 ·
+`[data-lifecycle-card-host="site_widget"]` (frame) = 1 ·
+`[data-lifecycle-card="recommendation_hold"]` (frame) = 1 ·
+`[data-conformance-id="run-chip-row"]` (frame) = 1 ·
+`[data-lifecycle-card="artifact_review_gate"]` (frame) = **0** ·
+`[data-lifecycle-card-state]` (root) = 1.
+
+| Cells | `[data-recommendation-chip]` (root) | `[data-skill-action]` confirm / adjust / skip (root) | `data-lifecycle-card-state` | `data-can-decide` |
+|---|---|---|---|---|
+| `W1` `H1` `W2` `H2` `H3` | **4** | **4 / 4 / 4** | `held` | `true` |
+| `W3` `H4` | **4** | **0 / 0 / 0** | `decided` | absent |
+
+### The two cells that changed, cell by cell
+
+**`W3` — the settled column. VERDICT: PASS, including the clause that failed.**
+*Shows:* the row settled IN PLACE in the same embedded column — same page load,
+same frame instance, same card instance that drew the held row, no navigation
+between them (`settledInPlace: true`). The card's own text, read out of the DOM
+at the shutter:
+
+> `Blog Post Matcher Skill` CONFIRMED · `Blog Writing Skill` ADJUSTED ·
+> `Brand Voice Matcher Skill` SKIPPED · `Web Research Skill` CONFIRMED
+
+*Against §V's settled clause* — *“SETTLED — ONE CHIP PER SKILL, EACH SHOWING WHAT
+IT RECORDED”* and *“each chip states its own outcome in place. Nothing is
+summarised above it, and there is nothing left to press.”*: four skills were
+asked about, four chips are drawn, each states its own outcome, nothing is
+summarised above the row and `0 / 0 / 0` affordances remain ✔.
+*Against §V's skipped treatment* — *“the dashed edge and the muted ground, never
+a status colour”*: `Brand Voice Matcher Skill` carries `data-chip-mark="skipped"`
+and the dashed, untinted face, beside the confirmed one's tint and the adjusted
+one's ✔.
+*Against plan §6.4* — *“the card settles in place showing what you chose, and the
+run card underneath advances”*: the run card below reads *Agentic Run Progress ·
+Awaiting input · Idea (optional) · Continue*, and the database agrees on either
+side (`pending_input` → `pending_approval`) ✔.
+
+**`H4` — the settled card root. VERDICT: PASS.**
+*Shows:* the four settled pills alone, in the order the hold offered them —
+`CONFIRMED`, `ADJUSTED`, `SKIPPED`, `CONFIRMED` — with
+`data-lifecycle-card-state="decided"`, `data-can-decide` absent, and nothing to
+press. The root IS the row ✔.
+
+**`W1` — the held column, light. VERDICT: PASS.** The third-party page's embedded
+widget top to bottom in one frame: the visitor's own turn, the assistant's reply
+carrying the platform's report sentence with this run's id, the held card with
+four chips each carrying its own `Confirm` `Adjust` `Skip`, and the widget's own
+composer at the foot. No heading plate, no row-level submit.
+
+**`H1` · `W2` · `H2` · `H3` — VERDICT: PASS**, on the same clauses the superseded
+section grades them against, with one measurement re-taken: the in-flight window
+between a chip's press and its own mark changing is **47 ms** on this run (polled
+at 25 ms), so `H3` again shows the decided-one-chip reading and the figure stands
+in place of a photograph of a sub-frame state.
+
+### The defect, closed
+
+> The settled recommendation row omitted every SKIPPED skill: §V requires one
+> chip per skill on the settled row, each stating its own recorded outcome, and
+> the widget's settled row drew **3 chips for 4 decided skills**. It now draws
+> **4**, and the fourth — `Brand Voice Matcher Skill`, settled by a real press on
+> its own `Skip` — states `SKIPPED` in the skipped treatment. The skill still has
+> no row in any decision table, which is what made the old reading impossible;
+> the chip is drawn from the hold's own durable offer.
+
+## Honest notes
+
+- **The four chips are all force-add** (`recommended = false` on every offered
+  row). A run started this way carries no input params, so nothing scores over
+  the recommend threshold and the row offers the agent's whole assigned set. That
+  is the shipped force-add behaviour — and it is precisely the shape that exposed
+  the defect, because the efficacy half is written only for a RECOMMENDED skill.
+- **The lane's skill assignments were written by this lane**, through the shipped
+  writer `upsertCustomSkillAssignment` and read back through the shipped
+  `getAssignedSkillIdsForAgent` (four ids in, the same four out). Without them the
+  checkpoint answers `no recommendation candidates` and the run dispatches unheld.
+  No SQL was written by hand — this is lane data, created the way the product
+  creates it, and it is the ONLY write this round made that was not the app's own.
+- **The lane database is a clone**, so the instance identity, the registered
+  widget instance and the sealed provider connection travelled with it rather
+  than being re-entered; each was verified by readback before the run — the
+  instance identity through the shipped `readInstanceIdentity` (`present: true,
+  hasNamespace: true`), the provider through the shipped `readOpenAIConnection`
+  (`storeResolvesAKey: true`, and NOT the published presence placeholder), and the
+  instance's public origin already set and read back rather than re-typed.
+- **The provider evidence binds a provider to a window, not to a call.**
+  `usage_events` recorded `openai` / `gpt-5.5` at `18:24:14.688Z`, inside this
+  turn's window; it does not name the call. `CINATRA_TEST_LLM_PROVIDER` is unset
+  in this lane's environment (measured: zero matching lines), and the scripted
+  provider was never armed.
+- **One thing had to be warmed before the turn would run, and it is worth
+  recording.** The assistant refuses a turn it cannot reach its own tools for:
+  *“public MCP URL … is unreachable (no response within 2500 ms) — refusing to run
+  the turn without Cinatra tools (#1699)”*. On a cold dev server the app's own
+  `/api/mcp` route had not compiled, so the round-trip missed the budget and the
+  first attempt produced no run at all. The route was warmed until it answered in
+  ~0.2 s and the sequence then ran through. Nothing about the run was changed by
+  this; the refusal is the shipped guard working.
+- **This is the dev build**, not a production-equivalent one, as every round in
+  this directory has been.

@@ -46,6 +46,25 @@
  *                     two mount paths (the agent package mounted STANDALONE and
  *                     the same gate inlined as a subflow of an orchestrator)
  *                     cannot drift apart unnoticed.
+ *   OAS-RUNTIME-014 — a HIDDEN Flow input the run can never carry
+ *                     (cinatra#3003). Two notions of "must be supplied" meet
+ *                     at dispatch: the RUNTIME demands every input without a
+ *                     `default` in the start message, while the APP collects
+ *                     only the fields named in the StartNode's
+ *                     `metadata.cinatra.required`. A package that declares an
+ *                     input `metadata.cinatra.hidden` (no operator will EVER
+ *                     be shown it) and gives it no `default` (the runtime
+ *                     demands it anyway) contradicts itself: the only way out
+ *                     is a platform supplier — the set in
+ *                     `scripts/extensions/platform-supplied-flow-inputs.mjs`,
+ *                     shared with the dispatcher that writes them. Without
+ *                     one, the package installs, arms a schedule, fires, and
+ *                     only THEN dies with `Cannot start conversation because
+ *                     of missing inputs "<name>"` — naming an input nobody
+ *                     was shown. Scoped to HIDDEN inputs on purpose: a VISIBLE
+ *                     input is present in the compiled schema, so a caller
+ *                     that can see it (the `agent_run` tool, chat extraction,
+ *                     the API) can still pre-supply it.
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -84,6 +103,12 @@ import {
   AGENTS_PASSTHROUGH_URL_MARKER,
 } from "./artifact-binding";
 import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
+import {
+  PLATFORM_SUPPLIED_FLOW_INPUTS,
+  isExemptFromUnsatisfiableInputCheck,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs data module (allowJs)
+} from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
 
 // pyagentspec's exact placeholder regex from
 // `pyagentspec/templating.TEMPLATE_PLACEHOLDER_REGEXP`. Filtered
@@ -175,6 +200,23 @@ export function scanOasForRuntimeInvariantFindings(
     findings.push(...scanApiNodePlaceholderInputsParity(flow));
     findings.push(...scanAgentRunIdPropagation(flow));
     findings.push(...scanEndNodeOutputSources(flow));
+  }
+  // OAS-RUNTIME-014 scans the START-CONVERSATION surface only — the TOP-LEVEL
+  // Flow. That is the one input set the A2A start message has to satisfy. A
+  // nested subflow's inputs are fed by its parent's DataFlowEdges, never by the
+  // start message, so the same shape there is not a dispatch failure
+  // (OAS-RUNTIME-005 owns unsourced subflow inputs).
+  if (parsed.component_type === "Flow") {
+    const rootFlow = extractFlow(parsed);
+    if (rootFlow) {
+      findings.push(
+        ...scanUnsatisfiableFlowInputs(
+          rootFlow,
+          describeAgentForFindings(parsed),
+          resolvePackageName(parsed),
+        ),
+      );
+    }
   }
   return findings;
 }
@@ -984,6 +1026,155 @@ function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
 }
 
 // ---------------------------------------------------------------------------
+// Invariant 14 — a declared Flow input the run can never carry
+// (OAS-RUNTIME-014, cinatra#3003).
+// ---------------------------------------------------------------------------
+
+/**
+ * Name the offending package as `vendor/package@version`, read from the OAS's
+ * own `metadata.cinatra`. Falls back to the Flow `id` (the package name by
+ * convention) so a finding ALWAYS names something an operator can act on, even
+ * for an OAS that omits the optional `packageVersion`.
+ */
+function describeAgentForFindings(parsed: Record<string, unknown>): string {
+  const metadata = isPlainObject(parsed.metadata)
+    ? (parsed.metadata as Record<string, unknown>)
+    : {};
+  const cinatra = isPlainObject(metadata.cinatra)
+    ? (metadata.cinatra as Record<string, unknown>)
+    : {};
+  const name =
+    typeof cinatra.packageName === "string" && cinatra.packageName
+      ? cinatra.packageName
+      : typeof parsed.id === "string" && parsed.id
+        ? parsed.id
+        : "<unknown agent>";
+  const version =
+    typeof cinatra.packageVersion === "string" && cinatra.packageVersion
+      ? `@${cinatra.packageVersion}`
+      : "";
+  return `${name}${version}`;
+}
+
+/**
+ * A HIDDEN input is satisfiable at dispatch through exactly three doors:
+ *   (a) it declares a `default` — the runtime accepts a start message without
+ *       it and substitutes the default;
+ *   (b) the PLATFORM writes it unprompted — the shared set in
+ *       `scripts/extensions/platform-supplied-flow-inputs.mjs`, which is the
+ *       same constant `buildWayflowInitialMessagePayload` keys its writes off;
+ *   (c) a KNOWN CALLER always pre-supplies it, recorded as a bounded
+ *       per-(package, input) exemption in that same module.
+ *
+ * `metadata.cinatra.required` is deliberately NOT a door. Naming a hidden input
+ * required does not get it collected — `execution.ts`'s `pendingFields` drops
+ * every `x-hidden` field before it checks presence, and neither the `agent_run`
+ * tool nor the published agent tools enforce a template's required list — so
+ * honouring it here would silence the check without making the run satisfiable.
+ *
+ * A hidden input through none of these is dead on arrival: the package installs,
+ * arms a schedule, the tick fires, a child run is created, and the runtime
+ * refuses the conversation naming an input nobody was ever shown. Catch it
+ * here, where the message can name the agent and the field.
+ *
+ * The FLOW's own `inputs` is the authoritative descriptor: pyagentspec starts
+ * the conversation from it, so a default there — not on the StartNode copy the
+ * host compiler reads — is what makes the runtime accept an omission.
+ */
+function scanUnsatisfiableFlowInputs(
+  flow: FlowComponent,
+  agentLabel: string,
+  packageName: string,
+): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  for (const title of flow.startHidden) {
+    if (!flow.flowInputTitles.includes(title)) continue;
+    if (flow.flowInputDefaults.has(title)) continue;
+    if (PLATFORM_SUPPLIED_FLOW_INPUTS.includes(title)) continue;
+    if (isExemptFromUnsatisfiableInputCheck(packageName, title)) continue;
+    findings.push({
+      code: "OAS-RUNTIME-014",
+      severity: "blocker",
+      message:
+        `${agentLabel}: hidden Flow input "${title}" can never be supplied ` +
+        `at run time. It is in the StartNode's metadata.cinatra.hidden (so no ` +
+        `operator is ever shown it), the Flow declares it with no "default" ` +
+        `(so the runtime demands it in the start message anyway), and it is ` +
+        `not one of the inputs the platform writes unprompted ` +
+        `(${PLATFORM_SUPPLIED_FLOW_INPUTS.join(", ")}). A run of this agent ` +
+        `arms, fires, reaches the runtime and is refused there with ` +
+        `\`Cannot start conversation because of missing inputs ` +
+        `"${title}"\`, before any model call. Fix with ONE of: (a) give the ` +
+        `Flow input a "default" — \`"default": ""\` is the shape every other ` +
+        `bundled runtime agent uses for its hidden inputs (mirror it onto the ` +
+        `StartNode descriptor, whose inputs and outputs pyagentspec requires to ` +
+        `stay equal); (b) drop it from the Flow inputs[] if nothing consumes ` +
+        `it; (c) if one specific caller always pre-supplies it on the run, ` +
+        `record that as a bounded exemption in ` +
+        `scripts/extensions/platform-supplied-flow-inputs.mjs. Naming it in ` +
+        `metadata.cinatra.required does NOT work: the setup loop drops every ` +
+        `hidden field whether or not it is required. See ` +
+        `docs/developing-agents.md.`,
+      location: `inputs[] "${title}" (Flow "${flow.flowId}")`,
+      source: "deterministic",
+    });
+  }
+  return findings;
+}
+
+/**
+ * Titles of the input descriptors that declare an explicit `default`.
+ *
+ * `"default" in input` — not a truthiness test. `"default": ""` is the
+ * canonical hidden-input declaration across the bundled runtime agent set, and
+ * a falsy-but-present default satisfies the runtime exactly like any other.
+ */
+function extractDefaultedTitles(rawInputs: unknown): Set<string> {
+  if (!Array.isArray(rawInputs)) return new Set();
+  return new Set(
+    rawInputs
+      .filter(isPlainObject)
+      .filter((i) => "default" in i)
+      .map((i) => i.title)
+      .filter((t): t is string => typeof t === "string"),
+  );
+}
+
+/** The bare package name, for the per-(package, input) exemption lookup. */
+function resolvePackageName(parsed: Record<string, unknown>): string {
+  const metadata = isPlainObject(parsed.metadata)
+    ? (parsed.metadata as Record<string, unknown>)
+    : {};
+  const cinatra = isPlainObject(metadata.cinatra)
+    ? (metadata.cinatra as Record<string, unknown>)
+    : {};
+  if (typeof cinatra.packageName === "string" && cinatra.packageName) {
+    return cinatra.packageName;
+  }
+  return typeof parsed.id === "string" ? parsed.id : "";
+}
+
+/**
+ * One list out of the StartNode's `metadata.cinatra` — `required` (the APP's
+ * list, the only fields the setup loop collects; `oas-compiler.ts` step 7
+ * copies it verbatim into the compiled `inputSchema.required`) or `hidden`
+ * (the fields marked `x-hidden` and never rendered).
+ */
+function extractStartStringList(
+  rawStartNode: unknown,
+  key: "required" | "hidden",
+): string[] {
+  if (!isPlainObject(rawStartNode)) return [];
+  const metadata = (rawStartNode as Record<string, unknown>).metadata;
+  if (!isPlainObject(metadata)) return [];
+  const cinatra = (metadata as Record<string, unknown>).cinatra;
+  if (!isPlainObject(cinatra)) return [];
+  const list = (cinatra as Record<string, unknown>)[key];
+  if (!Array.isArray(list)) return [];
+  return list.filter((t): t is string => typeof t === "string");
+}
+
+// ---------------------------------------------------------------------------
 // Graph extraction — builds a normalized view of one Flow component
 // (the top-level Flow, plus any subflows nested under $referenced_components).
 // ---------------------------------------------------------------------------
@@ -991,8 +1182,25 @@ function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
 interface FlowComponent {
   flowId: string;
   flowInputTitles: string[];
+  /**
+   * Titles of the Flow inputs that declare an explicit `default`. The RUNTIME
+   * accepts a start message without these; every other declared input must
+   * arrive in the message or `start_conversation` refuses (OAS-RUNTIME-014).
+   */
+  flowInputDefaults: Set<string>;
   startNodeRef: string;
   startNode: { inputTitles: string[] } | null;
+  /**
+   * The StartNode's `metadata.cinatra.required` — the APP's list, the only
+   * fields the setup loop collects (`oas-compiler.ts` step 7 copies it into the
+   * compiled `inputSchema.required`). Empty when the node declares none.
+   */
+  startRequired: string[];
+  /**
+   * The StartNode's `metadata.cinatra.hidden` — the fields the compiler marks
+   * `x-hidden` and the setup form never renders (`oas-compiler.ts` step 7).
+   */
+  startHidden: string[];
   endNodeRef: string;
   endNode: { outputTitles: string[] } | null;
   apiNodes: Array<{
@@ -1068,6 +1276,7 @@ function extractFlow(
     .filter(isPlainObject)
     .map((i) => i.title as string)
     .filter((t): t is string => typeof t === "string");
+  const flowInputDefaults = extractDefaultedTitles(raw.inputs);
 
   const startNodeRef = resolveComponentRef(raw.start_node) ?? "start";
   const endNodes = listEndNodes(raw);
@@ -1080,6 +1289,8 @@ function extractFlow(
   const startNode = isPlainObject(refs[startNodeRef])
     ? extractIoNode(refs[startNodeRef] as Record<string, unknown>)
     : null;
+  const startRequired = extractStartStringList(refs[startNodeRef], "required");
+  const startHidden = extractStartStringList(refs[startNodeRef], "hidden");
   const endNode = endNodes[0] ?? null;
 
   const apiNodes: FlowComponent["apiNodes"] = [];
@@ -1143,8 +1354,11 @@ function extractFlow(
   return {
     flowId,
     flowInputTitles,
+    flowInputDefaults,
     startNodeRef,
     startNode,
+    startRequired,
+    startHidden,
     endNodeRef,
     endNode: endNode
       ? { outputTitles: endNode.outputs.map((o) => o.title) }
