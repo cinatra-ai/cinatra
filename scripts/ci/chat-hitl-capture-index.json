@@ -5317,7 +5317,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/H1__recommendation-card__site_widget__held.png",
-      "sha256": "ab5e55be0cf202107fa0f2bd6ed3aad292b95b8aea3ba7c26e1fc9c61679bf5c",
+      "sha256": "d198d11d88ae15487e29c90831f1c9975143b4ca17126262bd5fcf7704dd14cc",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -5381,9 +5381,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:36:54.526Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id."
+      "recordedAt": "2026-08-27T18:24:26.285Z",
+      "runtime": "",
+      "note": "The same held card on its own root, so the drawing can be graded against section V with nothing else in the picture."
     },
     {
       "cell": "H2__recommendation-card__site_widget__held__dark",
@@ -5393,7 +5393,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/H2__recommendation-card__site_widget__held__dark.png",
-      "sha256": "286f1e5d63c9e1e1b337bacd6815e583b57253c16983b1367553d222e604eb5b",
+      "sha256": "9cae507d28b2815f8eec24994e0bf5e4f2110b7032b361bad892227bf7dae3f8",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -5457,9 +5457,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:36:55.542Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME held card on its own root, same run, same frame selector, in `dark`."
+      "recordedAt": "2026-08-27T18:24:45.967Z",
+      "runtime": "",
+      "note": "The same card root in dark."
     },
     {
       "cell": "H3__recommendation-card__site_widget__held__mid-decision",
@@ -5469,7 +5469,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/H3__recommendation-card__site_widget__held__mid-decision.png",
-      "sha256": "408f06dbe4270c8cd22a761d4c971bbf072c0bd06571577fe31837b0894d5ef7",
+      "sha256": "52140e89061dc8634c30a09920202b6f7ef799a4e812cba6cb62ac2becda5b22",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -5533,9 +5533,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:36:58.052Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit."
+      "recordedAt": "2026-08-27T18:24:48.805Z",
+      "runtime": "",
+      "note": "After ONE chip was decided by pressing its own Confirm in a real browser: that chip carries its confirmed mark; every other chip still shows all three affordances and is still pressable. The row is never decided as a unit."
     },
     {
       "cell": "H4__recommendation-card__site_widget__settled",
@@ -5545,7 +5545,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
-      "sha256": "83fa01670e027c0d1d789e24cb94db8f9d116a022247aeb3bc6b8359920a1bee",
+      "sha256": "51baf67a688d3f7b3805e2d1ce7bb1ad1dbba90eb34f2b25600173594f5d656a",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -5609,9 +5609,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:37:08.265Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row."
+      "recordedAt": "2026-08-27T18:25:11.483Z",
+      "runtime": "",
+      "note": "The same settled row on its own root."
     },
     {
       "cell": "R2__recommendation-card__page_gate_region__decided__above-gate",
@@ -5991,7 +5991,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
-      "sha256": "47fb4015b21cb132cbdc190c0691a8a2ef2fc5c04c66c7bb786248a8749dce25",
+      "sha256": "37482bf668e35da6e8067eb1e37441276d8a86918f03b09639de64980c323400",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -6055,9 +6055,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:36:54.476Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`)."
+      "recordedAt": "2026-08-27T18:24:26.188Z",
+      "runtime": "",
+      "note": "The third-party page's embedded widget: the visitor's typed turn that STARTED the agent, the platform's own report sentence, the held card with its chips, and the widget's own composer."
     },
     {
       "cell": "W2__recommendation-card__site_widget__held__column__dark",
@@ -6067,7 +6067,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
-      "sha256": "34e8932495ba3462e2af775e7c9ea2839704395198198ce48d686af28cf2c12c",
+      "sha256": "a25587ed998819f88717666f6ea5fa29abdbd6074b4473c8c5f822c8e8f0a175",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -6131,9 +6131,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:36:55.498Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed."
+      "recordedAt": "2026-08-27T18:24:45.853Z",
+      "runtime": "",
+      "note": "The same column, the same run, in dark — the palette chosen with the app's own shipped theme control, which the widget follows."
     },
     {
       "cell": "W3__recommendation-card__site_widget__settled__column",
@@ -6143,7 +6143,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
-      "sha256": "05b654f4cdca87fbc5f952d5fb492f3c5e672f232bee2fd6f2954a8f26aff4bb",
+      "sha256": "3ed2e53450e0c6ee3fa13fbd8c8a970d9f4cb24cd6c5629a7847197dcec85c19",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -6207,9 +6207,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T21:37:08.226Z",
-      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`."
+      "recordedAt": "2026-08-27T18:25:11.395Z",
+      "runtime": "",
+      "note": "The row SETTLED IN PLACE in the same embedded column, composer in frame — same page load, same frame instance, same card instance that drew the held row. Nothing left to press."
     },
     {
       "cell": "S4__recommendation-card__page_gate_region__decided",
@@ -8854,6 +8854,1598 @@
           "Approve"
         ]
       }
+    },
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
+      "sha256": "2b950a5f0670d16bff4de7484dc7cd2f32aafe65351c159ada649474514a5212",
+      "capturedAt": "2026-08-27T14:12:26.454Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
+      "sha256": "da312059634130477a700ec82aca88eb71cb494d91879fe6f7b22c906dd5cd9c",
+      "capturedAt": "2026-08-27T14:12:42.924Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
+      "sha256": "3d3f5148b7f189122e0518c55eca71df7bed8d51eacc3305d1b2de0d25d0c240",
+      "capturedAt": "2026-08-27T14:12:55.588Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-pending__hitl-card__run_card__pending__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
+      "sha256": "a0057a70c126f0ddeee39e41b7cab3fb9aa90d7d0988feb1a6004ffe50998988",
+      "capturedAt": "2026-08-27T14:13:07.459Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
+      "sha256": "69f352e1379090056b1d095ffc0851face759bc5ae1a458542549b421e4f0202",
+      "capturedAt": "2026-08-27T14:16:56.152Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
+      "sha256": "c91204348f06dd393b0d2132fe20fbbab1ba2b38cfd3f7c90562a4e81c6897a1",
+      "capturedAt": "2026-08-27T14:17:12.261Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
+      "sha256": "30f87e4ffe94cbb2d9f2eb640b1c7f39d0e51490e5fe0750bf756f9a5857a3ef",
+      "capturedAt": "2026-08-27T14:17:24.909Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
+      "sha256": "f0c60f62baf1d1a2b9aa9d4327226b37cdcf18ea09c0388c7ac1ea82e78f3b40",
+      "capturedAt": "2026-08-27T14:17:37.442Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"agent_hitl_screen\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full min-w-0 flex-col gap-3",
+          "data-lifecycle-card": "agent_hitl_screen",
+          "data-lifecycle-card-state": "asking",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "agent-hitl-screen-card"
+        }
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-decided__hitl-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "8cb5a4eea73d1168606a9c16024acf91299b8d9aee47ffab99bb5c45a93c510f",
+      "capturedAt": "2026-08-27T14:15:42.796Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-decided__hitl-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "cb668c63a7f82cda1f120e9674333f42ff420fad0d8b11b7bc1737895b2fb369",
+      "capturedAt": "2026-08-27T14:15:54.713Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "88fc08c0a69b9f0ea2a88d1a7e4b2de962f8afb00c7baeb1ff8dadf52594530f",
+      "capturedAt": "2026-08-27T14:23:41.516Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "f53a013dc790b7c1dc59e714721dfcb9eb9989a5722d5fd4c67a8c0dda14a865",
+      "capturedAt": "2026-08-27T14:23:54.596Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
     }
   ]
 }

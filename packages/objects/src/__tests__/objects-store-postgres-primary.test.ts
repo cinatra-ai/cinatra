@@ -29,9 +29,11 @@ vi.mock("@/lib/database", () => ({
 import {
   getObjectById,
   listObjectsByFilter,
+  MAX_EXTERNAL_IDS_BATCH,
   softDeleteObject,
   upsertObjectAndEnqueue,
 } from "@/lib/objects-store";
+import { objectsListSchema } from "../mcp/schemas";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 // The request frame the ambient write-time inheritance reads (cinatra#1377
 // contrasts the explicit binding against it). Real AsyncLocalStorage via the
@@ -167,6 +169,69 @@ describe("listObjectsByFilter (org-scoped)", () => {
     const sql = runPg.mock.calls[0][0].queries[0].text;
     expect(sql).toMatch(/id\s*=\s*ANY\s*\(\s*\$\d+\s*::\s*text\[\]\s*\)/i);
     expect(sql).toMatch(/org_id\s*=\s*\$\d+\s+OR\s+\$\d+\s+IS\s+NULL/i);
+  });
+
+  // cinatra#1378 — the memory-sync preflight's batch key lookup.
+  it("compiles externalIds into a parameterized ANY() over data->>'externalId'", () => {
+    runPg.mockReturnValue([{ rows: [] }]);
+    listObjectsByFilter({
+      orgId: "org-1",
+      type: "@cinatra-ai/memory:concept",
+      externalIds: ["aa", "bb"],
+    });
+    const query = runPg.mock.calls[0][0].queries[0];
+    expect(query.text).toMatch(
+      /data->>'externalId'\s*=\s*ANY\s*\(\s*\$\d+\s*::\s*text\[\]\s*\)/i,
+    );
+    // The batch VALUE is parameterized; only the fixed key literal is inline.
+    expect(query.values).toContainEqual(["aa", "bb"]);
+    // And it never replaces the org / type narrowing — it ANDs with them.
+    expect(query.text).toMatch(/org_id\s*=\s*\$\d+/i);
+    expect(query.text).toMatch(/type\s*=\s*\$\d+/i);
+  });
+
+  it("treats an EMPTY externalIds array as no filter, never as `= ANY({})`", () => {
+    // `= ANY('{}')` matches nothing, so a filter that quietly compiled to it
+    // would report every present row as absent — and a sync run reads absent
+    // as "create". The primitive schema refuses an empty batch outright; the
+    // store simply does not emit a clause it was given nothing for.
+    runPg.mockReturnValue([{ rows: [] }]);
+    listObjectsByFilter({ orgId: "org-1", type: "t", externalIds: [] });
+    expect(runPg.mock.calls[0][0].queries[0].text).not.toMatch(/externalId/);
+  });
+
+  it("throws rather than silently truncating an over-cap batch", () => {
+    runPg.mockReturnValue([{ rows: [] }]);
+    expect(() =>
+      listObjectsByFilter({
+        orgId: "org-1",
+        type: "t",
+        externalIds: Array.from({ length: MAX_EXTERNAL_IDS_BATCH + 1 }, (_v, i) => `id-${i}`),
+      }),
+    ).toThrow(new RegExp(`exceeds the ${MAX_EXTERNAL_IDS_BATCH} cap`));
+    expect(runPg).not.toHaveBeenCalled();
+  });
+
+  // The claim `MAX_EXTERNAL_IDS_BATCH`'s own doc comment makes: the store cap
+  // and the primitive's two bounds are PINNED equal, not left to agree by
+  // coincidence. A batch that could ask for more rows than one call can return
+  // would report present rows as absent, and a sync run reads absent as
+  // "create" — a duplicate write. Both schema bounds are DISCOVERED by probing
+  // rather than restated as a literal, so raising one number in isolation
+  // fails here instead of passing quietly.
+  it("pins the store cap equal to the primitive's batch AND limit ceilings", () => {
+    const batchAccepts = (n: number) =>
+      objectsListSchema.safeParse({
+        type: "t",
+        externalIds: Array.from({ length: n }, (_v, i) => `id-${i}`),
+      }).success;
+    expect(batchAccepts(MAX_EXTERNAL_IDS_BATCH)).toBe(true);
+    expect(batchAccepts(MAX_EXTERNAL_IDS_BATCH + 1)).toBe(false);
+
+    const limitAccepts = (n: number) =>
+      objectsListSchema.safeParse({ type: "t", limit: n }).success;
+    expect(limitAccepts(MAX_EXTERNAL_IDS_BATCH)).toBe(true);
+    expect(limitAccepts(MAX_EXTERNAL_IDS_BATCH + 1)).toBe(false);
   });
 
   it("Test 6: returns rows in the same order they came back", () => {

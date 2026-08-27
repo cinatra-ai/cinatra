@@ -33,12 +33,14 @@
  * store rather than of this suite: the module graph opens its pool at import
  * time, before any hook runs, and the store's cross-schema foreign keys point at
  * the Better Auth tables in `public`. A production database already has them; a
- * freshly created scratch one has none. `PUBLIC_FLOOR` below is the same minimal
- * set `scripts/check-fresh-schema-ddl.mjs` provisions for exactly this reason.
- * It is replayed in the hook so a re-run is self-sufficient, and its statements
- * must ALSO be applied to a brand-new scratch database ONCE before the first
- * run — from a short node script that connects with `pg` and issues each
- * statement in `PUBLIC_FLOOR`, in order.
+ * freshly created scratch one has none. `PUBLIC_FLOOR` below is that minimal
+ * set, in the spirit of `scripts/check-fresh-schema-ddl.mjs`'s own precondition
+ * block rather than a copy of it. It is replayed in the hook, so a run is
+ * self-sufficient either way: against a database provisioned the repository's
+ * own way (`node scripts/apply-public-schema.mjs`, which is what CI runs) every
+ * statement is an `IF NOT EXISTS` no-op and the committed snapshot's shapes are
+ * the ones that apply; against a brand-new scratch database the hook creates the
+ * floor itself, in order, before the store DDL.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
@@ -108,14 +110,29 @@ function writeAuthority() {
  * The MINIMAL public-schema floor the store's cross-schema foreign keys point
  * at. Better Auth owns these tables in production; a scratch database has none,
  * and the bootstrap's `REFERENCES public."user"(id)` clauses cannot be created
- * without them. The shapes are the same minimal floor
- * `scripts/check-fresh-schema-ddl.mjs` provisions for exactly this reason —
- * enough columns for the references to resolve, and nothing that could stand in
- * for the real auth schema.
+ * without them. Enough columns for the references to resolve, and nothing that
+ * could stand in for the real auth schema — the same idea as
+ * `scripts/check-fresh-schema-ddl.mjs`'s own precondition block, never a copy of
+ * it: this list has always carried tables and columns that guard does not, and
+ * `user` and `organization` here now also carry the columns the committed
+ * snapshot declares NOT NULL, so the seeds below are accepted on a
+ * snapshot-provisioned database too (see the note on those statements). That
+ * guard needs none of that: it replays its DDL inside a transaction it always
+ * rolls back and seeds no rows, so it never meets these constraints.
  */
 const PUBLIC_FLOOR: readonly string[] = [
-  `CREATE TABLE IF NOT EXISTS public."user" (id text PRIMARY KEY, username text)`,
-  `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, slug text, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+  // The three columns the repository's OWN schema snapshot
+  // (tests/e2e/rbac/fixtures/public-schema.sql) declares NOT NULL with no
+  // default — `name`, `email`, `emailVerified` — are part of the floor, so the
+  // seed below states the same values whichever way the database was
+  // provisioned. On a brand-new scratch database this statement creates them;
+  // on a database provisioned the repository's own way
+  // (`node scripts/apply-public-schema.mjs`, which is what CI runs) the table
+  // already exists, `IF NOT EXISTS` makes this a no-op, and the snapshot's
+  // constraints are the ones that apply. A floor NARROWER than the snapshot is
+  // what made this tier die in `beforeAll` on a snapshot-provisioned database.
+  `CREATE TABLE IF NOT EXISTS public."user" (id text PRIMARY KEY, username text, name text NOT NULL, email text NOT NULL, "emailVerified" boolean NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, slug text NOT NULL, name text NOT NULL, "createdAt" timestamptz NOT NULL, "archivedAt" timestamptz, "archiveEpoch" int)`,
   `CREATE TABLE IF NOT EXISTS public."team" (id text PRIMARY KEY, "organizationId" text, name text)`,
   `CREATE TABLE IF NOT EXISTS public."teamMember" (id text PRIMARY KEY, "teamId" text, "userId" text)`,
   `CREATE TABLE IF NOT EXISTS public."member" (id text PRIMARY KEY, "organizationId" text, "userId" text, "createdAt" timestamptz, role text)`,
@@ -143,11 +160,13 @@ describeDb("the named start's run, on a real database", () => {
     // reference them, and a run owned by a user the database does not hold is
     // not a run this tier could claim anything about.
     await admin.query(
-      `INSERT INTO public."user" (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
-      [PERSON_ID, "x2935"],
+      `INSERT INTO public."user" (id, username, name, email, "emailVerified")
+       VALUES ($1, $2, $3, $4, false) ON CONFLICT (id) DO NOTHING`,
+      [PERSON_ID, "x2935", "x2935", "x2935@example.test"],
     );
     await admin.query(
-      `INSERT INTO public."organization" (id, slug, name) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO public."organization" (id, slug, name, "createdAt")
+       VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
       [ORG_ID, "x2935", "x2935"],
     );
     // THE MEMBERSHIP IS THE POINT, not a fixture detail. Without this row the

@@ -1019,3 +1019,50 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: 4e23061a1f113414116b6e1e25c8182ec77f55eb
 ```
+
+---
+
+## Correction for `db1303f790cd23264e8e3c5754be9444f46cc7af`
+
+```
+correction: truthful-attribution record for db1303f79
+
+The record on db1303f79 ("lifecycle-b W6 part 1 — the section-6 fixtures for the pieces already on main (#2936) (#3019)") is invalid under the ratified record grammar: it mixes
+`Assisted-by: none` with named assistants, and it names assistants that did not touch this
+change — a `claude-sonnet-5` line, a `gpt-5.5` line and a bare `Claude Code` line without a
+model id. The cause is mechanical: the merge arm aggregated trailers over a commit range whose
+ancestry was cut short, so trailers of commits outside this change were gathered in. This
+commit carries the corrected record verbatim: the assistants are the union of the merged
+branch's own commit trailers, deduplicated on name and model id, together with the agent that
+produced this correction. The change itself was gated, merged and is untouched — this corrects
+the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.4
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: db1303f790cd23264e8e3c5754be9444f46cc7af```
+
+---
+
+## Correction for `66fc6f485b95e68d173921f18a414828f2e307c9`
+
+```
+correction: truthful-attribution record for 66fc6f485
+
+The record on 66fc6f485 ("lifecycle-b W5b — the prompt window outside the chat is a per-run conversation, and every window takes the run's access (#2995)") carries a bare `Assisted-by: Claude Code` line without a
+model id beside the model-qualified lines; the ratified grammar names each assistant as
+`<agent> (<model-id>)`. The bare line came from the same range aggregation as the record
+corrected beside this one. This commit carries the corrected record verbatim: the assistants
+are the union of the merged branch's own commit trailers, deduplicated on name and model id,
+together with the agent that produced this correction. The change itself was gated, merged and
+is untouched — this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.4
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 66fc6f485b95e68d173921f18a414828f2e307c9```

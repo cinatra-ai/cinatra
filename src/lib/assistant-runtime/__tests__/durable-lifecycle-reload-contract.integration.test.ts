@@ -167,6 +167,29 @@ vi.mock("../../../../packages/agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
   skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
 }));
+// The HITL screen card's own reader (cinatra#2930, lifecycle-b W3), stubbed for
+// exactly the reason the hold's is: the card self-gates, so a "none" answer
+// would make the mount arm fail on a drawn card rather than measure it. An
+// ASKING answer is what the run's own row states when the agent pauses, and it
+// is the gate the run panel would be asking on.
+vi.mock("../../../../packages/agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: async () => ({
+    state: "asking",
+    runId: "00000000-0000-4000-8000-000000002930",
+    screenRef: "hitl-ref-s9j-reload-harness",
+    gate: {
+      reviewTaskId: "task-s9j-reload-harness",
+      xRenderer: "cinatra.schema-field:output",
+      inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+      currentValues: {},
+      fieldName: "answer",
+    },
+  }),
+}));
+vi.mock("../../../../packages/agents/src/hitl-actions", () => ({
+  approveReviewTask: async () => undefined,
+  rejectReviewTask: async () => undefined,
+}));
 
 import {
   createAgUiSinkAdapter,
@@ -290,7 +313,32 @@ const CARRIAGES: readonly Carriage[] = Object.freeze([
       return { result, identity: runId };
     },
   },
+  {
+    // THE SECOND INTERRUPT KIND (cinatra#2930, lifecycle-b W3). The agent parks
+    // MID-RUN to ask, so the durable dispatch answer carries `pending_approval`
+    // rather than `pending_input` — and, like the hold, it is not an envelope:
+    // the run is genuinely blocked on the answer, so the identity is the run
+    // and the card is mounted at the dispatch part the reload rebuilt.
+    kind: "agent_hitl_screen",
+    toolName: "agent_run",
+    prose: "I started the agent and it has a question for you.",
+    build: () => {
+      const runId = randomUUID();
+      const result = JSON.stringify({ runId, status: "pending_approval" });
+      return { result, identity: runId };
+    },
+  },
 ]);
+
+/**
+ * The two carriages whose wire shape is an INTERRUPT rather than an envelope.
+ *
+ * Read from the SHIPPED contract rather than listed here, so a kind that changes
+ * its carriage cannot leave this file asserting the wrong shape for it.
+ */
+function isInterruptCarriage(kind: LifecycleViewType | string): boolean {
+  return carriageRowFor(kind as never).carriage === "interrupt";
+}
 
 // ---------------------------------------------------------------------------
 // 1. The real sink
@@ -2186,7 +2234,7 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
     it("the sink mints the card on the wire from the producing tool result", async () => {
       const { drive } = await carry(carriage);
       const wire = dataPartsOnTheWire(drive);
-      if (carriage.kind === "recommendation_hold") {
+      if (isInterruptCarriage(carriage.kind)) {
         // Not an envelope: the sink parses the dispatch answer and pins the run.
         expect(wire).toEqual([
           { kind: "agent_run", toolCallId: drive.toolCallId, runId: drive.identity },
@@ -2205,7 +2253,7 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
       const carried = await carry(carriage);
       const { drive } = carried;
       const assistant = requireReloadedAssistantTurn(carried);
-      if (carriage.kind === "recommendation_hold") {
+      if (isInterruptCarriage(carriage.kind)) {
         // The run's identity comes back on the durable `agent_run` part, which is
         // what the transcript renders the run card from — and `runIdOf`, the
         // shipped contract reader, agrees with what the sink pinned on the wire.
@@ -2288,7 +2336,7 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
     });
 
     it("the card re-asks the server about exactly the persisted ref", async () => {
-      if (carriage.kind === "recommendation_hold") {
+      if (isInterruptCarriage(carriage.kind)) {
         // No authoritative-resolve seam: this carriage is an interrupt, and its
         // identity assertion is the run-card mount above.
         return;
@@ -2374,6 +2422,67 @@ describe("a card the PLATFORM injected survives store → reload", () => {
     expect(parts.filter((p) => p.kind === "tool_call").map((p) => p.name)).toEqual([
       "agent_run",
     ]);
+  });
+
+  // ACCEPTANCE 1 FOR THE HITL SCREEN (cinatra#2930, lifecycle-b W3), against the
+  // REAL store: "a fixture shows the parked run's card — with no assistant tool
+  // call in the transcript — and it is still there after a reload".
+  //
+  // The shape differs from the schedule's above for a reason that is the kind's
+  // own: `agent_hitl_screen` is carried as an INTERRUPT, so nothing mints a view
+  // envelope for it and there is no injected DATA_PART to come back. Its durable
+  // anchor IS the run's own dispatch part — the same slot an injected view is
+  // restored at — and the card is mounted there from the run's stated moment. So
+  // what a reload has to bring back is the DISPATCH PART, and what the card has
+  // to do is draw on it: the turn says nothing, no tool asked for the card, and
+  // after a refresh from Postgres alone the question is on screen.
+  it("the HITL screen is on screen after a reload, with no tool call that asked for it", async () => {
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const dispatchCall = `call-${randomUUID()}`;
+
+    // The turn as the stream route persists it: the run's own dispatch, and
+    // nothing the model asked for.
+    persistThroughTheRealStore({
+      threadId,
+      userText: "run the blog agent",
+      runId,
+      durable: {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "tool_call", id: dispatchCall, name: "agent_run" }],
+        dataParts: [{ kind: "agent_run", toolCallId: dispatchCall, runId }],
+        dataPartSlots: [dispatchCall],
+      },
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    const assistant = reloadedAssistantTurn(reloaded);
+    expect(assistant, "the reloaded thread carries no assistant turn").toBeDefined();
+    const parts = (assistant!.parts ?? []) as Array<Record<string, unknown>>;
+    const producing = parts.find((p) => p.id === dispatchCall);
+    expect(producing, "the run's own dispatch part did not come back").toBeDefined();
+    // NO ASSISTANT TOOL CALL asked for the card: the only call in the turn is the
+    // run's dispatch, and it carries no view — this kind mints none.
+    expect(parts.filter((p) => p.kind === "tool_call").map((p) => p.name)).toEqual([
+      "agent_run",
+    ]);
+    expect(producing!.views ?? []).toEqual([]);
+
+    // …and the card is on screen, from Postgres alone: the shared conversation
+    // column draws the run's question at the dispatch part the reload rebuilt.
+    const root = await mountReloadedChat(reloaded);
+    const card = root.querySelector('[data-lifecycle-card="agent_hitl_screen"]');
+    expect(card, "the reloaded transcript drew no HITL screen card").not.toBeNull();
+    expect(card!.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    expect(card!.getAttribute("data-lifecycle-card-state")).toBe("asking");
+    // Its own slot, and not inside the run card's subtree — the card is the
+    // conversation's mount, not the panel's.
+    expect(card!.closest(`[data-agent-run-slot="${runId}"]`)).not.toBeNull();
+    expect(card!.closest('[data-lifecycle-card-host="run_card"]')).toBeNull();
+    // The one thing it offers, off real DOM.
+    expect(card!.querySelector('[data-action="submit-hitl-screen"]')).not.toBeNull();
   });
 
   it("does not give the person a second card when the moment is stated again", async () => {

@@ -1,0 +1,38 @@
+{
+  "probe": "the run page's settled reading of agent_hitl_screen",
+  "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+  "readings": [
+    {
+      "theme": "light",
+      "at": "2026-08-27T14:29:53.843Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "hitlCards": 0,
+      "hitlFields": 0,
+      "hitlSend": 0,
+      "cardsOnScreen": [
+        {
+          "kind": "artifact_review_gate",
+          "host": "run_card",
+          "state": "pending"
+        }
+      ],
+      "stepRail": 1
+    },
+    {
+      "theme": "dark",
+      "at": "2026-08-27T14:30:07.085Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "hitlCards": 0,
+      "hitlFields": 0,
+      "hitlSend": 0,
+      "cardsOnScreen": [
+        {
+          "kind": "artifact_review_gate",
+          "host": "run_card",
+          "state": "pending"
+        }
+      ],
+      "stepRail": 1
+    }
+  ]
+}

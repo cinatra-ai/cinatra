@@ -252,3 +252,63 @@ describe("the entrypoint carries the alarm", () => {
     expect(run.stderr).not.toContain("anchor-contract violation");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. The fifth kind is inside the alarm (cinatra#2930, lifecycle-b W3)
+// ---------------------------------------------------------------------------
+//
+// `agent_hitl_screen` was ruled a kind before it had a card and is drawn now.
+// It is covered here the way the other four are — and the two host cells that
+// have no reachable subject record their REASON where their anchors would be,
+// so making one capturable later, or changing why it is not, moves the digest
+// exactly as renaming an anchor does.
+
+describe("the fifth kind is covered by the same alarm", () => {
+  const KIND = "agent_hitl_screen";
+
+  it("is one of the ruled kinds", () => {
+    expect([...ANCHOR_CONTRACT_KINDS]).toContain(KIND);
+  });
+
+  it("records the anchors a capture of it is graded against, on the hosts it can be photographed on", () => {
+    const anchors = captureAnchorExpectations();
+    expect(anchors.chat_thread[`${KIND}|pending`]).toEqual(
+      expect.arrayContaining([expect.stringContaining('[data-conformance-id="hitl-screen-fields"]')]),
+    );
+    expect(anchors.run_card[`${KIND}|pending`]).toEqual(
+      expect.arrayContaining([expect.stringContaining(`[data-lifecycle-card="${KIND}"]`)]),
+    );
+  });
+
+  it("records the reason where a cell has no reachable subject", () => {
+    const anchors = captureAnchorExpectations();
+    for (const host of ["site_widget", "page_gate_region"]) {
+      for (const state of ["pending", "decided"]) {
+        expect(anchors[host][`${KIND}|${state}`], `${host}|${state}`).toEqual([
+          expect.stringContaining("composition-only"),
+        ]);
+      }
+    }
+  });
+
+  it("a composition-only cell quietly made capturable does NOT stay ratified", () => {
+    const anchors = captureAnchorExpectations();
+    const loosened = JSON.parse(JSON.stringify(anchors));
+    loosened.site_widget[`${KIND}|pending`] = ["[data-conversation-list] frame present  canonical"];
+    const digest = computeAnchorDigest(
+      anchorDigestInputs({
+        specCommit: manifest().specCommit,
+        domExpectations: contract().domExpectations,
+        captureAnchors: loosened,
+      }),
+    );
+    expect(digest).not.toBe(contract().digest);
+  });
+
+  it("the settled reading of this kind is an absence, and the digest carries that", () => {
+    const anchors = captureAnchorExpectations();
+    const decided = anchors.chat_thread[`${KIND}|decided`].join("\n");
+    expect(decided).toContain(`[data-lifecycle-card="${KIND}"] frame absent`);
+    expect(decided).not.toContain(`[data-lifecycle-card="${KIND}"] frame present`);
+  });
+});

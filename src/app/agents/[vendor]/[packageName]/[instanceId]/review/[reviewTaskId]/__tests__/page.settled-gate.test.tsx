@@ -100,6 +100,13 @@ vi.mock("@cinatra-ai/agents/review-gate-card", () => ({
 vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
   RecommendationHoldCard: () => <div data-testid="recommendation-hold-card" />,
 }));
+// The HITL screen card, stubbed for the same reason the §V card above is: this
+// suite is about the REVIEW card's mount on this host, and the sibling cards are
+// keyed by the run and self-gating, so a live one would only add a resolve this
+// page's test has no answer for.
+vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
+  AgentHitlScreenCard: () => <div data-testid="agent-hitl-screen-card" />,
+}));
 vi.mock("@cinatra-ai/agents/lifecycle-card-runtime", () => ({
   LifecycleCardSurfaceProvider: ({
     host,
