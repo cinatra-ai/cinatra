@@ -36,13 +36,18 @@
 
 import "server-only";
 
+import { drawnScreenControls } from "@/lib/lifecycle/bound-screen-controls";
 import {
   controlsLentBy,
   resolveBoundReference,
   type BoundReferenceResolution,
   type LentCardControl,
 } from "@/lib/lifecycle/bound-reference-resolver";
-import { mintLentActionGrant, type LentActionControl } from "@/lib/lifecycle/lent-action-grant";
+import {
+  mintLentActionGrant,
+  type LentActionControl,
+  type LentActionGrantControl,
+} from "@/lib/lifecycle/lent-action-grant";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
 import {
   recordLentActionGrant,
@@ -300,7 +305,15 @@ export async function resolveBoundCard(input: {
   // consulting it here would refuse every screen with "1 cards are waiting".
   // With a review ALSO live the ordinary rule runs, because then two different
   // things really are open and the person must pick.
-  if (chosen.resolution.kind === "hitl_screen") {
+  //
+  // THE SCHEDULER FORM BINDS ON THE SAME TERMS (cinatra#2934, repaired after the
+  // picture leg): the page claims nothing for it either — the server minted its
+  // ref from the run the box sits under — and the counter enumerates review
+  // gates, so consulting it here would refuse every schedule screen too.
+  if (
+    chosen.resolution.kind === "hitl_screen" ||
+    chosen.resolution.kind === "schedule_form"
+  ) {
     return {
       kind: "bound",
       ref: chosen.ref,
@@ -463,6 +476,28 @@ export function primaryControlFor(
 }
 
 /**
+ * What the TURN'S GRANT names for a binding — the pressable control where there
+ * is one, and `fill` for a card that lends only a fill.
+ *
+ * WHY IT IS NOT `primaryControlFor` (cinatra#2934, repaired after the picture
+ * leg). That function answers "which button may a sentence press", and for the
+ * SCHEDULER FORM the honest answer is none: §X says the person presses the
+ * form's own button. But the fill road still needs the grant, because the grant
+ * is the only server-checked fact that says "this message was sent with that
+ * card bound" — without one, a schedule screen's window could fill nothing.
+ *
+ * So the grant names `fill`, which is not a press anywhere: see the four
+ * enforcement points listed on `LENT_ACTION_GRANT_CONTROLS`.
+ */
+export function grantedControlFor(
+  resolution: BoundReferenceResolution,
+): LentActionGrantControl | null {
+  const pressable = primaryControlFor(resolution);
+  if (pressable) return pressable;
+  return controlsLentBy(resolution).includes("fill") ? "fill" : null;
+}
+
+/**
  * The screen a run is parked at, as a ref — minted here, on the server, from
  * the run's own durable row.
  *
@@ -546,7 +581,7 @@ export async function issueTurnLentActionGrant(input: {
     };
   }
 
-  const control = primaryControlFor(binding.resolution);
+  const control = grantedControlFor(binding.resolution);
   if (!control) return NOT_BOUND;
 
   // WORD FOR WORD, OR NOT AT ALL (convergence round 2). The words that land are the
@@ -564,7 +599,16 @@ export async function issueTurnLentActionGrant(input: {
   // shortened. A SCREEN's submit sends the values its own fields were shown
   // holding — the message is never placed anywhere — so the same bound there
   // would take the fill road away from anyone who typed a long description.
-  if (control !== "submit" && words.length > MAX_LENT_COMMENT_CHARS) return NOT_BOUND;
+  // A FILL is bounded the same way a submit is, and for the same reason: the
+  // person's message is never PLACED on the card, so a long description must
+  // not cost them the fill road.
+  if (
+    control !== "submit" &&
+    control !== "fill" &&
+    words.length > MAX_LENT_COMMENT_CHARS
+  ) {
+    return NOT_BOUND;
+  }
 
   const minted = (d.mint ?? mintLentActionGrant)({
     userId: actorCtx.actor.userId ?? "",
@@ -591,7 +635,34 @@ export async function issueTurnLentActionGrant(input: {
   // is not handed out at all — better no grant than one that fails at the call.
   if (!recorded) return NOT_BOUND;
 
+  if (binding.resolution.kind === "schedule_form") {
+    // THE SCHEDULE SCREEN'S OWN FORM. One road and one control: the rows are
+    // filled and the person presses the form's own button. The rows are NAMED
+    // here so the model addresses the controls the screen draws rather than
+    // guessing at them (cinatra#2934, repaired after the picture leg).
+    const rows = drawnScreenControls(binding.resolution.form).join(", ");
+    return {
+      grant: minted.grant,
+      systemContext:
+        `\n\nBOUND SCREEN. This message was sent with the scheduler form the person is ` +
+        `looking at bound to the prompt window, ref "${binding.ref}".\n` +
+        `· TO FILL ITS ROWS — whenever the person describes when the run should start — call ` +
+        `\`lifecycle_bound_screen_fill\` with that ref and the values. Its rows are: ${rows}. ` +
+        `This SUBMITS NOTHING and ARMS NOTHING: the values appear in the form in front of them ` +
+        `and they press the form's own button.\n` +
+        `· THERE IS NO CONTROL TO PRESS on this screen: do not call ` +
+        `\`lifecycle_bound_card_decide\` for it, and do not offer to start or arm the run ` +
+        `yourself. A question about the schedule is answered as a question and fills nothing.\n` +
+        `Report what comes back and add nothing to it; where your sentence and the form ` +
+        `disagree, the form is right.`,
+    };
+  }
   if (binding.resolution.kind === "hitl_screen") {
+    // THE ROWS THE SCREEN ACTUALLY DRAWS, named for the same reason
+    // (cinatra#2934, repaired after the picture leg): a setup-loop screen draws
+    // ONE control, and a model told the schema's inner keys addressed fields
+    // that were not on the screen.
+    const screenRows = drawnScreenControls(binding.resolution.form).join(", ");
     // TWO ROADS, NAMED APART (cinatra#2934). Filling is the ordinary thing a
     // described change reaches and presses nothing; the press is the separate
     // thing the person has to ask for in so many words.
@@ -603,8 +674,8 @@ export async function issueTurnLentActionGrant(input: {
         `· TO FILL ITS FIELDS — whenever the person describes what the form should say — call ` +
         `\`lifecycle_bound_screen_fill\` with that ref and the values. This SUBMITS NOTHING: the ` +
         `values appear in the fields in front of them and they press the screen's own button. ` +
-        `Fields the form does not declare are dropped; ask the person about anything you cannot ` +
-        `work out.\n` +
+        `Its fields are: ${screenRows}. Fields the form does not declare are dropped; ask the ` +
+        `person about anything you cannot work out.\n` +
         `· TO SUBMIT IT — ONLY when the person asks for that in so many words in this same ` +
         `message — FILL IT FIRST, then call \`lifecycle_bound_card_decide\` with that ref and ` +
         `control "${control}", ONCE. A press with nothing filled in this message is refused by ` +

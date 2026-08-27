@@ -5,7 +5,11 @@
 // sees the box), AC4 (the tool-less message when the model cannot act).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// The ref codec derives its key from the app secret; a window with no secret
+// mints no ref at all, which is a different case from the one below.
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-run-window-turn";
 import { readFileSync } from "node:fs";
+import { decodeScheduleFormRef } from "../lifecycle-card-ref";
 import { join } from "node:path";
 
 type EnforceRunAccess = (
@@ -690,8 +694,14 @@ describe("the window hands the assistant the run it sits under", () => {
 // the row the turn writes carries them. Nothing W5b asserted changed.
 // ---------------------------------------------------------------------------
 describe("the window is bound to the run's own waiting screen", () => {
-  it("names the RUN for the four form windows, so the server mints the screen's ref", async () => {
-    for (const surface of ["run-page", "step-by-step", "schedule", "armed-trigger"] as const) {
+  // AMENDED (cinatra#2934, repaired after the picture leg). The SCHEDULE screen
+  // is no longer among the windows that name the run: the surface in front of
+  // the person there is the scheduler form, not the run's waiting screen, and
+  // binding the run's HITL gate row to it offered the setup step's fields on a
+  // screen that draws none of them. The other three are unchanged, the
+  // ARMED-trigger tab deliberately among them — the armed form is cinatra#2788's.
+  it("names the RUN for the three windows that sit under the run's own screen", async () => {
+    for (const surface of ["run-page", "step-by-step", "armed-trigger"] as const) {
       lastTurnArgs = null;
       await mod.runWindowTurn({ runId: "run-1", surface, prompt: "make it say hello" });
       const claim = (lastTurnArgs as unknown as {
@@ -699,6 +709,22 @@ describe("the window is bound to the run's own waiting screen", () => {
       }).boundCard;
       expect(claim?.screenRunIds, surface).toEqual(["run-1"]);
     }
+  });
+
+  it("the SCHEDULE screen carries its own form's ref and names no run screen", async () => {
+    lastTurnArgs = null;
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "schedule",
+      prompt: "set it for tomorrow at 9 in the morning, Berlin time",
+    });
+    const claim = (lastTurnArgs as unknown as {
+      boundCard?: { screenRunIds?: string[]; candidateRefs?: string[] };
+    }).boundCard;
+    expect(claim?.screenRunIds).toBeUndefined();
+    expect(claim?.candidateRefs).toHaveLength(1);
+    // The ref is the server's own, minted from this run — never a client claim.
+    expect(decodeScheduleFormRef(claim!.candidateRefs![0]!)).toEqual({ runId: "run-1" });
   });
 
   it("leaves the REVIEW page's own claim alone — its card carries a ref of its own", async () => {

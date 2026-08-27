@@ -66,15 +66,14 @@ import {
  * are exactly what the card's own buttons offer". A control that no card draws
  * is not in this union, so a grant cannot name one.
  *
- * `fill` is deliberately ABSENT, and STAYS absent now that the fill road exists
- * (cinatra#2934, lifecycle-b W5c). Filling a form presses nothing: it places
- * values in the fields in front of the person and the person still presses the
- * button. It is therefore not an authority a grant can spend, and giving it one
- * would make "fill, then submit when asked" impossible in a single message —
- * the grant is consumed by its first use, and the plan requires both halves of
- * that sentence to work in the same message. The fill road reads the turn's
- * grant to know the screen was bound (`matchLentActionGrantCard` below) and
- * never spends it.
+ * `fill` is deliberately ABSENT HERE, and stays absent (cinatra#2934,
+ * lifecycle-b W5c). Filling a form presses nothing: it places values in the
+ * fields in front of the person and the person still presses the button. It is
+ * therefore not an authority a grant can SPEND, and putting it in this list
+ * would also make "fill, then submit when asked" impossible in a single message
+ * — a spend consumes the grant, and the plan requires both halves of that
+ * sentence to work in one message. The fill road reads the turn's grant to know
+ * the screen was bound (`matchLentActionGrantCard` below) and never spends it.
  */
 export const LENT_ACTION_CONTROLS = [
   "comment",
@@ -92,6 +91,45 @@ export function isLentActionControl(value: unknown): value is LentActionControl 
   );
 }
 
+/**
+ * The vocabulary a GRANT may name — the pressable controls above, and `fill`.
+ *
+ * WHY THE TWO LISTS DIFFER, and why that is the safety property rather than a
+ * loophole (cinatra#2934, repaired after the picture leg). A grant answers one
+ * question for the fill road: "was this message sent with that card bound?" The
+ * SCHEDULER FORM is bound to the schedule screen's window and lends NO press at
+ * all — "the person presses the form's own button" — so its grant has no
+ * pressable control to name, and naming one it does not lend would be a lie in
+ * the ledger that a future reader could act on.
+ *
+ * A `fill` GRANT CAN NEVER PRESS ANYTHING, and that is enforced FOUR times over,
+ * each independently sufficient:
+ *
+ *   1. `lifecycle_bound_card_decide` accepts only `LENT_ACTION_CONTROLS` in its
+ *      own input schema, so a call can never even name `fill`;
+ *   2. `matchLentActionGrant` below refuses outright when the CLAIM is not a
+ *      pressable control;
+ *   3. the ledger's spend statement names the control in its predicate, so a row
+ *      minted `fill` matches no spend;
+ *   4. `controlsLentBy` gives the scheduler form `["fill"]`, and the lent
+ *      action's own gate 5 refuses a control the card does not lend.
+ */
+export const LENT_ACTION_GRANT_CONTROLS = [
+  ...LENT_ACTION_CONTROLS,
+  "fill",
+] as const;
+
+export type LentActionGrantControl = (typeof LENT_ACTION_GRANT_CONTROLS)[number];
+
+export function isLentActionGrantControl(
+  value: unknown,
+): value is LentActionGrantControl {
+  return (
+    typeof value === "string" &&
+    (LENT_ACTION_GRANT_CONTROLS as readonly string[]).includes(value)
+  );
+}
+
 /** What a grant says. Every field is a claim the verifier re-checks. */
 export type LentActionGrantClaims = {
   /** The grant's own identity — the single-use ledger key. */
@@ -104,8 +142,11 @@ export type LentActionGrantClaims = {
   readonly messageId: string;
   /** The fingerprint of the bound card's ref. */
   readonly cardRefFingerprint: string;
-  /** The ONE control this grant allows. */
-  readonly control: LentActionControl;
+  /**
+   * The ONE control this grant allows — or `fill`, which allows no press at all
+   * and exists so a card that lends only a fill can still be named by a grant.
+   */
+  readonly control: LentActionGrantControl;
   /** Expiry, epoch seconds. */
   readonly expiresAt: number;
 };
@@ -116,7 +157,7 @@ export type MintLentActionGrantInput = {
   readonly orgId: string;
   readonly messageId: string;
   readonly cardRef: string;
-  readonly control: LentActionControl;
+  readonly control: LentActionGrantControl;
   /** Injectable clock — tests never wall-clock an expiry. */
   readonly now?: () => Date;
 };
@@ -203,7 +244,7 @@ export function mintLentActionGrant(
 ): { grant: string; claims: LentActionGrantClaims } | null {
   const { userId, orgId, messageId, cardRef, control } = input;
   if (!isBounded(userId) || !isBounded(orgId) || !isBounded(messageId)) return null;
-  if (!isLentActionControl(control)) return null;
+  if (!isLentActionGrantControl(control)) return null;
   const cardRefFingerprint = lentActionCardFingerprint(cardRef);
   if (!cardRefFingerprint) return null;
   const key = grantKey();
@@ -279,7 +320,7 @@ export function verifyLentActionGrant(
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
     const { j, u, o, m, r, c, e } = parsed as Record<string, unknown>;
     if (!isBounded(j) || !isBounded(u) || !isBounded(o) || !isBounded(m)) return null;
-    if (!isBounded(r) || !isLentActionControl(c)) return null;
+    if (!isBounded(r) || !isLentActionGrantControl(c)) return null;
     if (typeof e !== "number" || !Number.isFinite(e)) return null;
     const nowSec = Math.floor((opts.now ?? (() => new Date()))().getTime() / 1000);
     if (nowSec >= e) return null;
@@ -332,6 +373,11 @@ export function matchLentActionGrant(
   },
 ): boolean {
   if (!isBounded(call.userId) || !isBounded(call.orgId)) return false;
+  // A GRANT THAT NAMES NO PRESSABLE CONTROL AUTHORIZES NO PRESS, said here
+  // rather than left to the string comparison below (cinatra#2934). A `fill`
+  // grant is minted for a card whose button is the person's; it must not become
+  // a press because some future caller passed `control: "fill"` through.
+  if (!isLentActionControl(claims.control)) return false;
   if (!constantTimeEquals(claims.userId, call.userId)) return false;
   if (!constantTimeEquals(claims.orgId, call.orgId)) return false;
   if (claims.control !== call.control) return false;

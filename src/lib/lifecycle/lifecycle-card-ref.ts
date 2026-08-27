@@ -210,3 +210,81 @@ export function decodeScheduleRunRef(ref: string): ScheduleRunRefPayload | null 
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// The SCHEDULE-FORM ref (cinatra#2934, lifecycle-b W5c).
+//
+// The schedule screen's window sits under the SCHEDULER FORM, not under the run's
+// HITL gate row, so it needs a ref of its own to be bound by. It addresses one
+// RUN: the form is the run's, there is one of it, and its rows are declared by
+// `schedule-form-screen.ts` rather than read out of a row.
+//
+// A THIRD KEY LABEL, disjoint from both families above by construction: a gate
+// ref presented here does not decode, a schedule-form ref presented to the gate
+// resolver does not either, and neither decodes as cinatra#2788's run-scoped
+// schedule CARD ref. That is what keeps "one ref addresses one kind of thing"
+// true without a discriminator byte a caller could flip.
+//
+// STILL NOT A CAPABILITY. It addresses a run and grants nothing: the resolver
+// re-runs the reader's run access on every call, and the form it names lends
+// `fill` and no press at all.
+// ---------------------------------------------------------------------------
+
+/** Key-derivation label for the schedule-FORM ref — disjoint from both others. */
+const SCHEDULE_FORM_REF_KEY_INFO = "cinatra:lifecycle-schedule-form-ref:v1";
+
+function scheduleFormRefKey(): Buffer | null {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(SCHEDULE_FORM_REF_KEY_INFO).digest();
+}
+
+/** What a schedule-form ref addresses: the run whose scheduler form is in view. */
+export type ScheduleFormRefPayload = { runId: string };
+
+/** Encode a schedule-form ref. `null` when it cannot be expressed. */
+export function encodeScheduleFormRef(payload: ScheduleFormRefPayload): string | null {
+  const { runId } = payload;
+  if (typeof runId !== "string" || runId.length === 0 || runId.length > REF_FIELD_MAX) {
+    return null;
+  }
+  const key = scheduleFormRefKey();
+  if (!key) return null;
+  try {
+    const iv = randomBytes(IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const body = Buffer.concat([
+      cipher.update(JSON.stringify({ r: runId }), "utf8"),
+      cipher.final(),
+    ]);
+    const ref = Buffer.concat([iv, body, cipher.getAuthTag()]).toString("base64url");
+    return ref.length <= REF_MAX ? ref : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a schedule-form ref. `null` for anything that is not one. */
+export function decodeScheduleFormRef(ref: string): ScheduleFormRefPayload | null {
+  if (typeof ref !== "string" || ref.length === 0 || ref.length > REF_MAX) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(ref)) return null;
+  const key = scheduleFormRefKey();
+  if (!key) return null;
+  try {
+    const raw = Buffer.from(ref, "base64url");
+    if (raw.length <= IV_BYTES + TAG_BYTES) return null;
+    const iv = raw.subarray(0, IV_BYTES);
+    const tag = raw.subarray(raw.length - TAG_BYTES);
+    const body = raw.subarray(IV_BYTES, raw.length - TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const { r } = parsed as { r?: unknown };
+    if (typeof r !== "string" || r.length === 0 || r.length > REF_FIELD_MAX) return null;
+    return { runId: r };
+  } catch {
+    return null;
+  }
+}

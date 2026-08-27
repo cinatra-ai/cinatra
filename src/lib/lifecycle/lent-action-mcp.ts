@@ -303,6 +303,13 @@ export async function handleLentAction(
     return say({ ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested", outcome });
   }
 
+  // ONLY A HITL SCREEN HAS A CONTINUE (cinatra#2934, repaired after the picture
+  // leg). The scheduler form is a bound screen too, and its button is the
+  // person's: gate 5 above already refuses it — it lends `fill` and no pressable
+  // control — and this states the same thing where the effect is, so a card kind
+  // added later cannot fall into a resume path that was never written for it.
+  if (bound.kind !== "hitl_screen") return refuseCardUnavailable();
+
   // The HITL screen's Continue. `approveReviewTaskInternal` is the gate's own
   // actor-checked resume entry — the door the plan says the submit side already
   // has — and it enforces run execute + approveHitl against the run it resolves

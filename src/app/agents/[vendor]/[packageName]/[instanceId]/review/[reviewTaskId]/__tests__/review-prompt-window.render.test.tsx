@@ -47,7 +47,7 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
 // The window's server bridge — the store has its own unit and real-database
 // tiers. The shared panel and the one controller run for real.
 vi.mock("@cinatra-ai/agents/run-window-actions", () => ({
-  loadRunWindowConversation: vi.fn(async () => []),
+  loadRunWindowConversation: vi.fn(async () => ({ entries: [], fillCount: 0 })),
   // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
   // reports the fills it placed and whether it PRESSED a control, and the one
   // controller reads both. A mock that omits them lies about the contract.

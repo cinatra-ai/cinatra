@@ -35,6 +35,30 @@ import {
   type RecurringFrequency,
 } from "./trigger-recurrence";
 
+/**
+ * The repeat rows this form draws, by the names `RecurringConfig` gives them
+ * (cinatra#2934, repaired after the picture leg).
+ *
+ * §VI: "There is no raw cron field: the builder's selections are what the reader
+ * sees and confirms." So a described repeat lands in these selections — the ones
+ * the person can see and correct — and the cron is derived from them by the same
+ * `buildCron` the form's own controls use. The list is exported so the bound
+ * screen's row descriptor and this form cannot drift apart under a test.
+ */
+export const SCHEDULE_RECURRENCE_ROWS = [
+  "frequency",
+  "interval",
+  "weekdays",
+  "dayOfMonth",
+  "monthlyMode",
+  "nthWeek",
+  "monthlyWeekday",
+  "quarterAnchor",
+  "yearlyMonth",
+  "hour",
+  "minute",
+] as const;
+
 // -----------------------------------------------------------------------------
 // Schema
 // -----------------------------------------------------------------------------
@@ -280,6 +304,23 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         sv("cronExpression", values.cronExpression);
         const parsed = parseCronToRecurring(values.cronExpression);
         if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+      }
+      // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
+      // (`updateRecurring`): the selections move and the cron is rebuilt from
+      // them, so what is armed later is what the person can read now.
+      const patch: Record<string, unknown> = {};
+      for (const row of SCHEDULE_RECURRENCE_ROWS) {
+        if (values[row] !== undefined) patch[row] = values[row];
+      }
+      if (Object.keys(patch).length > 0) {
+        setRecurring((prev) => {
+          const next = { ...prev, ...(patch as Partial<RecurringConfig>) };
+          setValue("cronExpression" as never, buildCron(next) as never);
+          return next;
+        });
+        // A repeat described without naming the kind IS the recurring row; a
+        // message that named one keeps the one it named.
+        if (typeof values.triggerType !== "string") setValue("triggerType", "recurring");
       }
     },
     [setValue],

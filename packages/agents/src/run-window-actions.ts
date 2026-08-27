@@ -127,16 +127,35 @@ export async function sendRunWindowTurn(input: {
   }
 }
 
-/** The stored exchange for the first paint after a reload. */
+/**
+ * The stored exchange for the first paint after a reload, AND how many fills the
+ * run already holds (cinatra#2934, repaired after the picture leg).
+ *
+ * THE DEFECT THE COUNT REPAIRS. The window applies "only a fill this turn
+ * ADDED", and it told turns apart by counting: a turn whose count grew placed
+ * one. The counter started at zero on every mount and the load never seeded it,
+ * so after ANY page load the first turn read every fill the run already held as
+ * new — and a screen whose fields the person had since edited was overwritten by
+ * an earlier message's values, on a turn that placed nothing at all.
+ */
+export type RunWindowConversation = {
+  entries: RunWindowEntry[];
+  /** How many fills the run holds right now — the counter's starting point. */
+  fillCount: number;
+};
+
 export async function loadRunWindowConversation(
   runId: string,
-): Promise<RunWindowEntry[]> {
+): Promise<RunWindowConversation> {
   try {
     const { readRunWindowConversation } = await impl();
-    return toEntries(await readRunWindowConversation(runId));
+    const rows = await readRunWindowConversation(runId);
+    return { entries: toEntries(rows), fillCount: toFills(rows).length };
   } catch {
     // A window that cannot read its conversation still opens; it simply starts
-    // empty rather than breaking the screen it is portalled into.
-    return [];
+    // empty rather than breaking the screen it is portalled into. A count of
+    // zero is the honest reading of "nothing was read", and it is only ever
+    // raised by what a turn actually returns.
+    return { entries: [], fillCount: 0 };
   }
 }

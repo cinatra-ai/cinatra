@@ -45,6 +45,9 @@ import type { RunWindowSurface } from "@cinatra-ai/agents/run-window-conversatio
 import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
 import { reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
 import type { ActorContext } from "@/lib/authz/actor-context";
+// The one projection that says which controls a screen DRAWS — shared with the
+// fill road so the frame cannot name a field the fill would then drop.
+import { drawnScreenForm } from "@/lib/lifecycle/bound-screen-controls";
 
 /**
  * THE DATA REGION'S OWN MARKERS.
@@ -226,12 +229,25 @@ function hasValue(value: unknown): boolean {
 function gateFields(
   inputSchema: Record<string, unknown> | null | undefined,
   currentValues: Record<string, unknown> | null | undefined,
+  /**
+   * The setup loop's single property, where the gate has one (cinatra#2934,
+   * repaired after the picture leg).
+   *
+   * A gate that carries one stores that property's INNER schema, and the screen
+   * draws ONE control named by it. A frame that listed the inner keys told the
+   * assistant about fields the person cannot see — and the fill road, which
+   * shares this projection, would then drop every one of them.
+   */
+  fieldName?: string,
 ): RunWindowGateField[] {
   const values = (currentValues ?? {}) as Record<string, unknown>;
+  const drawn = drawnScreenForm({
+    schema: (inputSchema ?? {}) as Record<string, unknown>,
+    values,
+    ...(fieldName ? { fieldName } : {}),
+  });
   const properties =
-    inputSchema && typeof inputSchema === "object"
-      ? ((inputSchema as { properties?: Record<string, unknown> }).properties ?? {})
-      : {};
+    (drawn.schema as { properties?: Record<string, unknown> }).properties ?? {};
   const names = [
     ...Object.keys(properties),
     ...Object.keys(values).filter((k) => !(k in properties)),
@@ -311,7 +327,7 @@ export async function buildRunWindowFrame(args: {
       waiting: true,
       detail: hitl.xRenderer ? renderLabel(hitl.xRenderer, "(unnamed)") : null,
       reference: hitl.reviewTaskId ? renderLabel(hitl.reviewTaskId, "(unnamed)") : null,
-      fields: gateFields(hitl.inputSchema, hitl.currentValues),
+      fields: gateFields(hitl.inputSchema, hitl.currentValues, hitl.fieldName),
     });
   }
 

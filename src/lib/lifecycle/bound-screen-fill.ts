@@ -40,7 +40,7 @@
 //      `respondToHitl`, because the resolver authorizes a screen on run READ and
 //      reading a screen is not permission to place values on it (convergence
 //      round 1, finding 3). A review lends no fill; an absent card lends nothing.
-//   4. ONLY FIELDS THE FORM ASKS FOR. The screen's own schema is the closed set;
+//   4. ONLY THE CONTROLS THE SCREEN DRAWS. The drawn set is the closed set;
 //      a key the form does not declare is dropped rather than stored, so a model
 //      cannot invent a field, and the run's own reserved keys are never writable
 //      from here.
@@ -63,114 +63,28 @@ import {
 } from "@/lib/lifecycle/bound-reference-resolver";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 import { canActorRespondToRun } from "@/lib/lifecycle/run-window-turn";
+import {
+  drawnScreenControls,
+  selectDrawnFillValues,
+} from "@/lib/lifecycle/bound-screen-controls";
 
-/**
- * Keys no fill may ever write, whatever the schema says.
- *
- * `approved` is the interrupt approval flag — pressing Continue is the SUBMIT
- * road and a fill must not be able to smuggle one. `lifecycleCardRef` is a
- * server-minted opaque ticket that lives in the gate's values and is not a field
- * a human edits; the run and schedule screens already strip it before anything
- * leaves the page, and the same rule holds coming back the other way.
- */
-export const FILL_RESERVED_KEYS: readonly string[] = [
-  "approved",
-  "lifecycleCardRef",
-];
-
-/** How many fields one fill may place, and how large the placed values may be. */
-export const FILL_MAX_FIELDS = 40;
-export const FILL_MAX_SERIALIZED_CHARS = 100_000;
-
-/**
- * The screen's own field names, read out of the form schema it published.
- *
- * A JSON-Schema `properties` object is the shape every HITL screen's interrupt
- * carries; a schema without one declares no editable field and therefore lends
- * no fill at all — refusing is the honest answer, never "fill whatever you were
- * given".
- */
-export function fillableFieldNames(
-  schema: Record<string, unknown> | null | undefined,
-): readonly string[] {
-  const props = (schema as { properties?: unknown } | null | undefined)?.properties;
-  if (!props || typeof props !== "object" || Array.isArray(props)) return [];
-  return Object.keys(props as Record<string, unknown>).filter(
-    (k) => !FILL_RESERVED_KEYS.includes(k),
-  );
-}
-
-/**
- * The values a fill may actually place: the intersection of what was asked for
- * and what the form declares, in the FORM's order, bounded.
- *
- * PURE, so the closed-set property is pinned by a test rather than by reading a
- * model's mind. `undefined` values are dropped (there is nothing to place);
- * `null` is kept, because clearing a field is a real thing to ask for.
- */
-export function selectFillableValues(
-  schema: Record<string, unknown> | null | undefined,
-  requested: Record<string, unknown>,
-  /**
-   * What the fields ALREADY hold. A "fill" that places a value the field already
-   * has changes nothing a person could see, and is dropped (convergence round 2,
-   * finding 2): the press this road allows requires a fill in the same message,
-   * so a fill that alters nothing must not be able to unlock one. An induced
-   * press therefore has to visibly change the person's own fields first.
-   */
-  current: Record<string, unknown> = {},
-): Record<string, unknown> {
-  const allowed = fillableFieldNames(schema);
-  const out: Record<string, unknown> = {};
-  let count = 0;
-  for (const key of allowed) {
-    if (!Object.prototype.hasOwnProperty.call(requested, key)) continue;
-    const value = requested[key];
-    if (value === undefined) continue;
-    if (sameValue(value, current[key])) continue;
-    if (count >= FILL_MAX_FIELDS) break;
-    out[key] = value;
-    count += 1;
-  }
-  // The placed values are stored and travel back to a browser; an unbounded
-  // payload is a cost the model would be choosing on the person's behalf.
-  if (JSON.stringify(out).length > FILL_MAX_SERIALIZED_CHARS) return {};
-  return out;
-}
-
-/**
- * Is the placed value the one the field already holds?
- *
- * TRUE structural equality, not `JSON.stringify` (convergence round 3): a plain
- * stringify is KEY-ORDER SENSITIVE, so the same object with its keys written in
- * another order would read as a change — and a "change" that alters nothing a
- * person can see is exactly what must not unlock a press. Keys are sorted at
- * every depth before the comparison, and arrays keep their order because their
- * order is content.
- */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (b === undefined) return false;
-  try {
-    return stableJson(a) === stableJson(b);
-  } catch {
-    return false;
-  }
-}
-
-/** JSON with every object's keys in sorted order, at every depth. */
-function stableJson(value: unknown): string {
-  return JSON.stringify(stabilize(value));
-}
-
-function stabilize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stabilize);
-  if (!value || typeof value !== "object") return value;
-  const src = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(src).sort()) out[key] = stabilize(src[key]);
-  return out;
-}
+// THE PURE CLOSED SET LIVES NEXT DOOR (cinatra#2934, repaired after the picture
+// leg). `bound-screen-controls.ts` holds the reserved keys, the bounds, the
+// no-op rule and — new — the DRAWN-control projection, with no imports at all,
+// because the turn that names a screen's rows to the assistant reads the same
+// rule and must not pull this module's store graph in for it. Re-exported here
+// so every existing reader of this module is unchanged.
+export {
+  FILL_MAX_FIELDS,
+  FILL_MAX_SERIALIZED_CHARS,
+  FILL_RESERVED_KEYS,
+  drawnScreenControls,
+  drawnScreenForm,
+  fillableFieldNames,
+  selectDrawnFillValues,
+  selectFillableValues,
+  type BoundScreenForm,
+} from "@/lib/lifecycle/bound-screen-controls";
 
 export type BoundScreenFillOutcome =
   | { readonly kind: "filled"; readonly ref: string; readonly applied: readonly string[] }
@@ -231,7 +145,13 @@ export async function recordBoundScreenFill(input: {
     ref: input.ref,
     actorCtx: input.actorCtx,
   });
-  if (bound.kind !== "hitl_screen") return { kind: "unavailable" };
+  // THE TWO SCREENS A FILL MAY REACH: the screen an agent is waiting on, and
+  // the SCHEDULER FORM the schedule surface sits under (cinatra#2934, repaired
+  // after the picture leg). Both answer the same question below — does this card
+  // lend `fill` — and a review, an absence and anything else lend nothing.
+  if (bound.kind !== "hitl_screen" && bound.kind !== "schedule_form") {
+    return { kind: "unavailable" };
+  }
   if (!controlsLentBy(bound).includes("fill")) return { kind: "unavailable" };
 
   // THE RUN'S OWN RIGHT TO ANSWER, asked separately from the right to read it.
@@ -247,10 +167,14 @@ export async function recordBoundScreenFill(input: {
   ).catch(() => false);
   if (!mayOperate) return { kind: "unavailable" };
 
-  const values = selectFillableValues(bound.form.schema, input.values, bound.form.values);
+  // THE SCREEN'S OWN DRAWN CONTROLS, never the schema's raw properties (see the
+  // note atop `bound-screen-controls.ts`): a setup-loop screen draws ONE control
+  // named by the gate's `fieldName`, and placing that control's INNER keys wrote
+  // a row the screen in front of the person could not read.
+  const values = selectDrawnFillValues(bound.form, input.values);
   const applied = Object.keys(values);
   if (applied.length === 0) {
-    return { kind: "no-fields", fields: fillableFieldNames(bound.form.schema) };
+    return { kind: "no-fields", fields: drawnScreenControls(bound.form) };
   }
 
   // THE GRANT, CLAIMED LAST. Everything above is a read; this is the moment

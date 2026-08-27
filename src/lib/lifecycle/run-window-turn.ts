@@ -54,6 +54,7 @@ import { getAuthSession, resolveUserContextForUserId } from "@/lib/auth-session"
 // window is typed in by people who hold their access through a TEAM or a
 // PROJECT grant as often as by an owner, and hand-built hints would deny them.
 import { resolveBoundTurnActor } from "./bound-turn-actor";
+import { encodeScheduleFormRef } from "./lifecycle-card-ref";
 
 // THE ASSISTANT RUNTIME IS REACHED LAZILY, and that is load-bearing rather
 // than a style choice. `canRespondInRunWindow` below is called by the SERVER
@@ -180,6 +181,46 @@ function boundedClaim(
   // the page can have seen; it is dropped rather than repaired.
   if (refs.length === 0) return undefined;
   return { candidateRefs: refs, focusedRef: refs.includes(focused ?? "") ? focused : null };
+}
+
+/**
+ * WHICH CARD THE WINDOW'S OWN SURFACE IS SITTING UNDER (cinatra#2934, repaired
+ * after the picture leg).
+ *
+ * THE DEFECT THIS REPAIRS, measured on the real screen: for a run waiting on its
+ * trigger, the schedule screen's window bound the run's HITL GATE row — the
+ * setup step's schema — while the surface in front of the person is the
+ * SCHEDULER FORM, whose rows are not in that schema at all. The assistant
+ * answered "This screen can't schedule the run. It only has these fields: title
+ * / summary / outline", and nothing was filled.
+ *
+ * THE THREE READINGS, and each is the plan's own:
+ *
+ *   · the REVIEW page keeps its own claim — its card carries a ref on the client
+ *     and the run behind it is parked at the review, not at a fillable screen;
+ *   · the SCHEDULE screen binds the SCHEDULER FORM, whose ref this mints from
+ *     the run the box sits under, server-side, exactly as a parked screen's is
+ *     minted; it lends a fill and no press at all;
+ *   · every other window sits under the run's own waiting screen and names the
+ *     RUN, so the binder mints that screen's ref. The ARMED-trigger tab is
+ *     deliberately among them and unchanged: the armed form is cinatra#2788's
+ *     and is not built here.
+ *
+ * PURE and exported so the reading is one readable line under test rather than a
+ * condition buried in a turn.
+ */
+export function boundScreenClaimForSurface(
+  surface: RunWindowSurface,
+  runId: string,
+  mintScheduleFormRef: (runId: string) => string | null = (id) =>
+    encodeScheduleFormRef({ runId: id }),
+): { readonly screenRunIds: readonly string[]; readonly candidateRefs: readonly string[] } {
+  if (surface === "review") return { screenRunIds: [], candidateRefs: [] };
+  if (surface === "schedule") {
+    const ref = mintScheduleFormRef(runId);
+    return { screenRunIds: [], candidateRefs: ref ? [ref] : [] };
+  }
+  return { screenRunIds: [runId], candidateRefs: [] };
 }
 
 /** The rows the access check read, handed back rather than read a second time. */
@@ -362,15 +403,19 @@ export async function runWindowTurn(
   const messageId = `run-window:${input.runId}:${Date.now()}:${Math.random()
     .toString(36)
     .slice(2, 10)}`;
-  // THE WINDOW IS THE SCREEN'S (cinatra#2934, lifecycle-b W5c). Four of the five
-  // windows sit directly under the run's own waiting screen, and that screen has
-  // no ref on any client — one is minted at gate emission only for the marked
-  // review gate. So the page claims nothing here: the turn names the RUN, and
-  // the server mints the screen's ref from the run's durable parked row and
-  // re-checks it under this person's access, exactly as it re-checks a page's
-  // claim. The REVIEW page keeps its own claim: its card does carry a ref, and
-  // the run it belongs to is parked at the review, not at a fillable screen.
-  const screenRunIds = input.surface === "review" ? [] : [input.runId];
+  // THE WINDOW IS THE SCREEN'S (cinatra#2934, lifecycle-b W5c). The windows
+  // outside the chat sit directly under the surface the person is looking at,
+  // and that surface has no ref on any client — one is minted at gate emission
+  // only for the marked review gate. So the page claims nothing here: the turn
+  // names the RUN, and the server mints the surface's own ref and re-checks it
+  // under this person's access, exactly as it re-checks a page's claim. Which
+  // surface gets which is `boundScreenClaimForSurface` above.
+  const surfaceBinding = boundScreenClaimForSurface(input.surface, input.runId);
+  const screenRunIds = surfaceBinding.screenRunIds;
+  const candidateRefs = [
+    ...(claim?.candidateRefs ?? []),
+    ...surfaceBinding.candidateRefs,
+  ];
 
   // The person's message is committed BEFORE the model runs. A turn that dies
   // in the model still leaves what the person typed on the run.
@@ -472,10 +517,10 @@ export async function runWindowTurn(
       // W5a's claim, bounded and then passed through. The runtime re-resolves
       // it under this person's access and mints the single-use grant, or does
       // not; nothing here concludes anything from it.
-      ...(claim || screenRunIds.length > 0
+      ...(candidateRefs.length > 0 || screenRunIds.length > 0
         ? {
             boundCard: {
-              candidateRefs: claim?.candidateRefs ?? [],
+              candidateRefs,
               focusedRef: claim?.focusedRef ?? null,
               ...(screenRunIds.length > 0 ? { screenRunIds } : {}),
             },

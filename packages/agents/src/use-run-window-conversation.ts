@@ -73,20 +73,37 @@ export function useRunWindowConversation(args: {
   const localIdRef = useRef(0);
   // How many fills the run held at the end of the last turn, so a turn's OWN
   // fill can be told from the ones already on the run.
+  //
+  // SEEDED FROM THE LOAD, not from zero (cinatra#2934, repaired after the
+  // picture leg). A run carries its fills, and a freshly mounted window that
+  // started this counter at zero read all of them as this turn's: measured on a
+  // reloaded step-by-step screen, a turn that placed NO fill was followed by the
+  // three fields holding an earlier message's values. The rule at the send below
+  // — "only a fill this turn ADDED is applied" — was false for the first turn
+  // after every page load, which is the turn a person is most likely to take.
   const fillCountRef = useRef(0);
 
   useEffect(() => {
     if (!runId) {
+      fillCountRef.current = 0;
       setLoaded(true);
       return;
     }
     let cancelled = false;
     setLoaded(false);
-    void loadRunWindowConversation(runId).then((rows) => {
+    // A DIFFERENT RUN IS A DIFFERENT LEDGER. The count belongs to the run this
+    // window is now showing, so it starts again and is raised by the load.
+    fillCountRef.current = 0;
+    void loadRunWindowConversation(runId).then((loaded) => {
       if (cancelled) return;
       // The stored exchange IS the state: what a reload shows is what the run
       // holds, never a client-side merge of the two.
-      setEntries(rows);
+      setEntries(loaded.entries);
+      // NEVER LOWERED. The store is append-only, so the count only grows; a turn
+      // that landed while this read was in flight has already raised it past
+      // what the read saw, and seeding over that would make the NEXT turn read
+      // its predecessor's fill as its own.
+      fillCountRef.current = Math.max(fillCountRef.current, loaded.fillCount);
       setLoaded(true);
     });
     return () => {

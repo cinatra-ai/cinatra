@@ -53,8 +53,20 @@ import {
   readGatePinnedTargets,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
+// STATICALLY IMPORTED, for the reason `mintParkedScreenRef` states about the
+// agents store: a dynamic import is opaque to the org-write boundary analyser,
+// which reads it as an unreviewed new caller inside the write perimeter.
+import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
-import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  decodeLifecycleGateRef,
+  decodeScheduleFormRef,
+} from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  SCHEDULE_FORM_X_RENDERER,
+  scheduleFormSchema,
+  scheduleFormValues,
+} from "@/lib/lifecycle/schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 /** The HITL screen a run is parked at, as the resolver answers it. */
@@ -71,6 +83,32 @@ export type BoundHitlScreen = {
     /** Setup-loop screens only — the single property the form writes back. */
     readonly fieldName?: string;
   };
+};
+
+/**
+ * The SCHEDULER FORM a schedule screen is sitting under (cinatra#2934,
+ * lifecycle-b W5c — added after the picture leg).
+ *
+ * §X's schedule reading: "Fills the scheduler form's own rows — when the run
+ * starts, its time, its timezone — whether the schedule is being set for the
+ * first time or changed once it stands. The person presses the form's own
+ * button." So it is a screen with a form, and it is NOT the run's HITL gate: for
+ * a run waiting on its trigger, that gate's schema is the SETUP STEP's, whose
+ * fields are not on this surface at all.
+ *
+ * IT LENDS NO PRESS. `controlsLentBy` gives it `fill` and nothing else, and the
+ * lent action refuses it outright — the form's own button stays the person's.
+ */
+export type BoundScheduleForm = {
+  readonly kind: "schedule_form";
+  readonly runId: string;
+  /** The form's own rows and what they are holding. */
+  readonly form: {
+    readonly schema: Record<string, unknown>;
+    readonly values: Record<string, unknown>;
+  };
+  /** The surface's identity, as every other bound screen carries one. */
+  readonly xRenderer: string;
 };
 
 /** The review a card is bound to, as the resolver answers it. */
@@ -91,6 +129,7 @@ export type BoundReferenceAbsent = { readonly kind: "absent" };
 
 export type BoundReferenceResolution =
   | BoundHitlScreen
+  | BoundScheduleForm
   | BoundReview
   | BoundReferenceAbsent;
 
@@ -104,6 +143,7 @@ export type BoundReferencePorts = {
   ) => Promise<boolean>;
   readonly readPinnedTargets: typeof readGatePinnedTargets;
   readonly readParkedScreen: typeof readLatestDurableHitlGateArtifact;
+  readonly readRunTrigger: typeof readRunTriggerByRunId;
 };
 
 const DEFAULT_PORTS: BoundReferencePorts = {
@@ -118,6 +158,7 @@ const DEFAULT_PORTS: BoundReferencePorts = {
   },
   readPinnedTargets: readGatePinnedTargets,
   readParkedScreen: readLatestDurableHitlGateArtifact,
+  readRunTrigger: readRunTriggerByRunId,
 };
 
 /**
@@ -140,6 +181,33 @@ export async function resolveBoundReference(input: {
   readonly ports?: Partial<BoundReferencePorts>;
 }): Promise<BoundReferenceResolution> {
   const ports: BoundReferencePorts = { ...DEFAULT_PORTS, ...(input.ports ?? {}) };
+
+  // THE SCHEDULE FORM'S OWN REF, tried first because it is a DISJOINT family: a
+  // gate ref does not decode here and this does not decode there, so neither arm
+  // can be reached with the other's ref. The order is therefore free, and this
+  // one is a decode with no read behind it.
+  const scheduleForm = decodeScheduleFormRef(input.ref);
+  if (scheduleForm) {
+    // THE SAME ORDER AS EVERY OTHER ARM: run READ first, before any row is
+    // touched, so holding a ref cannot be used to learn about a run.
+    let mayRead = false;
+    try {
+      mayRead = await ports.enforceRunRead(scheduleForm.runId, input.actorCtx);
+    } catch {
+      return ABSENT;
+    }
+    if (!mayRead) return ABSENT;
+    // The form's rows are DECLARED, not read out of a row; only what they are
+    // holding comes from the run, and a read that fails costs the current values
+    // rather than the screen.
+    const trigger = await ports.readRunTrigger(scheduleForm.runId).catch(() => null);
+    return {
+      kind: "schedule_form",
+      runId: scheduleForm.runId,
+      xRenderer: SCHEDULE_FORM_X_RENDERER,
+      form: { schema: scheduleFormSchema(), values: scheduleFormValues(trigger) },
+    };
+  }
 
   const payload = decodeLifecycleGateRef(input.ref);
   if (!payload) return ABSENT;
@@ -211,6 +279,9 @@ export async function resolveBoundReference(input: {
  * and cannot drift into a store call.
  *
  *   · a REVIEW lends its own three buttons — Comment, Approve, Reject;
+ *   · the SCHEDULER FORM lends Fill ALONE (cinatra#2934, repaired after the
+ *     picture leg): the assistant fills the form's own rows and "the person
+ *     presses the form's own button", so no grant can name a press on it;
  *   · a HITL SCREEN lends Fill and Submit — the plan's "fill and submit where
  *     fields wait" (cinatra#2934, lifecycle-b W5c). They are two different
  *     roads and are kept apart everywhere: FILL places values in the fields in
@@ -224,6 +295,7 @@ export function controlsLentBy(
 ): readonly LentCardControl[] {
   if (resolution.kind === "review") return ["comment", "approve", "reject"];
   if (resolution.kind === "hitl_screen") return ["fill", "submit"];
+  if (resolution.kind === "schedule_form") return ["fill"];
   return [];
 }
 

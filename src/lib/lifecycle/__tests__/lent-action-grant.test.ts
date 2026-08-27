@@ -76,16 +76,40 @@ describe("the grant names the person, the message, the card and ONE control", ()
         ...PERSON,
         messageId: MESSAGE,
         cardRef: CARD,
-        // `fill` is cinatra#2934's road and is deliberately not in the vocabulary.
-        control: "fill" as never,
+        control: "delete" as never,
       }),
     ).toBeNull();
   });
 
-  it("the control vocabulary is exactly the buttons a card draws", () => {
+  it("the PRESSABLE vocabulary is exactly the buttons a card draws", () => {
     expect([...LENT_ACTION_CONTROLS]).toEqual(["comment", "approve", "reject", "submit"]);
     expect(isLentActionControl("fill")).toBe(false);
     expect(isLentActionControl("approve")).toBe(true);
+  });
+
+  // AMENDED (cinatra#2934, repaired after the picture leg). This case used to
+  // assert that a grant naming `fill` cannot be minted at all. It can now, and
+  // only for the card that needs it: the SCHEDULER FORM lends a fill and no
+  // press — "the person presses the form's own button" — so its grant has no
+  // pressable control to name, and naming one it does not lend would be a lie in
+  // the ledger. The property the old case existed for is UNCHANGED and is what
+  // is asserted here instead: such a grant can press nothing, anywhere.
+  it("a grant may name `fill`, and a `fill` grant presses nothing", () => {
+    const minted = mintLentActionGrant({
+      ...PERSON,
+      messageId: MESSAGE,
+      cardRef: CARD,
+      control: "fill",
+    });
+    expect(minted).not.toBeNull();
+    expect(minted!.claims.control).toBe("fill");
+    for (const control of LENT_ACTION_CONTROLS) {
+      expect(
+        matchLentActionGrant(minted!.claims, { ...PERSON, cardRef: CARD, control }),
+      ).toBe(false);
+    }
+    // The DECIDE vocabulary still cannot name it, so no call can ask for it.
+    expect(isLentActionControl("fill")).toBe(false);
   });
 });
 
