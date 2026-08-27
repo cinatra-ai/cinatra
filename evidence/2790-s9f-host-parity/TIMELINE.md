@@ -506,3 +506,38 @@ capture index and its two pictures are deleted from this branch (they remain in
 git history at `4049bc46`). Rows 8 and 9 above are what the conversation and the
 run page show instead, on run `c0614eeb-07ed-4e16-9a1e-88133a780cfa`, recorded at
 `1929e861551b`.
+
+---
+
+# The WIDGET round — the order, 2026-08-27
+
+Every timestamp below is either a database column or a line in
+`logs/widget-real-hold.txt`; the source is named on each row. The lane clock is
+UTC.
+
+| Time (UTC) | What happened | Where the timestamp comes from |
+|---|---|---|
+| `16:13:19.709Z` | the capture run opened the third-party page | driver log, first line |
+| — | the embed frame mounted; its own hosted-PKCE sign-in ran in its own window (`/widget-auth`); the frame left the anonymous state ~2 s later | driver log |
+| `16:13:40.212Z` | **the visitor's turn was sent** through the widget's own composer: *“Please start the agent `@cinatra-ai/blog-draft-writer-agent` for me.”* | driver log, recorded at the press |
+| `16:13:58.570Z` | the app's own dispatch created the run, `human_present = true` | `agent_runs.created_at` |
+| `16:14:00.221Z` | the shipped hold **parked** it at the recommendation moment | `lifecycle_continuation_park.created_at` |
+| `16:14:02.273Z` | the real provider answered inside the turn's window | `usage_events.created_at` |
+| `16:14:08.347Z` | the offered set was written — four skills, all force-add | `run_recommendation_offered_set.offered_at` |
+| ~`16:14:1x` | the card root appeared in the widget column (~10 s after the run row) | driver log |
+| — | `W1`, `H1` shot (light) | driver log |
+| — | the app's own theme control pressed → dark; the frame followed; `W2`, `H2` shot | driver log, `themeToDark.followed = true` |
+| — | pressed back to light; the frame followed | driver log, `themeToLight.followed = true` |
+| — | `Confirm` pressed on chip 0; the chip's own mark changed **33 ms** later; `H3` shot | driver log, measured at 25 ms polling |
+| — | `Adjust` → *“Keep it in this run”* on chip 1; `Skip` on chip 2; `Confirm` on chip 3 | driver log |
+| `16:15:03.901Z` | the three selections were written | `run_selected_skill_revisions.selected_at` |
+| `16:15:04.350Z` | the park was **released** | `lifecycle_continuation_park.resolved_at` |
+| `16:15:04.470Z` | the hold notification was cleared | `lifecycle_continuation_park.hold_notify_attempted_at` |
+| — | the row settled IN PLACE — same page load, same frame, same card instance; `W3`, `H4` shot | driver log, `settledInPlace = true`, `reloadedBeforeReading = false` |
+| — | `agent_runs.status` read back as **`pending_approval`** | database, after the settle |
+
+**What the order shows.** The park exists 1.65 s after the run row and 18.4 s
+after the person's own keystroke; the provider answers 2.1 s after the park; the
+release is 64 s after the park and is caused by the fourth press, not by a
+timeout (the TTL was `2026-08-28T16:14:00.221Z`, a day out). No step here was
+driven by anything but the person's own presses and the app's own loops.
