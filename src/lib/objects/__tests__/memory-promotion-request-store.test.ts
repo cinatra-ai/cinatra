@@ -102,9 +102,21 @@ describe("the team-containment assert (the co-committed one)", () => {
 
   it("asserts the team is in THIS organization and raises when it is not", () => {
     const stmt = buildMemoryPromotionTeamContainmentAssert({ teamId: "team-9", orgId: "org-1" });
-    expect(stmt.text).toContain('FROM public."team" t WHERE t.id = $1 AND t."organizationId" = $2');
+    expect(stmt.text).toContain('FROM public."team" t');
+    expect(stmt.text).toContain('WHERE t.id = $1 AND t."organizationId" = $2');
     expect(stmt.text).toMatch(/1 \/ CASE WHEN EXISTS/);
     expect(stmt.values).toEqual(["team-9", "org-1"]);
+  });
+
+  it("LOCKS the team row for the rest of the transaction (codex round 2, finding 1)", () => {
+    // Without the lock the predicate is a TOCTOU read: a concurrent delete or
+    // an organization move committing between this statement and the promotion
+    // commit would leave a foreign team as the row's owner, with nothing
+    // failing. FOR SHARE (not FOR KEY SHARE — an organization move is a
+    // non-key update) makes such a writer wait for this transaction.
+    const stmt = buildMemoryPromotionTeamContainmentAssert({ teamId: "team-9", orgId: "org-1" });
+    expect(stmt.text).toMatch(/FOR SHARE/);
+    expect(stmt.text).not.toMatch(/FOR KEY SHARE/);
   });
 
   it("writes nothing — it is a predicate, not a mutation", () => {

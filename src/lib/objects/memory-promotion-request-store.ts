@@ -421,6 +421,18 @@ export function buildMemoryPromotionApproveClaim(input: {
  * team that is not in this organization AT COMMIT TIME aborts the widen, the
  * claim, the history event and the outbox row together.
  *
+ * IT LOCKS, it does not merely look (codex round 2, finding 1). An unlocked
+ * `EXISTS` inside the transaction still leaves a window: under READ COMMITTED a
+ * concurrent transaction can delete the team, or move it to another
+ * organization, AFTER this statement reads it and commit before this one does —
+ * and nothing would fail. `FOR SHARE` takes a shared row lock that is held for
+ * the REST of this transaction, so a concurrent DELETE or UPDATE of that team
+ * row blocks until the promotion commits or rolls back. The containment the
+ * assert reports is therefore the containment at COMMIT time, which is the only
+ * one that matters. `FOR SHARE` rather than `FOR KEY SHARE`: moving a team to
+ * another organization is a NON-key update, and only `FOR SHARE` conflicts with
+ * that.
+ *
  * It raises the same way every other in-transaction assert on this path does
  * (division by zero on an empty match), so a race resolves as a stale snapshot:
  * the destination the reviewer approved is not the destination that exists, and
@@ -435,9 +447,13 @@ export function buildMemoryPromotionTeamContainmentAssert(input: {
   orgId: string;
 }): { text: string; values: unknown[] } {
   return {
-    text: `SELECT 1 / CASE WHEN EXISTS (
-             SELECT 1 FROM public."team" t WHERE t.id = $1 AND t."organizationId" = $2
-           ) THEN 1 ELSE 0 END AS ok`,
+    text: `WITH locked AS (
+             SELECT 1 AS ok
+             FROM public."team" t
+             WHERE t.id = $1 AND t."organizationId" = $2
+             FOR SHARE
+           )
+           SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM locked) THEN 1 ELSE 0 END AS ok`,
     values: [input.teamId, input.orgId],
   };
 }
