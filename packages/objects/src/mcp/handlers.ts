@@ -782,6 +782,262 @@ function resolveMemoryConceptDefOrThrow() {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Memory ingest secret scan (cinatra#1378, epic #1373) — FAIL-CLOSED.
+// ---------------------------------------------------------------------------
+//
+// A memory bundle is written by coding agents into a working tree, so a concept
+// file is exactly where an API key ends up by accident. The sync client scans
+// before it uploads and reports a local diagnostic naming the file — but a
+// bundle is untrusted input end-to-end, so the client's scan can never be the
+// thing that decides. This is the gate that decides.
+//
+// Fail-closed in both directions:
+//   - a credential-shaped literal REJECTS the write, and the payload is never
+//     persisted (this runs on the same seam as the envelope schema, before any
+//     commit);
+//   - a scan that cannot COMPLETE also rejects. "Could not look" and "looked
+//     and found nothing" must never produce the same answer, so the walk is
+//     bounded and exceeding a bound throws rather than returning what it had.
+//
+// Inlined here rather than imported for the same reason MEMORY_CONCEPT_TYPE_ID
+// is: this handler is reachable from the locked route-graph budgets, and a new
+// first-party module would grow every locked route by one. It has no imports.
+//
+// It is deliberately NOT a copy of a shared helper with a kill-switch: there is
+// no env flag, no org opt-out, and no claim probe. A memory-typed write whose
+// content cannot be cleared is refused, full stop.
+
+/** Stable refusal codes for the memory ingest secret scan (cinatra#1378). */
+const OBJECTS_MEMORY_SECRET_DETECTED = "OBJECTS_MEMORY_SECRET_DETECTED" as const;
+const OBJECTS_MEMORY_SECRET_SCAN_FAILED =
+  "OBJECTS_MEMORY_SECRET_SCAN_FAILED" as const;
+
+/** Known credential prefixes — flagged regardless of entropy. */
+const MEMORY_SECRET_PREFIXES: ReadonlyArray<{ name: string; re: RegExp }> = [
+  { name: "openai-sk", re: /^sk-[A-Za-z0-9_-]{16,}$/ },
+  { name: "anthropic-key", re: /^sk-ant-[A-Za-z0-9_-]{16,}$/ },
+  { name: "github-pat", re: /^(gho|ghp|gha|ghs|ghr)_[A-Za-z0-9]{20,}$/ },
+  { name: "google-oauth", re: /^ya29\.[A-Za-z0-9_-]{20,}$/ },
+  { name: "slack-token", re: /^(xoxb|xoxp|xoxa|xoxr|xoxs)-[A-Za-z0-9-]{16,}$/ },
+  { name: "aws-access-key", re: /^(AKIA|ASIA)[A-Z0-9]{12,}$/ },
+];
+
+/** Documentation shapes that must not be flagged, or the gate trains bypasses. */
+const MEMORY_SECRET_PLACEHOLDERS: ReadonlyArray<RegExp> = [
+  /^\s*\{\{[\s\S]*\}\}\s*$/,
+  /\$\{[A-Z0-9_]+\}/,
+  /^\$[A-Z0-9_]+$/,
+  /<[A-Z0-9_]+>/,
+  /^\s*\*+\s*$/,
+  /^\s*REDACTED\s*$/i,
+];
+
+const MEMORY_SECRET_PLACEHOLDER_SUBSTRINGS = ["example", "redacted", "placeholder"];
+const MEMORY_SECRET_ENTROPY_MIN_LENGTH = 24;
+const MEMORY_SECRET_ENTROPY_THRESHOLD = 4.5;
+// URL punctuation (`/ ? = & #`) is in the split set alongside whitespace and
+// JSON punctuation: the common way a credential reaches a concept file is
+// inside a URL, and without those separators the whole URL is one token that
+// matches no anchored prefix and whose entropy is diluted by the readable host
+// and path — so a real key would ride through.
+const MEMORY_SECRET_TOKEN_SPLIT = /[\s,;:|()\[\]<>{}"'`/?=&#]+/;
+
+/** Anchored segment tests: linear, so hostile input cannot make the scan blow up. */
+const MEMORY_JWT_SEGMENT = /^[A-Za-z0-9_-]+$/;
+const MEMORY_JWT_LEADING = /^[A-Za-z0-9_-]+/;
+
+/**
+ * Bounds that make the WALK itself fail-closed. Frontmatter is arbitrary
+ * author-supplied YAML, so it can nest and fan out without limit; a walk that
+ * quietly stopped would clear content it never read.
+ */
+const MEMORY_SCAN_MAX_DEPTH = 32;
+const MEMORY_SCAN_MAX_VALUES = 20_000;
+
+function memorySecretEntropy(value: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of value) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const c of counts.values()) {
+    const p = c / value.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+function isMemorySecretPlaceholderToken(token: string): boolean {
+  if (MEMORY_SECRET_PLACEHOLDERS.some((re) => re.test(token))) return true;
+  const lower = token.toLowerCase();
+  return MEMORY_SECRET_PLACEHOLDER_SUBSTRINGS.some((sub) => lower.includes(sub));
+}
+
+/** Linear JWT-shape scan (split on ".", check consecutive triples). */
+function memoryJwtShape(value: string): string | null {
+  if (!value.includes("eyJ")) return null;
+  const parts = value.split(".");
+  for (let i = 0; i + 2 < parts.length; i++) {
+    const head = parts[i] ?? "";
+    const idx = head.indexOf("eyJ");
+    if (idx === -1) continue;
+    const seg0 = head.slice(idx);
+    if (seg0.length < 4 || !MEMORY_JWT_SEGMENT.test(seg0)) continue;
+    const seg1 = parts[i + 1] ?? "";
+    if (seg1.length < 4 || !seg1.startsWith("eyJ") || !MEMORY_JWT_SEGMENT.test(seg1)) continue;
+    const tail = (parts[i + 2] ?? "").match(MEMORY_JWT_LEADING);
+    if (tail === null) continue;
+    return `${seg0}.${seg1}.${tail[0]}`;
+  }
+  return null;
+}
+
+/**
+ * Return the credential-pattern LABEL for one string, or null.
+ * The label names the SHAPE, never the matched text — a refusal message that
+ * echoed the secret would copy it into run history and error logs.
+ */
+function detectMemorySecretPattern(value: string): string | null {
+  if (value.length === 0) return null;
+  const trimmed = value.trim();
+  if (MEMORY_SECRET_PLACEHOLDERS.some((re) => re.test(trimmed))) return null;
+
+  const jwt = memoryJwtShape(value);
+  if (jwt !== null && !isMemorySecretPlaceholderToken(jwt)) return "jwt";
+
+  const bearer = /^\s*Bearer\s+(\S+)\s*$/i.exec(value);
+  if (bearer) {
+    const inner = bearer[1] ?? "";
+    if (isMemorySecretPlaceholderToken(inner)) return null;
+    return detectMemorySecretPattern(inner);
+  }
+
+  for (const token of value.split(MEMORY_SECRET_TOKEN_SPLIT)) {
+    if (token.length === 0) continue;
+    for (const { name, re } of MEMORY_SECRET_PREFIXES) {
+      if (re.test(token)) return name;
+    }
+    if (isMemorySecretPlaceholderToken(token)) continue;
+    if (
+      token.length >= MEMORY_SECRET_ENTROPY_MIN_LENGTH &&
+      memorySecretEntropy(token) >= MEMORY_SECRET_ENTROPY_THRESHOLD
+    ) {
+      return "high-entropy-token";
+    }
+  }
+  return null;
+}
+
+/**
+ * Object keys a location string may echo verbatim: short, ordinary identifier
+ * shapes. Anything else is rendered positionally.
+ */
+const MEMORY_SAFE_KEY_RE = /^[A-Za-z0-9_.\- ]{1,64}$/;
+
+/**
+ * Render one object key as a location segment WITHOUT echoing it unless it is
+ * obviously safe to.
+ *
+ * A location ends up inside a refusal message, and a refusal message ends up
+ * in terminal scrollback and CI logs. An object KEY is author-controlled text
+ * exactly like a value, so `{ "ghp_<real token>": "note" }` would otherwise
+ * copy the credential into the very message that promises to name only the
+ * shape. A key is echoed only when it is a short ordinary identifier that the
+ * credential detector itself does not flag; everything else is positional.
+ */
+function memoryLocationSegment(key: string, index: number): string {
+  if (!MEMORY_SAFE_KEY_RE.test(key)) return `[key#${index}]`;
+  try {
+    return detectMemorySecretPattern(key) === null ? key : `[key#${index}]`;
+  } catch {
+    return `[key#${index}]`;
+  }
+}
+
+/**
+ * Scan a memory envelope's content surface. THROWS a PrimitiveInvocationError
+ * on a hit and on a scan that could not complete.
+ *
+ * The scanned surface is everything a bundle author controls and a reader will
+ * later be shown: the body, every string anywhere in the frontmatter — VALUES
+ * and KEYS alike, because a key hides a credential just as well — and every
+ * link target. Identity fields are not scanned — they are hex digests and
+ * bundle-relative paths the schema already constrains, and scanning them would
+ * only add false positives to a gate whose value depends on being believed.
+ */
+function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): void {
+  const values: Array<{ location: string; value: string }> = [];
+  const seen = new Set<object>();
+  const walk = (node: unknown, location: string, depth: number): void => {
+    if (depth > MEMORY_SCAN_MAX_DEPTH) {
+      throw new Error(`nesting deeper than ${MEMORY_SCAN_MAX_DEPTH} levels at ${location}`);
+    }
+    if (values.length > MEMORY_SCAN_MAX_VALUES) {
+      throw new Error(`more than ${MEMORY_SCAN_MAX_VALUES} scannable values`);
+    }
+    if (typeof node === "string") {
+      values.push({ location, value: node });
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    if (seen.has(node as object)) throw new Error(`the value at ${location} is cyclic`);
+    seen.add(node as object);
+    if (Array.isArray(node)) {
+      node.forEach((entry, i) => walk(entry, `${location}[${i}]`, depth + 1));
+      return;
+    }
+    Object.entries(node as Record<string, unknown>).forEach(([key, entry], i) => {
+      const segment = memoryLocationSegment(key, i);
+      // The KEY is author-controlled text too. `{ "<a real token>": "note" }`
+      // hides a credential exactly as well as a value does, so every key is
+      // scanned as a value in its own right at its own (echo-safe) location.
+      values.push({ location: `${location}.${segment}`, value: key });
+      walk(entry, `${location}.${segment}`, depth + 1);
+    });
+  };
+
+  try {
+    walk(data.frontmatter, "frontmatter", 0);
+    if (typeof data.bodyMarkdown === "string") {
+      values.push({ location: "bodyMarkdown", value: data.bodyMarkdown });
+    }
+    walk(data.links, "links", 0);
+  } catch (err) {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+      message: `the memory secret scan could not complete, so this concept was not stored: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      retryable: false,
+      details: {},
+    });
+  }
+
+  for (const { location, value } of values) {
+    let label: string | null;
+    try {
+      label = detectMemorySecretPattern(value);
+    } catch (err) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+        message: `the memory secret scan could not complete at ${location}, so this concept was not stored: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        retryable: false,
+        details: {},
+      });
+    }
+    if (label !== null) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_MEMORY_SECRET_DETECTED,
+        message: `this memory concept carries a credential-shaped literal (${label}) at ${location} and was not stored; remove it from the source file and sync again`,
+        retryable: false,
+        // Shape + location only. The matched text is never echoed back.
+        details: { location, pattern: label },
+      });
+    }
+  }
+}
+
 /**
  * Memory-envelope enforcement (cinatra#1376, epic #1373). Memory rows take
  * the deterministic static-type path; this gate wires the type's REGISTERED
@@ -828,6 +1084,11 @@ function enforceMemoryConceptEnvelope(
       `[objects:memory-concept] invalid memory concept envelope: ${issues}`,
     );
   }
+  // Fail-closed ingest secret scan (cinatra#1378). Runs AFTER the schema so it
+  // scans a shape it can rely on, and BEFORE every caller's commit — this
+  // function's return value is what gets persisted, so a throw here means
+  // nothing was written.
+  scanMemoryConceptEnvelopeForSecrets(data);
   if (data.okfVersion === undefined) {
     const parsedOkfVersion = (parsed.data as { okfVersion?: unknown }).okfVersion;
     return { ...data, okfVersion: parsedOkfVersion ?? "0.1" };
@@ -1498,6 +1759,35 @@ export function createObjectsPrimitiveHandlers() {
       const hasQuery =
         typeof input.query === "string" && input.query.trim().length > 0;
 
+      // cinatra#1378: `externalIds` is a KEY lookup, so it belongs to the
+      // Postgres-only path. Two refusals keep it honest rather than
+      // approximately right:
+      //
+      //   - WITHOUT a `type`, the filter would scan `data->>'externalId'`
+      //     across every type in the org. External ids are only unique within
+      //     the type that defines them, so an unqualified match could return a
+      //     row of an unrelated type that happens to carry the same key.
+      //   - WITH a `query`, the answer would come from the ranked semantic path
+      //     — relevance-ordered and truncated — while the caller asked
+      //     "which of these exact keys exist". A preflight that silently lost
+      //     rows to a relevance cut would report present rows as absent, and a
+      //     sync run reads absent as "create".
+      //
+      // Both are refusals, not silent corrections: a preflight that quietly
+      // answered a different question is what a duplicate write is made of.
+      if (input.externalIds !== undefined) {
+        if (typeof input.type !== "string" || input.type.trim() === "") {
+          throw new Error(
+            "objects_list: externalIds requires an explicit `type` (an external id is unique only within its type)",
+          );
+        }
+        if (hasQuery) {
+          throw new Error(
+            "objects_list: externalIds is an exact key lookup and cannot be combined with a semantic `query`",
+          );
+        }
+      }
+
       // Actor-scoped ownership filter (cinatra#1428): the same SQL filter the
       // artifact read surface splices; the kernel post-filter below stays as
       // the role-permission axis. Both surfaces now scope reads identically.
@@ -1583,6 +1873,10 @@ export function createObjectsPrimitiveHandlers() {
             // cinatra#1456: indexed data.* correlation filter (thread/campaign/
             // contact seam). Pushed into SQL; per-row object.read still gates below.
             dataEquals: input.dataEquals,
+            // cinatra#1378: the memory-sync preflight's batch key lookup.
+            // Pushed into SQL alongside the type filter; per-row object.read
+            // still gates below, so this narrows the read and never widens it.
+            externalIds: input.externalIds,
             limit: input.limit,
             // Pass projectId straight through; the store appends
             // `AND project_id = $projectId` when the per-table feature flag is

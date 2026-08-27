@@ -408,3 +408,61 @@ the same one every other project-scoped surface produces.
 `ownerLevel` / `ownerId` / `visibility` / `projectId` and passes them through
 unchanged. The in-process client is **not** a privileged path: it invokes the same
 handler and therefore the same gates.
+
+## Memory sync — the ingest gates and the preflight (cinatra#1378, epic #1373)
+
+`memory sync` is the one-way bridge from a local `.memory` bundle into memory rows.
+The client classifies and scans before it uploads, and **none of that decides
+anything**: a bundle is untrusted input end-to-end, so every rule below runs on the
+server, on the same seam that produces the persisted payload.
+
+**Ingest gates** (`enforceMemoryConceptEnvelope`, `packages/objects/src/mcp/handlers.ts`),
+in order, before any commit:
+
+1. the registered envelope schema — including the **server's own recomputation** of
+   `externalId` as `sha256(bundleId + NUL + conceptId)`; a mismatch is rejected, so a
+   forged field cannot steer which row a save lands on;
+2. **size caps on every author-controlled surface** — `bodyMarkdown` 64 KiB (#1376),
+   `frontmatter` 32 KiB serialized, `links` 512 entries, one link target 2 KiB,
+   `conceptId` 1 KiB. An uncapped surface would make the body cap decorative, because
+   the same payload just moves into frontmatter;
+3. a **fail-closed secret scan** over the body, every link target, and every string
+   anywhere in the frontmatter — object **keys included**, because `{ "<a real
+   token>": "note" }` hides a credential exactly as well as a value does. Both
+   directions refuse: a credential-shaped literal (`OBJECTS_MEMORY_SECRET_DETECTED`)
+   and a scan that could not **complete** (`OBJECTS_MEMORY_SECRET_SCAN_FAILED`) —
+   "could not look" must never produce the same answer as "looked and found
+   nothing". Both refusals name the SHAPE and the location, never the matched text.
+   The location is echo-safe for the same reason: it is built from keys, so a key
+   is rendered verbatim only when it is a short ordinary identifier the detector
+   itself does not flag, and positionally (`[key#3]`) otherwise. There is no env
+   flag, no org opt-out and no claim probe on this gate.
+
+Both codes are terminal `PrimitiveInvocationError`s (`retryable: false`), the same
+contract as the collision codes above.
+
+**Provenance.** Identity provenance is actor-derived onto the row's own columns
+(`orgId`, `createdBy`, `runId`, `agentId`, `packageVersion`), exactly as the table in
+the previous section states. The envelope adds only what no server-side value can
+answer: the bundle id, the concept path, and an optional client-declared
+`provenance: { tool, toolVersion }` — bounded, `.strict()`, and authorization-bearing
+for nothing.
+
+**Scope on a resync.** The sync client sends `ownerLevel` / `ownerId` / `visibility`
+**only on a create**. On an update it omits them, so the `ON CONFLICT` arm preserves
+the row's stored tuple and a row that promotion widened stays wide. Requesting a
+different tuple is refused (`OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED`), never
+silently dropped. Sync never narrows a row and never deletes one.
+
+**`objects_list.externalIds`** is the sync preflight: a batch key lookup over
+`data->>'externalId'`, capped at `MAX_EXTERNAL_IDS_BATCH` (equal to `limit`'s own
+ceiling, pinned by test). It is a **filter on the existing primitive**, so the
+authorization it gets is exactly `objects_list`'s — org-scoped in SQL,
+ownership-filtered in SQL, `object.read`-probed per row. A row the caller may not read
+is simply **absent**, indistinguishable from one that does not exist, which is what
+keeps the preflight from being an existence oracle. It refuses what it cannot answer
+honestly rather than approximating: without an explicit `type` (an external id is
+unique only within its type), combined with a semantic `query` (a relevance cut would
+report present rows as absent, and a sync run reads absent as "create"), and on an
+empty batch (a filter that silently disappeared would widen the read to the whole
+type).
