@@ -74,6 +74,33 @@ export const objectsListSchema = z.object({
       }),
     )
     .optional(),
+  // cinatra#1378: BATCH lookup by the row's `data.externalId` — the memory-sync
+  // preflight. One call answers "which of these concepts already have a row",
+  // which is what lets a resync write nothing for untouched concepts instead of
+  // re-saving every file and churning versions and history.
+  //
+  // Deliberately a filter on the EXISTING primitive rather than a new one: the
+  // authorization it needs is exactly `objects_list`'s. Every returned row is
+  // still org-scoped in SQL, ownership-filtered in SQL, and `object.read`-probed
+  // per row in the handler — so a row the caller may not read is simply absent,
+  // indistinguishable from one that does not exist. That is what keeps the
+  // preflight from being an existence oracle.
+  //
+  // Capped at 500, the same ceiling as `limit`: a batch that could ask for more
+  // rows than the call can return would report present rows as absent, which is
+  // exactly the misreading that turns a skip into a duplicate write. An EMPTY
+  // array is rejected rather than read as "no filter" — a filter that silently
+  // disappears would widen the read to the whole type.
+  //
+  // The 500 ceiling is the ARRAY cap; the handler additionally refuses a batch
+  // larger than the call's EFFECTIVE `limit`, whose default is 100
+  // (cinatra#1378 review item 7) — the array cap alone does not bind.
+  //
+  // Each id is capped too: an external id is a key, and 500 unbounded strings
+  // reaching the array parameter is an author-controlled surface with no
+  // ceiling. 256 bytes sits far above every key this filter is built for (the
+  // memory preflight's are 64-character sha256 hex digests).
+  externalIds: z.array(z.string().min(1).max(256)).min(1).max(500).optional(),
 });
 
 export const objectsGetSchema = z.object({

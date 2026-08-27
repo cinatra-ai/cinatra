@@ -237,7 +237,12 @@ describe("objects_update — memory envelope enforcement on the merged payload",
     expect(merged.bodyMarkdown).toBe("Updated body.");
   });
 
-  it("rejects a patch whose MERGED envelope is invalid, before any commit", async () => {
+  it("rejects a patch that repoints the row's identity, before any commit", async () => {
+    // Same intent as before: a patch whose merged envelope no longer describes
+    // this row is refused with nothing written. The refusal is now the more
+    // specific one (cinatra#1378 review item 8) — since `data->>'externalId'`
+    // became a lookup key, an identity change is refused for what it IS rather
+    // than caught downstream as an externalId/conceptId mismatch.
     mockGet.mockReturnValue(makeMemoryRecord());
     const handlers = createObjectsPrimitiveHandlers();
     await expect(
@@ -245,12 +250,34 @@ describe("objects_update — memory envelope enforcement on the merged payload",
         primitiveName: "objects_update",
         input: {
           objectId: "obj-mem-1",
-          data: { conceptId: "hijacked/elsewhere" }, // externalId no longer matches
+          data: { conceptId: "hijacked/elsewhere" },
         },
         actor: ACTOR,
         mode: "agentic",
       } as never),
-    ).rejects.toThrow(/invalid memory concept envelope.*externalId/);
+    ).rejects.toMatchObject({
+      code: "OBJECTS_MEMORY_IDENTITY_IMMUTABLE",
+      details: { field: "conceptId" },
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a patch that breaks the envelope without touching identity", async () => {
+    // The envelope gate itself has not moved: a merged payload that violates a
+    // non-identity rule is still an envelope rejection before any commit.
+    mockGet.mockReturnValue(makeMemoryRecord());
+    const handlers = createObjectsPrimitiveHandlers();
+    await expect(
+      handlers.objects_update({
+        primitiveName: "objects_update",
+        input: {
+          objectId: "obj-mem-1",
+          data: { okfType: "a-type-the-frontmatter-does-not-declare" },
+        },
+        actor: ACTOR,
+        mode: "agentic",
+      } as never),
+    ).rejects.toThrow(/invalid memory concept envelope.*okfType/);
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
