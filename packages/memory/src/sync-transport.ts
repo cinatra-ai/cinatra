@@ -278,7 +278,11 @@ export function createHttpMemorySyncTransport(
       body: JSON.stringify(payload),
       signal,
     });
-    const session = response.headers.get("mcp-session-id") ?? undefined;
+    // An empty header value is not a session: storing it would replay
+    // "mcp-session-id:" on every request and count as session-bound for the
+    // 404 re-initialize path (same wire rule as the non-empty id checks).
+    const rawSession = response.headers.get("mcp-session-id");
+    const session = rawSession === null || rawSession === "" ? undefined : rawSession;
     const contentType = response.headers.get("content-type") ?? "";
     const body = await response.text();
     return {

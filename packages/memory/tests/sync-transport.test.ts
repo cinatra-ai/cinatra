@@ -327,6 +327,29 @@ describe("the negotiated protocol version rides every following request", () => 
   });
 });
 
+describe("an empty session header is not a session", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("never stores or replays an empty mcp-session-id answer", async () => {
+    const calls = stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        return { sessionId: "", body: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }) };
+      }
+      if (body.id === undefined) return null;
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await transport.callTool("objects_list", {});
+    const toolCall = calls.find((c) => c.body.method === "tools/call");
+    expect(toolCall).toBeDefined();
+    // The empty header value must not be adopted: no session header rides the
+    // following requests, and the call is not treated as session-bound.
+    expect(toolCall?.headers["mcp-session-id"]).toBeUndefined();
+  });
+});
+
 describe("a session-bound 404 re-initializes once instead of failing the run", () => {
   it("drops the dead session, handshakes again, and completes the call", async () => {
     let handshakes = 0;
