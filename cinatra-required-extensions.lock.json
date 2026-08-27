@@ -19,9 +19,9 @@
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "e33ec3e4f1b8b6e80e56ad6c782a0f91feb951d1",
-      "packageVersion": "0.1.1",
-      "treeSha256": "55849e8177c3f3a5c1d77e39fe582a21c3b2a83077afd72de1b69d59a12ad629"
+      "resolvedSha": "d46034f54e002b03d29d5016876064a8690f9202",
+      "packageVersion": "0.1.2",
+      "treeSha256": "1a25cab353568bb251de61a90fcb12ce2b2d4df9480b82bf368a0e09c9f31dae"
     },
     {
       "packageName": "@cinatra-ai/automation-authoring-skill",
