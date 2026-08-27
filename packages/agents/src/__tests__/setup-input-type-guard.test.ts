@@ -160,7 +160,14 @@ describe("assertValuesMatchDeclaredObjectTypes", () => {
     const call = src.indexOf("assertValuesMatchDeclaredObjectTypes(");
     expect(call, "the setup loop must call the shared guard").toBeGreaterThan(-1);
     // The call sits inside a try whose catch transitions the run to "failed".
-    const window = src.slice(call - 400, call + 900);
+    // That try now holds TWO pre-dispatch guards — this one and the
+    // satisfiability guard (`assertUnsatisfiableHiddenInputs`, cinatra#3003) —
+    // and BOTH land the run through the same catch, so the window has to reach
+    // past the second call to see it.
+    const window = src.slice(call - 400, call + 1800);
+    // AWAITED, not merely called: an async guard whose promise is dropped would
+    // let dispatch proceed while the rejection escapes the try entirely.
+    expect(window).toMatch(/await\s+assertUnsatisfiableHiddenInputs\(/);
     expect(window).toMatch(/try\s*\{/);
     expect(window).toMatch(/transitionRunStatus\(\s*runId,\s*"queued",\s*"failed"/);
     expect(window).toMatch(/Run cannot start/);
