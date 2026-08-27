@@ -2435,17 +2435,48 @@ describe("direction 4 — the LIVE repo", () => {
     expect(v.tiers.length).toBeGreaterThan(0);
   });
 
-  it("this plan's three proof tiers are wired (cinatra#2936)", () => {
+  it("this plan's four proof tiers are wired (cinatra#2936)", () => {
     const enforcedConfigs = new Set(auditRootIntegrationTiers().enforced.map((e) => e.config));
     for (const config of [
       "vitest.integration-2928.config.ts",
       "vitest.integration-2932.config.ts",
       "vitest.integration-2935.config.ts",
+      // W5b (cinatra#2933). It landed after the other three were wired, so it
+      // spent the interval as a ledger row rather than as a step — which is the
+      // two lawful states working, not an exception to them. Named here for the
+      // same reason as its three siblings: this list is what makes a silent
+      // un-wiring of THIS plan's proof cost a red.
+      "vitest.integration-2933.config.ts",
       // The negative control: the one tier that was already wired. A green
       // above cannot mean "this direction credits everything".
       "vitest.integration-2882.config.ts",
     ]) {
       expect(enforcedConfigs.has(config), `${config} is run by no workflow`).toBe(true);
+    }
+  });
+
+  it("…and none of the four is ALSO recorded as unwired (cinatra#2933)", () => {
+    // THE OTHER HALF OF WIRING ONE. A tier has exactly two lawful states, so
+    // wiring the W5b tier had to delete its ledger row in the same change; a row
+    // that outlived its gap would describe a CI this repository is not running.
+    // Said of these four BY NAME, so re-recording one of them reds a case whose
+    // title says which tier, and the two halves of "wired" fail separately
+    // rather than as one line number.
+    //
+    // READ OFF THE LEDGER FILE, NOT off `exempt`. A row for a tier a workflow
+    // DOES run never reaches `exempt` at all — `auditRootIntegrationTiers`
+    // classifies enforced first and only then looks the config up — it is
+    // reported as `redundantExceptions`. Asserting the absence on `exempt`
+    // would therefore be vacuous for exactly the mutation this arm exists to
+    // catch, which is the false-green direction, so the ledger is read directly.
+    const recorded = new Set(readRootTierExceptions().map((e) => e.config));
+    for (const config of [
+      "vitest.integration-2928.config.ts",
+      "vitest.integration-2932.config.ts",
+      "vitest.integration-2933.config.ts",
+      "vitest.integration-2935.config.ts",
+    ]) {
+      expect(recorded.has(config), `${config} is wired AND recorded as unwired`).toBe(false);
     }
   });
 

@@ -5,7 +5,7 @@
     "`slice` is the issue whose work the tier IS \u2014 where wiring it belongs. It may be CLOSED, and that is exactly what",
     "this ledger records: the tier shipped and its runner did not. An entry for a tier that IS run, or for a config file",
     "that no longer exists, fails the gate, so this list can only shrink honestly.",
-    "Every entry below was found by the cinatra#2936 audit; that change wired the three tiers of its own plan and left",
+    "Every entry below was found by the cinatra#2936 audit; that change wired the four proof tiers of its own plan and left",
     "these untouched, because each belongs to another slice and wiring one needs that slice's services and its judgement."
   ],
   "exceptions": [
@@ -43,11 +43,6 @@
       "config": "vitest.integration-2911.config.ts",
       "slice": "https://github.com/cinatra-ai/cinatra/issues/2911",
       "reason": "Reached by `pnpm test:created-at-immutable`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
-    },
-    {
-      "config": "vitest.integration-2933.config.ts",
-      "slice": "https://github.com/cinatra-ai/cinatra/issues/2933",
-      "reason": "Reached by `pnpm test:run-window`, which no workflow invokes. It is the newest tier of this same epic and was not in the audit this change acts on, so wiring it belongs to its own slice rather than being folded in unannounced."
     }
   ]
 }

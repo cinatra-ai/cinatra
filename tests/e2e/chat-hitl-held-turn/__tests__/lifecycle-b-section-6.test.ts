@@ -25,11 +25,11 @@
 //   C. "the schedule moment is shown for every run a person starts …" (§6 The
 //      runner) — UNMET on `main`, recorded.
 //   D. "Every fixture named in plan section 6 … run … inside the held-turn
-//      harness rather than a second harness" (cinatra#2936) — three of this
+//      harness rather than a second harness" (cinatra#2936) — four of this
 //      plan's own waves shipped their proof in a private
 //      `vitest.integration-*.config.ts` tier no workflow invoked. RECORDED as a
 //      gap when this file landed; CLOSED in the same slice's CI change, which
-//      made all three steps OF THIS HARNESS'S OWN JOB — the clause's "rather
+//      made all four steps OF THIS HARNESS'S OWN JOB — the clause's "rather
 //      than a second harness", read as it is written — and taught
 //      `scripts/audit/ci-pinned-tests-exist.mjs` (direction 4) to fail on the
 //      next root tier that arrives unwired anywhere. D's arm below now asserts
@@ -372,6 +372,7 @@ const PLAN_PROOF_TIERS: ReadonlyArray<{
 }> = [
   { script: "test:lifecycle-moment", config: "vitest.integration-2928.config.ts", wave: "W2a" },
   { script: "test:lent-action-grant", config: "vitest.integration-2932.config.ts", wave: "W5a" },
+  { script: "test:run-window", config: "vitest.integration-2933.config.ts", wave: "W5b" },
   { script: "test:named-agent-start", config: "vitest.integration-2935.config.ts", wave: "W5d" },
 ];
 
@@ -465,18 +466,22 @@ function buildPrerequisites(): readonly string[] {
 }
 
 describe("§6 — the plan's fixtures run in CI", () => {
-  it("this plan's three private proof tiers are invoked by a workflow", () => {
+  it("this plan's four private proof tiers are invoked by a workflow", () => {
     // WAS THE RECORD, IS NOW THE GUARANTEE. A fixture wired to a config nothing
     // runs is the vacuity class this repo already refuses elsewhere
     // (`scripts/audit/ci-pinned-tests-exist.mjs`), and it arrived through a door
     // that guard did not watch: a ROOT config named in a package script rather
-    // than a file path pinned inside a workflow step. All three tiers are now
+    // than a file path pinned inside a workflow step. All four tiers are now
     // steps of this harness's own CI job, and direction 4 of that same guard
-    // fails on the next root tier that arrives unwired anywhere.
+    // fails on the next root tier that arrives unwired anywhere. The W5b tier
+    // is what that guard then held: it landed after the first three were wired,
+    // spent the interval as a ledger row, and joined them as the job's fourth
+    // tier step — which is why this table is read from `PLAN_PROOF_TIERS` and
+    // not from a sentence saying how many there are.
     //
     // THIS ARM IS NOT THAT GUARD, and does not duplicate it. The guard governs
     // EVERY root tier and decides enforceability from the workflow's structure;
-    // this arm says one narrower thing the plan cares about — that THESE THREE,
+    // this arm says one narrower thing the plan cares about — that THESE FOUR,
     // the proof of this plan's own waves, are among the wired ones — and it says
     // it from the harness, where §6's own conformance sentence is checked.
     //
@@ -504,7 +509,7 @@ describe("§6 — the plan's fixtures run in CI", () => {
 
     // Each named tier really is a root integration config reached through that
     // script, and that config really is a file — otherwise the arm above is
-    // three string comparisons against nothing, and it would keep passing after
+    // four string comparisons against nothing, and it would keep passing after
     // a rename on either side.
     const scripts = packageScripts();
     for (const tier of PLAN_PROOF_TIERS) {
