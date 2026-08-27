@@ -42,7 +42,12 @@ export type RunWindowTurnOutcome =
   | {
       ok: true;
       entries: RunWindowEntry[];
-      /** Every fill the run holds, oldest first. */
+      /**
+       * The fills THIS turn placed, oldest first (cinatra#2934, convergence
+       * round 1, finding 1). Selected on the SERVER by the turn's own identity,
+       * because the run holds every earlier message's fills too and no count a
+       * client keeps can reliably tell them apart.
+       */
       fills: RunWindowFillEntry[];
       /** True when the turn actually pressed a control of the bound card. */
       acted: boolean;
@@ -73,16 +78,6 @@ function toEntries(
     }));
 }
 
-function toFills(
-  rows: ReadonlyArray<{
-    fill?: { ref: string; values: Record<string, unknown> } | null;
-  }>,
-): RunWindowFillEntry[] {
-  const out: RunWindowFillEntry[] = [];
-  for (const row of rows) if (row.fill) out.push(row.fill);
-  return out;
-}
-
 /** Send one message from a window and get the whole exchange back. */
 export async function sendRunWindowTurn(input: {
   runId: string;
@@ -102,7 +97,7 @@ export async function sendRunWindowTurn(input: {
     return {
       ok: true,
       entries: toEntries(result.entries),
-      fills: toFills(result.entries),
+      fills: result.fills.map((fill) => ({ ref: fill.ref, values: fill.values })),
       acted: result.acted,
     };
   } catch (err) {
@@ -127,35 +122,16 @@ export async function sendRunWindowTurn(input: {
   }
 }
 
-/**
- * The stored exchange for the first paint after a reload, AND how many fills the
- * run already holds (cinatra#2934, repaired after the picture leg).
- *
- * THE DEFECT THE COUNT REPAIRS. The window applies "only a fill this turn
- * ADDED", and it told turns apart by counting: a turn whose count grew placed
- * one. The counter started at zero on every mount and the load never seeded it,
- * so after ANY page load the first turn read every fill the run already held as
- * new — and a screen whose fields the person had since edited was overwritten by
- * an earlier message's values, on a turn that placed nothing at all.
- */
-export type RunWindowConversation = {
-  entries: RunWindowEntry[];
-  /** How many fills the run holds right now — the counter's starting point. */
-  fillCount: number;
-};
-
+/** The stored exchange for the first paint after a reload. */
 export async function loadRunWindowConversation(
   runId: string,
-): Promise<RunWindowConversation> {
+): Promise<RunWindowEntry[]> {
   try {
     const { readRunWindowConversation } = await impl();
-    const rows = await readRunWindowConversation(runId);
-    return { entries: toEntries(rows), fillCount: toFills(rows).length };
+    return toEntries(await readRunWindowConversation(runId));
   } catch {
     // A window that cannot read its conversation still opens; it simply starts
-    // empty rather than breaking the screen it is portalled into. A count of
-    // zero is the honest reading of "nothing was read", and it is only ever
-    // raised by what a turn actually returns.
-    return { entries: [], fillCount: 0 };
+    // empty rather than breaking the screen it is portalled into.
+    return [];
   }
 }

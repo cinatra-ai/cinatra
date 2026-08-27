@@ -58,6 +58,7 @@ vi.mock("../run-window-turn", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../run-window-turn")>();
   return {
     boundScreenClaimForSurface: actual.boundScreenClaimForSurface,
+    fillsPlacedByMessage: actual.fillsPlacedByMessage,
     canActorRespondToRun: async () => mayRespond,
   };
 });
@@ -113,8 +114,15 @@ import {
   primaryControlFor,
   resolveBoundCard,
 } from "../bound-card-binding";
-import { boundScreenClaimForSurface } from "../run-window-turn";
-import { scheduleFormRowNames, scheduleFormValues } from "../schedule-form-screen";
+import {
+  boundScreenClaimForSurface,
+  fillsPlacedByMessage,
+} from "../run-window-turn";
+import {
+  scheduleFormRowNames,
+  scheduleFormSchema,
+  scheduleFormValues,
+} from "../schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 const PERSON = { userId: "usr_1", orgId: "org_1" };
@@ -293,6 +301,32 @@ describe("the fill's closed set is what the screen draws", () => {
     ).toEqual({
       offeringCompanyWebsite: "https://example.test",
       callToAction: "Book a 20-minute demo",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DEFECT 1, CONTINUED — a value the control cannot show is not "placed"
+// (convergence round 1, findings 2 and 4).
+// ---------------------------------------------------------------------------
+describe("only a value the control could hold is placed", () => {
+  it("an inner property drawn as text refuses a number", () => {
+    // `SingleTextObjectField` reads `value[textProperty]` and shows "" for a
+    // non-string, so recording this would leave the box blank while the answer
+    // said it was filled.
+    expect(selectDrawnFillValues(IDEA_FORM, { idea: { title: 42 } })).toEqual({});
+  });
+
+  it("a declared array of strings refuses a number inside it", () => {
+    expect(
+      selectDrawnFillValues(IDEA_FORM, { idea: { title: "ok", outline: [42] } }),
+    ).toEqual({ idea: { title: "ok" } });
+  });
+
+  it("clearing the single-text control is what its own empty box emits", () => {
+    const held = { ...IDEA_FORM, values: { idea: { title: "old", summary: "kept" } } };
+    expect(selectDrawnFillValues(held, { idea: null })).toEqual({
+      idea: { summary: "kept" },
     });
   });
 });
@@ -509,6 +543,31 @@ describe("the schedule screen binds the scheduler form", () => {
     expect(binding.controls).toEqual(["fill", "submit"]);
   });
 
+  it("the rows offer exactly what their own controls offer", () => {
+    // The repeat chooser lists {1,2,3,4,6,8,12}; the minute chooser lists
+    // five-minute steps; the day chooser lists 1-28; the timezone chooser lists
+    // the platform's own IANA zones. A value outside any of those is not one the
+    // person could have picked (convergence round 1, finding 3).
+    const form = { schema: scheduleFormSchema(), values: {} };
+    expect(selectDrawnFillValues(form, { interval: 5 })).toEqual({});
+    expect(selectDrawnFillValues(form, { interval: 6 })).toEqual({ interval: 6 });
+    expect(selectDrawnFillValues(form, { minute: 2 })).toEqual({});
+    expect(selectDrawnFillValues(form, { minute: 30 })).toEqual({ minute: 30 });
+    expect(selectDrawnFillValues(form, { dayOfMonth: 31 })).toEqual({});
+    expect(selectDrawnFillValues(form, { timezone: "Nowhere/Nowhen" })).toEqual({});
+    expect(selectDrawnFillValues(form, { timezone: 42 })).toEqual({});
+    expect(selectDrawnFillValues(form, { timezone: "Europe/Berlin" })).toEqual({
+      timezone: "Europe/Berlin",
+    });
+    expect(selectDrawnFillValues(form, { scheduledAt: {} })).toEqual({});
+    expect(selectDrawnFillValues(form, { scheduledAt: "tomorrow morning" })).toEqual({});
+    // The box holds a local `YYYY-MM-DDTHH:mm`, so the same moment written any
+    // other way is RECORDED as the characters the box will show.
+    expect(selectDrawnFillValues(form, { scheduledAt: "2026-08-28 09:00:00" })).toEqual({
+      scheduledAt: "2026-08-28T09:00",
+    });
+  });
+
   it("what the rows are holding is the run's own trigger, or nothing at all", () => {
     expect(scheduleFormValues(null)).toEqual({});
     expect(
@@ -523,5 +582,43 @@ describe("the schedule screen binds the scheduler form", () => {
       scheduledAt: "2026-08-28T09:00",
       timezone: "Europe/Berlin",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DEFECT 3 — a turn's fill is its OWN, by the turn's identity (convergence
+// round 1, finding 1: a count is not an identity).
+// ---------------------------------------------------------------------------
+describe("a turn's fills are selected by the turn's own identity", () => {
+  const rows = [
+    { messageId: "msg_0", fill: { ref: "r", values: { subject: "earlier" } } },
+    { messageId: "msg_0", fill: null, text: "an earlier answer" },
+    { messageId: "msg_1", fill: null, text: "this turn's question" },
+    { messageId: "msg_2", fill: { ref: "r", values: { subject: "another tab's" } } },
+  ] as never;
+
+  it("a turn that placed none gets none, however many the run holds", () => {
+    expect(fillsPlacedByMessage(rows, "msg_1")).toEqual([]);
+  });
+
+  it("a turn gets its own, in the order it placed them", () => {
+    const mine = [
+      ...(rows as unknown as Record<string, unknown>[]),
+      { messageId: "msg_1", fill: { ref: "r", values: { subject: "mine" } } },
+      { messageId: "msg_1", fill: { ref: "r", values: { body: "mine too" } } },
+    ] as never;
+    expect(fillsPlacedByMessage(mine, "msg_1")).toEqual([
+      { ref: "r", values: { subject: "mine" } },
+      { ref: "r", values: { body: "mine too" } },
+    ]);
+  });
+
+  it("a row written before turn identities were recorded is not this turn's", () => {
+    expect(
+      fillsPlacedByMessage(
+        [{ messageId: null, fill: { ref: "r", values: { subject: "old" } } }] as never,
+        "msg_1",
+      ),
+    ).toEqual([]);
   });
 });

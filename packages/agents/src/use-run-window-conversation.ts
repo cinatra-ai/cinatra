@@ -71,39 +71,31 @@ export function useRunWindowConversation(args: {
   boundCardRef.current = args.boundCard;
   // A local id source for the run-less window, which has no stored positions.
   const localIdRef = useRef(0);
-  // How many fills the run held at the end of the last turn, so a turn's OWN
-  // fill can be told from the ones already on the run.
-  //
-  // SEEDED FROM THE LOAD, not from zero (cinatra#2934, repaired after the
-  // picture leg). A run carries its fills, and a freshly mounted window that
-  // started this counter at zero read all of them as this turn's: measured on a
+  // THERE IS NO FILL COUNTER HERE, and its absence is the repair (cinatra#2934,
+  // after the picture leg and convergence round 1, finding 1). A turn's own fill
+  // used to be told from the run's by counting how many the run held before and
+  // after — and a count is only as good as its starting point. This one began at
+  // zero on every mount and the load never seeded it, so after ANY page load the
+  // first turn read every fill the run already held as its own: measured on a
   // reloaded step-by-step screen, a turn that placed NO fill was followed by the
-  // three fields holding an earlier message's values. The rule at the send below
-  // — "only a fill this turn ADDED is applied" — was false for the first turn
-  // after every page load, which is the turn a person is most likely to take.
-  const fillCountRef = useRef(0);
+  // three fields holding an earlier message's values. Seeding it would still
+  // have left the turn sent before the load returned, the load that failed soft
+  // and the second tab filling in between. The SERVER names the turn instead, so
+  // `outcome.fills` is already only this message's rows and there is nothing
+  // here to keep in step.
 
   useEffect(() => {
     if (!runId) {
-      fillCountRef.current = 0;
       setLoaded(true);
       return;
     }
     let cancelled = false;
     setLoaded(false);
-    // A DIFFERENT RUN IS A DIFFERENT LEDGER. The count belongs to the run this
-    // window is now showing, so it starts again and is raised by the load.
-    fillCountRef.current = 0;
-    void loadRunWindowConversation(runId).then((loaded) => {
+    void loadRunWindowConversation(runId).then((rows) => {
       if (cancelled) return;
       // The stored exchange IS the state: what a reload shows is what the run
       // holds, never a client-side merge of the two.
-      setEntries(loaded.entries);
-      // NEVER LOWERED. The store is append-only, so the count only grows; a turn
-      // that landed while this read was in flight has already raised it past
-      // what the read saw, and seeding over that would make the NEXT turn read
-      // its predecessor's fill as its own.
-      fillCountRef.current = Math.max(fillCountRef.current, loaded.fillCount);
+      setEntries(rows);
       setLoaded(true);
     });
     return () => {
@@ -157,16 +149,15 @@ export function useRunWindowConversation(args: {
           return NOTHING_HAPPENED;
         }
         setEntries(outcome.entries);
-        // The NEWEST fill is the one the screen writes into its fields: a turn
-        // that filled twice placed the second set last, and that is what the
-        // person was told about.
+        // THIS TURN'S OWN FILLS, and only those — the server selected them by the
+        // turn's identity. The NEWEST is the one the screen writes into its
+        // fields: a turn that filled twice placed the second set last, and that
+        // is what the person was told about. A turn that placed none applies
+        // none, so a screen re-reading the run never re-applies a fill the
+        // person has since edited away.
         const fills = outcome.fills;
-        const previous = fillCountRef.current;
-        fillCountRef.current = fills.length;
         return {
-          // Only a fill this turn ADDED is applied. A screen re-reading the run
-          // must not re-apply a fill the person has since edited away.
-          fill: fills.length > previous ? (fills[fills.length - 1] ?? null) : null,
+          fill: fills.length > 0 ? (fills[fills.length - 1] ?? null) : null,
           acted: outcome.acted,
         };
       } finally {

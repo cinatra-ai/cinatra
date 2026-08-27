@@ -35,6 +35,10 @@ import {
   DEFAULT_RECURRING_CONFIG,
   parseCronToRecurring,
 } from "@cinatra-ai/agents/trigger-recurrence";
+import {
+  IANA_TIMEZONE_FORMAT,
+  LOCAL_DATE_TIME_FORMAT,
+} from "@/lib/lifecycle/bound-screen-controls";
 import type { TriggerRecord } from "@cinatra-ai/agents/trigger-store";
 
 /**
@@ -74,12 +78,14 @@ export function scheduleFormSchema(): Record<string, unknown> {
       },
       scheduledAt: {
         type: "string",
+        format: LOCAL_DATE_TIME_FORMAT,
         title: "Run at",
         description:
           "The local date and time for a one-off run, as YYYY-MM-DDTHH:mm, read in the timezone row below.",
       },
       timezone: {
         type: "string",
+        format: IANA_TIMEZONE_FORMAT,
         title: "Timezone",
         description: "An IANA timezone name, for example Europe/Berlin.",
       },
@@ -91,8 +97,11 @@ export function scheduleFormSchema(): Record<string, unknown> {
       interval: {
         type: "integer",
         title: "Every",
-        minimum: 1,
-        maximum: 30,
+        // THE CHOOSER'S OWN OPTIONS, not a range (convergence round 1, finding
+        // 3). The control offers exactly these, and only for daily, weekly and
+        // monthly — quarterly and yearly draw no interval at all and are always
+        // one.
+        enum: [1, 2, 3, 4, 6, 8, 12],
         description: "Days, weeks or months between runs; always 1 for quarterly and yearly.",
       },
       weekdays: {
@@ -104,8 +113,10 @@ export function scheduleFormSchema(): Record<string, unknown> {
       dayOfMonth: {
         type: "integer",
         title: "Day of the month",
+        // 1-28, which is what the chooser lists: a day that does not exist in
+        // every month is not one it offers.
         minimum: 1,
-        maximum: 31,
+        maximum: 28,
       },
       monthlyMode: {
         type: "string",
@@ -135,7 +146,13 @@ export function scheduleFormSchema(): Record<string, unknown> {
         maximum: 12,
       },
       hour: { type: "integer", title: "Hour", minimum: 0, maximum: 23 },
-      minute: { type: "integer", title: "Minute", minimum: 0, maximum: 59 },
+      // The minute chooser lists five-minute steps, so those are the minutes a
+      // person can pick and the only ones a fill may place.
+      minute: {
+        type: "integer",
+        title: "Minute",
+        enum: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55],
+      },
     },
   };
 }

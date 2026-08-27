@@ -108,7 +108,7 @@ vi.mock("../agent-ui-override-registry", () => ({
 // The window's server bridge. The store is proven elsewhere (unit + real-DB
 // tiers); here it only has to answer so the controller can settle.
 vi.mock("../run-window-actions", () => ({
-  loadRunWindowConversation: vi.fn(async () => ({ entries: [], fillCount: 0 })),
+  loadRunWindowConversation: vi.fn(async () => []),
   // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
   // reports the fills it placed and whether it PRESSED a control, and the one
   // controller reads both. A mock that omits them lies about the contract.

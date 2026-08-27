@@ -107,7 +107,7 @@ vi.mock("lucide-react", () => {
 // The window's server bridge. Its behaviour is proven by the store's own unit
 // and real-database tiers; here it only has to answer so the controller settles.
 vi.mock("../run-window-actions", () => ({
-  loadRunWindowConversation: vi.fn(async () => ({ entries: [], fillCount: 0 })),
+  loadRunWindowConversation: vi.fn(async () => []),
   // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
   // reports the fills it placed and whether it PRESSED a control, and the one
   // controller reads both. A mock that omits them lies about the contract.

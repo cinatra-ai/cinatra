@@ -1,16 +1,24 @@
 // @vitest-environment jsdom
-// THE FILL COUNTER IS SEEDED FROM WHAT THE RUN ALREADY HOLDS (cinatra#2934,
-// lifecycle-b W5c — the third defect the picture leg's readbacks found).
+// A TURN APPLIES ITS OWN FILL AND NO OTHER (cinatra#2934, lifecycle-b W5c — the
+// third defect the picture leg's readbacks found, and convergence round 1's
+// finding on it).
 //
-// The window's rule is "only a fill this turn ADDED is applied. A screen
+// The window's rule is "only a fill this turn placed is applied. A screen
 // re-reading the run must not re-apply a fill the person has since edited away."
-// It is implemented by counting, and the counter started at zero on every mount
-// while the load effect never seeded it — so after ANY page load the first turn
-// read every fill the run already held as its own.
+// It was implemented by COUNTING how many fills the run held before and after a
+// turn, and the counter began at zero on every mount while the load never
+// seeded it — so after any page load the first turn read every fill the run
+// already held as its own.
 //
 // MEASURED ON THE REAL SCREEN: a freshly loaded step-by-step screen with three
 // empty fields; the turn placed NO fill; the fields afterwards held an EARLIER
 // message's values.
+//
+// The repair is not a better count: the server selects the turn's own rows by
+// the turn's identity, so this hook has nothing to keep in step. What is pinned
+// here is that it applies exactly what came back, whatever the run holds and
+// whatever the load did — including a load that has not returned yet, which no
+// seeding could have covered.
 
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -25,28 +33,27 @@ vi.mock("../run-window-actions", () => ({
 
 import { useRunWindowConversation } from "../use-run-window-conversation";
 
-const FILL_A = { ref: "ref_1", values: { subject: "an earlier message's subject" } };
-const FILL_B = { ref: "ref_1", values: { subject: "what this turn asked for" } };
+const MINE = { ref: "ref_1", values: { subject: "what this turn asked for" } };
+const ALSO_MINE = { ref: "ref_1", values: { body: "and this" } };
 
 function mount() {
-  return renderHook(() => useRunWindowConversation({ runId: "run_1", surface: "step-by-step" }));
+  return renderHook(() =>
+    useRunWindowConversation({ runId: "run_1", surface: "step-by-step" }),
+  );
 }
 
-describe("a turn after a page load applies only the fill it added", () => {
-  it("a turn that placed NOTHING applies nothing, with prior fills on the run", async () => {
-    loadRunWindowConversation.mockResolvedValue({
-      entries: [
-        { id: 1, role: "user", content: "make it say that" },
-        { id: 2, role: "assistant", content: "Placed." },
-      ],
-      // TWO fills already on the run — the ones the person has since edited away.
-      fillCount: 2,
-    });
-    // The turn answers a question: the run still holds exactly those two fills.
+describe("a turn applies its own fill and no other", () => {
+  it("a turn that placed NOTHING applies nothing, however many the run holds", async () => {
+    loadRunWindowConversation.mockResolvedValue([
+      { id: 1, role: "user", content: "make it say that" },
+      { id: 2, role: "assistant", content: "Placed." },
+    ]);
+    // The person asks a question. The run still carries the earlier message's
+    // fills; none of them is this turn's, so the server returns none.
     sendRunWindowTurn.mockResolvedValue({
       ok: true,
       entries: [],
-      fills: [FILL_A, FILL_B],
+      fills: [],
       acted: false,
     });
 
@@ -60,12 +67,12 @@ describe("a turn after a page load applies only the fill it added", () => {
     expect(effect).toEqual({ fill: null, acted: false });
   });
 
-  it("a turn that DID add one applies exactly that one", async () => {
-    loadRunWindowConversation.mockResolvedValue({ entries: [], fillCount: 1 });
+  it("applies the NEWEST of the fills this turn placed", async () => {
+    loadRunWindowConversation.mockResolvedValue([]);
     sendRunWindowTurn.mockResolvedValue({
       ok: true,
       entries: [],
-      fills: [FILL_A, FILL_B],
+      fills: [MINE, ALSO_MINE],
       acted: false,
     });
 
@@ -74,27 +81,37 @@ describe("a turn after a page load applies only the fill it added", () => {
 
     let effect: { fill: unknown; acted: boolean } | undefined;
     await act(async () => {
-      effect = await result.current.send('make the subject "what this turn asked for"');
+      effect = await result.current.send("make the subject that, and the body this");
     });
-    expect(effect).toEqual({ fill: FILL_B, acted: false });
+    expect(effect).toEqual({ fill: ALSO_MINE, acted: false });
   });
 
-  it("a screen with no stored conversation still applies its own first fill", async () => {
-    loadRunWindowConversation.mockResolvedValue({ entries: [], fillCount: 0 });
+  it("a turn sent BEFORE the stored exchange has been read still applies its own", async () => {
+    // No seeding could have covered this: the load is still in flight when the
+    // person sends. The turn's own fill is still the turn's own.
+    let releaseLoad: (rows: unknown[]) => void = () => {};
+    loadRunWindowConversation.mockReturnValue(
+      new Promise((resolve) => {
+        releaseLoad = resolve as (rows: unknown[]) => void;
+      }),
+    );
     sendRunWindowTurn.mockResolvedValue({
       ok: true,
       entries: [],
-      fills: [FILL_A],
+      fills: [MINE],
       acted: false,
     });
 
     const { result } = mount();
-    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.loaded).toBe(false);
 
     let effect: { fill: unknown; acted: boolean } | undefined;
     await act(async () => {
       effect = await result.current.send("make it say that");
     });
-    expect(effect).toEqual({ fill: FILL_A, acted: false });
+    expect(effect).toEqual({ fill: MINE, acted: false });
+    await act(async () => {
+      releaseLoad([]);
+    });
   });
 });

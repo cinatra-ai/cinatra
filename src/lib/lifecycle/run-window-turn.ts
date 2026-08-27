@@ -42,6 +42,7 @@ import {
   readRunWindowMessages,
   type RunWindowMessage,
   type RunWindowSurface,
+  type RunWindowFill,
 } from "@cinatra-ai/agents/run-window-conversation-store";
 import {
   actorFromSession,
@@ -137,8 +138,43 @@ export type RunWindowTurnInput = {
   attachments?: readonly Record<string, unknown>[];
 };
 
+/**
+ * The fills ONE turn placed, selected by that turn's own identity
+ * (cinatra#2934, convergence round 1, finding 1).
+ *
+ * PURE, and the whole of the rule. Every row a turn writes carries its
+ * `messageId` — the person's message, the fills the assistant placed, the files
+ * that travelled with it — so which fills are THIS turn's is a fact about the
+ * rows, not an arithmetic about how many the run held before.
+ *
+ * WHY IT IS NOT A COUNT. The window applies "only a fill this turn placed", and
+ * that used to be decided by comparing counts across a turn. A count is only as
+ * good as its starting point, and the client's was wrong in four ways at once:
+ * it began at zero on every mount, the load never seeded it (measured — a
+ * reloaded screen's first turn re-applied an earlier message's values into three
+ * fields it had not touched), a turn sent before the load returned would have
+ * out-run any seeding, a load that failed soft reports nothing to seed from, and
+ * a second tab filling in between moves the count under both. Naming the turn
+ * answers all of them and needs no ordering at all.
+ */
+export function fillsPlacedByMessage(
+  rows: readonly RunWindowMessage[],
+  messageId: string,
+): RunWindowFill[] {
+  const out: RunWindowFill[] = [];
+  for (const row of rows) {
+    if (row.fill && row.messageId === messageId) out.push(row.fill);
+  }
+  return out;
+}
+
 export type RunWindowTurnResult = {
   entries: RunWindowMessage[];
+  /**
+   * The fills THIS turn placed, oldest first — never another message's, and
+   * never the run's whole history. See {@link fillsPlacedByMessage}.
+   */
+  fills: RunWindowFill[];
   /** True when the turn ran on a model that could not use tools. */
   toolLess: boolean;
   /**
@@ -573,9 +609,7 @@ export async function runWindowTurn(
       `[run-window] the answer for run ${input.runId} could not be stored`,
       err,
     );
-    return {
-      acted,
-      entries: [
+    const unstoredEntries = [
         ...(await readRunWindowMessages(input.runId)),
         {
           id: `unstored:${userRow.id}`,
@@ -590,12 +624,22 @@ export async function runWindowTurn(
           messageId,
           createdAt: new Date(),
         },
-      ],
+      ];
+    return {
+      acted,
+      entries: unstoredEntries,
+      fills: fillsPlacedByMessage(unstoredEntries, messageId),
       toolLess,
     };
   }
 
-  return { entries: await readRunWindowMessages(input.runId), toolLess, acted };
+  const entries = await readRunWindowMessages(input.runId);
+  return {
+    entries,
+    toolLess,
+    acted,
+    fills: fillsPlacedByMessage(entries, messageId),
+  };
 }
 
 /**

@@ -192,13 +192,55 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** The two formats a row may declare, and what each control accepts. */
+export const IANA_TIMEZONE_FORMAT = "iana-timezone";
+export const LOCAL_DATE_TIME_FORMAT = "local-date-time";
+const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+
+let ianaZones: Set<string> | null | undefined;
+function isIanaTimezone(value: string): boolean {
+  if (ianaZones === undefined) {
+    try {
+      ianaZones = new Set(
+        (Intl as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf!(
+          "timeZone",
+        ),
+      );
+    } catch {
+      // A runtime that cannot list the zones cannot contradict one either; the
+      // control's own list is the browser's, and refusing every value here would
+      // take the timezone row away rather than keep it honest.
+      ianaZones = null;
+    }
+  }
+  return ianaZones === null ? value.trim() !== "" : ianaZones.has(value);
+}
+
+/**
+ * The value as the control would HOLD it, where the row says how it is written.
+ *
+ * The date-time row is a local `YYYY-MM-DDTHH:mm` box, and an ask that spelled
+ * the same moment with seconds or a space is the same moment; normalising it
+ * here means the row records exactly the characters the box will show, which is
+ * what makes "placed in the fields on the person's screen" true.
+ */
+function normalizeForRow(row: Record<string, unknown> | null, value: unknown): unknown {
+  if (row?.format === LOCAL_DATE_TIME_FORMAT && typeof value === "string") {
+    return value.trim().replace(" ", "T").slice(0, 16);
+  }
+  return value;
+}
+
 /**
  * Is this value one the row's own control could hold?
  *
  * A row that declares an `enum` draws a chooser, so a value outside it is not a
  * value the person could ever have selected; a bounded integer row draws a
- * number the same way. Dropping those is the same rule as dropping an undeclared
- * key, applied one level in: the closed set is what the screen can show.
+ * number the same way, and a text row draws text. Dropping those is the same
+ * rule as dropping an undeclared key, applied one level in: the closed set is
+ * what the screen can show. Recording a value the control cannot display and
+ * then reporting it as placed is exactly the defect the picture leg found, one
+ * level down (convergence round 1, finding 2).
  */
 function valueFitsRow(row: Record<string, unknown> | null, value: unknown): boolean {
   if (!row) return true;
@@ -209,6 +251,13 @@ function valueFitsRow(row: Record<string, unknown> | null, value: unknown): bool
     }
     return declaredEnum.includes(value as never);
   }
+  if (row.type === "string") {
+    if (typeof value !== "string") return false;
+    if (row.format === IANA_TIMEZONE_FORMAT) return isIanaTimezone(value);
+    if (row.format === LOCAL_DATE_TIME_FORMAT) return LOCAL_DATE_TIME.test(value);
+    return true;
+  }
+  if (row.type === "boolean") return typeof value === "boolean";
   if (row.type === "integer" || row.type === "number") {
     if (typeof value !== "number" || !Number.isFinite(value)) return false;
     if (row.type === "integer" && !Number.isInteger(value)) return false;
@@ -220,6 +269,17 @@ function valueFitsRow(row: Record<string, unknown> | null, value: unknown): bool
     if (!Array.isArray(value)) return false;
     const items = isPlainObject(row.items) ? row.items : null;
     return value.every((entry) => valueFitsRow(items, entry));
+  }
+  if (row.type === "object") {
+    if (!isPlainObject(value)) return false;
+    // EVERY DECLARED KEY, all the way down: an inner property the control draws
+    // as text must not be handed a number, or the box renders empty while the
+    // answer says it was filled.
+    for (const [key, inner] of Object.entries(value)) {
+      const declared = propertySchema(row, key);
+      if (declared && !valueFitsRow(declared, inner)) return false;
+    }
+    return true;
   }
   return true;
 }
@@ -238,15 +298,21 @@ function valueForDrawnControl(
 ): unknown {
   if (row?.type === "object") {
     const textProperty = row[OBJECT_TEXT_PROPERTY_KEY];
+    const hasTextProperty = typeof textProperty === "string" && textProperty !== "";
     const carried = isPlainObject(current) ? current : {};
-    if (
-      typeof requested === "string" &&
-      typeof textProperty === "string" &&
-      textProperty !== ""
-    ) {
+    // CLEARING IS A REAL THING TO ASK FOR (convergence round 1, finding 4), and
+    // it is what the control's OWN empty box emits: the companions it was
+    // holding, with the text property gone. `selectFillableValues` has always
+    // said `null` is kept; an object control has to mean the same thing by it.
+    if (requested === null) {
+      const cleared: Record<string, unknown> = { ...carried };
+      if (hasTextProperty) delete cleared[textProperty as string];
+      return cleared;
+    }
+    if (typeof requested === "string" && hasTextProperty) {
       // ONE TEXT BOX. The control writes its text into the declared property and
       // keeps the companions it was holding — the renderer's own contract.
-      return { ...carried, [textProperty]: requested };
+      return { ...carried, [textProperty as string]: requested };
     }
     if (isPlainObject(requested)) {
       // FURTHER KEYS ONLY WHEN THE ASK NAMES THEM, and only keys the object
@@ -263,8 +329,17 @@ function valueForDrawnControl(
     }
     return undefined;
   }
-  if (!valueFitsRow(row, requested)) return undefined;
-  return requested;
+  // A PLAIN TEXT ROW can be emptied too, and its box shows the empty; a CHOOSER
+  // or a number cannot be un-chosen, so `null` there is not a value the control
+  // could hold and is dropped like any other.
+  if (requested === null) {
+    return row && row.type === "string" && !Array.isArray(row.enum) && !row.format
+      ? null
+      : undefined;
+  }
+  const normalized = normalizeForRow(row, requested);
+  if (!valueFitsRow(row, normalized)) return undefined;
+  return normalized;
 }
 
 /**
