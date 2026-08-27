@@ -84,6 +84,33 @@ import type { RecommendedSkillForChip } from "./server-actions";
 
 export type { RecommendationHoldActor } from "./recommendation-hold";
 
+/**
+ * ONE SKILL THE HOLD ITSELF OFFERED, carried into the settled reading
+ * (cinatra#2790, epic #2784 S9f).
+ *
+ * WHY THE DURABLE DECISION EVIDENCE IS NOT ENOUGH ON ITS OWN. §V's settled
+ * clause is "one chip per skill, each showing what it recorded", and its own
+ * drawing renders the skipped one — `Schedule send ✕ Skipped` — beside the
+ * confirmed and the adjusted one. But a skill settled by pressing ITS OWN Skip
+ * writes no selection row (the selection store records what the run will use),
+ * and the rejected half is written only for a candidate the scorer
+ * RECOMMENDED (`recommendation-interception.ts`, `persistRejectedHalf`). So on
+ * an offer where nothing scored over the recommend threshold — which is every
+ * chip of a run started with no input params — a skipped skill left NO row of
+ * any kind, and the settled row drew one chip fewer than the skills it had
+ * just asked about.
+ *
+ * THE OFFER IS THE MISSING HALF, AND IT IS ALREADY DURABLE. The set a card
+ * offered is claimed against the hold at the first draw (cinatra#2906). Carried
+ * here, it lets the ONE row draw a chip for every skill it offered and state
+ * SKIPPED on the ones no decision row names — which is what happened to them.
+ */
+export type RunRecommendationSettledCandidate = {
+  skillId: string;
+  /** The manifest displayName the held chip carried, or the id when unresolvable. */
+  name: string;
+};
+
 /** What the card may draw right now, for THIS reader. */
 export type RunRecommendationHoldState =
   | { state: "none" }
@@ -116,8 +143,20 @@ export type RunRecommendationHoldState =
       state: "confirmed";
       skillNames: string[];
       decided: RunRecommendationDecidedSkill[];
+      /**
+       * THE HOLD'S OWN OFFER — one entry per skill this reader was asked about,
+       * so the settled row can state an outcome for each of them. Absent only
+       * where the offer cannot be read (a hold parked before cinatra#2906 owns
+       * no claim); the row then keeps exactly the reading it had before.
+       */
+      candidates?: RunRecommendationSettledCandidate[];
     }
-  | { state: "skipped"; decided: RunRecommendationDecidedSkill[] };
+  | {
+      state: "skipped";
+      decided: RunRecommendationDecidedSkill[];
+      /** The same offer, for the same reason — see the `confirmed` arm above. */
+      candidates?: RunRecommendationSettledCandidate[];
+    };
 
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
@@ -229,6 +268,51 @@ async function resolveDecidedSkillNames(run: AgentRunRecord): Promise<Map<string
 }
 
 /**
+ * THE HOLD'S OWN OFFER, resolved for the SETTLED reading (cinatra#2790).
+ *
+ * Read back from the claim the FIRST draw wrote against this hold — not
+ * re-scored — so the settled row states the outcome of the very set the reader
+ * was asked about, whatever has been published since.
+ *
+ * INTERSECTED AGAINST THIS READER exactly as the held branch intersects its
+ * chips, and for the same reason: the settled row is the held row after it
+ * settled, so a reader who was never shown a scoped skill does not learn its
+ * name from the row's decided reading either.
+ *
+ * BEST-EFFORT AND ONE-DIRECTIONAL. An offer that cannot be read costs the
+ * SKIPPED chips and never the card: the answer falls back to the decided
+ * evidence alone, which is the reading this branch had before. A hold parked
+ * before cinatra#2906 owns no claim and lands there by construction.
+ */
+async function resolveSettledCandidates(input: {
+  run: AgentRunRecord;
+  holdId: string;
+  who: RecommendationHoldActor;
+  nameBySkillId: ReadonlyMap<string, string>;
+}): Promise<RunRecommendationSettledCandidate[]> {
+  const { run, holdId, who, nameBySkillId } = input;
+  try {
+    const offered = await readRunRecommendationOfferedSet(holdId);
+    if (offered.length === 0) return [];
+    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const packageName = template?.packageName;
+    if (!packageName) return [];
+    const entitled = new Set(
+      await resolveRecommendationCandidateSkillIds({
+        run,
+        packageName,
+        viewer: viewerScopeForHoldActor(who),
+      }),
+    );
+    return offered
+      .filter((o) => entitled.has(o.skillId))
+      .map((o) => ({ skillId: o.skillId, name: nameBySkillId.get(o.skillId) ?? o.skillId }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * THE READ LADDER, for one verified reader.
  *
  * AUTHORIZATION (cinatra#2148): the run is loaded THROUGH the access door —
@@ -268,14 +352,25 @@ export async function resolveRecommendationHoldStateForActor(input: {
     }
     const nameBySkillId = await resolveDecidedSkillNames(run);
     const decided = decidedSkillsFromEvidence(selected, rejected, nameBySkillId);
+    // THE OFFER RIDES BOTH SETTLED ANSWERS, and therefore BOTH TRANSPORTS: the
+    // cookie action and the broker read route each return this state verbatim,
+    // so the row is handed the same shape whichever host drew it. There is no
+    // second path and no host-specific settled reading.
+    const candidates = await resolveSettledCandidates({
+      run,
+      holdId: park.id,
+      who,
+      nameBySkillId,
+    });
     if (selected.length > 0) {
       return {
         state: "confirmed",
         skillNames: selected.map((s) => nameBySkillId.get(s.skillId) ?? s.skillId),
         decided,
+        candidates,
       };
     }
-    if (hasRunRecommendationSkip(runId)) return { state: "skipped", decided };
+    if (hasRunRecommendationSkip(runId)) return { state: "skipped", decided, candidates };
     return { state: "none" };
   }
 
