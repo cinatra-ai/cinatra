@@ -171,3 +171,157 @@ describe("a credential in a KEY is found, and the diagnostic never echoes it", (
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round-3 review probes (PR #3017). Every case below is a shape the reviewer
+// carried through the detector on the first attempt. The literals follow this
+// file's existing fixture convention — ordered alphabet runs, never a
+// real-looking credential — so the organization's own secret-scan and
+// source-leak gates stay green on them.
+// ---------------------------------------------------------------------------
+
+/** Fixture credential shapes: obviously synthetic, structurally credential-like. */
+const PAT_SHAPED = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+const ANTHROPIC_SHAPED = "sk-ant-0123456789abcdefghijklmnopqrstuvwxyz";
+/** A 64-char hex run over the full hex alphabet — maximal normalized entropy. */
+const HEX_KEY_SHAPED = "0123456789abcdef".repeat(4);
+
+describe("placeholder tolerance is per token, not a whole-value switch (item 1)", () => {
+  it("still tolerates a value that documents how to set a key", () => {
+    expect(detectMemoryCredentialPattern("export OPENAI_API_KEY=${OPENAI_API_KEY}")).toBeNull();
+    expect(detectMemoryCredentialPattern("Authorization: Bearer <API_TOKEN>")).toBeNull();
+    expect(detectMemoryCredentialPattern("Set ${HOME} first.")).toBeNull();
+    expect(detectMemoryCredentialPattern("See <TODO>.")).toBeNull();
+    expect(detectMemoryCredentialPattern("{{ MY_TEMPLATE_VAR }}")).toBeNull();
+    expect(detectMemoryCredentialPattern("****")).toBeNull();
+    expect(detectMemoryCredentialPattern("REDACTED")).toBeNull();
+    expect(detectMemoryCredentialPattern("$HOME")).toBeNull();
+  });
+
+  it("does NOT let a placeholder anywhere in the value un-scan the rest of it", () => {
+    expect(detectMemoryCredentialPattern(`Set \${HOME} first. ${PAT_SHAPED}`)).toBe("github-pat");
+    expect(detectMemoryCredentialPattern(`See <TODO>. ${PAT_SHAPED}`)).toBe("github-pat");
+    expect(detectMemoryCredentialPattern(`See <BR>. ${ANTHROPIC_SHAPED}`)).toBe("anthropic-key");
+    expect(detectMemoryCredentialPattern(`{{ ${PAT_SHAPED} }}`)).toBe("github-pat");
+    expect(detectMemoryCredentialPattern(`<X> ${PAT_SHAPED}`)).toBe("github-pat");
+    expect(
+      detectMemoryCredentialPattern(`https://host/hook?a=\${T}&token=${PAT_SHAPED}`),
+    ).toBe("github-pat");
+  });
+});
+
+describe('a token that merely CONTAINS "example" is not skipped (item 6)', () => {
+  it("skips the placeholder word as a whole token or a delimited word", () => {
+    expect(detectMemoryCredentialPattern("sk-EXAMPLE")).toBeNull();
+    expect(detectMemoryCredentialPattern("token.example.placeholder-value")).toBeNull();
+  });
+
+  it("does not skip a credential-shaped token with the word embedded in it", () => {
+    // The reviewer's probe: a 35-character mixed-case token with `example`
+    // spliced into its middle. The word is not a whole token and not a
+    // delimited word inside one, so it must not switch the detector off.
+    const embedded = "0123456789abcdexampleefghijklmnopqr";
+    expect(embedded).toHaveLength(35);
+    expect(detectMemoryCredentialPattern(embedded)).toBe("high-entropy-token");
+  });
+});
+
+describe("the entropy branch is alphabet-aware (item 5)", () => {
+  it("flags a hex-encoded key, which a 4.5-bits-per-char rule can never reach", () => {
+    expect(detectMemoryCredentialPattern(HEX_KEY_SHAPED)).toBe("high-entropy-token");
+    expect(detectMemoryCredentialPattern(HEX_KEY_SHAPED.repeat(2))).toBe("high-entropy-token");
+  });
+
+  it("flags a PEM private-key block, which no entropy rule catches", () => {
+    expect(
+      detectMemoryCredentialPattern("-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----"),
+    ).toBe("pem-private-key");
+    expect(detectMemoryCredentialPattern("-----BEGIN OPENSSH PRIVATE KEY-----")).toBe(
+      "pem-private-key",
+    );
+  });
+
+  it("flags a password carried in a connection URL's userinfo", () => {
+    expect(detectMemoryCredentialPattern("postgres://app:hunter2@db.internal:5432/main")).toBe(
+      "url-credential",
+    );
+    expect(detectMemoryCredentialPattern("https://user:tokenvalue@example.com/path")).toBe(
+      "url-credential",
+    );
+  });
+
+  it("tolerates a connection URL whose password is a placeholder", () => {
+    expect(
+      detectMemoryCredentialPattern("postgres://app:${PGPASSWORD}@db.internal:5432/main"),
+    ).toBeNull();
+    expect(detectMemoryCredentialPattern("https://user@example.com/path")).toBeNull();
+  });
+
+  it("does not flag ordinary long identifiers, paths or prose", () => {
+    for (const benign of [
+      "resolveMemoryConceptScopeRequestForBundle",
+      "OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED",
+      "memory-sync-preflight-batch-classification",
+      "packages/objects/src/mcp/handlers.ts",
+      "internationalizationandlocalization",
+      "ObjectSyncAdapterConfigRow",
+      "a concept about debugging the sync run end to end",
+    ]) {
+      expect(detectMemoryCredentialPattern(benign)).toBeNull();
+    }
+  });
+});
+
+describe("the reported pattern names the most specific prefix (item 13)", () => {
+  it("reports an Anthropic key as anthropic-key, not openai-sk", () => {
+    expect(detectMemoryCredentialPattern(ANTHROPIC_SHAPED)).toBe("anthropic-key");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex convergence round (PR #3017 fix round). Two shapes that survived the
+// round-3 fixes on the first attempt and are pinned here so they cannot come
+// back.
+// ---------------------------------------------------------------------------
+
+describe("a placeholder WORD does not launder the token it is glued to", () => {
+  it("flags a high-entropy token with a delimited placeholder word inside it", () => {
+    // 38 characters, `example` delimited by hyphens in the middle. Matching the
+    // word — as a substring OR as a delimited word — switched the detector off
+    // for the whole token, which is a one-word bypass anyone can find.
+    expect(detectMemoryCredentialPattern("Ab3Cd5Ef7Gh9-example-Jk2Lm4Np6Qr8St0Uv")).toBe(
+      "high-entropy-token",
+    );
+    expect(detectMemoryCredentialPattern("Ab3Cd5Ef7Gh9_redacted_Jk2Lm4Np6Qr8St0Uv")).toBe(
+      "high-entropy-token",
+    );
+  });
+
+  it("still skips a token that is documentation once the word is removed", () => {
+    // The residue is what decides: `sk` and `tokenvalue` are far too short to
+    // be a credential, so tolerance holds exactly where it should.
+    expect(detectMemoryCredentialPattern("sk-EXAMPLE")).toBeNull();
+    expect(detectMemoryCredentialPattern("token.example.placeholder-value")).toBeNull();
+    expect(detectMemoryCredentialPattern("API_KEY_PLACEHOLDER")).toBeNull();
+    expect(detectMemoryCredentialPattern("my-redacted-value")).toBeNull();
+  });
+});
+
+describe("a standard-base64 credential is not split into invisibility", () => {
+  it("flags a contiguous standard-base64 run carrying + or /", () => {
+    // The token splitter consumes `/`, so a standard-base64 key reached the
+    // token loop as fragments too short to score. An AWS-secret-shaped key is
+    // the everyday case.
+    const shaped = "wJalrXUtnFEMI+K7MDENG/bPxRfiCYzEXAMPLEKEYaZ";
+    expect(detectMemoryCredentialPattern(shaped)).toBe("standard-base64-token");
+  });
+
+  it("does not flag a slash-separated path, which carries no digit", () => {
+    expect(
+      detectMemoryCredentialPattern("packages/objects/src/mcp/handlers.ts"),
+    ).toBeNull();
+    expect(
+      detectMemoryCredentialPattern("docs/internals/workflows/memory-conventions.md"),
+    ).toBeNull();
+  });
+});

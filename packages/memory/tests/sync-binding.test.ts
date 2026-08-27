@@ -58,14 +58,27 @@ describe("parseMemorySyncBinding", () => {
       sync: {
         projectId: "proj-1",
         ownerLevel: "team",
-        ownerId: "team-7",
         visibility: "team",
       },
     });
     expect(binding).toEqual({
       projectId: "proj-1",
-      defaultScope: { ownerLevel: "team", ownerId: "team-7", visibility: "team" },
+      defaultScope: { ownerLevel: "team", visibility: "team" },
     });
+  });
+
+  it("refuses an ownerId in the bundle — the principal is actor-derived", () => {
+    // cinatra#1378 review item 4. `ownerLevel` and `visibility` are a REQUEST
+    // the server evaluates; `ownerId` names a PRINCIPAL, which is the one thing
+    // an untrusted file may never do. Refused for the same reason `orgId` is:
+    // dropping it silently would let the author believe the row landed under an
+    // owner it did not.
+    expect(() => parseMemorySyncBinding({ sync: { ownerId: "user-VICTIM" } })).toThrow(
+      MemorySyncError,
+    );
+    expect(() => parseMemorySyncBinding({ sync: { ownerId: "user-VICTIM" } })).toThrow(
+      /derived from the authenticated caller/,
+    );
   });
 
   it("refuses an orgId in the bundle — the organization is actor-derived", () => {

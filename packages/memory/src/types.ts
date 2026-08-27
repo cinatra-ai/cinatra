@@ -201,19 +201,22 @@ export type MemoryScopeVisibility = "private" | "team" | "organization" | "publi
  * A scope REQUEST — never a grant.
  *
  * Both fields are evaluated under the caller's normal authorization at save
- * time (`deriveSaveDefaults` + the `object.create` probe). A bundle that asks
- * for `organization`/`organization` from a caller who cannot satisfy it is
- * REFUSED by the server; it is not silently downgraded and never widens
- * anything on its own. Widening an EXISTING row is promotion, not a save.
+ * time. The server's memory ownership-authority gate resolves the LEVEL against
+ * the authenticated actor and fills the owning principal in from that actor; a
+ * level whose authority is not derivable there (`team`, `workspace`) and a
+ * `public` visibility are REFUSED, not silently downgraded. Widening an
+ * EXISTING row is promotion, not a save.
  *
- * `orgId` is deliberately absent from this type and from every surface that
- * builds it: the organization axis is actor-derived on the server and no
- * objects primitive accepts it from a caller. A bundle file that names one is
- * refused loudly (see `parseMemorySyncBinding`).
+ * `orgId` and `ownerId` are deliberately absent from this type and from every
+ * surface that builds it (cinatra#1378 review item 4). Both name a PRINCIPAL,
+ * and a principal is derived from the authenticated caller on the server — no
+ * objects primitive reads one from a memory bundle. A bundle file or a concept
+ * that names either is refused loudly (see `parseMemorySyncBinding` and
+ * `memoryConceptScopeRefusals`), because dropping it silently would let the
+ * author believe the sync landed somewhere it did not.
  */
 export interface MemoryScopeRequest {
   ownerLevel?: MemoryScopeOwnerLevel;
-  ownerId?: string;
   visibility?: MemoryScopeVisibility;
 }
 
@@ -291,7 +294,14 @@ export type MemorySyncDiagnosticCode =
   /** The ledger says "already synced" but the stored row no longer matches. */
   | "ledger-stale"
   /** The server refused this concept; the refusal text is carried verbatim. */
-  | "server-refused";
+  | "server-refused"
+  /**
+   * The concept's frontmatter carries a scope key a bundle may not supply
+   * (`ownerId` — cinatra#1378 review item 4). Refused loudly rather than
+   * dropped, so the author is never left believing the sync landed under an
+   * owner it did not.
+   */
+  | "scope-key-refused";
 
 /** A structured diagnostic emitted by a sync run. */
 export interface MemorySyncDiagnostic {

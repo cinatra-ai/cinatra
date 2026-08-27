@@ -44,7 +44,6 @@ const VISIBILITIES: ReadonlySet<string> = new Set([
 const SYNC_KEYS: ReadonlySet<string> = new Set([
   "projectId",
   "ownerLevel",
-  "ownerId",
   "visibility",
 ]);
 
@@ -69,6 +68,27 @@ const FORBIDDEN_SYNC_KEYS: ReadonlyMap<string, string> = new Map([
   [
     "externalId",
     "the row's external identity is recomputed by the server from bundleId + conceptId",
+  ],
+  [
+    "ownerId",
+    "the owning principal is derived from the authenticated caller and is never read from a bundle file; choose a sync.ownerLevel instead",
+  ],
+]);
+
+/**
+ * Frontmatter scope keys that are REFUSED rather than read
+ * (cinatra#1378 review item 4).
+ *
+ * `ownerLevel` and `visibility` are a request the server evaluates. `ownerId`
+ * is not a request, it is a NAMED PRINCIPAL — a file asking that its row be
+ * owned by someone else. The server refuses it outright, and so does this
+ * parser, for the reason `orgId` is refused in the bundle block: dropping it
+ * silently would let the author believe the sync landed somewhere it did not.
+ */
+export const FORBIDDEN_CONCEPT_SCOPE_KEYS: ReadonlyMap<string, string> = new Map([
+  [
+    "ownerId",
+    "the owning principal is derived from the authenticated caller and is never read from a concept file; use ownerLevel to request a scope",
   ],
 ]);
 
@@ -135,9 +155,6 @@ export function parseMemorySyncBinding(
     }
     defaultScope.visibility = visibility as MemoryScopeVisibility;
   }
-  if (raw["ownerId"] !== undefined) {
-    defaultScope.ownerId = readNonEmptyString(raw["ownerId"], "sync.ownerId", where);
-  }
   const binding: MemorySyncBinding = { defaultScope };
   if (raw["projectId"] !== undefined && raw["projectId"] !== null) {
     binding.projectId = readNonEmptyString(raw["projectId"], "sync.projectId", where);
@@ -146,13 +163,42 @@ export function parseMemorySyncBinding(
 }
 
 /**
+ * Refusals a concept's own frontmatter scope keys produce, or an empty array.
+ *
+ * Separate from {@link resolveMemoryConceptScopeRequest} because the two answer
+ * different questions: this one says what the author must FIX, that one says
+ * what the run will REQUEST. A concept with a refusal is blocked by the caller
+ * before it is classified, so it never reaches a batch or a transport.
+ */
+export function memoryConceptScopeRefusals(
+  concept: Pick<MemoryConcept, "frontmatter">,
+): Array<{ key: string; reason: string }> {
+  const out: Array<{ key: string; reason: string }> = [];
+  for (const [key, reason] of FORBIDDEN_CONCEPT_SCOPE_KEYS) {
+    if (concept.frontmatter[key] !== undefined) out.push({ key, reason });
+  }
+  return out;
+}
+
+/**
  * Resolve the scope a sync run REQUESTS for one concept:
  * bundle default first, per-concept frontmatter over it.
  *
- * Frontmatter is CONCEPT content, so it is read tolerantly (an unusable value
- * is ignored rather than failing the whole run) — but it is still only a
- * request, evaluated under the caller's own authorization at save time. It
- * can never widen a row beyond what the caller could already write, and it is
+ * Frontmatter is CONCEPT content, so an unusable VALUE is ignored rather than
+ * failing the whole run — but the request itself is still only a request. Two
+ * things make that sentence true rather than aspirational (cinatra#1378 review
+ * item 4):
+ *
+ *  - the request carries a LEVEL and a VISIBILITY and never a PRINCIPAL.
+ *    `ownerId` is refused here and on the server, so no file can ask that its
+ *    row be owned by somebody else;
+ *  - the server evaluates the level it is given against the AUTHENTICATED
+ *    actor and fills the owning principal in from that actor. A level whose
+ *    authority is not derivable there (`team`, `workspace`) and a `public`
+ *    visibility are refused, not silently downgraded.
+ *
+ * So the request can name a scope the caller could already write, and nothing
+ * else. Widening past that is promotion, which is reviewed. The request is
  * only ever sent for a row this run CREATES.
  *
  * `orgId` in frontmatter is ignored here for the same reason the bundle block
@@ -172,10 +218,6 @@ export function resolveMemoryConceptScopeRequest(
   const visibility = fm["visibility"];
   if (typeof visibility === "string" && VISIBILITIES.has(visibility)) {
     resolved.visibility = visibility as MemoryScopeVisibility;
-  }
-  const ownerId = fm["ownerId"];
-  if (typeof ownerId === "string" && ownerId.trim() !== "") {
-    resolved.ownerId = ownerId.trim();
   }
   return resolved;
 }
