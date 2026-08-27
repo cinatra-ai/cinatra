@@ -45,7 +45,10 @@ beforeAll(async () => {
         res.writeHead(202).end();
         return;
       }
-      let result: unknown = {};
+      // A real server names its protocol version on initialize; a result
+      // without one is refused by the transport (round-3 item 2).
+      let result: unknown =
+        body.method === "initialize" ? { protocolVersion: "2025-06-18" } : {};
       if (body.method === "tools/call") {
         const name = body.params.name as string;
         const args = body.params.arguments as Record<string, unknown>;

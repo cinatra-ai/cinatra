@@ -112,7 +112,7 @@ describe("createHttpMemorySyncTransport", () => {
       if (body.method === "notifications/initialized") return null;
       const payload =
         body.method === "initialize"
-          ? rpcResult(body.id!, {})
+          ? rpcResult(body.id!, { protocolVersion: "2025-06-18" })
           : rpcResult(body.id!, { structuredContent: { objectId: "obj-9" } });
       return {
         contentType: "text/event-stream",
@@ -127,7 +127,7 @@ describe("createHttpMemorySyncTransport", () => {
     const { url } = await startServer((body) => {
       if (body.method === "notifications/initialized") return null;
       if (body.method === "initialize") {
-        return { contentType: "application/json", payload: rpcResult(body.id!, {}) };
+        return { contentType: "application/json", payload: rpcResult(body.id!, { protocolVersion: "2025-06-18" }) };
       }
       return {
         contentType: "application/json",
@@ -144,6 +144,43 @@ describe("createHttpMemorySyncTransport", () => {
     await expect(transport.callTool("objects_save", {})).rejects.toThrow(
       /OBJECTS_MEMORY_SECRET_DETECTED/,
     );
+  });
+
+  it("refuses a tool result whose isError is present but not a boolean", async () => {
+    // `isError: "true"` must not read as a clean success (codex round-3 find).
+    const { url } = await startServer((body) => {
+      if (body.method === "notifications/initialized") return null;
+      if (body.method === "initialize") {
+        return { contentType: "application/json", payload: rpcResult(body.id!, { protocolVersion: "2025-06-18" }) };
+      }
+      return {
+        contentType: "application/json",
+        payload: rpcResult(body.id!, { isError: "true", structuredContent: { objectId: "obj-x" } }),
+      };
+    });
+    const transport = createHttpMemorySyncTransport({ url });
+    await expect(transport.callTool("objects_save", {})).rejects.toThrow(
+      /isError is not a boolean/,
+    );
+  });
+
+  it("refuses the handshake when notifications/initialized is rejected", async () => {
+    // A 4xx on the initialized notification means the server did not accept
+    // the handshake; no tools/call may follow (codex round-3 find).
+    const { url, recorded } = await startServer((body) => {
+      if (body.method === "notifications/initialized") {
+        return { status: 403, contentType: "text/plain", payload: "no" };
+      }
+      if (body.method === "initialize") {
+        return { contentType: "application/json", payload: rpcResult(body.id!, { protocolVersion: "2025-06-18" }) };
+      }
+      return { contentType: "application/json", payload: rpcResult(body.id!, {}) };
+    });
+    const transport = createHttpMemorySyncTransport({ url });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(
+      /notifications\/initialized/,
+    );
+    expect(recorded.some((r) => r.method === "tools/call")).toBe(false);
   });
 
   it("throws on a JSON-RPC error frame", async () => {
@@ -175,7 +212,7 @@ describe("createHttpMemorySyncTransport", () => {
   it("sends no authorization header when no credential is configured", async () => {
     const { url, recorded } = await startServer((body) => {
       if (body.method === "notifications/initialized") return null;
-      return { contentType: "application/json", payload: rpcResult(body.id!, {}) };
+      return { contentType: "application/json", payload: rpcResult(body.id!, { protocolVersion: "2025-06-18" }) };
     });
     const transport = createHttpMemorySyncTransport({ url });
     await transport.callTool("objects_list", {}).catch(() => undefined);
@@ -312,6 +349,24 @@ describe("the negotiated protocol version rides every following request", () => 
     await expect(transport.callTool("objects_list", {})).rejects.toThrow(
       /"2099-01-01".*"2025-06-18"|"2025-06-18".*"2099-01-01"/,
     );
+  });
+
+  it("refuses an initialize result with no readable protocolVersion, before anything follows", async () => {
+    // protocolVersion is REQUIRED on an initialize result; an answer without
+    // one is a malformed handshake, not a silent yes (round-3 item 2).
+    const calls = stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        return { sessionId: "s-1", body: rpcResult(body.id as number, {}) };
+      }
+      if (body.id === undefined) return null;
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(
+      /without a readable protocolVersion/,
+    );
+    expect(calls.some((c) => c.body.method === "tools/call")).toBe(false);
+    expect(calls.some((c) => c.body.method === "notifications/initialized")).toBe(false);
   });
 
   it("refuses an empty-string answered version", async () => {

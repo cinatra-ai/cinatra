@@ -553,12 +553,30 @@ describe("item 10 — the wire parsing does not fail open in either direction", 
   // Round-2 item 2: an EMPTY string satisfies `typeof x === "string"` and used
   // to be accepted, keying the row into the remote map under `""` — the same
   // shape as "no such row", one level below where the item-10 fix stopped.
-  it("aborts on a preflight row whose id or externalId is an empty string", async () => {
+  // Round-3 item 1: each predicate gets a case IT ALONE can fail — a
+  // both-empty row lets either half of the check cover for the other, so
+  // deleting one half stayed green.
+  it("aborts on a preflight row whose externalId alone is an empty string", async () => {
     const root = bundleWith([{ path: "a.md" }]);
     const transport: MemorySyncTransport = {
       async callTool(name) {
         if (name === "objects_list") {
-          return { items: [{ id: "", data: { externalId: "" } }] };
+          return { items: [{ id: "row-1", data: { externalId: "" } }] };
+        }
+        throw new Error("no write may be attempted");
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /without a non-empty `id` and `data.externalId`/,
+    );
+  });
+
+  it("aborts on a preflight row whose id alone is an empty string", async () => {
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") {
+          return { items: [{ id: "", data: { externalId: "e".repeat(64) } }] };
         }
         throw new Error("no write may be attempted");
       },
@@ -594,6 +612,12 @@ describe("item 10 — the wire parsing does not fail open in either direction", 
     await expect(runMemorySync({ root, transport })).rejects.toThrow(
       /carried no non-empty `objectId`/,
     );
+    // The reason the check exists: no ledger entry may point at a row id this
+    // run never saw — the empty answer earns NOTHING in the ledger (round-3
+    // item 4).
+    const bundleId = loadMemoryBundle(root).config.bundleId;
+    const ledger = loadMemorySyncLedger(root, bundleId);
+    expect(Object.keys(ledger.entries)).toHaveLength(0);
   });
 
   it("still flushes the ledger for the writes that DID land before the abort", async () => {
@@ -609,7 +633,9 @@ describe("item 10 — the wire parsing does not fail open in either direction", 
           const raw = args.rawData as Record<string, unknown>;
           return { objectId: `obj-${raw.externalId as string}` };
         }
-        return { acknowledged: true };
+        // An EMPTY objectId, not a missing one: the exact case the non-empty
+        // check was added for is the case this test drives (round-3 item 4).
+        return { objectId: "" };
       },
     };
     await expect(runMemorySync({ root, transport })).rejects.toThrow(/objectId/);

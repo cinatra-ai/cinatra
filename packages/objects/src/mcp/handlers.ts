@@ -895,12 +895,13 @@ const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
  * bundle id, an object id, a run id, a commit SHA. Measured against this
  * detector (5000 samples per shape): a random v4 UUID flags 94.0% of the time
  * (93.7% inside a prose sentence, 93.5% inside a link target), and a
- * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags;
- * a 12-character short SHA does not, because it is under the length floor
- * below. Nothing here excludes an identifier shape by name — only
- * `externalId` and `bundleId`, and only at the top level (see
- * `MEMORY_SCAN_EXCLUDED_KEYS`) — so a concept body or a nested frontmatter
- * value that quotes one is refused exactly like a credential would be.
+ * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags
+ * about 99% of the time; a 12-character short SHA does not, because it is
+ * under the length floor below. Nothing here excludes an identifier shape by
+ * name — only `externalId`, `bundleId` and `cinatraAgentRunId`, and only at
+ * the top level (see `MEMORY_SCAN_EXCLUDED_KEYS`) — so a concept body or a
+ * nested frontmatter value that quotes one is refused exactly like a
+ * credential would be.
  * Whether to exclude identifier shapes is a separate call this detector
  * deliberately does not make; buying author ergonomics with a hole is a trade
  * that should be made on purpose.
@@ -910,8 +911,9 @@ const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
  *   - A HEX DIGEST IS FLAGGED. A sha256 digest and a hex API key are the same
  *     shape and nothing in the string separates them, so this gate resolves the
  *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
- *     a false positive: `externalId` and `bundleId` are excluded from the scan
- *     BY NAME as identity fields (see MEMORY_SCAN_EXCLUDED_KEYS).
+ *     a false positive: `externalId`, `bundleId` and `cinatraAgentRunId` are
+ *     excluded from the scan BY NAME as server-controlled identity fields
+ *     (see MEMORY_SCAN_EXCLUDED_KEYS).
  *   - A token shorter than 24 characters is not entropy-scored at all. Short
  *     credentials are covered by the prefix list, not by this branch.
  *   - Standard base64 (`+` and `/`) is not a charset class here: the token

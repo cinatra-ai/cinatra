@@ -206,6 +206,14 @@ function unwrapToolResult(result: unknown, toolName: string): unknown {
     throw new MemorySyncError(`${toolName}: malformed MCP tool result`);
   }
   const r = result as Record<string, unknown>;
+  // A present-but-non-boolean `isError` is a malformed result, not a success:
+  // reading `isError: "true"` as a clean answer would be the
+  // fail-open-on-unreadable direction this file refuses everywhere else.
+  if (r["isError"] !== undefined && typeof r["isError"] !== "boolean") {
+    throw new MemorySyncError(
+      `${toolName}: malformed MCP tool result (isError is not a boolean)`,
+    );
+  }
   if (r["isError"] === true) {
     const content = Array.isArray(r["content"]) ? r["content"] : [];
     const text = content
@@ -338,11 +346,14 @@ export function createHttpMemorySyncTransport(
       });
       // Carry the version the server NEGOTIATED, not the one we offered — but
       // ONLY when it is a version this client actually implements (cinatra#1378
-      // round-2 item 1). A server that answers with nothing readable gets the
-      // offered one, which is what it saw on initialize. A server that answers
-      // with a string this client does NOT speak — including an empty one — is
-      // refused outright: adopting it would frame every later request in a
-      // version this code cannot honor.
+      // round-2 item 1). `protocolVersion` is REQUIRED on an initialize result
+      // (MCP InitializeResultSchema), so an answer without a readable one is a
+      // malformed handshake, not a silent yes: reading it as agreement would be
+      // the fail-open-on-unreadable direction everywhere else in this file
+      // refuses (round-3 item 2). A server that answers with a string this
+      // client does NOT speak — including an empty one — is refused outright:
+      // adopting it would frame every later request in a version this code
+      // cannot honor.
       const answered =
         result !== null &&
         typeof result === "object" &&
@@ -350,7 +361,9 @@ export function createHttpMemorySyncTransport(
           ? ((result as Record<string, unknown>)["protocolVersion"] as string)
           : undefined;
       if (answered === undefined) {
-        protocolVersion = MCP_CLIENT_PROTOCOL_VERSION;
+        throw new MemorySyncError(
+          `MCP endpoint ${safeUrl} answered initialize without a readable protocolVersion; a handshake that cannot name its version did not negotiate`,
+        );
       } else if (MCP_CLIENT_SUPPORTED_PROTOCOL_VERSIONS.has(answered)) {
         protocolVersion = answered;
       } else {
@@ -358,7 +371,19 @@ export function createHttpMemorySyncTransport(
           `MCP endpoint ${safeUrl} negotiated protocol version "${answered}" on initialize, which this client offered "${MCP_CLIENT_PROTOCOL_VERSION}" and does not implement; refusing rather than framing requests in an unsupported version`,
         );
       }
-      await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+      const initialized = await post({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      });
+      // A rejected `initialized` notification means the handshake did NOT
+      // complete on the server's side; proceeding to tools/call anyway would
+      // run the session against a server that refused it.
+      if (initialized.status >= 400) {
+        throw new MemorySyncError(
+          `MCP endpoint ${safeUrl} answered HTTP ${initialized.status} on notifications/initialized; the handshake was not accepted`,
+        );
+      }
     })();
     await handshake;
   };

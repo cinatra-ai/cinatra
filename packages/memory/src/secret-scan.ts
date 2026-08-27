@@ -105,8 +105,7 @@ const WORD_SPLIT_RE = /[-_.]+/;
  * cannot exceed log2(24) bits per character however wide its alphabet is, so
  * dividing by the class size alone would systematically under-score exactly the
  * tokens most worth reading. A score near 1.0 means "as unpredictable as this
- * charset and this length allow", which is what an opaque credential looks like
- * and what an identifier, a path, or prose does not.
+ * charset and this length allow", which is what an opaque credential looks like.
  *
  * The threshold and the digit+letter requirement below were calibrated against
  * this repository's own token corpus (every tracked file under packages/memory,
@@ -119,24 +118,27 @@ const WORD_SPLIT_RE = /[-_.]+/;
  * bundle id, an object id, a run id, a commit SHA. Measured against this
  * detector (5000 samples per shape): a random v4 UUID flags 94.0% of the time
  * (93.7% inside a prose sentence, 93.5% inside a link target), and a
- * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags;
- * a 12-character short SHA does not, because it is under the length floor
- * below. Nothing here excludes an identifier shape by name — only
- * `externalId` and `bundleId`, and only at the top level (see the caller in
- * `sync.ts` and `MEMORY_SCAN_EXCLUDED_KEYS` in the objects handler) — so a
- * concept body or a nested frontmatter value that quotes one is refused
- * exactly like a credential would be. Whether to exclude identifier shapes is
- * a separate call this detector deliberately does not make; buying author
- * ergonomics with a hole is a trade that should be made on purpose.
+ * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags
+ * about 99% of the time; a 12-character short SHA does not, because it is
+ * under the length floor below. THIS LOCAL SCAN EXCLUDES NOTHING BY NAME: it
+ * is deliberately the strict side. The only name-based exclusion lives in the
+ * objects handler's envelope scan (`MEMORY_SCAN_EXCLUDED_KEYS`: `externalId`,
+ * `bundleId`, `cinatraAgentRunId`, top level only), so a concept body or a
+ * nested frontmatter value that quotes an identifier is refused exactly like
+ * a credential would be. Whether to exclude identifier shapes is a separate
+ * call this detector deliberately does not make; buying author ergonomics
+ * with a hole is a trade that should be made on purpose.
  *
  * DELIBERATELY OUT OF SCOPE, so the comment does not read as broader than the
  * code (cinatra#1378 review item 5):
  *   - A HEX DIGEST IS FLAGGED. A sha256 digest and a hex API key are the same
  *     shape and nothing in the string separates them, so this gate resolves the
  *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
- *     a false positive: `externalId` and `bundleId` are excluded from the scan
- *     BY NAME as identity fields. A digest an author writes into a body IS
- *     flagged, and the refusal names the shape and the location so they can act.
+ *     a false positive: the objects handler's envelope scan excludes
+ *     `externalId`, `bundleId` and `cinatraAgentRunId` BY NAME as
+ *     server-controlled identity fields (this local scan excludes nothing). A
+ *     digest an author writes into a body IS flagged, and the refusal names
+ *     the shape and the location so they can act.
  *   - A token shorter than 24 characters is not entropy-scored at all. Short
  *     credentials are covered by the prefix list, not by this branch.
  *   - Standard base64 (`+` and `/`) is not a charset class here: the token

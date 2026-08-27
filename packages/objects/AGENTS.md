@@ -454,7 +454,8 @@ in order, before any commit:
    true of a common IDENTIFIER shape, and a memory concept is full of those: a
    random v4 UUID flags 94.0% of the time (93.7% in prose, 93.5% in a link
    target), a ULID-shaped id flags 85.8%, and a 40-character git commit SHA
-   flags (a 12-character short SHA does not — under the length floor). The
+   flags about 99% of the time (a 12-character short SHA does not — under the
+   length floor). The
    name-based exclusion above is the only carve-out, and it is top-level only:
    the same UUID quoted anywhere else in the envelope is scanned. Both
    directions refuse: a credential-shaped literal (`OBJECTS_MEMORY_SECRET_DETECTED`)
