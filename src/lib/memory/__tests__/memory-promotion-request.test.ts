@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   getObjectById: vi.fn(),
   decideResourceAccessForActorContext: vi.fn(() => null as unknown),
-  createMemoryRowPromotionRequest: vi.fn(async () => ({ ok: true, request: { id: "req-new" } })),
+  createMemoryRowPromotionRequest: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, request: { id: "req-new" } })),
 }));
 
 vi.mock("@/lib/objects-store", () => ({ getObjectById: mocks.getObjectById }));

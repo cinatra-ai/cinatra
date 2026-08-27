@@ -490,9 +490,6 @@
       "@cinatra-ai/agent-ui-protocol/renderable-views": ["./packages/agent-ui-protocol/src/renderable-views/index.ts"],
       "@cinatra-ai/agent-ui-protocol/conformance": ["./packages/agent-ui-protocol/src/conformance-entry.ts"],
       "@cinatra-ai/objects": ["./packages/objects/src/index.ts"],
-      // cinatra#1381 — the #1378 memory credential detector, reused (never re-implemented)
-      // by the memory-promotion approve gate. A pure leaf: node builtins only, no
-      // server-only import, no DB.
       "@cinatra-ai/memory/secret-scan": ["./packages/memory/src/secret-scan.ts"],
       "@cinatra-ai/artifacts": ["./packages/artifacts/src/index.ts"],
       "@cinatra-ai/chart-artifact/src/views/chart": ["./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx"],

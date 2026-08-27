@@ -21,7 +21,7 @@ const listMemoryPromotionInbox = vi.fn(async () => [] as unknown[]);
 const listMemoryPromotionMine = vi.fn(async () => [] as unknown[]);
 const countMemoryPromotionInbox = vi.fn(async () => 0);
 const countMemoryPromotionMine = vi.fn(async () => 0);
-const decideMemoryPromotion = vi.fn(async () => ({ ok: true }));
+const decideMemoryPromotion = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }));
 
 vi.mock("@/lib/objects/memory-row-promotion", () => ({
   listMemoryPromotionInbox: (...a: unknown[]) => listMemoryPromotionInbox(...(a as [])),
@@ -121,7 +121,7 @@ describe("AC1 — the pending request as a unified-feed row", () => {
     listMemoryPromotionInbox.mockResolvedValue([PENDING]);
     const [row] = (await promotionRequestsSource.fetchInbox!(admin)).rows;
     const { renderToStaticMarkup } = await import("react-dom/server");
-    const html = renderToStaticMarkup(promotionRequestsSource.rowRenderer!(row) as never);
+    const html = renderToStaticMarkup(promotionRequestsSource.rowRenderer!(row, { direction: "inbox" }) as never);
     expect(html).toContain("Deployment runbook");
     expect(html).toContain("Private → Organization");
     expect(html).toContain("by u-member");
@@ -152,7 +152,7 @@ describe("AC1 — the pending request as a unified-feed row", () => {
 describe("AC1 — the approve routes to the memory backend", () => {
   it("dispatches by the row-id discriminator and carries the reviewed version back", async () => {
     const res = await promotionRequestsSource.actions!.decide(
-      { sourceId: PROMOTION_SOURCE_ID, rowId: "memory:req-1", action: "approve", expectedVersion: "3" },
+      { rowId: "memory:req-1", action: "approve", expectedVersion: "3" },
       admin,
     );
     expect(res).toEqual({ ok: true });
@@ -166,17 +166,17 @@ describe("AC1 — the approve routes to the memory backend", () => {
 
   it("a rejection without a reason is refused by the SHARED source before the backend is touched", async () => {
     const res = await promotionRequestsSource.actions!.decide(
-      { sourceId: PROMOTION_SOURCE_ID, rowId: "memory:req-1", action: "reject" },
+      { rowId: "memory:req-1", action: "reject" },
       admin,
     );
-    expect(res).toMatchObject({ ok: false, code: "reason_required" });
+    expect(res as Record<string, unknown>).toMatchObject({ ok: false, code: "reason_required" });
     expect(decideMemoryPromotion).not.toHaveBeenCalled();
   });
 
   it("maps a `secret_scan` refusal to a FORBIDDEN decide result, surfaced in place", async () => {
     decideMemoryPromotion.mockResolvedValue({ ok: false, code: "secret_scan", message: "refused" });
     const res = await promotionRequestsSource.actions!.decide(
-      { sourceId: PROMOTION_SOURCE_ID, rowId: "memory:req-1", action: "approve", expectedVersion: "3" },
+      { rowId: "memory:req-1", action: "approve", expectedVersion: "3" },
       admin,
     );
     expect(res).toMatchObject({ ok: false, kind: "forbidden", code: "secret_scan" });
@@ -185,7 +185,7 @@ describe("AC1 — the approve routes to the memory backend", () => {
   it("a malformed or foreign row id never reaches the memory backend", async () => {
     for (const rowId of ["req-1", ":req-1", "memory:", "unknownsubject:req-1"]) {
       const res = await promotionRequestsSource.actions!.decide(
-        { sourceId: PROMOTION_SOURCE_ID, rowId, action: "approve", expectedVersion: "3" },
+        { rowId, action: "approve", expectedVersion: "3" },
         admin,
       );
       expect(res).toMatchObject({ ok: false, code: "not_found" });
