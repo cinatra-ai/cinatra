@@ -73,8 +73,9 @@ The same rules ship as concepts in the seed bundle
 through the CLI instead: `memory list --dir <seed-bundle>` and
 `memory recall --dir <seed-bundle> <query>`.
 
-The command surface comes from the `@cinatra-ai/memory` workspace package.
-Every subcommand is local, offline, and free of model calls.
+The command surface comes from the `@cinatra-ai/memory` workspace package. No
+subcommand makes a model call. Every subcommand except `sync` is also local and
+offline; `sync` is the one that talks to a Cinatra server.
 
 | Command | Use it for |
 |---------|------------|
@@ -83,9 +84,28 @@ Every subcommand is local, offline, and free of model calls.
 | `memory list [--type <kind>] [--json]` | See what the bundle already holds. |
 | `memory recall <query> [--json]` | Lexical search before you act or write. |
 | `memory check [--json]` | Conformance diagnostics; non-zero on an error. |
+| `memory sync [--dry-run] [--json]` | Push the bundle into shared memory. |
 
 Every subcommand takes `--dir <bundle-dir>`. Omit it to use the nearest
 `.memory/bundle.yaml` at or above the working directory.
+
+`memory sync` is one-way. It writes local concepts into shared memory and never
+edits a concept file or `bundle.yaml`, never deletes a remote row, and never
+narrows one. Run `memory sync --dry-run` first: it prints the create / update /
+skip decision for every concept and writes nothing. The endpoint comes from
+`--url` or `CINATRA_MCP_URL` and must be `https` unless it is a loopback host;
+the credential comes from `CINATRA_MCP_TOKEN` only, so it never reaches your
+shell history. The server re-derives every rule for itself, so a concept it
+refuses is refused for a reason your bundle cannot override.
+
+A sync run that wrote something leaves one file behind: `sync-ledger.json` at
+the bundle root. It records the object id and content digest of what the last
+run pushed, which is how a later run reports a row that drifted since. **Do not
+commit it.** It is a per-checkout cache, the object ids in it are minted per
+organization by whichever server answered, and nothing reads it as authority —
+the preflight decides what to write, and the ledger only reports disagreement.
+`memory init` writes a `.gitignore` next to it that already excludes it; a
+bundle created before that line needs the entry added by hand.
 <!-- memory-adapter:end -->
 
 ## The rules
