@@ -1866,6 +1866,28 @@ jobs:
       - name: Artifact-UI type-identity boundary gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/artifact-ui-boundary-gate.test.mjs
 
+      # THE FLOOR GATE - plan `PLAN: Agents Lifecycle (B)` section 5 / cinatra#2931 W4.
+      # Counts the artifact TYPES whose review would land on the card's metadata
+      # floor: no renderer from the type's own namespace pack, no representation
+      # provider for any form it declares, and no first-party form arm either.
+      # NOT "packages missing a display file" - a pack shipping no renderer whose
+      # declared text form renders through the rung is not counted, and defensive
+      # states (requires-rebuild, a deleted or unreadable target, a runtime
+      # failure) keep their own readings and never count as fallbacks. The count
+      # is reported on every run; the live set must EQUAL the committed baseline,
+      # which may only shrink - so a new artifact type can never ship reviewable
+      # only as a floor. Runs in THIS job because it materializes the companion
+      # extension tree the shipped registry lives in (clone-extensions above).
+      - name: Artifact-review floor gate (shrink-only)
+        env:
+          # Same base ref the sibling artifact ratchets use for their
+          # regenerate-to-pass guard.
+          ARTIFACT_REVIEW_FLOOR_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/artifact-review-floor-gate.mjs
+
+      - name: Artifact-review floor gate tests
+        run: node --test scripts/audit/__tests__/artifact-review-floor-gate.test.mjs
+
       # G4 addendum — variable-URL dynamic-import ratchet (epic #1620 M1 Slice A,
       # cinatra#1630). The main-realm dynamic renderer loader is the ONE
       # sanctioned CLIENT variable-URL `import(runtimeURL)` seam (alongside the

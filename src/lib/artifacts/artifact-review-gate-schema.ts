@@ -108,7 +108,7 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   artifact_id                text NOT NULL,
   representation_revision_id text NOT NULL,
   disposition                text NOT NULL CHECK (disposition IN ('approve','reject','comment','changes_requested')),
-  renderer_kind              text NOT NULL CHECK (renderer_kind IN ('build-map','runtime','floor')),
+  renderer_kind              text NOT NULL CHECK (renderer_kind IN ('build-map','runtime','first-party','floor')),
   renderer_package           text,
   renderer_digest            text,
   created_at                 timestamptz NOT NULL DEFAULT now()
@@ -948,6 +948,43 @@ export function runRecommendationSkipsSchemaQueries(schemaName: string): QueryIn
     {
       text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_SKIPS_SKIPPED_AT_INDEX}
   ON "${q}"."${RUN_RECOMMENDATION_SKIPS_TABLE}" (skipped_at DESC)`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2931 (epic #2926 W4) — `artifact_review_audit.renderer_kind` admits
+// `first-party`, the provenance of the FORM RUNG: the host's own renderer for a
+// declared text form (markdown, escaped plain text). W4 restored that rung to
+// the review card, so a markdown draft that used to reach the reviewer as
+// "cannot render" now reaches them as the draft — and a target the host rendered
+// that way is RECORDED as rendered, never as a floor, because the floor gate
+// counts floor rows.
+//
+// The CREATE TABLE above already carries the widened CHECK, which covers a
+// FRESH install. This leaf covers every OTHER database: `CREATE TABLE IF NOT
+// EXISTS` leaves an existing table's constraint exactly as core__0072 wrote it,
+// and a `renderer_kind` the CHECK refuses does not degrade the audit row — the
+// INSERT raises inside the same transaction as the gate CAS, so the whole
+// decision rolls back and the draft the reviewer just read in full becomes
+// impossible to approve, reject or comment on.
+//
+// Idempotent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT (postgres names a column
+// CHECK `<table>_<column>_check` deterministically) — a no-op on a schema this
+// bootstrap created wide, a widen on a deployed one. Strictly additive: every
+// value the old constraint admitted is still admitted. Run AFTER the S0/#1796
+// gate tables exist. Migration twin: core__0097.
+// ---------------------------------------------------------------------------
+
+export function artifactReviewFormProvenanceSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_audit" DROP CONSTRAINT IF EXISTS artifact_review_audit_renderer_kind_check`,
+    },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_audit" ADD CONSTRAINT artifact_review_audit_renderer_kind_check
+  CHECK (renderer_kind IN ('build-map','runtime','first-party','floor'))`,
     },
   ];
 }

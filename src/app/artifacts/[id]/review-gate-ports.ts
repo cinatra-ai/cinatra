@@ -105,10 +105,16 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
 }
 
 /**
- * Prepare a caller's review targets against a run's pending gate — the fully
- * bound counterpart of the #1807 fenced `prepareArtifactReviewTargets`. Resolves
- * the kernel actor for the artifact-side reads, binds the run/gate ports, and
- * runs the pure core.
+ * Prepare a caller's review targets against a run's gate — the fully bound
+ * counterpart of the #1807 fenced `prepareArtifactReviewTargets`. Resolves the
+ * kernel actor for the artifact-side reads, binds the run/gate ports, and runs
+ * the pure core.
+ *
+ * A PENDING gate by default. The read-only history reading passes
+ * `acceptResolvedGate` on the input to prepare a DECIDED gate's frozen set as
+ * well (`loadReviewGateSurface`'s settled answer, and nowhere else); every
+ * decision path leaves it unset and is refused on a gate that is no longer
+ * pending, exactly as before.
  */
 export async function prepareReviewTargets(args: {
   input: PrepareReviewInput;
@@ -132,15 +138,28 @@ export async function prepareReviewTargets(args: {
 // DECIDE — the full SubmitDecisionPorts the decision core consumes.
 // ---------------------------------------------------------------------------
 
-/** Map the type-resolved mount to audit provenance (host-authoritative). */
-function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
-  if (resolved.kind === "build-map") {
-    return { kind: "build-map", packageName: resolved.packageName, digest: null };
+/** Map the type-resolved mount to audit provenance (host-authoritative).
+ * Exported for its own unit test — the submit-time port that calls it needs a
+ * database, and the mapping is exactly what must not drift when a mount kind is
+ * added (cinatra#2931 W4). */
+export function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
+  switch (resolved.kind) {
+    case "build-map":
+      return { kind: "build-map", packageName: resolved.packageName, digest: null };
+    case "runtime":
+      return {
+        kind: "runtime",
+        packageName: resolved.packageName,
+        digest: resolved.descriptor.tuple.digest,
+      };
+    // The FORM RUNG, re-resolved at submit time like every other kind, so a
+    // rendered text target is recorded as RENDERED. Recording it as a floor
+    // would put a fallback on the audit row of a review the reader read in full.
+    case "form":
+      return { kind: "first-party", packageName: null, digest: null };
+    case "floor":
+      return { kind: "floor", packageName: resolved.packageName, digest: null };
   }
-  if (resolved.kind === "runtime") {
-    return { kind: "runtime", packageName: resolved.packageName, digest: resolved.descriptor.tuple.digest };
-  }
-  return { kind: "floor", packageName: resolved.packageName, digest: null };
 }
 
 /** Bind every decision port (run access + gate state + submit-time membership +
@@ -326,9 +345,9 @@ export async function readReviewGatePinnedTargets(
  * Load the review surface for a run's gate. Order is security-load-bearing
  * (§V): read access FIRST (a viewer with none never reaches the targets), then
  * the gate's own state — a DECIDED gate is `settled` (the card draws its
- * recorded reading) and an unavailable one is a single blocked state, gate
- * existence never leaked — then prepare the pinned set, then the decision
- * permissions. Never throws for an authorization/gate-state outcome — those are
+ * recorded reading over the reviewed target(s), kept read-only) and an
+ * unavailable one is a single blocked state, gate existence never leaked — then
+ * prepare the pinned set, then the decision permissions. Never throws for an authorization/gate-state outcome — those are
  * modelled states, not errors.
  */
 export async function loadReviewGateSurface(args: {
@@ -356,7 +375,12 @@ export async function loadReviewGateSurface(args: {
   //                      suggestion chips — so the surface says "mount the card"
   //                      rather than blocking before the card exists. Plan §4.4
   //                      step 7: everyone looking at that run, in any channel,
-  //                      sees the same settled card.
+  //                      sees the same settled card. And that card is not a
+  //                      decision line over an empty box: "A resolved gate opens
+  //                      read-only: what was decided, and the reviewed
+  //                      target(s), kept for the run's audit trail" — so this
+  //                      answer prepares the gate's OWN frozen pinned set,
+  //                      read-only, exactly as the pending answer prepares it.
   //
   //      `unavailable` → `blocked`, unchanged. A gate that never existed and a
   //                      row too corrupt to read are not a decided review, and
@@ -369,7 +393,40 @@ export async function loadReviewGateSurface(args: {
     return { kind: "blocked", reason: "no-longer-pending" };
   }
   if (gate.status !== "pending") {
-    return { kind: "settled" };
+    // The decided reading KEEPS THE REVIEWED WORK. The set is read from the gate
+    // itself — the frozen one it pinned, so the reader sees the revision the
+    // decision was taken on and never a later re-materialization ("You approve
+    // exactly what you saw") — and prepared through the SAME never-blank ladder
+    // the pending reading uses. `acceptResolvedGate` is opened HERE and nowhere
+    // a decision is taken; nothing on this path can decide anything, because the
+    // decision floor is the card's and the decided card draws none.
+    const pinned = await readReviewGatePinnedTargets(runId, reviewTaskId);
+    // The gate answered `resolved` a line ago; a set that is gone underneath is
+    // a row that can no longer be read, which is blocked, not decided.
+    if (!pinned) return { kind: "blocked", reason: "no-longer-pending" };
+    const history = await prepareReviewTargets({
+      input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
+      actorCtx,
+    });
+    if (!history.ok) {
+      return history.error.kind === "run-access-denied"
+        ? { kind: "not-authorized" }
+        : { kind: "blocked", reason: "no-longer-pending" };
+    }
+    return {
+      kind: "settled",
+      targets: history.prepared,
+      pinnedCapturePairs: await loadPinnedCapturePairsForTargets(
+        actorCtx.orgId,
+        history.prepared,
+        isRepairSuccessorTaskId(reviewTaskId)
+          ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
+          : null,
+      ),
+      // As on the ready path: no gate/run column carries a producer summary in
+      // this slice, so the chrome renders nothing rather than an empty summary.
+      agentSummary: null,
+    };
   }
 
   // 3. Prepare EVERY pinned target through the fully-bound core (never-blank

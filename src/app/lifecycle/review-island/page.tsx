@@ -67,12 +67,32 @@ import "server-only";
 // header shows the dev value, not the configured one. That is a `next dev`
 // artifact, not evidence the header is unset in production.
 //
+// ONE DOCUMENT, THE HOST'S PALETTE (cinatra#2931, epic #2926 W4). The island is
+// a nested browsing context and cannot see the surface around it, so it used to
+// resolve a palette from its OWN theme state. On a first-party page that store
+// is the app's own and the island came out matching the page by coincidence;
+// inside a third-party application it is a partitioned store nothing writes, so
+// the island fell back to the app's default palette and painted a light panel
+// inside a dark widget. The card that frames it now NAMES the host's palette on
+// this URL, for every host from one read, and this page paints in exactly what
+// it was told: the palette class carries the tokens to every descendant and the
+// full-frame height keeps the document's own ground from showing around them.
+// The parameter is a closed two-word enum and authorizes nothing; a request that
+// names no palette renders exactly what it rendered before it existed.
+//
 // EVERY DENIAL DRAWS NOTHING. No access, no such gate, a ref that does not
-// decode, a gate that is no longer pending — all render an empty document. The
-// island never says why, because the card above it must be indistinguishable
-// between "you may not read this" and "there is nothing here" (the generic
-// refusal contract). The card's own authoritative refetch is what turns a
-// settled gate into §IV's "no longer open" panel; the island stays silent.
+// decode, a gate too damaged to read — all render an empty document. The island
+// never says why, because the card above it must be indistinguishable between
+// "you may not read this" and "there is nothing here" (the generic refusal
+// contract).
+//
+// A DECIDED GATE IS NOT A DENIAL. "A resolved gate opens read-only: what was
+// decided, and the reviewed target(s), kept for the run's audit trail" — so this
+// document draws a resolved gate's frozen pinned set exactly as it draws a
+// pending one's: the same panels, the same renderers, the same pinned revision.
+// The reading is still display-only, and the difference is entirely above the
+// frame: the card that mounts this island for a decided gate draws no floor at
+// all, so there is nothing to press on either side of the boundary.
 // ---------------------------------------------------------------------------
 
 import { Suspense } from "react";
@@ -84,6 +104,14 @@ import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
+import {
+  islandBodyClassName,
+  islandDocumentGroundCss,
+  islandEmptyClassName,
+  parseIslandColorScheme,
+  REVIEW_ISLAND_COLOR_SCHEME_PARAM,
+  type IslandColorScheme,
+} from "./island-color-scheme";
 import { resolveIslandCredentialReader } from "@/lib/lifecycle/review-island-serving";
 import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
@@ -106,13 +134,26 @@ type PageProps = {
  */
 
 /**
- * The empty island — the ONE shape every denial and every absence renders. It is
- * a single shared ELEMENT rather than a component, so "no access", "no such
- * gate", "a ref that does not decode" and "the gate moved on" are not merely
- * similar: they are the same object, and nothing downstream can accidentally
- * make one of them distinguishable from another.
+ * The empty island — the ONE shape every denial and every absence renders.
+ *
+ * It is built ONCE PER REQUEST and every denial below returns that one object,
+ * so "no access", "no such gate", "a ref that does not decode" and "the gate
+ * moved on" are not merely similar: they are the same element, and nothing
+ * downstream can accidentally make one of them distinguishable from another. It
+ * takes the host's palette exactly as the body does — a denial inside a dark
+ * card is still a painted rectangle — and every denial takes the same one, so
+ * the palette separates schemes and never separates refusals.
  */
-const EMPTY_ISLAND = <div data-conformance-id="review-target-island-empty" />;
+function emptyIsland(scheme: IslandColorScheme | null) {
+  return (
+    <div
+      className={islandEmptyClassName(scheme)}
+      data-conformance-id="review-target-island-empty"
+      data-island-color-scheme={scheme ?? undefined}
+      style={scheme ? { colorScheme: scheme } : undefined}
+    />
+  );
+}
 
 export default async function ReviewTargetIslandPage({ searchParams }: PageProps) {
   const sp = (await searchParams) ?? {};
@@ -121,6 +162,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
   const rawCredential = sp[REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM];
   const credential = typeof rawCredential === "string" ? rawCredential : null;
+  // The HOST's palette, named by the card that frames this document. Read before
+  // the first refusal below, because a refusal is painted too.
+  const scheme = parseIslandColorScheme(one(sp[REVIEW_ISLAND_COLOR_SCHEME_PARAM]));
+  const groundCss = islandDocumentGroundCss(scheme);
+  const empty = emptyIsland(scheme);
 
   // Is this a VERIFIED widget frame? Resolved server-side from the SAME closed
   // binding the island's `frame-ancestors` wall uses, so the header and this
@@ -140,7 +186,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   let reviewTaskId: string;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
-    if (!reader) return EMPTY_ISLAND;
+    if (!reader) return empty;
     actorCtx = reader.actorCtx;
     // The GATE COMES FROM THE CREDENTIAL, not from a second decode of the ref.
     // The two were proven equal inside the resolver; reading the ref again here
@@ -166,20 +212,20 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     // though the credential path above is the widget's real answer.
     const session = await getAuthSession();
     if (!session) {
-      if (widgetFrame) return EMPTY_ISLAND;
+      if (widgetFrame) return empty;
       redirect(await signInRedirectTarget());
     }
     actorCtx = await resolveReviewActorContext();
     if (!actorCtx) {
-      if (widgetFrame) return EMPTY_ISLAND;
+      if (widgetFrame) return empty;
       redirect(await signInRedirectTarget());
     }
 
-    if (!ref) return EMPTY_ISLAND;
+    if (!ref) return empty;
     // The ref is authenticated-encrypted: a forged or tampered one does not
     // decode, and a replayed one still has to pass the access checks below.
     const payload = decodeLifecycleGateRef(ref);
-    if (!payload) return EMPTY_ISLAND;
+    if (!payload) return empty;
     runId = payload.runId;
     reviewTaskId = payload.reviewTaskId;
   }
@@ -189,19 +235,29 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     reviewTaskId,
     actorCtx,
   });
-  // `not-authorized`, `blocked` and `settled` all draw nothing here — see the
-  // header. `settled` (cinatra#2904) belongs in that list for the same reason
-  // the other two do: the island's job is §III's target ladder for a gate that
-  // is still open, and a decided gate's card draws no island at all. It is one
+  // `not-authorized` and `blocked` draw nothing here — see the header. It is one
   // empty document either way, so a reader still cannot tell WHY it is empty.
-  if (surface.kind !== "ready") return EMPTY_ISLAND;
+  // `settled` draws: a decided gate keeps its reviewed target(s) read-only.
+  if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
+  const decided = surface.kind === "settled";
 
   return (
     <div
-      className="flex flex-col gap-3 bg-surface p-3"
+      className={islandBodyClassName(scheme)}
       data-conformance-id="review-target-island-body"
+      // WHICH READING this document is: the gate's own state, named for the
+      // conformance check and for nothing else. Both readings draw the same
+      // panels from the same frozen set; neither carries decision chrome.
+      data-review-reading={decided ? "decided" : "pending"}
       data-target-count={surface.targets.length}
+      data-island-color-scheme={scheme ?? undefined}
+      style={scheme ? { colorScheme: scheme } : undefined}
     >
+      {/* The document's own ground, which a wrapper cannot reach: the frame's
+          scrollbar and the canvas an overscroll exposes. Composed from the
+          closed enum, never from the request's text. */}
+      {groundCss ? <style>{groundCss}</style> : null}
+
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}
       {surface.agentSummary ? (
@@ -223,6 +279,10 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
         >
           <ReviewTargetPanel
             prepared={prepared}
+            // The TRUSTED organization scope, from the reader this island just
+            // authorized — never from the query string and never from the
+            // display props. The form rung reads the pinned bytes under it.
+            orgId={actorCtx.orgId}
             capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
           />
         </Suspense>

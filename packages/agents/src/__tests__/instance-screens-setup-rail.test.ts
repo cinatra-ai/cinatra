@@ -143,11 +143,13 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(SETUP_BRANCH).toContain('<AgentPanelBody role="frame">');
   });
 
-  it("hands the scheduling form the SAME nine props it was given, and no tenth", () => {
+  it("hands the scheduling form the SAME props it was given, and no extra one", () => {
     // The form is unchanged and armed by the same Continue (acceptance 2): a
     // prop dropped in the lift would change what it can do, and a prop ADDED
     // would change it just as much — so the tag's whole prop set is read, not a
-    // list of substrings that a superset would also satisfy.
+    // list of substrings that a superset would also satisfy. The set is read in
+    // full for that reason: it is the LIFT that may add nothing, and any later
+    // prop has to be written into this list by the change that adds it.
     const tagStart = SCHEDULER_SURFACE.indexOf("<TriggerScreenClient");
     expect(tagStart).toBeGreaterThan(-1);
     const tag = SCHEDULER_SURFACE.slice(
@@ -164,6 +166,14 @@ describe("the setup run page draws the run surface, not a single column", () => 
       "instanceId={instanceId}",
       "templateId={template.id}",
       "isAdmin={isAdmin}",
+      // cinatra#2933 (lifecycle-b W5b): the run whose conversation the window
+      // under this form is, and the run's own answer to whether this reader may
+      // type in it. They are NOT part of the lift this test guards — the form
+      // was already given both at this mount before the setup screens became a
+      // rail — so they are listed with the rest rather than allowed in as an
+      // unread superset, and an unlisted prop still fails.
+      "runId={run?.id ?? null}",
+      "canRespondInWindow={canRespondInWindow}",
       "inputParams={inputParams}",
       "requiredFields={required}",
       "properties={properties}",

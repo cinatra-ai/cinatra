@@ -98,6 +98,15 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
   it("hides HitlConversationPanel when isGenericObjectSchema is true", () => {
     // The AI-assist panel must be hidden for generic-object gates because
     // there is nothing for the user to refine — they only click Continue.
-    expect(SRC).toMatch(/visible=\{!isGenericObjectSchema/);
+    //
+    // AMENDED by cinatra#2933 (lifecycle-b W5b). The rule this test pins is
+    // unchanged; the expression it reads is no longer one line. The window's
+    // visibility gained a SECOND term in the same wave — the run's own access,
+    // "no window shown to a person whose message it would refuse" — so the
+    // single-line literal was replaced by the two terms that must both hold.
+    const visible = SRC.match(/visible=\{([\s\S]*?)\}\n/);
+    expect(visible, "the panel must declare a visible expression").toBeTruthy();
+    expect(visible![1]).toMatch(/!isGenericObjectSchema/);
+    expect(visible![1]).toMatch(/canRespondInWindow !== false/);
   });
 });
