@@ -214,6 +214,20 @@ export type RunChatTurnArgs = {
    * that never had a composer binding.
    */
   boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  /**
+   * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
+   * lifecycle-b W5b), already composed as text by the window's own road.
+   *
+   * READ STATE, NOT AUTHORITY. It is composed into this turn's system context
+   * and nothing else: no tool is added for it, no grant is minted from it, and
+   * the turn's tool set is byte-identical with and without it. It is present
+   * whether or not the provider can use tools — a conversation-only model can
+   * still answer about the run it was handed, which is the whole point.
+   *
+   * Absent ⇒ the system string is byte-identical to a turn that never had one,
+   * which is every chat turn.
+   */
+  runFrame?: string;
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
@@ -1013,6 +1027,15 @@ export async function runAssistantTurn(
   // interim mode is SUPERSEDED by #1717 native-MCP activation when it fires.
   const conversationOnly = isConversationOnlyProvider(adapter.provider);
   const conversationOnlyNotice = conversationOnlyNoticeFor(conversationOnly);
+  // cinatra#2933 (lifecycle-b W5b) — the turn STATES its own capability, once,
+  // as soon as it is known. The plan: "A conversation whose model cannot
+  // operate anything lends nothing … The assistant says so plainly the moment
+  // it is asked to act … never a silent no-op." A caller that has to tell a
+  // person that cannot depend on the model volunteering it, and the only place
+  // that knows is here. Additive and inert: every existing sink ignores an
+  // event it does not name (the AG-UI adapter's `default` arm returns), so no
+  // existing surface changes.
+  send("turn_capability", { conversationOnly });
 
   // Tool array. Conversation-only providers (Gemini, AC#5) carry NO tools; every
   // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
@@ -1710,6 +1733,11 @@ export async function runAssistantTurn(
     // must not sit in the head (convergence round 2, finding 2). It follows
     // `userContext` because it is policy-bearing text and policy is read after
     // user-controlled content, never before it (finding 1).
+    // cinatra#3016 — the run a prompt window outside the chat sits under, or
+    // `""`. It follows `userContext` because it is the other user-controlled
+    // fragment, and it is NOT withheld from a conversation-only turn: it is
+    // state to read, not a control to press.
+    runFrameContext: args.runFrame ?? "",
     instanceFreezeState,
     pendingConfirmationContext,
     // cinatra#2932 — what this turn is bound to and the ONE control it may
