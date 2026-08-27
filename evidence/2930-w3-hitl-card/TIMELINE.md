@@ -1,77 +1,102 @@
-# TIMELINE — the shutters beside the database's own clock
+# TIMELINE — cinatra#2930 W3 (PR #3014), the picture leg re-driven at this head
 
-One lane, one instance, one agent, two runs. Every timestamp is UTC and comes from the
-row or from the recorder, never from prose. The run every cell stands on is
-`0998c3fb-facd-4881-acfe-f372decc73f5`; the first run is on the record because it failed and
-why it failed matters.
+Every stamp is UTC and comes from the database, the shipped recorder's own `capturedAt`, or the app
+server's own log. Nothing here is reconstructed from memory.
 
-## The lane, before any picture
+## The environment
 
 | at | what |
 |---|---|
-| — | the worktree was checked out at the pull request's head; the pinned extension tree (112 packages) was synced |
-| — | the app booted on a **dedicated lane database** on the verify Postgres (5634) and the verify Redis (6579), loopback-only, with this checkout's own package registry and agent runtime container beside it |
-| — | the lane account signed up through the app's own `/api/auth/sign-up/email`; org created and set active through the app's own endpoints |
-| — | `/setup/name` provisioned the instance namespace **through the app's own step** |
-| — | the wizard's Secrets step was completed **through the app's own form** (lane-local placeholder; disclosed in README.md) |
-| — | `/setup/model` sealed a REAL provider connection **through the app's own form**; `cinatra.metadata` holds one `openai_connection` row |
-| — | `/configuration/development?tab=tunnel` set the public origin **through the app's own UI**; `/api/mcp-settings` read it back as the one just saved |
-| — | the lane account joined the organization the instance's boot stamped every agent template with |
-| — | the run package and its two dependencies were published to the instance's own registry; the agent and its agent dependency were installed through `/configuration/extensions/upload` — both rows `owner_level: organization`, `status: active` |
+| — | the branch checked out at `d061c116fb1867413a7f5c1eff4db466c083097a`; 112/112 pinned extension repos synced |
+| — | a fresh database created on the verify Postgres (5634); the committed `public` schema seed applied with `scripts/apply-public-schema.mjs` |
+| — | `docker compose --profile wayflow up -d verdaccio wayflow` from this checkout; the dev package registry answered 200 |
+| — | `node scripts/dev-server.mjs` on 127.0.0.1:3000 — Next.js 16.2.10 (Turbopack), `CINATRA_RUNTIME_MODE=development`; the public origin answered before any pictured turn |
+| — | the account signed up through the app's own `/api/auth/sign-up/email`; the organization created and made active through the app's own endpoints |
+| — | `/setup/name` completed through the app's own step; the wizard's Secrets step completed through the app's own form; `/setup/model` completed by the provider driver on `main`, inside the operator's credential wrapper — *"the instance holds a sealed openai_connection row"* |
+| — | `/configuration/development?tab=tunnel` set through the app's own field; `/api/mcp-settings` read the origin back as the one just saved |
+| — | `@cinatra-ai/blog-draft-writer-agent`, `@cinatra-ai/context-selection-agent` and `@cinatra-ai/blog-post-artifact` published to the instance's own registry; the two agents installed through the app's own **Upload Extension** screen (`owner_level: organization`, `status: active`) |
 
-## Run 1 — `0f99ca1c-c81f-4170-83ea-dd6940d893d7`, on the record because it FAILED
-
-| at | what |
-|---|---|
-| `2026-08-27T08:50:58.671Z` | the app's own dispatch created the run out of the chat turn |
-| `2026-08-27T08:50:59.819Z` | the setup gate materialised — `setup-0f99ca1c…`, renderer `@cinatra-ai/agent-builder:schema-field-fallback`, field `idea` |
-| `2026-08-27T09:07:37.442Z` | readback before the answer — `pending_approval`, `input_params {}` |
-| `2026-08-27T09:08:21.415Z` | readback after the answer in the card — `pending_trigger`, `input_params {"idea": {"title": "How small teams keep their customer research organised"}}` |
-| `2026-08-27T09:11:06.695Z` | the trigger was released from the run's own step (`immediate`) |
-| `2026-08-27T09:11:10.651Z` | the mid-run gate materialised — `wayflow-f39d7511…`, renderer `@cinatra-ai/context-selection-agent:context-selector` |
-| `2026-08-27T09:15:40.744Z` | after the card's own Continue: the run RESUMED, ran the flow, wrote the draft — and then **failed** at artifact materialisation: *"failed to load the run package's artifact bindings: 404 Not Found … no such package available"*. The package had been installed by upload, which writes no tarball to the instance's registry. |
-
-The three packages were then published to that registry, and the whole leg was driven again.
-
-## Run 2 — `0998c3fb-facd-4881-acfe-f372decc73f5`, the run every cell stands on
-
-| at | what | cell |
-|---|---|---|
-| `2026-08-27T09:19:08.659Z` | the thread was opened — `0ae6d363-2081-48cc-91f5-2113b949c5cf` | |
-| `2026-08-27T09:19:2x` | a warm-up turn was sent and answered before the measured turn | |
-| `2026-08-27T09:19:37.051Z` | **the app's own dispatch created the run** out of *"Please run the Blog Draft Writer Agent for me now."* | |
-| `2026-08-27T09:19:38.010Z` | the setup gate materialised — `setup-0998c3fb…`, field `idea` | |
-| `2026-08-27T09:19:39.483Z` | the last streamed chat call of that turn (`openai` / `gpt-5.5`) | |
-| `2026-08-27T09:20:38.588Z` | shutter — the conversation at the setup screen, light | `HC-pending…__pending` |
-| `2026-08-27T09:20:55.670Z` | shutter — the same, dark | `HC-pending…__pending__dark` |
-| `2026-08-27T09:21:08.095Z` | shutter — the run page at the same moment, light | `HR-pending…__pending` |
-| `2026-08-27T09:21:20.040Z` | shutter — the same, dark | `HR-pending…__pending__dark` |
-| `2026-08-27T09:23:09.393Z` | readback before the answer — `pending_approval`, `input_params {}`, moment `hitl` | |
-| `2026-08-27T09:23:3x` | **the answer was typed into the field the card draws and Continue was pressed INSIDE the card** | |
-| `2026-08-27T09:23:53.927Z` | readback after — `pending_trigger`, `input_params {"idea": {"title": "How small teams keep their customer research organised"}}`, moment `schedule` | |
-| `2026-08-27T09:24:31.411Z` | shutter — the settled conversation, light | `HC-decided…__decided` |
-| `2026-08-27T09:24:43.069Z` | shutter — the same, dark | `HC-decided…__decided__dark` |
-| `2026-08-27T09:25:07.920Z` | the trigger was released from the run's own step (`immediate`, `Europe/Berlin`) | |
-| `2026-08-27T09:25:09.577Z` | **the mid-run gate materialised** — `wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4`, renderer `@cinatra-ai/context-selection-agent:context-selector` | |
-| `2026-08-27T09:26:08.741Z` | shutter — the mid-run question in the conversation, light | `HC-midrun-pending…__pending` |
-| `2026-08-27T09:26:24.803Z` | shutter — the same, dark | `HC-midrun-pending…__pending__dark` |
-| `2026-08-27T09:26:37.222Z` | shutter — the run page at the mid-run gate, light | `HR-midrun-pending…__pending` |
-| `2026-08-27T09:26:50.145Z` | shutter — the same, dark | `HR-midrun-pending…__pending__dark` |
-| `2026-08-27T09:27:5x` | the occlusion probe: the card's Continue is topmost at the resting scroll AND after scrolling to the end | |
-| `2026-08-27T09:28:50.101Z` | readback before the press — `pending_approval`, `completed_at` null, `a2a_task_id` `6a85b4cd…` | |
-| `2026-08-27T09:28:5x` | **`[data-action="submit-hitl-screen"]` was pressed INSIDE the card, in the conversation** | |
-| `2026-08-27T09:29:35.715Z` | the run **completed** | |
-| `2026-08-27T09:29:39.569Z` | readback after — `completed` | |
-| `2026-08-27T09:29:46.801Z` | the artifact was updated — *How Small Teams Keep Customer Research Organised*, `@cinatra-ai/blog-post-artifact:post` | |
-| `2026-08-27T09:30:01.351Z` | **the run's own review gate opened** — `cinatra.artifact_review_gates`, 1 row, `lifecycle-review:15259f72…`, `pending` | |
-| `2026-08-27T09:30:12.440Z` | the last generate call of the session (`openai` / `gpt-5.5-2026-04-23`) | |
-| `2026-08-27T09:30:43.929Z` | shutter — the settled conversation with the review card in the slot, light | `HC-midrun-decided…__decided` |
-| `2026-08-27T09:30:56.405Z` | shutter — the same, dark | `HC-midrun-decided…__decided__dark` |
-
-## After the shutters
+## The first run — FAILED, and left on the record
 
 | at | what |
 |---|---|
-| — | the run page was probed once more with the run `completed`: `[data-lifecycle-card="agent_hitl_screen"]` **0**, the surface draws `artifact_review_gate`. No HR-decided cell is claimed. |
-| — | the five drawings were rendered from the two spec files fetched read-only at `design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f` |
-| — | `chat-hitl-acceptance-gate`, `chat-hitl-evidence-gate`, `chat-hitl-one-card-gate` (bare and `--audit`) and `file-size-ratchet` all exit 0; the anchor digest reads `recorded == recomputed == fa31fa2f…` |
+| `13:50:31.131Z` | thread `4ca2006a-…` created by the app's own chat |
+| `13:50:58.272Z` | run `9dc2d652-…` created by the app's own dispatch; `pending_approval`, moment `hitl` |
+| `13:50:59.334Z` | setup gate `setup-9dc2d652-…` created (`@cinatra-ai/agent-builder:schema-field-fallback`, field `idea`), materialised `.335Z` |
+| ~`14:01:0xZ` | the card's own Continue pressed in the conversation; `approveReviewTask("setup-9dc2d652-…", {"idea":{"title":"…"}}, "idea")` — `pending_approval → pending_trigger`, the value merged |
+| `14:02:23.653Z` | trigger created, released `.656Z` |
+| `14:02:26.5xZ` | `[context-route] rejected kind=resolve code=forbidden status=403 … bridge auth failed` ×3, then `[wayflow] … state=failed`; the run `failed` at `14:02:26.557Z` |
+| — | **cause, and it is this round's own environment**: `docker/wayflow/.wayflow.env` had not been generated for this checkout, so the agent runtime container held no bridge token. `node scripts/gen-wayflow-env.mjs` wrote it (3 keys; the token matches the app's), the container was recreated and reported `/.health` `{"status":"ok","agents":29,"failed":0,"failed_agents":[]}` |
+
+## The run every cell stands on
+
+| at | what |
+|---|---|
+| `14:10:46.033Z` | thread `e84977d4-3427-4210-9b6b-d3b7d42d8fce` created; a warm-up turn sent and answered before the measured turn |
+| `14:10:45.3Z` | the person asked in their own words: *"Please run the Blog Draft Writer Agent for me now."* |
+| `14:11:03.562Z` | run `6928e825-6eb0-49da-88ae-a9faf446a5bc` created **by the app's own dispatch** (`agent_run`, off the model's own tool call) |
+| `14:11:04.553Z` | setup gate `setup-6928e825-…` created (`@cinatra-ai/agent-builder:schema-field-fallback`, field `idea`), materialised `.554Z`; run `pending_approval`, moment `hitl`, card kind `agent_hitl_screen` |
+
+### The setup screen — pictured
+
+| at | cell / reading |
+|---|---|
+| `14:12:26.454Z` | **HC-pending** light — `chat_thread`, `pending` |
+| `14:12:42.924Z` | **HC-pending** dark |
+| `14:12:55.588Z` | **HR-pending** light — `run_card`, `pending` |
+| `14:13:07.459Z` | **HR-pending** dark |
+| `14:13–14:14` | the field treatment and the send counts measured on all four cells |
+| `14:14:38.141Z` | readback: `pending_approval`, moment `hitl`, `input_params` `{}` |
+
+### The card's own Continue, on the setup gate
+
+| at | what |
+|---|---|
+| ~`14:15:13Z` | `[data-action="submit-hitl-screen"]` pressed IN THE CARD, in the conversation |
+| — | `[approveReviewTaskInternal] setup-path resumed run=6928e825-… fieldName=idea actor=…` and `approveReviewTask("setup-6928e825-…", {"idea":{"title":"How small teams keep customer research organised"}}, "idea")` |
+| `14:15:42.796Z` | **HC-decided** light — `chat_thread`, `decided`; every HITL anchor 0, the conversation list 1 |
+| `14:15:54.713Z` | **HC-decided** dark |
+| `14:15:54.802Z` | readback: **`pending_trigger`**, moment `schedule`, card kind `trigger_schedule_proposal`, `input_params` **`{"idea": {"title": "How small teams keep customer research organised"}}`** |
+
+### The schedule step and the dispatch
+
+| at | what |
+|---|---|
+| `14:16:17.216Z` | "Run right after setup" and Continue pressed on the run's own trigger step |
+| `14:16:17.440Z` | trigger created, released `.443Z` |
+| `14:16:19.177Z` | WayFlow task `f1a87077-…` `state=input-required`; `[wayflow-interrupt] … slotId: "draftContext"` |
+| `14:16:19.411Z` | mid-run gate `wayflow-f1a87077-…` created (`@cinatra-ai/context-selection-agent:context-selector`, no field), materialised `.412Z`; `[human-gate-park] run=6928e825-… parked on WayFlow gate` |
+
+### The mid-run screen — pictured
+
+| at | cell / reading |
+|---|---|
+| `14:16:56.152Z` | **HC-midrun-pending** light — `chat_thread`, `pending` |
+| `14:17:12.261Z` | **HC-midrun-pending** dark |
+| `14:17:24.909Z` | **HR-midrun-pending** light — `run_card`, `pending` |
+| `14:17:37.442Z` | **HR-midrun-pending** dark |
+| `14:17–14:19` | the field treatment and the send counts measured on all four cells |
+| `14:19:06.964Z` | readback: `pending_approval`, task `f1a87077-…`; review gates for this run: **0** |
+
+### The card's own Continue, on the mid-run gate
+
+| at | what |
+|---|---|
+| ~`14:19:2xZ` | `[data-action="submit-hitl-screen"]` pressed IN THE CARD, in the conversation |
+| `14:20:18.347Z` | the resumed run's first `generate` call to the real provider |
+| `14:20:18.355Z` | WayFlow task `0afeda2a-…` `state=completed` |
+| — | `[approveReviewTaskInternal] wayflow-path resumed run=6928e825-… task=f1a87077-… actor=… resultState=completed` |
+| `14:20:19.843Z` | the run **`completed`** (`completed_at`) |
+| `14:20:22.929Z` | **the run's own review gate opened** — `cinatra.artifact_review_gates`, `lifecycle-review:b61c5e70…`, `pending` |
+| `14:20:32.199Z` | the artifact updated — *How Small Teams Keep Customer Research Organized*, `@cinatra-ai/blog-post-artifact:post` |
+| — | the first attempt at the settled reading was REFUSED by the shipped validator: *"the recorded absence counted 1 card(s) … a root that is still on the screen is not a settled reading"* — the run had not finished resuming. Nothing was changed; the walk was split into a press step and a reading step that waits for the review gate's own card. |
+| `14:23:41.516Z` | **HC-midrun-decided** light — `chat_thread`, `decided`; every HITL anchor 0, the conversation list 1, the review card in the slot |
+| `14:23:54.596Z` | **HC-midrun-decided** dark |
+
+### After
+
+| at | what |
+|---|---|
+| `14:29:53.843Z` / `14:30:07.085Z` | the run page probed in both themes after completion: every HITL anchor **0**, `artifact_review_gate` (`run_card`, `pending`) in its place, step rail 1 (the completed run's rail, not a HITL-gate row) |
+| — | the drawings re-rendered at the contract's pin, read-only, from a loopback copy |
+| — | the twelve records registered through the shipped merge: **89 → 93**; annotated with runtime, run id, database readback and provider evidence; the shipped validator accepts all 93 |

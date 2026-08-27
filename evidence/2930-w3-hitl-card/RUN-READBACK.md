@@ -1,124 +1,124 @@
-# RUN-READBACK — the rows every picture stands on
+# RUN-READBACK — cinatra#2930 W3 (PR #3014), the picture leg re-driven at this head
 
-Read out of the lane database by `drivers/13-run-readback.mjs`, which writes nothing. The
-machine-readable copy is `readback/run-readback.json`.
+Every row below is read out of the database or the app server's own log by
+`drivers/13-run-readback.mjs` and `drivers/17-register-records.mjs`; the raw output is
+`readback/run-readback.json` and `readback/run-page-settled-probe.json`. Nothing in this round wrote a
+run, a gate, a trigger, a park, a record or a review task by hand.
 
-## 1. The runs
+## The runs
 
-| run | status | created | completed | `a2a_task_id` | `input_params` |
+| run | status | created | completed | a2a task | moment at capture | human present | source |
+|---|---|---|---|---|---|---|---|
+| `9dc2d652-4d09-480c-97e5-184a99cc3466` | **failed** | `13:50:58.272Z` | `14:02:26.557Z` | `a2d51aff-…` | — | true | `agent_builder` |
+| **`6928e825-6eb0-49da-88ae-a9faf446a5bc`** | **completed** | `14:11:03.562Z` | **`14:20:19.843Z`** | `0afeda2a-…` | — | true | `agent_builder` |
+
+The first run failed at dispatch on this round's own environment — the agent runtime container held no
+bridge token, so `/api/context-resolve` refused its callback (`code=forbidden … bridge auth failed`).
+It is kept in the readback rather than deleted. **Every cell stands on the second run.**
+
+## The HITL gates
+
+| run | `review_task_id` | `x_renderer` | field | created | materialised |
 |---|---|---|---|---|---|
-| `0f99ca1c-c81f-4170-83ea-dd6940d893d7` | **failed** | `2026-08-27T08:50:58.671Z` | `2026-08-27T09:15:40.744Z` | `6637daaa…` | `{"idea": {"title": "How small teams keep their customer research organised"}}` |
-| `0998c3fb-facd-4881-acfe-f372decc73f5` | **completed** | `2026-08-27T09:19:37.051Z` | `2026-08-27T09:29:35.715Z` | `fbc8dc4b…` | `{"idea": {"title": "How small teams keep their customer research organised"}}` |
+| `9dc2d652…` | `setup-9dc2d652-…` | `@cinatra-ai/agent-builder:schema-field-fallback` | `idea` | `13:50:59.334Z` | `13:50:59.335Z` |
+| `6928e825…` | `setup-6928e825-…` | `@cinatra-ai/agent-builder:schema-field-fallback` | `idea` | `14:11:04.553Z` | `14:11:04.554Z` |
+| `6928e825…` | `wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836` | `@cinatra-ai/context-selection-agent:context-selector` | *(none)* | `14:16:19.411Z` | `14:16:19.412Z` |
 
-The first run's `error`, quoted in full rather than summarised:
+## The two Continue readbacks
 
-> artifact materialization failed — the run declared artifact output(s) it did not produce
-> (1 of 1 failed): (binding-resolution): failed to load the run package's artifact bindings:
-> 404 Not Found - GET …/@cinatra-ai%2fblog-draft-writer-agent - no such package available
+### The SETUP gate — pressed IN the card, on `chat_thread`
 
-The agent had been installed through the product's **Upload Extension** screen, which writes
-the install row but publishes no tarball to the instance's own registry, and the binding
-resolver reads the package from that registry. The three packages were published and the leg
-was driven again. **Nothing about the card differs between the two runs**; the second is the
-one every cell stands on.
+| | before | after |
+|---|---|---|
+| read at | `2026-08-27T14:14:38.141Z` | `2026-08-27T14:15:54.802Z` |
+| `status` | `pending_approval` | **`pending_trigger`** |
+| `lifecycle_moment` | `hitl` | `schedule` |
+| `lifecycle_card_kind` | `agent_hitl_screen` | `trigger_schedule_proposal` |
+| `input_params` | `{}` | **`{"idea": {"title": "How small teams keep customer research organised"}}`** |
 
-Both runs were **created by the app's own dispatch** off the model's own `agent_run` tool
-call. The transcript's tool calls across the session are `agent_list`, `agent_run`,
-`agent_list`, `agent_run`, `agent_run` — **no lifecycle-card tool call anywhere in the
-trace**.
+The app's own shipped server action took it, from the conversation host, with the reader's value
+wrapped under the gate's OWN field name:
 
-## 2. The HITL gates
-
-| run | `review_task_id` | `x_renderer` | `field_name` | materialised |
-|---|---|---|---|---|
-| `0f99ca1c…` | `setup-0f99ca1c-c81f-4170-83ea-dd6940d893d7` | `@cinatra-ai/agent-builder:schema-field-fallback` | `idea` | `2026-08-27T08:50:59.819Z` |
-| `0f99ca1c…` | `wayflow-f39d7511-1321-453f-8764-50f2131982e2` | `@cinatra-ai/context-selection-agent:context-selector` | — | `2026-08-27T09:11:10.651Z` |
-| **`0998c3fb…`** | **`setup-0998c3fb-facd-4881-acfe-f372decc73f5`** | `@cinatra-ai/agent-builder:schema-field-fallback` | `idea` | `2026-08-27T09:19:38.010Z` |
-| **`0998c3fb…`** | **`wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4`** | `@cinatra-ai/context-selection-agent:context-selector` | — | `2026-08-27T09:25:09.577Z` |
-
-The setup gate's own `input_schema`, as the row carries it:
-
-```json
-{"type": "object", "title": "idea", "required": ["title"],
- "properties": {"title": {"type": "string"},
-                "outline": {"type": "array", "items": {"type": "string"}},
-                "summary": {"type": "string"}},
- "x-multiline": true, "x-placeholder": "What should this post be about?",
- "x-object-text-property": "title"}
+```
+[approveReviewTaskInternal] setup-path resumed run=6928e825-… fieldName=idea actor=55884fd9-…
+  ƒ approveReviewTask("setup-6928e825-…", {"idea":{"title":"How small teams keep customer research organised"}}, "idea")
+    in 52ms  packages/agents/src/hitl-actions.ts
 ```
 
-This is the row behind the *"Idea (optional)"* reading recorded in README.md: the gate's own
-schema names `title` as required, not `idea`, so the fallback renderer has nothing at the
-field's own level to read as required.
+There is no second submit path: this is the same action the run page's Continue calls.
 
-## 3. The two Continues, either side
+### The MID-RUN gate — pressed IN the card, on `chat_thread`
 
-**The setup gate, answered in the card's own field** (cookie host, `/chat`):
-
-| | at | status | `input_params` | `lifecycle_moment` |
-|---|---|---|---|---|
-| before | `2026-08-27T09:23:09.393Z` | `pending_approval` | `{}` | `hitl` |
-| after | `2026-08-27T09:23:53.927Z` | `pending_trigger` | `{"idea": {"title": "How small teams keep their customer research organised"}}` | `schedule` |
-
-**The mid-run gate, answered with the card's OWN `[data-action="submit-hitl-screen"]`**
-(cookie host, `/chat`):
-
-| | at | status | `completed_at` |
-|---|---|---|---|
-| before | `2026-08-27T09:28:50.101Z` | `pending_approval` | — |
-| after | `2026-08-27T09:29:39.569Z` | **`completed`** | `2026-08-27T09:29:35.715Z` |
-
-And the gate that opened behind it:
-
-| table | rows | id | status | created |
-|---|---|---|---|---|
-| `cinatra.artifact_review_gates` | 1 | `lifecycle-review:15259f72a7e4b00ec2da917c4e5b69b40a65518c354cf3ab7555ce87ed14530a` | `pending` | `2026-08-27T09:30:01.351Z` |
-
-The triggers, both released by the app from the run's own step, never inserted here:
-
-| run | type | released |
+| | before | after |
 |---|---|---|
-| `0f99ca1c…` | `immediate` | `2026-08-27T09:11:06.695Z` |
-| `0998c3fb…` | `immediate` | `2026-08-27T09:25:07.920Z` |
+| read at | `2026-08-27T14:19:06.964Z` | `2026-08-27T14:20:36.887Z` |
+| `status` | `pending_approval` | **`completed`** |
+| `completed_at` | *(null)* | **`2026-08-27T14:20:19.843Z`** |
+| `a2a_task_id` | `f1a87077-1de0-42a5-bdd8-bbfda070f836` | `0afeda2a-6a17-452f-952e-d12f72eba427` |
+| review gates for this run | **0** | **1**, `pending` |
 
-## 4. The provider, and the limits of what this establishes
+```
+[wayflow] run=6928e825-… task=0afeda2a-… state=completed status={"state":"completed","timestamp":"2026-08-27T14:20:18.355945"}
+[approveReviewTaskInternal] wayflow-path resumed run=6928e825-… task=f1a87077-… actor=55884fd9-… resultState=completed
+[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0
+```
 
-`cinatra.usage_events`, grouped:
+## What the run produced
+
+| | |
+|---|---|
+| review gate | `777841e8-81fd-4a73-a5a0-ad814e7cb83e`, `lifecycle-review:b61c5e70ae488125c0c4ea3dd2a73a400825339650744fa1117affb9c5b31887`, **`pending`**, created `2026-08-27T14:20:22.929Z` |
+| artifact | *How Small Teams Keep Customer Research Organized*, `@cinatra-ai/blog-post-artifact:post`, revision `4b04877e-7a5…`, ownership organization, `text/markdown`, updated `2026-08-27T14:20:32.199Z` |
+| trigger | `immediate`, `Europe/Berlin`, created `14:16:17.440Z`, released `14:16:17.443Z` |
+
+## The provider — real, and configured through the app's own form
 
 | provider | model | source | operation | calls | input tokens | output tokens | first | last |
 |---|---|---|---|---|---|---|---|---|
-| `openai` | `gpt-5.5` | `llm` | `stream` | **6** | 128,545 | 1,324 | `2026-08-27T08:29:10.136Z` | `2026-08-27T09:19:39.483Z` |
-| `openai` | `gpt-5.5-2026-04-23` | `llm` | `generate` | **12** | 94,135 | 4,018 | `2026-08-27T09:15:40.059Z` | `2026-08-27T09:30:12.440Z` |
+| `openai` | `gpt-5.5` | `llm` | `stream` | **3** | 64,520 | 802 | `13:50:45.276Z` | `14:11:05.974Z` |
+| `openai` | `gpt-5.5-2026-04-23` | `llm` | `generate` | **11** | 59,004 | 2,752 | `14:20:18.347Z` | `14:20:58.407Z` |
 
-Negative and positive screens over the app server's own log for this session
-(831,569 bytes):
+## The negative screens
 
-| screen | count | what a number means |
-|---|---|---|
-| scripted-runtime lines | **0** | the absence of that particular line, and nothing more |
-| "no provider configured" refusals | **0** | same |
-| MCP tool-enumeration failures | **0** | same |
-| public-MCP refusals | **4** | **a positive**: four turns really were refused before the ingress was warmed, all of them before the pictured turns |
-| `POST /api/mcp 200` | **26** | **a positive**: callbacks from the provider's own servers over the lane's public ingress |
-| `[llm-bridge-run-select]` | **2** | **a positive**: the agent runtime's own bridge calls, served by run token |
+A hit is proof of a problem; a zero is the absence of that particular line and nothing more.
 
-**What this cannot say.** This host prints no environment at all for the listening process —
-`ps -E` yields `tokensSeen: 0` — so the process-table read establishes nothing either way
-about `CINATRA_TEST_LLM_PROVIDER`. The positive evidence is the usage rows, the 26 public
-callbacks, the 2 bridge lines and the absent scripted lines; the driver that started the app
-set no such variable.
+| screen | count |
+|---|---|
+| scripted-runtime lines in the whole session log | **0** |
+| "no provider configured" refusals | **0** |
+| MCP tool-enumeration failures | **0** |
+| public-MCP refusals ("is not reachable" / "is unreachable") | **0** — the ingress was warmed before the first pictured turn |
+| `POST /api/mcp 200` callbacks from the provider's own servers over the public ingress | **12** |
+| `[llm-bridge-run-select]` lines from the agent runtime | **1** |
+| session log bytes screened | 590,974 |
 
-**A correction to this driver, made here.** `publicMcpRefusals` matched the wording the app
-STORES on a refused turn ("is not reachable") while the server writes "is unreachable", so it
-reported **zero** on a session that refused four turns. Both spellings are counted now, and
-`publicMcpCallbacks` and `bridgeRunSelects` were corrected to the shipped spellings at the
-same time. The earlier zero is named here rather than left in the file.
+`CINATRA_TEST_LLM_PROVIDER` is set in nothing this round starts, and each driver aborts if it finds
+it. The process-table read establishes nothing on this host: `ps -E` prints no environment for the
+listening process (`tokensSeen: 0`), which is recorded as a limit rather than as evidence.
 
-## 5. The threads
+## The transcript
 
-Five threads exist in the lane; four are warm-up or pre-install attempts, and the one every
-cell stands on is `0ae6d363-2081-48cc-91f5-2113b949c5cf` (opened `2026-08-27T09:19:08.659Z`).
-The pre-install attempts are on the record too: two turns were answered *"Agent is not
-installed: `@cinatra-ai/blog-draft-writer-agent` — it ships with Cinatra but is opt-in.
-Install it from the marketplace before running it."*, which is what sent this lane to the
-Upload Extension screen.
+| | |
+|---|---|
+| tool calls in the assistant's turns | `agent_run`, `agent_list`, `agent_run` — **nothing lifecycle-shaped** |
+| threads | `4ca2006a-…` (the failed run), **`e84977d4-3427-4210-9b6b-d3b7d42d8fce`** (every cell) |
+
+## The run page's settled reading — probed, not claimed
+
+`readback/run-page-settled-probe.json`, both themes, after `completed`:
+
+| theme | at | `agent_hitl_screen` | `hitl-screen-fields` | `submit-hitl-screen` | what the surface draws instead |
+|---|---|---|---|---|---|
+| light | `14:29:53.843Z` | **0** | **0** | **0** | `artifact_review_gate` / `run_card` / `pending` |
+| dark | `14:30:07.085Z` | **0** | **0** | **0** | `artifact_review_gate` / `run_card` / `pending` |
+
+## The capture index
+
+| | |
+|---|---|
+| records before | **89** |
+| records after | **93** — 8 replaced in place, 4 added |
+| this kind's records | **12** — 8 `pending`, **4 `decided`, each pinning the absence** |
+| shipped validator (`graded` tier) | accepts all **93** |
+| `chat-hitl-acceptance-gate` | exit 0 — 16 rows, capture index host-anchored, **93 records**, anchor contract ratified at the manifest's design pin |
+| anchor digest | `recorded == recomputed == fa31fa2f1e73b545ba42e923636af4e4ac6025d623b6c5fdcc68d32342994d46` — **unchanged** |

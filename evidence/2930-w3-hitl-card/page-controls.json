@@ -4,8 +4,8 @@
   "records": [
     {
       "cell": "HC-pending__hitl-card__chat_thread__pending",
-      "at": "2026-08-27T09:22:11.571Z",
-      "url": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "at": "2026-08-27T14:13:44.270Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "resolvedTheme": "light",
       "fieldPresentation": "subordinate",
       "fieldsRegion": {
@@ -32,9 +32,9 @@
         ],
         "rect": {
           "x": 495,
-          "y": 581,
+          "y": 320,
           "width": 706,
-          "height": 118
+          "height": 82
         }
       },
       "fieldControl": {
@@ -54,7 +54,7 @@
         "placeholder": "What should this post be about?",
         "rect": {
           "x": 495,
-          "y": 598,
+          "y": 337,
           "width": 706,
           "height": 64
         }
@@ -119,12 +119,24 @@
           "height": 48
         }
       },
-      "sendAffordanceInFields": [
-        {
-          "text": "Continue",
-          "dataAction": null
-        }
-      ],
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": "card",
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 422,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
       "cards": [
         {
           "tag": "div",
@@ -141,9 +153,9 @@
       ],
       "cardRect": {
         "x": 480,
-        "y": 566,
+        "y": 305,
         "width": 736,
-        "height": 148
+        "height": 161
       },
       "cardHeadings": [],
       "cardLabels": [
@@ -164,7 +176,7 @@
           "type": null,
           "text": "Continue",
           "placeholder": null,
-          "dataAction": null,
+          "dataAction": "submit-hitl-screen",
           "disabled": false,
           "painted": true
         }
@@ -198,9 +210,9 @@
           "root": 1
         },
         "[data-action=\"submit-hitl-screen\"]": {
-          "frame": 0,
-          "framePainted": 0,
-          "root": 0
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
         },
         "[data-lifecycle-card-state]": {
           "frame": 1,
@@ -217,22 +229,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "hitl",
         "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "input_params": "{}",
         "a2a_task_id": null,
-        "read_at": "2026-08-27T09:22:11.568Z"
+        "read_at": "2026-08-27T14:13:44.266Z"
       }
     },
     {
       "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
-      "at": "2026-08-27T09:22:25.229Z",
-      "url": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "at": "2026-08-27T14:13:57.920Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "resolvedTheme": "dark",
       "fieldPresentation": "subordinate",
       "fieldsRegion": {
@@ -259,9 +271,9 @@
         ],
         "rect": {
           "x": 495,
-          "y": 581,
+          "y": 320,
           "width": 706,
-          "height": 118
+          "height": 82
         }
       },
       "fieldControl": {
@@ -281,7 +293,7 @@
         "placeholder": "What should this post be about?",
         "rect": {
           "x": 495,
-          "y": 598,
+          "y": 337,
           "width": 706,
           "height": 64
         }
@@ -346,12 +358,24 @@
           "height": 48
         }
       },
-      "sendAffordanceInFields": [
-        {
-          "text": "Continue",
-          "dataAction": null
-        }
-      ],
+      "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": "card",
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 422,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
       "cards": [
         {
           "tag": "div",
@@ -368,9 +392,9 @@
       ],
       "cardRect": {
         "x": 480,
-        "y": 566,
+        "y": 305,
         "width": 736,
-        "height": 148
+        "height": 161
       },
       "cardHeadings": [],
       "cardLabels": [
@@ -391,7 +415,7 @@
           "type": null,
           "text": "Continue",
           "placeholder": null,
-          "dataAction": null,
+          "dataAction": "submit-hitl-screen",
           "disabled": false,
           "painted": true
         }
@@ -425,9 +449,9 @@
           "root": 1
         },
         "[data-action=\"submit-hitl-screen\"]": {
-          "frame": 0,
-          "framePainted": 0,
-          "root": 0
+          "frame": 1,
+          "framePainted": 1,
+          "root": 1
         },
         "[data-lifecycle-card-state]": {
           "frame": 1,
@@ -444,22 +468,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "hitl",
         "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "input_params": "{}",
         "a2a_task_id": null,
-        "read_at": "2026-08-27T09:22:25.224Z"
+        "read_at": "2026-08-27T14:13:57.918Z"
       }
     },
     {
       "cell": "HR-pending__hitl-card__run_card__pending",
-      "at": "2026-08-27T09:22:35.777Z",
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "at": "2026-08-27T14:14:08.458Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "resolvedTheme": "light",
       "fieldPresentation": "primary",
       "fieldsRegion": {
@@ -540,6 +564,20 @@
           "dataAction": null
         }
       ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 0,
+        "sendText": null,
+        "sendDisabled": null,
+        "sendBox": null,
+        "primaryInputsInConversation": 0
+      },
       "cards": [
         {
           "tag": "div",
@@ -632,22 +670,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "hitl",
         "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "input_params": "{}",
         "a2a_task_id": null,
-        "read_at": "2026-08-27T09:22:35.775Z"
+        "read_at": "2026-08-27T14:14:08.454Z"
       }
     },
     {
       "cell": "HR-pending__hitl-card__run_card__pending__dark",
-      "at": "2026-08-27T09:22:46.229Z",
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "at": "2026-08-27T14:14:18.952Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "resolvedTheme": "dark",
       "fieldPresentation": "primary",
       "fieldsRegion": {
@@ -728,6 +766,20 @@
           "dataAction": null
         }
       ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 0,
+        "sendText": null,
+        "sendDisabled": null,
+        "sendBox": null,
+        "primaryInputsInConversation": 0
+      },
       "cards": [
         {
           "tag": "div",
@@ -820,22 +872,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": "hitl",
         "lifecycle_card_kind": "agent_hitl_screen",
-        "lifecycle_card_ref": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+        "lifecycle_card_ref": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "input_params": "{}",
         "a2a_task_id": null,
-        "read_at": "2026-08-27T09:22:46.227Z"
+        "read_at": "2026-08-27T14:14:18.948Z"
       }
     },
     {
       "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
-      "at": "2026-08-27T09:27:28.648Z",
-      "url": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "at": "2026-08-27T14:18:12.330Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "resolvedTheme": "light",
       "fieldPresentation": "subordinate",
       "fieldsRegion": {
@@ -862,7 +914,7 @@
         ],
         "rect": {
           "x": 495,
-          "y": 581,
+          "y": 320,
           "width": 706,
           "height": 92
         }
@@ -912,6 +964,23 @@
         }
       },
       "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 433,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
       "cards": [
         {
           "tag": "div",
@@ -928,7 +997,7 @@
       ],
       "cardRect": {
         "x": 480,
-        "y": 566,
+        "y": 305,
         "width": 736,
         "height": 171
       },
@@ -993,22 +1062,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
         "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
-        "read_at": "2026-08-27T09:27:28.644Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:12.323Z"
       }
     },
     {
       "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
-      "at": "2026-08-27T09:27:42.802Z",
-      "url": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "at": "2026-08-27T14:18:26.158Z",
+      "url": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "resolvedTheme": "dark",
       "fieldPresentation": "subordinate",
       "fieldsRegion": {
@@ -1035,7 +1104,7 @@
         ],
         "rect": {
           "x": 495,
-          "y": 581,
+          "y": 320,
           "width": 706,
           "height": 92
         }
@@ -1085,6 +1154,23 @@
         }
       },
       "sendAffordanceInFields": [],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 0,
+        "buttonTextsInsideRegion": [],
+        "sendInsideRegion": 0,
+        "sendOutsideRegionInCard": 1,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1104,
+          "y": 433,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 1
+      },
       "cards": [
         {
           "tag": "div",
@@ -1101,7 +1187,7 @@
       ],
       "cardRect": {
         "x": 480,
-        "y": 566,
+        "y": 305,
         "width": 736,
         "height": 171
       },
@@ -1166,22 +1252,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
         "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
-        "read_at": "2026-08-27T09:27:42.799Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:26.151Z"
       }
     },
     {
       "cell": "HR-midrun-pending__hitl-card__run_card__pending",
-      "at": "2026-08-27T09:27:53.503Z",
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "at": "2026-08-27T14:18:37.015Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "resolvedTheme": "light",
       "fieldPresentation": "primary",
       "fieldsRegion": {
@@ -1224,6 +1310,25 @@
           "dataAction": "submit-hitl-screen"
         }
       ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 1,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1093,
+          "y": 447,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 0
+      },
       "cards": [
         {
           "tag": "div",
@@ -1305,22 +1410,22 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
         "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
-        "read_at": "2026-08-27T09:27:53.501Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:37.009Z"
       }
     },
     {
       "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
-      "at": "2026-08-27T09:28:04.203Z",
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "at": "2026-08-27T14:18:47.568Z",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "resolvedTheme": "dark",
       "fieldPresentation": "primary",
       "fieldsRegion": {
@@ -1363,6 +1468,25 @@
           "dataAction": "submit-hitl-screen"
         }
       ],
+      "sendAffordance": {
+        "regionDeclaresCardOwnsSend": null,
+        "buttonsInsideRegion": 1,
+        "buttonTextsInsideRegion": [
+          "Continue"
+        ],
+        "sendInsideRegion": 1,
+        "sendOutsideRegionInCard": 0,
+        "sendTotalInFrame": 1,
+        "sendText": "Continue",
+        "sendDisabled": false,
+        "sendBox": {
+          "x": 1093,
+          "y": 447,
+          "width": 97,
+          "height": 28
+        },
+        "primaryInputsInConversation": 0
+      },
       "cards": [
         {
           "tag": "div",
@@ -1444,16 +1568,16 @@
       "toolNamesInTranscript": [],
       "stepRailPresent": 0,
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "pending_approval",
         "started_at": null,
         "completed_at": null,
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
         "lifecycle_card_ref": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
-        "read_at": "2026-08-27T09:28:04.201Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "f1a87077-1de0-42a5-bdd8-bbfda070f836",
+        "read_at": "2026-08-27T14:18:47.564Z"
       }
     }
   ]

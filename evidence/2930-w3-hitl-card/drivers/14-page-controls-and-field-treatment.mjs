@@ -72,6 +72,30 @@ for (const cell of CELLS) {
       chatBox: composer ? { ...treat(composer), rect: rect(composer) } : null,
       chatBoxContainer: composerBox ? { ...treat(composerBox), rect: rect(composerBox) } : null,
       sendAffordanceInFields: fields ? Array.from(fields.querySelectorAll("button, [role='button']")).map((b) => ({ text: (b.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60), dataAction: b.getAttribute("data-action") })) : [],
+      // THE COUNT THIS HEAD TURNS ON, read as two numbers rather than one.
+      // Section I forbids a send INSIDE the subordinate field; the card's own
+      // Continue stands OUTSIDE the region. Counting only the total would not
+      // tell the two apart, and "no button in the region" and "a Continue on the
+      // card" are two different claims that have to be measured separately.
+      sendAffordance: (() => {
+        const inRegion = fields ? Array.from(fields.querySelectorAll("button, [role='button']")) : [];
+        const sendAll = Array.from(document.querySelectorAll('[data-action="submit-hitl-screen"]'));
+        const outside = sendAll.filter((b) => inCard(b) && (!fields || !fields.contains(b)));
+        const one = sendAll[0] ?? null;
+        const r = one ? one.getBoundingClientRect() : null;
+        return {
+          regionDeclaresCardOwnsSend: fields ? fields.getAttribute("data-send-affordance") : null,
+          buttonsInsideRegion: fields ? inRegion.length : null,
+          buttonTextsInsideRegion: inRegion.map((b) => (b.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60)),
+          sendInsideRegion: fields ? fields.querySelectorAll('[data-action="submit-hitl-screen"]').length : null,
+          sendOutsideRegionInCard: outside.length,
+          sendTotalInFrame: sendAll.length,
+          sendText: one ? (one.textContent || "").replace(/\s+/g, " ").trim() : null,
+          sendDisabled: one ? (one.hasAttribute("disabled") || one.getAttribute("aria-disabled") === "true") : null,
+          sendBox: r ? { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) } : null,
+          primaryInputsInConversation: document.querySelectorAll('div[contenteditable="true"][role="textbox"]').length,
+        };
+      })(),
       cards: Array.from(document.querySelectorAll("[data-lifecycle-card]")).map((el) => ({
         tag: el.tagName.toLowerCase(),
         attributes: Object.fromEntries(Array.from(el.attributes).map((x) => [x.name, x.value])),

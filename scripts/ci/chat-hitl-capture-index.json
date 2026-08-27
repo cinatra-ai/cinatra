@@ -8858,11 +8858,11 @@
     {
       "cell": "HC-pending__hitl-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
-      "sha256": "394b793c42ec7ecfa6fe74789e56510074d07e19f50a3b3639e70229fdf71a41",
-      "capturedAt": "2026-08-27T09:20:38.588Z",
+      "sha256": "2b950a5f0670d16bff4de7484dc7cd2f32aafe65351c159ada649474514a5212",
+      "capturedAt": "2026-08-27T14:12:26.454Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -8924,75 +8924,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HC-pending__hitl-card__chat_thread__pending__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
-      "sha256": "d37603f98a3173a94d68468b347cbaaab75afd06fddc5c13eafe523f2f8f98a0",
-      "capturedAt": "2026-08-27T09:20:55.670Z",
+      "sha256": "da312059634130477a700ec82aca88eb71cb494d91879fe6f7b22c906dd5cd9c",
+      "capturedAt": "2026-08-27T14:12:42.924Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -9054,75 +9067,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HR-pending__hitl-card__run_card__pending",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
-      "sha256": "abc466af8f3cff92c9615cf905fcd1b5a05b71b64a71a88f4673d3a820310733",
-      "capturedAt": "2026-08-27T09:21:08.095Z",
+      "sha256": "3d3f5148b7f189122e0518c55eca71df7bed8d51eacc3305d1b2de0d25d0c240",
+      "capturedAt": "2026-08-27T14:12:55.588Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -9176,75 +9202,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HR-pending__hitl-card__run_card__pending__dark",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
-      "sha256": "9f4044b7568f28c03813eca777229696f35b8ac0b3b1745334d12249d42012b6",
-      "capturedAt": "2026-08-27T09:21:20.040Z",
+      "sha256": "a0057a70c126f0ddeee39e41b7cab3fb9aa90d7d0988feb1a6004ffe50998988",
+      "capturedAt": "2026-08-27T14:13:07.459Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -9298,75 +9337,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HC-midrun-pending__hitl-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
-      "sha256": "cca28e16d33fd62ddf1830d5c8e525c6e8fd251dcea9c4db519f9e2c3a0f0de3",
-      "capturedAt": "2026-08-27T09:26:08.741Z",
+      "sha256": "69f352e1379090056b1d095ffc0851face759bc5ae1a458542549b421e4f0202",
+      "capturedAt": "2026-08-27T14:16:56.152Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -9428,75 +9480,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HC-midrun-pending__hitl-card__chat_thread__pending__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ae6d363-2081-48cc-91f5-2113b949c5cf",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
-      "sha256": "b5f8e3c42895765ed7ab1105ee62145a2e995815fb3373b5dafe1fe6825bac9b",
-      "capturedAt": "2026-08-27T09:26:24.803Z",
+      "sha256": "c91204348f06dd393b0d2132fe20fbbab1ba2b38cfd3f7c90562a4e81c6897a1",
+      "capturedAt": "2026-08-27T14:17:12.261Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -9558,75 +9623,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HR-midrun-pending__hitl-card__run_card__pending",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
-      "sha256": "7f84aefd96130e22ffd5a0cca00eac253e85cd887b5fdc4b86fc8f57565e977c",
-      "capturedAt": "2026-08-27T09:26:37.222Z",
+      "sha256": "30f87e4ffe94cbb2d9f2eb640b1c7f39d0e51490e5fe0750bf756f9a5857a3ef",
+      "capturedAt": "2026-08-27T14:17:24.909Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -9680,75 +9758,88 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     },
     {
       "cell": "HR-midrun-pending__hitl-card__run_card__pending__dark",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0998c3fb-facd-4881-acfe-f372decc73f5",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
       "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
-      "sha256": "50fc956b1601938ba2088363383a7aee7a1fea4ebb3f9d4f85f97e2c2b68bcf8",
-      "capturedAt": "2026-08-27T09:26:50.145Z",
+      "sha256": "f0c60f62baf1d1a2b9aa9d4327226b37cdcf18ea09c0388c7ac1ea82e78f3b40",
+      "capturedAt": "2026-08-27T14:17:37.442Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -9802,64 +9893,557 @@
           "data-conformance-id": "agent-hitl-screen-card"
         }
       },
-      "runtime": "dev-runtime — node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; this repository's own WayFlow runtime and package registry from docker-compose.yml; a REAL model provider configured through the app's OWN provider form; CINATRA_TEST_LLM_PROVIDER unset in the driver and not found in the app server's process chain",
-      "runId": "0998c3fb-facd-4881-acfe-f372decc73f5",
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "dbAt": {
-        "id": "0998c3fb-facd-4881-acfe-f372decc73f5",
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
         "status": "completed",
-        "created_at": "2026-08-27T09:19:37.051Z",
+        "created_at": "2026-08-27T14:11:03.562Z",
         "started_at": null,
-        "completed_at": "2026-08-27T09:29:35.715Z",
+        "completed_at": "2026-08-27T14:20:19.843Z",
         "lifecycle_moment": null,
         "lifecycle_card_kind": null,
-        "input_params": "{\"idea\": {\"title\": \"How small teams keep their customer research organised\"}}",
-        "a2a_task_id": "fbc8dc4b-533e-4df5-83be-60dce9dd4bac",
-        "read_at": "2026-08-27T09:51:14.000Z"
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
       },
       "gatesAtCapture": [
         {
-          "review_task_id": "setup-0998c3fb-facd-4881-acfe-f372decc73f5",
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
           "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
           "field_name": "idea",
-          "materialized_at": "2026-08-27T09:19:38.010Z"
+          "materialized_at": "2026-08-27T14:11:04.554Z"
         },
         {
-          "review_task_id": "wayflow-6a85b4cd-e6fb-45c3-99ce-5242fbeabcb4",
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
           "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
           "field_name": null,
-          "materialized_at": "2026-08-27T09:25:09.578Z"
+          "materialized_at": "2026-08-27T14:16:19.412Z"
         }
       ],
       "providerEvidence": {
-        "serverLog": "the app server's own log for this session",
-        "scriptedRuntimeLines": 0,
-        "noProviderRefusals": 0,
-        "mcpToolListFailures": 0,
-        "publicMcpRefusals": 4,
-        "publicMcpCallbacks": 26,
-        "bridgeRunSelects": 2,
-        "driverScriptedProviderEnv": null,
-        "serverEnvReadFrom": "process-table",
-        "serverEnvTokensSeen": 0,
-        "serverEnvAvailable": false,
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
-            "model": "gpt-5.5",
-            "operation": "stream",
-            "calls": 6,
-            "inputTokens": 128545,
-            "outputTokens": 1324
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
           },
           {
             "provider": "openai",
-            "model": "gpt-5.5-2026-04-23",
-            "operation": "generate",
-            "calls": 12,
-            "inputTokens": 94135,
-            "outputTokens": 4018
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
           }
-        ]
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-decided__hitl-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "8cb5a4eea73d1168606a9c16024acf91299b8d9aee47ffab99bb5c45a93c510f",
+      "capturedAt": "2026-08-27T14:15:42.796Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-decided__hitl-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "cb668c63a7f82cda1f120e9674333f42ff420fad0d8b11b7bc1737895b2fb369",
+      "capturedAt": "2026-08-27T14:15:54.713Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+      "sha256": "88fc08c0a69b9f0ea2a88d1a7e4b2de962f8afb00c7baeb1ff8dadf52594530f",
+      "capturedAt": "2026-08-27T14:23:41.516Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
+      },
+      "note": null
+    },
+    {
+      "cell": "HC-midrun-decided__hitl-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
+      "build": "development",
+      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+      "sha256": "f53a013dc790b7c1dc59e714721dfcb9eb9989a5722d5fd4c67a8c0dda14a865",
+      "capturedAt": "2026-08-27T14:23:54.596Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"hitl-screen-fields\"]",
+          "scope": "frame",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "agent_hitl_screen",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"agent_hitl_screen\"]",
+        "matched": 0,
+        "index": null,
+        "id": null,
+        "attributes": {},
+        "absent": true
+      },
+      "runtime": "dev-runtime",
+      "runId": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+      "dbAt": {
+        "id": "6928e825-6eb0-49da-88ae-a9faf446a5bc",
+        "status": "completed",
+        "created_at": "2026-08-27T14:11:03.562Z",
+        "started_at": null,
+        "completed_at": "2026-08-27T14:20:19.843Z",
+        "lifecycle_moment": null,
+        "lifecycle_card_kind": null,
+        "input_params": "{\"idea\": {\"title\": \"How small teams keep customer research organised\"}}",
+        "a2a_task_id": "0afeda2a-6a17-452f-952e-d12f72eba427",
+        "read_at": "2026-08-27T14:31:40.470Z"
+      },
+      "gatesAtCapture": [
+        {
+          "review_task_id": "setup-6928e825-6eb0-49da-88ae-a9faf446a5bc",
+          "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+          "field_name": "idea",
+          "materialized_at": "2026-08-27T14:11:04.554Z"
+        },
+        {
+          "review_task_id": "wayflow-f1a87077-1de0-42a5-bdd8-bbfda070f836",
+          "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+          "field_name": null,
+          "materialized_at": "2026-08-27T14:16:19.412Z"
+        }
+      ],
+      "providerEvidence": {
+        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "usage": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5-2026-04-23",
+            "source": "llm",
+            "operation": "generate",
+            "calls": 11,
+            "input_tokens": 59004,
+            "output_tokens": 2752,
+            "first_at": "2026-08-27T14:20:18.347Z",
+            "last_at": "2026-08-27T14:20:58.407Z"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "source": "llm",
+            "operation": "stream",
+            "calls": 3,
+            "input_tokens": 64520,
+            "output_tokens": 802,
+            "first_at": "2026-08-27T13:50:45.276Z",
+            "last_at": "2026-08-27T14:11:05.974Z"
+          }
+        ],
+        "negativeScreens": {
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpToolListFailures": 0,
+          "publicMcpRefusals": 0,
+          "publicMcpCallbacks": 12,
+          "bridgeRunSelects": 1,
+          "sessionLogBytes": 590974
+        },
+        "processTable": {
+          "pid": "86964",
+          "readFrom": "process-table",
+          "tokensSeen": 0,
+          "scriptedProviderTokens": 0,
+          "value": null
+        },
+        "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
     }
