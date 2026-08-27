@@ -993,25 +993,19 @@
   "siteWidget": {
     "$comment": "The widget's seven recommendation cells, re-shot 2026-08-27 from a run STARTED INSIDE THE WIDGET by the person's own turn through the #2996 named-agent start. Nothing is seeded: the run, the park and the decision were all written by the app's own dispatch.",
     "run": {
-      "id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+      "id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
       "status": "pending_input",
       "human_present": true,
       "template_id": "3ac23e05-c031-43a8-8596-e502ea21bdd2",
-      "created_at": "2026-08-27T16:13:58.570Z"
+      "created_at": "2026-08-27T18:24:11.388Z"
     },
-    "park": {
-      "id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
-      "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-      "checkpoint": "recommendation",
-      "status": "parked",
-      "created_at": "2026-08-27T16:14:00.221Z"
-    },
+    "park": null,
     "prompt": "Please start the agent @cinatra-ai/blog-draft-writer-agent for me.",
-    "turnSentAt": "2026-08-27T16:13:40.212Z",
+    "turnSentAt": "2026-08-27T18:23:57.345Z",
     "statusBefore": "pending_input",
     "statusAfter": "pending_approval",
     "settledInPlace": true,
-    "inFlightMs": 33,
+    "inFlightMs": 47,
     "themeToDark": {
       "pressed": true,
       "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -1030,7 +1024,7 @@
           "width": 1244,
           "height": 2364
         },
-        "sha256": "b5984a7ea5324b54754bfbd780c84f34e327a07a7c0764e1f95439e090818a4a",
+        "sha256": "37482bf668e35da6e8067eb1e37441276d8a86918f03b09639de64980c323400",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1154,7 +1148,7 @@
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "H1__recommendation-card__site_widget__held",
@@ -1287,7 +1281,7 @@
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "W2__recommendation-card__site_widget__held__column__dark",
@@ -1296,7 +1290,7 @@
           "width": 1244,
           "height": 2364
         },
-        "sha256": "b6cd41ea89b119566db43bf09dc8d8416311f2f3a018055a583cf2b50da0fbfc",
+        "sha256": "a25587ed998819f88717666f6ea5fa29abdbd6074b4473c8c5f822c8e8f0a175",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1420,7 +1414,7 @@
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "H2__recommendation-card__site_widget__held__dark",
@@ -1553,7 +1547,7 @@
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "H3__recommendation-card__site_widget__held__mid-decision",
@@ -1686,7 +1680,7 @@
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Web Research Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "W3__recommendation-card__site_widget__settled__column",
@@ -1695,7 +1689,7 @@
           "width": 1244,
           "height": 2364
         },
-        "sha256": "e0a559f81d9b98d8366003edb5ae4af8a42865a403c4b5eeec75b06bc6c21791",
+        "sha256": "3ed2e53450e0c6ee3fa13fbd8c8a970d9f4cb24cd6c5629a7847197dcec85c19",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1750,7 +1744,7 @@
           {
             "selector": "[data-recommendation-chip]",
             "scope": "root",
-            "count": 3
+            "count": 4
           },
           {
             "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1786,6 +1780,14 @@
             "actions": []
           },
           {
+            "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+            "mark": "skipped",
+            "forced": false,
+            "label": "Brand Voice Matcher Skill",
+            "text": "Brand Voice Matcher SkillSkipped",
+            "actions": []
+          },
+          {
             "skillId": "@cinatra-ai/web-research-skill:web-research",
             "mark": "confirmed",
             "forced": false,
@@ -1795,8 +1797,8 @@
           }
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-        "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill CONFIRMED Blog Writing Skill ADJUSTED Web Research Skill CONFIRMED Agentic Run Progress Awaiting input Idea (optional) Continue No messages yet. Type a message... Command Palette Search for a command to run..."
+        "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nBrand Voice Matcher Skill\nSKIPPED\nWeb Research Skill\nCONFIRMED",
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill CONFIRMED Blog Writing Skill ADJUSTED Brand Voice Matcher Skill SKIPPED Web Research Skill CONFIRMED Loading agent run… Type a message... Command Palette Search for a command to run..."
       },
       {
         "cell": "H4__recommendation-card__site_widget__settled",
@@ -1805,7 +1807,7 @@
           "width": 1176,
           "height": 122
         },
-        "sha256": "7ae816cf510144b8a22fb0f58f12d1972453794a8dc4b93def783718accbb28c",
+        "sha256": "51baf67a688d3f7b3805e2d1ce7bb1ad1dbba90eb34f2b25600173594f5d656a",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1860,7 +1862,7 @@
           {
             "selector": "[data-recommendation-chip]",
             "scope": "root",
-            "count": 3
+            "count": 4
           },
           {
             "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1896,6 +1898,14 @@
             "actions": []
           },
           {
+            "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+            "mark": "skipped",
+            "forced": false,
+            "label": "Brand Voice Matcher Skill",
+            "text": "Brand Voice Matcher SkillSkipped",
+            "actions": []
+          },
+          {
             "skillId": "@cinatra-ai/web-research-skill:web-research",
             "mark": "confirmed",
             "forced": false,
@@ -1905,8 +1915,8 @@
           }
         ],
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-        "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED",
-        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 740c28fd-c6c1-496b-9a97-f8b2085c0076, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill CONFIRMED Blog Writing Skill ADJUSTED Web Research Skill CONFIRMED Agentic Run Progress Awaiting input Idea (optional) Continue No messages yet. Type a message... Command Palette Search for a command to run..."
+        "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nBrand Voice Matcher Skill\nSKIPPED\nWeb Research Skill\nCONFIRMED",
+        "columnText": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 5bd19ca1-4ac2-4575-b17c-2f72b6b45f79, status: pending_input). The run paused for a decision on the recommended skills. Blog Post Matcher Skill CONFIRMED Blog Writing Skill ADJUSTED Brand Voice Matcher Skill SKIPPED Web Research Skill CONFIRMED Loading agent run… Type a message... Command Palette Search for a command to run..."
       }
     ],
     "wire": [

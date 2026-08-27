@@ -1,20 +1,14 @@
 {
   "prompt": "Please start the agent @cinatra-ai/blog-draft-writer-agent for me.",
-  "turnSentAt": "2026-08-27T16:13:40.212Z",
+  "turnSentAt": "2026-08-27T18:23:57.345Z",
   "run": {
-    "id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "status": "pending_input",
     "human_present": true,
     "template_id": "3ac23e05-c031-43a8-8596-e502ea21bdd2",
-    "created_at": "2026-08-27T16:13:58.570Z"
+    "created_at": "2026-08-27T18:24:11.388Z"
   },
-  "park": {
-    "id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
-    "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-    "checkpoint": "recommendation",
-    "status": "parked",
-    "created_at": "2026-08-27T16:14:00.221Z"
-  },
+  "park": null,
   "statusBefore": "pending_input",
   "themeToDark": {
     "pressed": true,
@@ -26,7 +20,7 @@
     "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "followed": true
   },
-  "inFlightMs": 33,
+  "inFlightMs": 47,
   "settledInPlace": true,
   "statusAfter": "pending_approval",
   "decisionRows": [
@@ -44,49 +38,49 @@
     {
       "provider": "openai",
       "model": "gpt-5.5",
-      "created_at": "2026-08-27T16:14:02.273Z"
+      "created_at": "2026-08-27T18:24:14.688Z"
     }
   ],
   "offered": [
     {
-      "id": "509502e7-d2bd-48f5-b3e7-4072799aab27",
-      "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-      "hold_id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
+      "id": "f21bd673-9cfc-4f52-97d9-c08317ec92dc",
+      "run_id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
+      "hold_id": "a1fd0925-20c4-4bad-bf1a-2ca3597761e8",
       "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
       "skill_revision_id": "967165b8-cffb-451e-9375-c60808799319",
       "recommended": false,
       "offered_rank": 1,
-      "offered_at": "2026-08-27T16:14:08.347Z"
+      "offered_at": "2026-08-27T18:24:20.849Z"
     },
     {
-      "id": "bb7c0c2e-4c31-44af-ab1f-96bd1cd9df19",
-      "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-      "hold_id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
+      "id": "bcf3013c-9526-48d8-a48e-beb53564c3f2",
+      "run_id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
+      "hold_id": "a1fd0925-20c4-4bad-bf1a-2ca3597761e8",
       "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
       "skill_revision_id": "1b9a7a5f-b6cf-4492-8c29-d21a7438b738",
       "recommended": false,
       "offered_rank": 2,
-      "offered_at": "2026-08-27T16:14:08.347Z"
+      "offered_at": "2026-08-27T18:24:20.849Z"
     },
     {
-      "id": "70ba58dd-2876-47a2-8a94-95900297ad88",
-      "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-      "hold_id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
+      "id": "980ef4b2-9c6c-45e2-946a-6cc7c2e85b46",
+      "run_id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
+      "hold_id": "a1fd0925-20c4-4bad-bf1a-2ca3597761e8",
       "skill_id": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
       "skill_revision_id": "6834e7f1-69be-43be-872f-c42fcfed6407",
       "recommended": false,
       "offered_rank": 3,
-      "offered_at": "2026-08-27T16:14:08.347Z"
+      "offered_at": "2026-08-27T18:24:20.849Z"
     },
     {
-      "id": "0bf36f58-bed7-43ca-9edb-3c1e09bcc15d",
-      "run_id": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-      "hold_id": "6c181441-ee7a-4d6b-8d75-d41fa813a32d",
+      "id": "3e2fb224-2c94-44db-ac50-c2532eccdcf2",
+      "run_id": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
+      "hold_id": "a1fd0925-20c4-4bad-bf1a-2ca3597761e8",
       "skill_id": "@cinatra-ai/web-research-skill:web-research",
       "skill_revision_id": "95a29e4c-61d6-4282-ae56-a2051079d211",
       "recommended": false,
       "offered_rank": 4,
-      "offered_at": "2026-08-27T16:14:08.347Z"
+      "offered_at": "2026-08-27T18:24:20.849Z"
     }
   ]
 }

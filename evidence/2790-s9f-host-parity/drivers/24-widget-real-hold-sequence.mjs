@@ -398,9 +398,9 @@ try {
   await shoot("H4__recommendation-card__site_widget__settled", "settled", "The same settled row on its own root.", { settledInPlace, reloadedBeforeReading: false, runStatusAtShutter: statusAfter }, "card");
 
   // ---- readbacks -----------------------------------------------------------
-  state.decisionRows = await q(`select run_id, skill_id, source, created_by, created_at from cinatra.run_selected_skill_revisions where run_id = $1 order by created_at`, [RUN_ID]);
+  state.decisionRows = await q(`select run_id, skill_id, selection_source, selected_at from cinatra.run_selected_skill_revisions where run_id = $1 order by skill_id`, [RUN_ID]);
   state.skipRows = await q(`select * from cinatra.run_recommendation_skips where run_id = $1`, [RUN_ID]);
-  state.parkAfter = await q(`select id, checkpoint, status, updated_at from cinatra.lifecycle_continuation_park where run_id = $1`, [RUN_ID]);
+  state.parkAfter = await q(`select id, checkpoint, status, event_id, created_at, resolved_at from cinatra.lifecycle_continuation_park where run_id = $1`, [RUN_ID]);
   state.usage = await q(`select provider, model, created_at from cinatra.usage_events where created_at > $1 order by created_at`, [startedAt.toISOString()]);
   state.offered = await q(`select * from cinatra.run_recommendation_offered_set where run_id = $1`, [RUN_ID]);
   say(`DECIDE OUTCOMES ${JSON.stringify(decideOutcomes)}`);

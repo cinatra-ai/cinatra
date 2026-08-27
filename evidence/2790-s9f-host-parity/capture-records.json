@@ -377,7 +377,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
-    "sha256": "b5984a7ea5324b54754bfbd780c84f34e327a07a7c0764e1f95439e090818a4a",
+    "sha256": "37482bf668e35da6e8067eb1e37441276d8a86918f03b09639de64980c323400",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -441,8 +441,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:14:14.161Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:24:26.188Z",
+    "runtime": "",
     "note": "The third-party page's embedded widget: the visitor's typed turn that STARTED the agent, the platform's own report sentence, the held card with its chips, and the widget's own composer.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -505,7 +505,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "column",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "runStatusAtShutter": "pending_input"
   },
   {
@@ -580,8 +580,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:14:14.277Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:24:26.285Z",
+    "runtime": "",
     "note": "The same held card on its own root, so the drawing can be graded against section V with nothing else in the picture.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -644,7 +644,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "card",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "runStatusAtShutter": "pending_input"
   },
   {
@@ -655,7 +655,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
-    "sha256": "b6cd41ea89b119566db43bf09dc8d8416311f2f3a018055a583cf2b50da0fbfc",
+    "sha256": "a25587ed998819f88717666f6ea5fa29abdbd6074b4473c8c5f822c8e8f0a175",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -719,8 +719,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:14:25.317Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:24:45.853Z",
+    "runtime": "",
     "note": "The same column, the same run, in dark — the palette chosen with the app's own shipped theme control, which the widget follows.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -783,7 +783,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
     "framing": "column",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "runStatusAtShutter": "pending_input",
     "themeFacts": {
       "pressed": true,
@@ -863,8 +863,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:14:25.414Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:24:45.967Z",
+    "runtime": "",
     "note": "The same card root in dark.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -927,7 +927,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
     "framing": "card",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "themeFacts": {
       "pressed": true,
       "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -1006,8 +1006,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:14:28.211Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:24:48.805Z",
+    "runtime": "",
     "note": "After ONE chip was decided by pressing its own Confirm in a real browser: that chip carries its confirmed mark; every other chip still shows all three affordances and is still pressable. The row is never decided as a unit.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -1070,8 +1070,8 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "card",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
-    "inFlightMs": 33
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
+    "inFlightMs": 47
   },
   {
     "cell": "W3__recommendation-card__site_widget__settled__column",
@@ -1081,7 +1081,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
-    "sha256": "e0a559f81d9b98d8366003edb5ae4af8a42865a403c4b5eeec75b06bc6c21791",
+    "sha256": "3ed2e53450e0c6ee3fa13fbd8c8a970d9f4cb24cd6c5629a7847197dcec85c19",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -1136,7 +1136,7 @@
       {
         "selector": "[data-recommendation-chip]",
         "scope": "root",
-        "count": 3
+        "count": 4
       },
       {
         "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1145,8 +1145,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:15:32.366Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:25:11.395Z",
+    "runtime": "",
     "note": "The row SETTLED IN PLACE in the same embedded column, composer in frame — same page load, same frame instance, same card instance that drew the held row. Nothing left to press.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -1176,6 +1176,14 @@
         "actions": []
       },
       {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "skipped",
+        "forced": false,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillSkipped",
+        "actions": []
+      },
+      {
         "skillId": "@cinatra-ai/web-research-skill:web-research",
         "mark": "confirmed",
         "forced": false,
@@ -1186,7 +1194,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "column",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "settledInPlace": true,
     "reloadedBeforeReading": false,
     "runStatusAtShutter": "pending_approval"
@@ -1199,7 +1207,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
-    "sha256": "7ae816cf510144b8a22fb0f58f12d1972453794a8dc4b93def783718accbb28c",
+    "sha256": "51baf67a688d3f7b3805e2d1ce7bb1ad1dbba90eb34f2b25600173594f5d656a",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -1254,7 +1262,7 @@
       {
         "selector": "[data-recommendation-chip]",
         "scope": "root",
-        "count": 3
+        "count": 4
       },
       {
         "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1263,8 +1271,8 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-27T16:15:32.463Z",
-    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "recordedAt": "2026-08-27T18:25:11.483Z",
+    "runtime": "",
     "note": "The same settled row on its own root.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
@@ -1294,6 +1302,14 @@
         "actions": []
       },
       {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "skipped",
+        "forced": false,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillSkipped",
+        "actions": []
+      },
+      {
         "skillId": "@cinatra-ai/web-research-skill:web-research",
         "mark": "confirmed",
         "forced": false,
@@ -1304,7 +1320,7 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "card",
-    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runId": "5bd19ca1-4ac2-4575-b17c-2f72b6b45f79",
     "settledInPlace": true,
     "reloadedBeforeReading": false,
     "runStatusAtShutter": "pending_approval"

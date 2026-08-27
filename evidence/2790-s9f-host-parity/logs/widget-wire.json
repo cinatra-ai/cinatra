@@ -1,5 +1,5 @@
 {
-  "requests": [
+  "wire": [
     {
       "label": "recommendation-resolve",
       "method": "POST",
@@ -41,7 +41,7 @@
       "widgetAssistant": "present"
     }
   ],
-  "responses": [
+  "wireResponses": [
     {
       "path": "/api/lifecycle-views/recommendation-hold",
       "status": 200
