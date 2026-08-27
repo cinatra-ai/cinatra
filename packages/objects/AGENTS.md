@@ -424,11 +424,33 @@ in order, before any commit:
    forged field cannot steer which row a save lands on;
 2. **size caps on every author-controlled surface** — `bodyMarkdown` 64 KiB (#1376),
    `frontmatter` 32 KiB serialized, `links` 512 entries, one link target 2 KiB,
-   `conceptId` 1 KiB. An uncapped surface would make the body cap decorative, because
-   the same payload just moves into frontmatter;
-3. a **fail-closed secret scan** over the body, every link target, and every string
-   anywhere in the frontmatter — object **keys included**, because `{ "<a real
-   token>": "note" }` hides a credential exactly as well as a value does. Both
+   `conceptId` and each `resolvedConceptId` 1 KiB, `okfVersion` 64 B, and the
+   **serialized envelope 512 KiB in aggregate**. An uncapped surface would make the
+   body cap decorative, because the same payload just moves into frontmatter — and
+   an uncapped surface added LATER would do it again, which is what the aggregate
+   cap is for. The schema is `.strict()` at the top level, so an unknown key is a
+   rejection rather than an unscanned, uncapped passenger; the handler splits the
+   server-injected keys off before parsing and merges them back afterwards
+   (`MEMORY_SERVER_INJECTED_KEYS`), which is what lets strictness fall only on what
+   the client sent;
+3. a **fail-closed secret scan** over the whole object about to be written, minus
+   the identity fields excluded by name (`MEMORY_SCAN_EXCLUDED_KEYS`:
+   `externalId`, `bundleId`, `cinatraAgentRunId`) — object **keys included**,
+   because `{ "<a real token>": "note" }` hides a credential exactly as well as a
+   value does. The polarity matters: enumerating the fields to SCAN left every
+   field added later unscanned by default, so the scan enumerates what it SKIPS.
+   The detector applies placeholder tolerance **per token** (a `${VAR}` somewhere
+   in a body does not un-scan the body), scores opaque tokens with an
+   **alphabet-aware** normalized entropy rule (a 4.5-bits-per-character rule is
+   structurally unreachable for hex, so hex-encoded keys rode through), and carries
+   explicit shapes for a **PEM private-key block**, a **password in a connection
+   URL's userinfo**, and a **standard-base64 run** (the token splitter consumes
+   `/`, so such a key arrived as fragments too short to score). Measured through
+   the whole detector: 100% on 64-hex, 97.6% on a 40-character standard-base64
+   key, 96.7% on 43-character base64url, 83.6% on 64-character standard base64
+   — measured numbers, not a claim of coverage. A hex DIGEST in a body is
+   flagged too: it is the same shape as a hex key and nothing in the string
+   separates them, so the gate resolves that ambiguity fail-closed. Both
    directions refuse: a credential-shaped literal (`OBJECTS_MEMORY_SECRET_DETECTED`)
    and a scan that could not **complete** (`OBJECTS_MEMORY_SECRET_SCAN_FAILED`) —
    "could not look" must never produce the same answer as "looked and found
@@ -438,8 +460,22 @@ in order, before any commit:
    itself does not flag, and positionally (`[key#3]`) otherwise. There is no env
    flag, no org opt-out and no claim probe on this gate.
 
-Both codes are terminal `PrimitiveInvocationError`s (`retryable: false`), the same
-contract as the collision codes above.
+All of the memory refusal codes above are terminal `PrimitiveInvocationError`s
+(`retryable: false`), the same contract as the collision codes.
+
+**`source` is actor-derived.** The row's `source` column comes from the authenticated
+actor like every other provenance column, NOT from the client-declared
+`provenance.tool`. The envelope's provenance pair answers "which local tool wrote
+it" and is authorization-bearing for nothing; a reader looking for who wrote a memory
+row reads the columns.
+
+**The client leaves one file behind.** A `memory sync` run that wrote something
+writes `sync-ledger.json` at the BUNDLE root — object ids and content digests of what
+the last run pushed, used to report a row that drifted since. It is a per-checkout
+cache and is **not meant to be committed** (its object ids are minted per
+organization by whichever server answered, and nothing reads it as authority: the
+preflight decides). `memory init` writes a `.gitignore` excluding it. The
+conventions page says the same thing to the author.
 
 **Provenance.** Identity provenance is actor-derived onto the row's own columns
 (`orgId`, `createdBy`, `runId`, `agentId`, `packageVersion`), exactly as the table in
@@ -448,15 +484,59 @@ answer: the bundle id, the concept path, and an optional client-declared
 `provenance: { tool, toolVersion }` — bounded, `.strict()`, and authorization-bearing
 for nothing.
 
-**Scope on a resync.** The sync client sends `ownerLevel` / `ownerId` / `visibility`
-**only on a create**. On an update it omits them, so the `ON CONFLICT` arm preserves
-the row's stored tuple and a row that promotion widened stays wide. Requesting a
-different tuple is refused (`OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED`), never
-silently dropped. Sync never narrows a row and never deletes one.
+**Scope on a resync.** The sync client sends `ownerLevel` / `visibility` **only on a
+create**. On an update it omits them, so the `ON CONFLICT` arm preserves the row's
+stored tuple and a row that promotion widened stays wide. Requesting a different
+tuple is refused (`OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED`), never silently
+dropped. Sync never narrows a row and never deletes one.
+
+**Scope on a create — the ownership-authority gate.** Issue #1378 makes the bundle's
+`sync:` block and a concept's frontmatter a scope REQUEST "evaluated under the
+caller's normal authorization at save time (a request, never a grant)". The
+`object.create` probe alone does not deliver that sentence: `enforceResourceAccess`
+short-circuits only for a row user-owned by the ACTOR, everything else falls through
+to `can()`, and `can()` reads the cross-org guard and role→permission and never reads
+`ownerType` / `ownerId` / `visibility` at all. `object.create` is in the plain member
+set, so a same-org member's create naming another user, another team, or `public`
+passed on the member grant alone. That kernel gap is not this type's to close; what
+IS is that a memory bundle is an **untrusted file**, making this the one save path
+whose ownership request originates in a file. `enforceMemoryOwnershipRequest` is
+therefore memory-scoped and narrow, and changes `objects_save` for no other type:
+
+- `ownerId` is **refused** (`OBJECTS_MEMORY_OWNERSHIP_REFUSED`), exactly as `orgId`
+  already is everywhere. A request may choose a LEVEL; it may never name a PRINCIPAL.
+- `ownerLevel: "user"` resolves the owner to the authenticated user and
+  `"organization"` to the caller's own organization — both actor-derived, so the
+  written tuple is always coherent and always one the caller could write anyway.
+- `ownerLevel: "team"` / `"workspace"` and `visibility: "public"` are **refused**: no
+  team or workspace authority is derivable at this seam, and publishing is a reviewed
+  **promotion** (epic #1373), not something a file asks for at create time.
+
+The gate is asserted twice — on the declared `typeHint` (before the probe, so the
+probe evaluates the tuple the gate produced) and again on the RESOLVED type, closing
+the residual path where a save reaches the memory type without declaring it. Its
+coverage is pinned in `handlers-memory-ownership.test.ts`, which drives a kernel
+double that GRANTS `object.create` (as a real member grant does), so the refusals are
+attributable to the gate and not to an authz accident — the package-wide
+allow-by-default alias stub would make those assertions vacuous.
+
+**Identity is immutable on update.** The envelope's `superRefine` checks only that
+`externalId` equals `sha256(bundleId + NUL + conceptId)` — INTERNAL consistency — and
+never compares the triple against the identity the row already carries. Since
+`data->>'externalId'` became a lookup key, accepting a coherent triple from another
+bundle would point that bundle's next preflight at this row. `enforceMemoryIdentityImmutable`
+refuses any change to `externalId` / `bundleId` / `conceptId` on an existing row
+(`OBJECTS_MEMORY_IDENTITY_IMMUTABLE`, terminal). There is no rebind flow: a concept
+that moved bundle or path is a new identity and therefore a new row, which is what
+"path = identity" means in OKF.
 
 **`objects_list.externalIds`** is the sync preflight: a batch key lookup over
-`data->>'externalId'`, capped at `MAX_EXTERNAL_IDS_BATCH` (equal to `limit`'s own
-ceiling, pinned by test). It is a **filter on the existing primitive**, so the
+`data->>'externalId'`, capped at 500 entries with each id capped at 256 bytes. The
+array cap alone does not bind, because `limit` **defaults to 100** and `LIMIT` is
+applied in SQL after the WHERE while the handler always answers `nextCursor: null` —
+so an over-limit batch was truncated with nothing to say so. The handler therefore
+refuses a call whose batch exceeds its EFFECTIVE `limit`, the same way it refuses a
+missing `type`. It is a **filter on the existing primitive**, so the
 authorization it gets is exactly `objects_list`'s — org-scoped in SQL,
 ownership-filtered in SQL, `object.read`-probed per row. A row the caller may not read
 is simply **absent**, indistinguishable from one that does not exist, which is what
