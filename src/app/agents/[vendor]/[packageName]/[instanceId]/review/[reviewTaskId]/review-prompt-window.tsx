@@ -7,6 +7,7 @@ import {
   HitlConversationPanel,
   type HitlConversationEntry,
 } from "@cinatra-ai/agents/hitl-conversation-panel";
+import { useRunWindowConversation } from "@cinatra-ai/agents/use-run-window-conversation";
 import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
@@ -19,7 +20,8 @@ export type SubmitReviewDecisionAction = (input: {
  * The REAL conversational prompt window on the review surface (owner ruling
  * 2026-07-25 (1), cinatra#2063): the changes-request channel is the same live
  * PromptField conversation the pre-migration review HITL used
- * ("Ask Cinatra to suggest edits to the fields above…"), NOT the decision-bar
+ * (§X's reading for this surface: "Ask Cinatra about this review, or ask for
+ * changes to the work…"), NOT the decision-bar
  * rationale box. It mounts the shared `HitlConversationPanel` (sticky, portalled
  * into <main>) and routes a typed request through the EXISTING Comment path
  * (`submitReviewDecisionAction` with disposition "comment") — which, on a fenced
@@ -34,14 +36,38 @@ export function ReviewPromptWindow({
   submitAction,
   storageKey,
   canComment,
+  runId,
+  boundCardRef,
 }: {
   submitAction: SubmitReviewDecisionAction;
   storageKey: string;
   canComment: boolean;
+  /** The run this review belongs to — the conversation is kept with it (cinatra#2933). */
+  runId: string;
+  /**
+   * The gate's own server-minted reference, carried with the message as W5a's
+   * CLAIM so the runtime can re-resolve it under this reader's access. The page
+   * concludes nothing from it.
+   */
+  boundCardRef?: string | null;
 }) {
   const router = useRouter();
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
+  // cinatra#2933 (lifecycle-b W5b) — the exchange is the RUN's, stored server
+  // side per turn and read on mount, so it is there after a reload.
+  const runWindow = useRunWindowConversation({
+    runId,
+    surface: "review",
+    ...(boundCardRef
+      ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
+      : {}),
+  });
+  // The PLATFORM's own line about what the filing did. It is not the
+  // assistant's answer and is not stored with the conversation: #2934 moves the
+  // filing itself onto the card's Comment control, where the outcome becomes
+  // part of the answer. Until then it is shown after the stored exchange so the
+  // reviewer still sees what happened to their request.
+  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
   const [promptPending, setPromptPending] = useState(false);
   // Monotonic id source for conversation entries — a ref (not state) so two
   // appends in one handler can never collide on a stale counter (which would
@@ -52,25 +78,27 @@ export function ReviewPromptWindow({
     setPortalTarget(document.querySelector("main"));
   }, []);
 
-  const appendEntry = (role: "user" | "assistant", content: string) => {
-    const id = ++idRef.current;
-    setConversation((prev) => [...prev, { id, role, content }]);
+  const appendOutcome = (content: string) => {
+    // Offset well past the stored positions so a platform line can never take a
+    // stored entry's React key.
+    const id = 1_000_000 + ++idRef.current;
+    setOutcomeLines((prev) => [...prev, { id, role: "assistant", content }]);
   };
 
   const handleSubmit = async (prompt: string) => {
-    appendEntry("user", prompt);
+    // THE ONE ROAD: what was typed goes to the run's conversation with the
+    // assistant. The direct comment-submit below is today's behaviour, kept
+    // until #2934 retires it together with the review page's typed road.
+    void runWindow.send(prompt);
     setPromptPending(true);
     let refresh = false;
     try {
       const outcome = await submitAction({ disposition: "comment", comment: prompt });
       const { reply, refreshToLive } = describeOutcome(outcome);
-      appendEntry("assistant", reply);
+      appendOutcome(reply);
       refresh = refreshToLive;
     } catch {
-      appendEntry(
-        "assistant",
-        "The change request could not be recorded — please try again.",
-      );
+      appendOutcome("The change request could not be recorded — please try again.");
     } finally {
       setPromptPending(false);
     }
@@ -91,9 +119,13 @@ export function ReviewPromptWindow({
     <div data-conformance-id="review-prompt-window" data-action="request-changes -> changes-requested">
       <HitlConversationPanel
         portalTarget={portalTarget}
+        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+        // `app-artifact-review.html` §X): the mount names its surface and the
+        // window reads the drawing's own sentence for it.
+        surface="review"
         visible={canComment && !!portalTarget}
-        conversation={conversation}
-        promptPending={promptPending}
+        conversation={[...runWindow.entries, ...outcomeLines]}
+        promptPending={promptPending || runWindow.pending}
         storageKey={storageKey}
         onSubmit={handleSubmit}
       />

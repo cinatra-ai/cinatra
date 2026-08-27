@@ -17,11 +17,15 @@ const {
   orchestrateGenerateMock,
   readAgentTemplateByIdMock,
   requireAdminSessionMock,
+  getAuthSessionMock,
+  resolveActorGrantsForUserInOrgMock,
   buildActorContextMock,
 } = vi.hoisted(() => ({
   orchestrateGenerateMock: vi.fn(),
   readAgentTemplateByIdMock: vi.fn(),
   requireAdminSessionMock: vi.fn(),
+  getAuthSessionMock: vi.fn(),
+  resolveActorGrantsForUserInOrgMock: vi.fn(),
   buildActorContextMock: vi.fn(),
 }));
 
@@ -33,6 +37,18 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: requireAdminSessionMock,
+  // cinatra#2933 (W5b): the route now authenticates via getAuthSession()
+  // before it decides between the admin path and the run's own access, so
+  // the route calls it directly. Separately, the module graph reached by
+  // importing the route (route -> canRespondInRunWindow in run-window-turn.ts
+  // -> resolveBoundTurnActor in bound-turn-actor.ts) reads
+  // resolveActorGrantsForUserInOrg off this SAME mocked module at
+  // bound-turn-actor.ts's top level (its DEFAULT_PORTS object), so the export
+  // has to exist there too or the file fails to load before any test runs —
+  // even though none of the tests below send a runId, so canRespondInRunWindow
+  // (and this function) is never actually invoked at runtime here.
+  getAuthSession: getAuthSessionMock,
+  resolveActorGrantsForUserInOrg: resolveActorGrantsForUserInOrgMock,
 }));
 vi.mock("@/lib/authz/enforce", () => ({
   buildActorContext: buildActorContextMock,
@@ -46,10 +62,22 @@ describe("POST /api/agents/builder/[templateId]/hitl-assist — multi-turn conte
     orchestrateGenerateMock.mockReset();
     readAgentTemplateByIdMock.mockReset();
     requireAdminSessionMock.mockReset();
+    getAuthSessionMock.mockReset();
+    resolveActorGrantsForUserInOrgMock.mockReset();
     buildActorContextMock.mockReset();
 
     // Default: admin session OK.
     requireAdminSessionMock.mockResolvedValue({ user: { id: "admin-1" } });
+    // Default: getAuthSession() (the route's step-1 authenticate) resolves the
+    // same identity. None of this file's requests send a runId, so the
+    // run-window access path (and resolveActorGrantsForUserInOrg) is never
+    // reached; this only has to clear the route's own `!plain?.user?.id` gate.
+    getAuthSessionMock.mockResolvedValue({ user: { id: "admin-1" } });
+    // Not called by any test in this file (no runId => the run-window access
+    // path is never reached), but must resolve to a well-typed
+    // ResolvedActorGrants shape rather than being left undefined, in case
+    // that ever changes.
+    resolveActorGrantsForUserInOrgMock.mockResolvedValue({ projectGrants: [], teamIds: [] });
     // Default: actorContext built so generate's fail-closed actor gate passes.
     buildActorContextMock.mockReturnValue({
       principalType: "HumanUser",

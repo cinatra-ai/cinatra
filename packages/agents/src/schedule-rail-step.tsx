@@ -207,6 +207,8 @@ export function ScheduleStepSurface({
   host,
   cardRef,
   promptWindowTemplateId = null,
+  runId,
+  canRespondInWindow,
 }: {
   /** Which page this rail belongs to. The two page hosts are the only
    *  callers: a transcript has no rail, and its card is served by the registry
@@ -225,6 +227,11 @@ export function ScheduleStepSurface({
    * decision, made by the page that the plan names.
    */
   promptWindowTemplateId?: string | null;
+  /** cinatra#2933 (lifecycle-b W5b) -- the run whose conversation this host's
+   *  window is, and the run's own answer to whether this person may type in it.
+   *  Forwarded unchanged; this host concludes nothing from either. */
+  runId?: string | null;
+  canRespondInWindow?: boolean;
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
   const scheduler = useScheduleSurfaceReading(cardHost);
@@ -266,6 +273,8 @@ export function ScheduleStepSurface({
       {promptWindowTemplateId && scheduler.drawn ? (
         <SchedulePromptWindow
           templateId={promptWindowTemplateId}
+          runId={runId}
+          canRespondInWindow={canRespondInWindow}
           readOnly={!scheduler.changeable}
         />
       ) : null}
@@ -287,6 +296,8 @@ export function ScheduleRailStep({
   detail = null,
   initialSelection = "schedule",
   promptWindowTemplateId = null,
+  runId,
+  canRespondInWindow,
 }: {
   /** Which page this rail belongs to. The two page hosts are the only
    *  callers: a transcript has no rail, and its card is served by the registry
@@ -320,6 +331,11 @@ export function ScheduleRailStep({
    * decision, made by the page that the plan names.
    */
   promptWindowTemplateId?: string | null;
+  /** cinatra#2933 (lifecycle-b W5b) -- the run whose conversation this host's
+   *  window is, and the run's own answer to whether this person may type in it.
+   *  Forwarded unchanged; this host concludes nothing from either. */
+  runId?: string | null;
+  canRespondInWindow?: boolean;
 }): ReactElement {
   return (
     <RunSurfaceRail
@@ -332,6 +348,8 @@ export function ScheduleRailStep({
               host={host}
               cardRef={cardRef}
               promptWindowTemplateId={promptWindowTemplateId}
+              runId={runId}
+              canRespondInWindow={canRespondInWindow}
             />
           ),
         },

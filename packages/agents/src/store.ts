@@ -25,6 +25,11 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+// cinatra#2933 (lifecycle-b W5b) — `agent_run_messages` now carries a SECOND
+// use: the per-run conversation of the prompt windows outside the chat. This
+// reader is the RUN'S OWN replay thread and must keep returning exactly that,
+// so it excludes the window rows by the predicate their writer declares.
+import { notARunWindowRow } from "./run-window-conversation-store";
 import { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
 // cinatra#1940 P1 (Decision 4): bulkStop* thread a host-minted authority through
@@ -3278,7 +3283,11 @@ export async function readAgentRunMessages(
   const rows = await db
     .select()
     .from(agentRunMessages)
-    .where(eq(agentRunMessages.runId, runId))
+    // The window rows are NOT part of the run's replay thread (cinatra#2933):
+    // they are a person's conversation about the run, and neither the run seed
+    // at /api/agents/runs/[runId] nor the `agent_run_messages_list` primitive
+    // may start returning them.
+    .where(and(eq(agentRunMessages.runId, runId), notARunWindowRow))
     .orderBy(asc(agentRunMessages.sequence));
   return rows.map((row) => ({
     id: row.id,
