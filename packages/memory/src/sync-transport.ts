@@ -42,6 +42,23 @@ export interface MemorySyncTransport {
  */
 const MCP_CLIENT_PROTOCOL_VERSION = "2025-06-18";
 
+/**
+ * Every protocol version this client actually implements (cinatra#1378 round-2
+ * item 1). Exactly {@link MCP_CLIENT_PROTOCOL_VERSION} today.
+ *
+ * The handshake used to adopt WHATEVER string the server answered with, with
+ * no check that this client could speak it: an empty string, a future date, a
+ * date this client predates, or a garbage token all rode through and were
+ * sent back verbatim as `mcp-protocol-version` on every later request.
+ * Streamable HTTP's lifecycle says a client that does not support the
+ * server's selected version should disconnect rather than continue, and the
+ * reason is the one this file exists for: the negotiated version is what
+ * tells both ends how to frame everything that follows.
+ */
+const MCP_CLIENT_SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([
+  MCP_CLIENT_PROTOCOL_VERSION,
+]);
+
 /** Hosts for which a plain-`http` endpoint is acceptable. */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   "localhost",
@@ -315,17 +332,28 @@ export function createHttpMemorySyncTransport(
         capabilities: {},
         clientInfo: { name: "cinatra-memory-cli", version: "0.1.0" },
       });
-      // Carry the version the server NEGOTIATED, not the one we offered. A
-      // server that answers with a version it prefers gets that version back on
-      // every following request; a server that answers with nothing readable
-      // gets the offered one, which is what it saw on initialize.
-      const negotiated =
+      // Carry the version the server NEGOTIATED, not the one we offered — but
+      // ONLY when it is a version this client actually implements (cinatra#1378
+      // round-2 item 1). A server that answers with nothing readable gets the
+      // offered one, which is what it saw on initialize. A server that answers
+      // with a string this client does NOT speak — including an empty one — is
+      // refused outright: adopting it would frame every later request in a
+      // version this code cannot honor.
+      const answered =
         result !== null &&
         typeof result === "object" &&
         typeof (result as Record<string, unknown>)["protocolVersion"] === "string"
           ? ((result as Record<string, unknown>)["protocolVersion"] as string)
-          : MCP_CLIENT_PROTOCOL_VERSION;
-      protocolVersion = negotiated;
+          : undefined;
+      if (answered === undefined) {
+        protocolVersion = MCP_CLIENT_PROTOCOL_VERSION;
+      } else if (MCP_CLIENT_SUPPORTED_PROTOCOL_VERSIONS.has(answered)) {
+        protocolVersion = answered;
+      } else {
+        throw new MemorySyncError(
+          `MCP endpoint ${safeUrl} negotiated protocol version "${answered}" on initialize, which this client offered "${MCP_CLIENT_PROTOCOL_VERSION}" and does not implement; refusing rather than framing requests in an unsupported version`,
+        );
+      }
       await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     })();
     await handshake;

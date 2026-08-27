@@ -6,7 +6,7 @@
  */
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   assertMemorySyncEndpointUrl,
@@ -244,26 +244,86 @@ describe("a URL that reaches a message carries no credential", () => {
   });
 });
 
+/**
+ * `fetch`-stubbed rather than a real listener (cinatra#1378 round-2 item 1):
+ * these tests exist to pin what the transport does with the ANSWERED version,
+ * not to re-exercise the HTTP framing the listener tests above already cover,
+ * and a same-process `fetch` against a loopback listener is this machine's own
+ * artifact (`ECONNREFUSED` — see the round-2 review, item 9's suite table).
+ * Stubbing keeps these three tests out of that class everywhere.
+ */
+function stubFetchTranscript(
+  handler: (body: { id?: number; method: string }) => {
+    status?: number;
+    contentType?: string;
+    body?: string;
+    sessionId?: string;
+  } | null,
+): Array<{ headers: Record<string, string>; body: { id?: number; method: string } }> {
+  const calls: Array<{ headers: Record<string, string>; body: { id?: number; method: string } }> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: { headers: Record<string, string>; body: string }) => {
+      const body = JSON.parse(init.body) as { id?: number; method: string };
+      calls.push({ headers: init.headers, body });
+      const answer = handler(body);
+      const responseHeaders = new Map<string, string>([
+        ["content-type", answer?.contentType ?? "application/json"],
+      ]);
+      if (answer?.sessionId !== undefined) responseHeaders.set("mcp-session-id", answer.sessionId);
+      return {
+        status: answer?.status ?? (answer === null ? 202 : 200),
+        headers: { get: (name: string) => responseHeaders.get(name.toLowerCase()) ?? null },
+        text: async () => answer?.body ?? "",
+      } as unknown as Response;
+    }),
+  );
+  return calls;
+}
+
 describe("the negotiated protocol version rides every following request", () => {
-  it("sends the version the SERVER answered with, not the one offered", async () => {
-    const { url, recorded } = await startServer((body) => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("adopts the version the server answered with, when this client implements it", async () => {
+    const calls = stubFetchTranscript((body) => {
       if (body.method === "initialize") {
-        return {
-          contentType: "application/json",
-          payload: rpcResult(body.id as number, { protocolVersion: "2099-01-01" }),
-          sessionId: "s-1",
-        };
+        return { sessionId: "s-1", body: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }) };
       }
       if (body.id === undefined) return null;
-      return {
-        contentType: "application/json",
-        payload: rpcResult(body.id, { structuredContent: { items: [] } }),
-      };
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
     });
-    const transport = createHttpMemorySyncTransport({ url, token: "t" });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
     await transport.callTool("objects_list", {});
-    const toolCall = recorded.find((r) => r.method === "tools/call");
-    expect(toolCall?.headers["mcp-protocol-version"]).toBe("2099-01-01");
+    const toolCall = calls.find((c) => c.body.method === "tools/call");
+    expect(toolCall?.headers["mcp-protocol-version"]).toBe("2025-06-18");
+  });
+
+  it("refuses a version this client does not implement, naming both versions", async () => {
+    stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        return { sessionId: "s-1", body: rpcResult(body.id as number, { protocolVersion: "2099-01-01" }) };
+      }
+      if (body.id === undefined) return null;
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(
+      /"2099-01-01".*"2025-06-18"|"2025-06-18".*"2099-01-01"/,
+    );
+  });
+
+  it("refuses an empty-string answered version", async () => {
+    stubFetchTranscript((body) => {
+      if (body.method === "initialize") {
+        return { sessionId: "s-1", body: rpcResult(body.id as number, { protocolVersion: "" }) };
+      }
+      if (body.id === undefined) return null;
+      return { body: rpcResult(body.id, { structuredContent: { items: [] } }) };
+    });
+    const transport = createHttpMemorySyncTransport({ url: "https://mcp.example.test/api/mcp", token: "t" });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(MemorySyncError);
   });
 });
 
