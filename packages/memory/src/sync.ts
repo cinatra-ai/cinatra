@@ -27,6 +27,7 @@
 import { loadMemoryBundle } from "./bundle.ts";
 import { scanMemoryConceptForSecrets } from "./secret-scan.ts";
 import {
+  memoryConceptScopeRefusals,
   memoryVisibilityRank,
   resolveMemoryConceptScopeRequest,
 } from "./sync-binding.ts";
@@ -85,6 +86,41 @@ export interface MemorySyncPlanInput {
   ledger: MemorySyncLedger;
   /** `externalId` → the row the preflight found. Absent = no visible row. */
   remote: Map<string, PreflightRow>;
+  /**
+   * Per-concept local refusals, keyed by concept PATH, computed BEFORE the
+   * preflight (cinatra#1378 review item 12). Supplying it is what lets a
+   * blocked concept be kept out of the preflight batch entirely. Omitted, this
+   * function computes the same map itself, so it stays a pure function of the
+   * bundle for its own unit tests.
+   */
+  blocked?: Map<string, MemorySyncDiagnostic[]>;
+}
+
+/**
+ * Every local refusal for a bundle, keyed by concept path.
+ *
+ * Two sources, both fail-closed: the credential scan, and the frontmatter scope
+ * keys a concept may not carry (`ownerId` — see `memoryConceptScopeRefusals`).
+ * A concept with an entry here is blocked; the map is what
+ * {@link runMemorySync} computes before it builds the preflight batch.
+ */
+export function scanMemoryBundleLocally(
+  bundle: MemoryBundle,
+): Map<string, MemorySyncDiagnostic[]> {
+  const out = new Map<string, MemorySyncDiagnostic[]>();
+  for (const concept of bundle.concepts) {
+    const findings: MemorySyncDiagnostic[] = [...scanMemoryConceptForSecrets(concept)];
+    for (const { key, reason } of memoryConceptScopeRefusals(concept)) {
+      findings.push({
+        severity: "error",
+        code: "scope-key-refused",
+        path: concept.path,
+        message: `frontmatter.${key} is not accepted — ${reason}`,
+      });
+    }
+    if (findings.length > 0) out.set(concept.path, findings);
+  }
+  return out;
 }
 
 /**
@@ -97,6 +133,7 @@ export interface MemorySyncPlanInput {
  */
 export function planMemorySync(input: MemorySyncPlanInput): MemorySyncPlan {
   const { bundle, ledger, remote } = input;
+  const blocked = input.blocked ?? scanMemoryBundleLocally(bundle);
   const bundleId = bundle.config.bundleId;
   const items: MemorySyncItem[] = [];
   const diagnostics: MemorySyncDiagnostic[] = [];
@@ -110,11 +147,12 @@ export function planMemorySync(input: MemorySyncPlanInput): MemorySyncPlan {
     });
     const conceptDiagnostics: MemorySyncDiagnostic[] = [];
 
-    // Secret scan FIRST. A concept that carries a credential-shaped literal is
-    // blocked before it is classified, so it never reaches a batch, a
-    // transport, or the ledger. The scan is fail-closed: a scan that could not
-    // complete blocks the concept exactly like a hit.
-    const secretFindings = scanMemoryConceptForSecrets(concept);
+    // Local refusals FIRST, and they were computed BEFORE the preflight ran
+    // (cinatra#1378 review item 12): a concept that carries a credential-shaped
+    // literal is blocked before its key is put in a batch, so it never reaches
+    // a batch, a transport, or the ledger. The scan is fail-closed — a scan
+    // that could not complete blocks the concept exactly like a hit.
+    const secretFindings = blocked.get(concept.path) ?? [];
     if (secretFindings.length > 0) {
       conceptDiagnostics.push(...secretFindings);
       diagnostics.push(...secretFindings);
@@ -275,19 +313,37 @@ async function runMemorySyncPreflight(
       limit: MEMORY_SYNC_PREFLIGHT_BATCH,
       ...(projectId === undefined ? {} : { projectId }),
     });
-    const items =
-      result !== null && typeof result === "object" && Array.isArray((result as Record<string, unknown>)["items"])
-        ? ((result as Record<string, unknown>)["items"] as unknown[])
-        : [];
+    // STRICT (cinatra#1378 review item 10). A result this code cannot read is
+    // NOT "no such row": read that way, every concept classifies as `create`
+    // and the run duplicates the whole bundle. An unreadable answer is an
+    // unreadable answer, and it aborts the run.
+    if (
+      result === null ||
+      typeof result !== "object" ||
+      !Array.isArray((result as Record<string, unknown>)["items"])
+    ) {
+      throw new MemorySyncError(
+        "objects_list: the preflight answer carried no `items` array; the run was stopped rather than reading an unreadable response as \"no such row\"",
+      );
+    }
+    const items = (result as Record<string, unknown>)["items"] as unknown[];
     for (const entry of items) {
-      if (entry === null || typeof entry !== "object") continue;
+      if (entry === null || typeof entry !== "object") {
+        throw new MemorySyncError(
+          "objects_list: the preflight answer carried a row that is not an object",
+        );
+      }
       const row = entry as Record<string, unknown>;
       const data = row["data"];
       const externalId =
         data !== null && typeof data === "object" && !Array.isArray(data)
           ? (data as Record<string, unknown>)["externalId"]
           : undefined;
-      if (typeof externalId !== "string" || typeof row["id"] !== "string") continue;
+      if (typeof externalId !== "string" || typeof row["id"] !== "string") {
+        throw new MemorySyncError(
+          "objects_list: the preflight answer carried a row without a readable `id` and `data.externalId`",
+        );
+      }
       out.set(externalId, {
         objectId: row["id"],
         digest: remoteMemoryConceptDigest(data),
@@ -306,11 +362,15 @@ async function runMemorySyncPreflight(
 /**
  * Build the `objects_save` input for one item.
  *
- * `ownerLevel` / `ownerId` / `visibility` ride ONLY on a create. On an update
- * they are omitted so the writer's `ON CONFLICT` arm preserves the row's
- * stored tuple; sending them would either be a no-op or — if the row had been
- * promoted since the last sync — a refused scope change. Omission is the
- * behaviour that lets a promoted row stay promoted through every resync.
+ * `ownerLevel` / `visibility` ride ONLY on a create. On an update they are
+ * omitted so the writer's `ON CONFLICT` arm preserves the row's stored tuple;
+ * sending them would either be a no-op or — if the row had been promoted since
+ * the last sync — a refused scope change. Omission is the behaviour that lets a
+ * promoted row stay promoted through every resync.
+ *
+ * `ownerId` is never sent at all (cinatra#1378 review item 4): the owning
+ * principal is derived from the authenticated caller server-side, and a memory
+ * bundle is an untrusted file that may not name one.
  *
  * `projectId` rides on BOTH, when the bundle binds one. On an update that is
  * deliberate: if the row has since moved to another project, the explicit
@@ -330,7 +390,6 @@ export function buildMemorySaveInput(
     ...(isCreate
       ? {
           ...(scopeRequest.ownerLevel === undefined ? {} : { ownerLevel: scopeRequest.ownerLevel }),
-          ...(scopeRequest.ownerId === undefined ? {} : { ownerId: scopeRequest.ownerId }),
           ...(scopeRequest.visibility === undefined ? {} : { visibility: scopeRequest.visibility }),
         }
       : {}),
@@ -361,18 +420,37 @@ export async function runMemorySync(
   const bundleId = bundle.config.bundleId;
   const ledger = loadMemorySyncLedger(options.root, bundleId);
 
-  const externalIds = bundle.concepts.map((concept) =>
-    buildMemoryConceptEnvelope(bundleId, concept, {
-      tool: MEMORY_SYNC_TOOL_ID,
-      toolVersion: MEMORY_SYNC_TOOL_VERSION,
-    }).externalId,
-  );
-  const remote = await runMemorySyncPreflight(
-    options.transport,
-    externalIds,
-    bundle.config.sync?.projectId,
-  );
-  const plan = planMemorySync({ bundle, ledger, remote });
+  // LOCAL SCAN FIRST (cinatra#1378 review item 12).
+  //
+  // The order used to be preflight-then-scan, which made the comment on the
+  // scan ("it never reaches a batch, a transport") false: a concept the local
+  // scan would block had already had its key sent to the server. The content
+  // never left the machine, so it was not a leak — but it also meant the local
+  // diagnostic this feature is built around could not be produced without a
+  // reachable endpoint, because the run threw in the preflight first.
+  //
+  // Scanning first fixes both. A blocked concept's key is excluded from the
+  // batch, and a bundle whose concepts are ALL blocked makes no tool call at
+  // all, so the diagnostic is produced with no server in reach.
+  const blocked = scanMemoryBundleLocally(bundle);
+  const externalIds = bundle.concepts
+    .filter((concept) => !blocked.has(concept.path))
+    .map(
+      (concept) =>
+        buildMemoryConceptEnvelope(bundleId, concept, {
+          tool: MEMORY_SYNC_TOOL_ID,
+          toolVersion: MEMORY_SYNC_TOOL_VERSION,
+        }).externalId,
+    );
+  const remote =
+    externalIds.length === 0
+      ? new Map<string, PreflightRow>()
+      : await runMemorySyncPreflight(
+          options.transport,
+          externalIds,
+          bundle.config.sync?.projectId,
+        );
+  const plan = planMemorySync({ bundle, ledger, remote, blocked });
 
   const result: MemorySyncResult = {
     plan,
@@ -391,65 +469,92 @@ export async function runMemorySync(
     entries: { ...ledger.entries },
   };
   let ledgerDirty = false;
+  let loopCompleted = false;
 
-  for (const item of plan.items) {
-    if (item.action !== "create" && item.action !== "update") continue;
-    const concept = conceptsByPath.get(item.path);
-    if (concept === undefined) continue;
-    const envelope = buildMemoryConceptEnvelope(bundleId, concept, {
-      tool: MEMORY_SYNC_TOOL_ID,
-      toolVersion: MEMORY_SYNC_TOOL_VERSION,
-    });
-    const scopeRequest = resolveMemoryConceptScopeRequest(bundle.config.sync, concept);
-    const input = buildMemorySaveInput(
-      envelope,
-      scopeRequest,
-      bundle.config.sync?.projectId,
-      item.action === "create",
-    );
-    let saved: unknown;
-    try {
-      saved = await options.transport.callTool("objects_save", input);
-    } catch (error) {
-      result.failed += 1;
-      const diagnostic: MemorySyncDiagnostic = {
-        severity: "error",
-        code: "server-refused",
-        path: item.path,
-        message: error instanceof Error ? error.message : String(error),
-      };
-      result.diagnostics.push(diagnostic);
-      item.diagnostics.push(diagnostic);
-      continue;
-    }
-    if (item.action === "create") result.created += 1;
-    else result.updated += 1;
-    const objectId =
-      saved !== null && typeof saved === "object" && typeof (saved as Record<string, unknown>)["objectId"] === "string"
-        ? ((saved as Record<string, unknown>)["objectId"] as string)
-        : item.objectId;
-    if (objectId !== undefined) {
+  try {
+    for (const item of plan.items) {
+      if (item.action !== "create" && item.action !== "update") continue;
+      const concept = conceptsByPath.get(item.path);
+      if (concept === undefined) continue;
+      const envelope = buildMemoryConceptEnvelope(bundleId, concept, {
+        tool: MEMORY_SYNC_TOOL_ID,
+        toolVersion: MEMORY_SYNC_TOOL_VERSION,
+      });
+      const scopeRequest = resolveMemoryConceptScopeRequest(bundle.config.sync, concept);
+      const input = buildMemorySaveInput(
+        envelope,
+        scopeRequest,
+        bundle.config.sync?.projectId,
+        item.action === "create",
+      );
+      let saved: unknown;
+      try {
+        saved = await options.transport.callTool("objects_save", input);
+      } catch (error) {
+        result.failed += 1;
+        const diagnostic: MemorySyncDiagnostic = {
+          severity: "error",
+          code: "server-refused",
+          path: item.path,
+          message: error instanceof Error ? error.message : String(error),
+        };
+        result.diagnostics.push(diagnostic);
+        item.diagnostics.push(diagnostic);
+        continue;
+      }
+      // STRICT (cinatra#1378 review item 10). A call that did not throw is not
+      // yet a write: `objects_save` answers with the row it wrote, and a result
+      // carrying no `objectId` means this code cannot say what happened. Counting
+      // it as created/updated would record a fact about the store that nothing
+      // established, and would write a ledger entry pointing at a row id this run
+      // never saw. The run stops instead.
+      //
+      // The ledger for the writes that DID land is flushed first (the `finally`
+      // below), so an abort here never loses the bookkeeping for work already
+      // done — a lost ledger entry is a duplicate write on the next run.
+      const objectId =
+        saved !== null &&
+        typeof saved === "object" &&
+        typeof (saved as Record<string, unknown>)["objectId"] === "string"
+          ? ((saved as Record<string, unknown>)["objectId"] as string)
+          : undefined;
+      if (objectId === undefined) {
+        throw new MemorySyncError(
+          `objects_save: the answer for ${item.path} carried no \`objectId\`; the run was stopped rather than recording an unconfirmed write`,
+        );
+      }
+      if (item.action === "create") result.created += 1;
+      else result.updated += 1;
       nextLedger.entries[item.path] = {
         sha256: memoryConceptContentDigest(envelope),
         objectId,
       };
       ledgerDirty = true;
     }
+    loopCompleted = true;
+  } finally {
+    // The ledger is written only when a write actually landed, and it is
+    // written even when the loop aborts on a malformed answer: a ledger entry
+    // that was earned and then dropped becomes a duplicate write next run. A
+    // run that classified everything as skip leaves the bundle directory
+    // byte-identical.
+    if (ledgerDirty) {
+      if (loopCompleted) {
+        writeMemorySyncLedger(options.root, nextLedger);
+      } else {
+        // Unwinding an abort. A ledger write that fails HERE would replace the
+        // error the caller actually needs to see with a filesystem message
+        // about bookkeeping, so the write is attempted and its own failure is
+        // dropped. Losing the ledger costs a redundant write next run; losing
+        // the abort's reason costs the author the diagnosis.
+        try {
+          writeMemorySyncLedger(options.root, nextLedger);
+        } catch {
+          // deliberately swallowed — see above
+        }
+      }
+    }
   }
 
-  // The ledger is written only when a write actually landed. A run that
-  // classified everything as skip leaves the bundle directory byte-identical.
-  if (ledgerDirty) writeMemorySyncLedger(options.root, nextLedger);
   return result;
-}
-
-/** Guard used by the CLI: a transport is required for a non-dry run. */
-export function assertMemorySyncTransport(
-  transport: MemorySyncTransport | undefined,
-): asserts transport is MemorySyncTransport {
-  if (transport === undefined) {
-    throw new MemorySyncError(
-      "no MCP endpoint configured; pass --url or set CINATRA_MCP_URL (and CINATRA_MCP_TOKEN)",
-    );
-  }
 }

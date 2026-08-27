@@ -18,7 +18,10 @@ import {
 import { checkMemoryTree } from "./check.ts";
 import { recallMemoryConcepts } from "./recall.ts";
 import { runMemorySync } from "./sync.ts";
-import { createHttpMemorySyncTransport } from "./sync-transport.ts";
+import {
+  assertMemorySyncEndpointUrl,
+  createHttpMemorySyncTransport,
+} from "./sync-transport.ts";
 import { MemoryError, MemorySyncError, type MemorySyncResult } from "./types.ts";
 import { addMemoryConcept } from "./write.ts";
 
@@ -46,9 +49,12 @@ The bundle is located via --dir, else the nearest ./.memory/bundle.yaml
 walking up from the current directory.
 
 memory sync is ONE-WAY: it writes local concepts into shared memory and
-never edits the bundle, never deletes a remote row, and never narrows one.
-The MCP endpoint comes from --url or CINATRA_MCP_URL; the bearer credential
-comes from CINATRA_MCP_TOKEN and is never written anywhere.`;
+never edits a concept file or bundle.yaml, never deletes a remote row, and
+never narrows one. It leaves one file behind after a write: sync-ledger.json
+at the bundle root, a per-checkout cache that memory init already gitignores.
+The MCP endpoint comes from --url or CINATRA_MCP_URL and must be https unless
+it is a loopback host; the bearer credential comes from CINATRA_MCP_TOKEN and
+is never written anywhere (a URL that reaches a message is redacted first).`;
 
 function resolveBundleDir(dirFlag: string | undefined, io: MemoryCliIo): string | undefined {
   if (dirFlag !== undefined) return path.resolve(dirFlag);
@@ -366,6 +372,12 @@ async function runSync(args: string[], io: MemoryCliIo): Promise<number> {
       "no MCP endpoint configured; pass --url or set CINATRA_MCP_URL",
     );
   }
+  // Validate the endpoint BEFORE the credential is read, let alone attached
+  // (cinatra#1378 review item 9). This is the transport's own guard, called
+  // here so the refusal reaches the author as a CLI message; it replaces the
+  // `assertMemorySyncTransport` helper that nothing called and whose doc
+  // comment claimed it was the CLI's check (review item 14).
+  assertMemorySyncEndpointUrl(url.trim());
   const token = process.env.CINATRA_MCP_TOKEN;
   const transport = createHttpMemorySyncTransport({
     url: url.trim(),

@@ -54,6 +54,7 @@ export {
   MemorySecretScanError,
 } from "./secret-scan.ts";
 export {
+  memoryConceptScopeRefusals,
   memoryVisibilityRank,
   parseMemorySyncBinding,
   resolveMemoryConceptScopeRequest,
@@ -75,7 +76,9 @@ export {
   MEMORY_SYNC_LEDGER_FILENAME,
 } from "./sync-ledger.ts";
 export {
+  assertMemorySyncEndpointUrl,
   createHttpMemorySyncTransport,
+  redactMemorySyncUrl,
   type HttpMemorySyncTransportOptions,
   type MemorySyncTransport,
 } from "./sync-transport.ts";
@@ -83,6 +86,7 @@ export {
   buildMemorySaveInput,
   planMemorySync,
   runMemorySync,
+  scanMemoryBundleLocally,
   MEMORY_SYNC_PREFLIGHT_BATCH,
   MEMORY_SYNC_TOOL_ID,
   MEMORY_SYNC_TOOL_VERSION,

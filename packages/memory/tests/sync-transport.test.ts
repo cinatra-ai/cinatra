@@ -8,7 +8,11 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createHttpMemorySyncTransport } from "../src/sync-transport.ts";
+import {
+  assertMemorySyncEndpointUrl,
+  createHttpMemorySyncTransport,
+  redactMemorySyncUrl,
+} from "../src/sync-transport.ts";
 import { MemorySyncError } from "../src/types.ts";
 
 interface Recorded {
@@ -169,5 +173,141 @@ describe("createHttpMemorySyncTransport", () => {
     const transport = createHttpMemorySyncTransport({ url });
     await transport.callTool("objects_list", {}).catch(() => undefined);
     expect(recorded.every((r) => r.headers.authorization === undefined)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-3 review item 9 (PR #3017): the transport attaches a bearer credential,
+// so where it attaches it, what it carries alongside it, and what it prints
+// afterwards are all part of the credential's exposure.
+// ---------------------------------------------------------------------------
+
+describe("the endpoint a credential may be attached to", () => {
+  it("refuses a plain-http endpoint on a non-loopback host", () => {
+    // The credential would travel in cleartext, and a mistyped host would
+    // simply receive it. Refusing here is the only place that can prevent it.
+    expect(() => assertMemorySyncEndpointUrl("http://mcp.example.test/api/mcp")).toThrow(
+      /plain http/,
+    );
+    expect(() => createHttpMemorySyncTransport({ url: "http://mcp.example.test/api/mcp" })).toThrow(
+      MemorySyncError,
+    );
+  });
+
+  it("allows https anywhere, and plain http on loopback", () => {
+    expect(() => assertMemorySyncEndpointUrl("https://mcp.example.test/api/mcp")).not.toThrow();
+    expect(() => assertMemorySyncEndpointUrl("http://127.0.0.1:3000/api/mcp")).not.toThrow();
+    expect(() => assertMemorySyncEndpointUrl("http://localhost:3000/api/mcp")).not.toThrow();
+  });
+
+  it("refuses a non-http scheme and an unparseable URL", () => {
+    expect(() => assertMemorySyncEndpointUrl("file:///etc/passwd")).toThrow(/HTTP only/);
+    expect(() => assertMemorySyncEndpointUrl("not a url")).toThrow(/valid absolute URL/);
+  });
+});
+
+describe("a URL that reaches a message carries no credential", () => {
+  it("drops userinfo, query and fragment and keeps the rest", () => {
+    expect(
+      redactMemorySyncUrl("https://user:secretpassword@host.test:8443/api/mcp?token=abc#frag"),
+    ).toBe("https://host.test:8443/api/mcp");
+  });
+
+  it("renders an unparseable URL as a placeholder rather than as itself", () => {
+    // An unparseable string is exactly the case where the credential could
+    // still be inside it.
+    expect(redactMemorySyncUrl("://nonsense")).toBe("<unparseable endpoint URL>");
+  });
+
+  it("keeps the credential out of a transport error the CLI would print", async () => {
+    const { url } = await startServer((body) =>
+      body.method === "initialize"
+        ? { contentType: "application/json", payload: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }), sessionId: "s-1" }
+        : { status: 500, contentType: "application/json", payload: "{}" },
+    );
+    const withQuery = `${url}?token=0123456789abcdefghij`;
+    const transport = createHttpMemorySyncTransport({ url: withQuery, token: "t" });
+    const error = await transport.callTool("objects_list", {}).catch((e: unknown) => e);
+    const message = (error as Error).message;
+    expect(message).toContain("HTTP 500");
+    expect(message).not.toContain("token=");
+    expect(message).not.toContain("0123456789abcdefghij");
+  });
+});
+
+describe("the negotiated protocol version rides every following request", () => {
+  it("sends the version the SERVER answered with, not the one offered", async () => {
+    const { url, recorded } = await startServer((body) => {
+      if (body.method === "initialize") {
+        return {
+          contentType: "application/json",
+          payload: rpcResult(body.id as number, { protocolVersion: "2099-01-01" }),
+          sessionId: "s-1",
+        };
+      }
+      if (body.id === undefined) return null;
+      return {
+        contentType: "application/json",
+        payload: rpcResult(body.id, { structuredContent: { items: [] } }),
+      };
+    });
+    const transport = createHttpMemorySyncTransport({ url, token: "t" });
+    await transport.callTool("objects_list", {});
+    const toolCall = recorded.find((r) => r.method === "tools/call");
+    expect(toolCall?.headers["mcp-protocol-version"]).toBe("2099-01-01");
+  });
+});
+
+describe("a session-bound 404 re-initializes once instead of failing the run", () => {
+  it("drops the dead session, handshakes again, and completes the call", async () => {
+    let handshakes = 0;
+    let served404 = false;
+    const { url, recorded } = await startServer((body) => {
+      if (body.method === "initialize") {
+        handshakes += 1;
+        return {
+          contentType: "application/json",
+          payload: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }),
+          sessionId: `s-${handshakes}`,
+        };
+      }
+      if (body.id === undefined) return null;
+      if (body.method === "tools/call" && !served404) {
+        served404 = true;
+        return { status: 404, contentType: "application/json", payload: "{}" };
+      }
+      return {
+        contentType: "application/json",
+        payload: rpcResult(body.id, { structuredContent: { items: [] } }),
+      };
+    });
+    const transport = createHttpMemorySyncTransport({ url, token: "t" });
+    await expect(transport.callTool("objects_list", {})).resolves.toEqual({ items: [] });
+    expect(handshakes).toBe(2);
+    // The retried call carries the NEW session, not the dead one.
+    const calls = recorded.filter((r) => r.method === "tools/call");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.headers["mcp-session-id"]).toBe("s-2");
+  });
+
+  it("is bounded: a second 404 after a fresh session is terminal", async () => {
+    let handshakes = 0;
+    const { url } = await startServer((body) => {
+      if (body.method === "initialize") {
+        handshakes += 1;
+        return {
+          contentType: "application/json",
+          payload: rpcResult(body.id as number, { protocolVersion: "2025-06-18" }),
+          sessionId: `s-${handshakes}`,
+        };
+      }
+      if (body.id === undefined) return null;
+      return { status: 404, contentType: "application/json", payload: "{}" };
+    });
+    const transport = createHttpMemorySyncTransport({ url, token: "t" });
+    await expect(transport.callTool("objects_list", {})).rejects.toThrow(
+      /404 after a fresh session was established/,
+    );
+    expect(handshakes).toBe(2);
   });
 });

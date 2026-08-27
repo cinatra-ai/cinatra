@@ -433,3 +433,133 @@ describe("the ledger is bookkeeping, never bundle content", () => {
     expect(ledger.entries).toEqual({});
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round-3 review probes (PR #3017), client half.
+// ---------------------------------------------------------------------------
+
+/** A synthetic credential shape — an ordered alphabet run, never a real key. */
+const SHAPED_PAT = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
+describe("item 12 — the local scan runs BEFORE the preflight", () => {
+  it("keeps a blocked concept's key out of the preflight batch", async () => {
+    const root = bundleWith([
+      { path: "clean.md" },
+      { path: "dirty.md", body: `The token is ${SHAPED_PAT}\n` },
+    ]);
+    const { transport, calls } = recordingTransport();
+    await runMemorySync({ root, transport });
+
+    const preflight = calls.filter((c) => c.name === "objects_list");
+    expect(preflight).toHaveLength(1);
+    const batch = preflight[0]!.args.externalIds as string[];
+    const bundle = loadMemoryBundle(root);
+    const dirty = bundle.concepts.find((c) => c.path === "dirty.md")!;
+    const dirtyKey = buildMemoryConceptEnvelope(
+      bundle.config.bundleId,
+      dirty,
+      PROVENANCE,
+    ).externalId;
+    // The blocked concept's key never leaves the machine at all.
+    expect(batch).not.toContain(dirtyKey);
+    expect(batch).toHaveLength(1);
+  });
+
+  it("produces the local diagnostic with NO server in reach when every concept is blocked", async () => {
+    // The scan-only path. The transport below throws on any call, so a run
+    // that still reached the preflight would fail instead of reporting.
+    const root = bundleWith([{ path: "dirty.md", body: `The token is ${SHAPED_PAT}\n` }]);
+    const unreachable: MemorySyncTransport = {
+      async callTool() {
+        throw new Error("the endpoint must not be contacted");
+      },
+    };
+    const result = await runMemorySync({ root, transport: unreachable });
+    expect(result.blocked).toBe(1);
+    expect(result.plan.items[0]).toMatchObject({ path: "dirty.md", action: "blocked" });
+    expect(
+      result.plan.diagnostics.some((d) => d.code === "secret-detected"),
+    ).toBe(true);
+  });
+
+  it("blocks a concept whose frontmatter names an owning principal", async () => {
+    // cinatra#1378 review item 4, client half: `ownerId` is refused loudly
+    // rather than dropped, so the author is never left believing the row landed
+    // under an owner it did not.
+    const root = bundleWith([
+      { path: "owned.md", frontmatter: "ownerId: user-VICTIM\n" },
+    ]);
+    const { transport, calls } = recordingTransport();
+    const result = await runMemorySync({ root, transport });
+    expect(result.blocked).toBe(1);
+    expect(
+      result.plan.diagnostics.some((d) => d.code === "scope-key-refused"),
+    ).toBe(true);
+    expect(calls.filter((c) => c.name === "objects_save")).toHaveLength(0);
+  });
+});
+
+describe("item 10 — the wire parsing does not fail open in either direction", () => {
+  it("aborts rather than reading an unreadable preflight as \"no such row\"", async () => {
+    // Read as "no such row", every concept classifies `create` and the run
+    // duplicates the whole bundle.
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") return { unexpected: true };
+        throw new Error("no write may be attempted");
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /carried no `items` array/,
+    );
+  });
+
+  it("aborts on a preflight row it cannot read", async () => {
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") return { items: [{ id: "obj-1" }] };
+        throw new Error("no write may be attempted");
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /without a readable `id` and `data.externalId`/,
+    );
+  });
+
+  it("aborts rather than counting an unconfirmed save as created", async () => {
+    const root = bundleWith([{ path: "a.md" }]);
+    const transport: MemorySyncTransport = {
+      async callTool(name) {
+        if (name === "objects_list") return { items: [] };
+        return { acknowledged: true };
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(
+      /carried no `objectId`/,
+    );
+  });
+
+  it("still flushes the ledger for the writes that DID land before the abort", async () => {
+    // A ledger entry that was earned and then dropped becomes a duplicate
+    // write on the next run, so the abort must not lose it.
+    const root = bundleWith([{ path: "a.md" }, { path: "b.md" }]);
+    let seen = 0;
+    const transport: MemorySyncTransport = {
+      async callTool(name, args) {
+        if (name === "objects_list") return { items: [] };
+        seen += 1;
+        if (seen === 1) {
+          const raw = args.rawData as Record<string, unknown>;
+          return { objectId: `obj-${raw.externalId as string}` };
+        }
+        return { acknowledged: true };
+      },
+    };
+    await expect(runMemorySync({ root, transport })).rejects.toThrow(/objectId/);
+    const bundleId = loadMemoryBundle(root).config.bundleId;
+    const ledger = loadMemorySyncLedger(root, bundleId);
+    expect(Object.keys(ledger.entries)).toHaveLength(1);
+  });
+});
