@@ -168,6 +168,26 @@ export type HistoryWriteOptions = {
   // `actor.orgId` by the writer before any statement runs. The canonical writer
   // never mints one itself (dark-slice discipline, cinatra#1938).
   authority: OrgWriteAuthority;
+  /**
+   * CO-COMMIT statements (cinatra#1381) — caller SQL that must land in the SAME
+   * transaction as this object write, or not at all. Consumed by
+   * `historyAwareUpsert`, which appends them INSIDE the org-write-guarded batch
+   * AHEAD of its own write statement, so they run under the same advisory lock
+   * and the same capability guard, and a statement that RAISES rolls the write,
+   * its history event and its Graphiti outbox row back with it.
+   *
+   * The one caller is memory row promotion, whose approve must transition the
+   * promotion request and widen the row as a single commit (there is no
+   * claimed-but-unapplied state to compensate). A caller that does NOT need
+   * that atomicity must not use this: every statement here runs on the same
+   * connection inside the write's transaction, so a slow or lock-taking
+   * statement extends the org write lock's hold.
+   *
+   * The statements' RESULTS are not returned — the write's own result stays the
+   * last batch entry. A co-commit statement therefore signals failure the only
+   * way a batch can: by raising.
+   */
+  coCommitStatements?: ReadonlyArray<{ text: string; values?: readonly unknown[] }>;
 };
 
 export type VersionConflictReason =

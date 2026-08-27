@@ -878,9 +878,19 @@ export function historyAwareUpsert(
     : buildCreateStatement(common);
 
   const orgId = requireGuardOrgId(options.actor);
+  // CO-COMMIT (cinatra#1381): caller statements that must land in the SAME
+  // transaction as this write, ordered AHEAD of it so a statement that raises
+  // aborts before anything is written. They are appended INSIDE the guarded
+  // batch, so they run under the same org advisory lock and the same
+  // capability guard as the write itself, and the write's own result stays the
+  // LAST entry (`.at(-1)` below) whatever the caller adds.
+  const coCommit = (options.coCommitStatements ?? []).map((s) => ({
+    text: s.text,
+    ...(s.values ? { values: [...s.values] } : {}),
+  }));
   const batch = buildGuardedOrgWriteBatch(
     { orgId, capability: "content.write", authority: options.authority },
-    [statement],
+    [...coCommit, statement],
   );
 
   let result: { rows: Array<Record<string, unknown>>; rowCount: number | null } | undefined;
