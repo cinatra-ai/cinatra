@@ -377,7 +377,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
-    "sha256": "47fb4015b21cb132cbdc190c0691a8a2ef2fc5c04c66c7bb786248a8749dce25",
+    "sha256": "b5984a7ea5324b54754bfbd780c84f34e327a07a7c0764e1f95439e090818a4a",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -441,9 +441,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:36:54.476Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`).",
+    "recordedAt": "2026-08-27T16:14:14.161Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The third-party page's embedded widget: the visitor's typed turn that STARTED the agent, the platform's own report sentence, the held card with its chips, and the widget's own composer.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -457,7 +457,7 @@
       {
         "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Post Matcher Skill",
         "text": "Blog Post Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -469,7 +469,7 @@
       {
         "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillConfirmAdjustSkip",
         "actions": [
@@ -481,7 +481,7 @@
       {
         "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Brand Voice Matcher Skill",
         "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -504,7 +504,9 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-    "framing": "column"
+    "framing": "column",
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runStatusAtShutter": "pending_input"
   },
   {
     "cell": "H1__recommendation-card__site_widget__held",
@@ -514,7 +516,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/H1__recommendation-card__site_widget__held.png",
-    "sha256": "ab5e55be0cf202107fa0f2bd6ed3aad292b95b8aea3ba7c26e1fc9c61679bf5c",
+    "sha256": "d198d11d88ae15487e29c90831f1c9975143b4ca17126262bd5fcf7704dd14cc",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -578,9 +580,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:36:54.526Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id.",
+    "recordedAt": "2026-08-27T16:14:14.277Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The same held card on its own root, so the drawing can be graded against section V with nothing else in the picture.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -594,7 +596,7 @@
       {
         "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Post Matcher Skill",
         "text": "Blog Post Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -606,7 +608,7 @@
       {
         "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillConfirmAdjustSkip",
         "actions": [
@@ -618,7 +620,7 @@
       {
         "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Brand Voice Matcher Skill",
         "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -641,7 +643,9 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-    "framing": "card"
+    "framing": "card",
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runStatusAtShutter": "pending_input"
   },
   {
     "cell": "W2__recommendation-card__site_widget__held__column__dark",
@@ -651,7 +655,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
-    "sha256": "34e8932495ba3462e2af775e7c9ea2839704395198198ce48d686af28cf2c12c",
+    "sha256": "b6cd41ea89b119566db43bf09dc8d8416311f2f3a018055a583cf2b50da0fbfc",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -715,9 +719,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:36:55.498Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed.",
+    "recordedAt": "2026-08-27T16:14:25.317Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The same column, the same run, in dark — the palette chosen with the app's own shipped theme control, which the widget follows.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -731,7 +735,7 @@
       {
         "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Post Matcher Skill",
         "text": "Blog Post Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -743,7 +747,7 @@
       {
         "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillConfirmAdjustSkip",
         "actions": [
@@ -755,7 +759,7 @@
       {
         "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Brand Voice Matcher Skill",
         "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -778,7 +782,14 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
-    "framing": "column"
+    "framing": "column",
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "runStatusAtShutter": "pending_input",
+    "themeFacts": {
+      "pressed": true,
+      "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "followed": true
+    }
   },
   {
     "cell": "H2__recommendation-card__site_widget__held__dark",
@@ -788,7 +799,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/H2__recommendation-card__site_widget__held__dark.png",
-    "sha256": "286f1e5d63c9e1e1b337bacd6815e583b57253c16983b1367553d222e604eb5b",
+    "sha256": "9cae507d28b2815f8eec24994e0bf5e4f2110b7032b361bad892227bf7dae3f8",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -852,9 +863,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:36:55.542Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SAME held card on its own root, same run, same frame selector, in `dark`.",
+    "recordedAt": "2026-08-27T16:14:25.414Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The same card root in dark.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -868,7 +879,7 @@
       {
         "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Post Matcher Skill",
         "text": "Blog Post Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -880,7 +891,7 @@
       {
         "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillConfirmAdjustSkip",
         "actions": [
@@ -892,7 +903,7 @@
       {
         "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Brand Voice Matcher Skill",
         "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -915,7 +926,13 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
-    "framing": "card"
+    "framing": "card",
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "themeFacts": {
+      "pressed": true,
+      "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "followed": true
+    }
   },
   {
     "cell": "H3__recommendation-card__site_widget__held__mid-decision",
@@ -925,7 +942,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/H3__recommendation-card__site_widget__held__mid-decision.png",
-    "sha256": "408f06dbe4270c8cd22a761d4c971bbf072c0bd06571577fe31837b0894d5ef7",
+    "sha256": "52140e89061dc8634c30a09920202b6f7ef799a4e812cba6cb62ac2becda5b22",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -989,9 +1006,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:36:58.052Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit.",
+    "recordedAt": "2026-08-27T16:14:28.211Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "After ONE chip was decided by pressing its own Confirm in a real browser: that chip carries its confirmed mark; every other chip still shows all three affordances and is still pressable. The row is never decided as a unit.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -1005,7 +1022,7 @@
       {
         "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
         "mark": "confirmed",
-        "forced": false,
+        "forced": true,
         "label": "Blog Post Matcher Skill",
         "text": "Blog Post Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -1017,7 +1034,7 @@
       {
         "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillConfirmAdjustSkip",
         "actions": [
@@ -1029,7 +1046,7 @@
       {
         "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
         "mark": "undecided",
-        "forced": false,
+        "forced": true,
         "label": "Brand Voice Matcher Skill",
         "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
         "actions": [
@@ -1052,7 +1069,9 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-    "framing": "card"
+    "framing": "card",
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "inFlightMs": 33
   },
   {
     "cell": "W3__recommendation-card__site_widget__settled__column",
@@ -1062,7 +1081,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
-    "sha256": "05b654f4cdca87fbc5f952d5fb492f3c5e672f232bee2fd6f2954a8f26aff4bb",
+    "sha256": "e0a559f81d9b98d8366003edb5ae4af8a42865a403c4b5eeec75b06bc6c21791",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -1117,7 +1136,7 @@
       {
         "selector": "[data-recommendation-chip]",
         "scope": "root",
-        "count": 4
+        "count": 3
       },
       {
         "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1126,9 +1145,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:37:08.226Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`.",
+    "recordedAt": "2026-08-27T16:15:32.366Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The row SETTLED IN PLACE in the same embedded column, composer in frame — same page load, same frame instance, same card instance that drew the held row. Nothing left to press.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -1154,14 +1173,6 @@
         "forced": false,
         "label": "Blog Writing Skill",
         "text": "Blog Writing SkillAdjusted",
-        "actions": []
-      },
-      {
-        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
-        "mark": "skipped",
-        "forced": false,
-        "label": "Brand Voice Matcher Skill",
-        "text": "Brand Voice Matcher SkillSkipped",
         "actions": []
       },
       {
@@ -1175,22 +1186,10 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "column",
-    "settleFacts": {
-      "settledInPlace": true,
-      "reloadedBeforeReading": false,
-      "runStatusBeforeDecide": "pending_input",
-      "runStatusAfterDecide": "pending_approval",
-      "runAdvanced": true,
-      "decideOutcomes": [
-        {
-          "path": "/api/lifecycle-views/recommendation-hold/decide",
-          "status": 200,
-          "outcomeOk": true,
-          "outcomeError": null,
-          "outcomeDispatched": true
-        }
-      ]
-    }
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "settledInPlace": true,
+    "reloadedBeforeReading": false,
+    "runStatusAtShutter": "pending_approval"
   },
   {
     "cell": "H4__recommendation-card__site_widget__settled",
@@ -1200,7 +1199,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
-    "sha256": "83fa01670e027c0d1d789e24cb94db8f9d116a022247aeb3bc6b8359920a1bee",
+    "sha256": "7ae816cf510144b8a22fb0f58f12d1972453794a8dc4b93def783718accbb28c",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -1255,7 +1254,7 @@
       {
         "selector": "[data-recommendation-chip]",
         "scope": "root",
-        "count": 4
+        "count": 3
       },
       {
         "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -1264,9 +1263,9 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T21:37:08.265Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row.",
+    "recordedAt": "2026-08-27T16:15:32.463Z",
+    "runtime": "dev build (Next.js Turbopack) on a dedicated lane database; the real provider through the app own sealed connection; the hosted MCP toolbox reached at the instance public origin",
+    "note": "The same settled row on its own root.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
@@ -1295,14 +1294,6 @@
         "actions": []
       },
       {
-        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
-        "mark": "skipped",
-        "forced": false,
-        "label": "Brand Voice Matcher Skill",
-        "text": "Brand Voice Matcher SkillSkipped",
-        "actions": []
-      },
-      {
         "skillId": "@cinatra-ai/web-research-skill:web-research",
         "mark": "confirmed",
         "forced": false,
@@ -1313,21 +1304,9 @@
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
     "framing": "card",
-    "settleFacts": {
-      "settledInPlace": true,
-      "reloadedBeforeReading": false,
-      "runStatusBeforeDecide": "pending_input",
-      "runStatusAfterDecide": "pending_approval",
-      "runAdvanced": true,
-      "decideOutcomes": [
-        {
-          "path": "/api/lifecycle-views/recommendation-hold/decide",
-          "status": 200,
-          "outcomeOk": true,
-          "outcomeError": null,
-          "outcomeDispatched": true
-        }
-      ]
-    }
+    "runId": "740c28fd-c6c1-496b-9a97-f8b2085c0076",
+    "settledInPlace": true,
+    "reloadedBeforeReading": false,
+    "runStatusAtShutter": "pending_approval"
   }
 ]
