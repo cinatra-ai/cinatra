@@ -82,9 +82,23 @@ describe("the grant names the person, the message, the card and ONE control", ()
   });
 
   it("the PRESSABLE vocabulary is exactly the buttons a card draws", () => {
-    expect([...LENT_ACTION_CONTROLS]).toEqual(["comment", "approve", "reject", "submit"]);
+    // AMENDED (cinatra#2853). The list grew with the CARDS whose buttons it
+    // names — the skills card's Confirm and Skip, and the schedule card's
+    // Adjust and Confirm — so it still says exactly what it says: the buttons a
+    // lifecycle card actually draws, and nothing else. A control no card draws
+    // is still not in it, which is what stops a grant from naming one.
+    expect([...LENT_ACTION_CONTROLS]).toEqual([
+      "comment",
+      "approve",
+      "reject",
+      "submit",
+      "confirm",
+      "skip",
+      "adjust",
+    ]);
     expect(isLentActionControl("fill")).toBe(false);
     expect(isLentActionControl("approve")).toBe(true);
+    expect(isLentActionControl("delete")).toBe(false);
   });
 
   // AMENDED (cinatra#2934, repaired after the picture leg). This case used to

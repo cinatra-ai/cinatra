@@ -114,6 +114,10 @@ async function record(row: {
       // The fixtures below write their control as a plain string; the claims
       // type names the four controls a card can lend.
       control: row.control as LentActionGrantClaims["control"],
+      // The MENU (cinatra#2853). The ledger row records the ANCHOR only, so a
+      // fixture that names one control is a one-item menu — which is exactly
+      // what every grant minted before that slice carried.
+      controls: [row.control as LentActionGrantClaims["control"]],
       expiresAt: row.expiresAt,
     },
     row.text ?? null,
@@ -294,6 +298,26 @@ maybe("the lent-action grant ledger, on a real Postgres", () => {
     expect((await spend("db-6", "u1", "o1", "fp-other", "comment")).ok).toBe(false);
     expect((await spend("db-6", "u1", "o1", "fp6", "approve")).ok).toBe(false);
     expect((await spend("db-6", "u1", "o1", "fp6", "comment")).ok).toBe(true);
+  });
+
+  it("a MENU still spends ONCE, on its anchor — cinatra#2853", async () => {
+    // The card offered three buttons and the person's words named two of them,
+    // so the signed grant carries a menu of two. The ROW still records ONE
+    // control — the anchor — and the ledger still lets exactly one spend
+    // through: which of the two was pressed is the signed grant's business, and
+    // the once-only property is the row's, unchanged by the menu above it.
+    const g = {
+      jti: "db-9", orgId: "o1", userId: "u1", messageId: "m9", fp: "fp9",
+      control: "comment", text: "approve it", expiresAt: nowSec() + 600,
+    };
+    await record(g);
+    // A press of the approve the person named spends the row on its anchor.
+    expect(await spend("db-9", "u1", "o1", "fp9", "comment")).toEqual({
+      ok: true,
+      text: "approve it",
+    });
+    // And there is no second press in that message, whichever button it names.
+    expect((await spend("db-9", "u1", "o1", "fp9", "comment")).ok).toBe(false);
   });
 
   it("the PERSON'S OWN WORDS come back with the spend — the model supplies none", async () => {

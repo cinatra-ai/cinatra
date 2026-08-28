@@ -37,9 +37,10 @@
 //      invent.
 //   2. THE GRANT VERIFIES. Signature, shape and life. A forged, rotated-out or
 //      expired grant is one observable.
-//   3. THE GRANT MATCHES THE CALL. Person, organization, card and the ONE
-//      control. A grant minted for another card, another person or another
-//      button is refused here.
+//   3. THE GRANT MATCHES THE CALL. Person, organization, card, and the control
+//      the call names against the grant's own MENU — the card's buttons narrowed
+//      by the person's own words (cinatra#2853). A grant minted for another
+//      card, another person, or a button the person never named is refused here.
 //   4. THE PERSON'S OWN CREDENTIAL. Resolved LIVE from the store — never the
 //      delegated chat token, whose whole point is that it is weaker. This is the
 //      plan's bound-turn actor branch.
@@ -62,12 +63,32 @@
 // added to authority such a party already holds. And nothing here decides
 // whether the person's message was ASKING for the press: the model chooses to
 // call, so text reaching the model — reviewed content, a form value, the
-// conversation — can induce a call. Two things bound that: what lands is the
-// PERSON'S OWN WORDS, read out of the spent row rather than supplied by the
-// model, and the only control a send mints today is `comment`, whose effect is
-// exactly what the review page's own box does with a typed sentence now.
-// Deciding whether a sentence asks for a decision at all is the typed actions
-// per card kind (cinatra#2853), which builds on this substrate.
+// conversation — can induce a call.
+//
+// WHAT BOUNDS THAT AFTER cinatra#2853. What lands is still the PERSON'S OWN
+// WORDS, read out of the spent row rather than supplied by the model. And the
+// MENU on the grant is now cut from those same words on the send path, before
+// any model reads anything: a control the person's own message never named is
+// not on it, so an induced call cannot reach Approve, Reject, a skills Confirm
+// or a schedule Confirm on a message that never named one. The two keys are
+// deliberately held apart: the person supplies the words, the assistant supplies
+// the reading, and one without the other presses nothing.
+//
+// WHAT AN INDUCED CALL CAN STILL DO, stated exactly rather than rounded down
+// (convergence round 1, findings 1 and 3):
+//
+//   · file the person's own words as a comment on a review. That is NOT
+//     harmless — on an active single-target lifecycle review the card's own path
+//     files a comment as CHANGES REQUESTED and the gate resolves — but it is
+//     byte-for-byte what the review page's own box does with any typed sentence
+//     today, with no model in the path at all, and this slice does not widen it;
+//   · re-draw a schedule card's rows, which writes nothing and arms nothing;
+//   · confirm a different subset of the skills THIS card offered.
+//
+// And the word key is WORD PRESENCE, not intent: a message that mentions an act
+// without asking for it — a question, a negation, a quotation — still puts that
+// act on the menu. `typed-decision-words.ts` says so in its own header. What the
+// key removes is the case the plan cares about: an act the person never wrote.
 //
 // THEN, AND ONLY THEN, THE CARD'S OWN PATH RUNS. `submitReviewDecisionAction`
 // for the review card's three buttons; `approveReviewTaskInternal` for the HITL
@@ -113,6 +134,51 @@ async function loadSubmitReviewDecision(): Promise<SubmitReviewDecisionAction> {
 async function loadApproveScreen(): Promise<ApproveReviewTaskInternal> {
   const mod = await import("@cinatra-ai/agents/review-task-actions");
   return mod.approveReviewTaskInternal;
+}
+
+// THE SKILLS CARD'S AND THE SCHEDULE CARD'S OWN ENTRIES (cinatra#2853), lazy for
+// the same measured reason as the two above, and named here so a reader can see
+// at a glance that this module re-implements nothing:
+//
+//   · `confirmRecommendationForActor` / `skipRecommendationForActor` — the two
+//     functions the chip row's Confirm and Skip reach through the cookie action,
+//     and that the widget's broker route reaches with its own credential. One
+//     core, three identities;
+//   · `writeRunSkillSelectionForActor` — the SAME execute-tier selection write
+//     the cookie action delegates to, resolved from this person's credential
+//     instead of an ambient cookie, exactly as the broker route does it;
+//   · `dispatchRunStartForPrincipal` — the canonical run-start dispatcher, which
+//     re-checks the run's own ownership before it queues anything;
+//   · `decideTriggerScheduleProposal` — the ONE entry every host's schedule card
+//     operates through, `op` and all.
+type ConfirmRecommendationForActor = typeof import(
+  "@cinatra-ai/agents/run-recommendation-core"
+)["confirmRecommendationForActor"];
+type SkipRecommendationForActor = typeof import(
+  "@cinatra-ai/agents/run-recommendation-core"
+)["skipRecommendationForActor"];
+type WriteRunSkillSelectionForActor = typeof import(
+  "@cinatra-ai/agents/run-recommendation-core"
+)["writeRunSkillSelectionForActor"];
+type DispatchRunStartForPrincipal = typeof import(
+  "@cinatra-ai/agents/run-dispatch-core"
+)["dispatchRunStartForPrincipal"];
+type DecideTriggerScheduleProposal = typeof import(
+  "@/lib/lifecycle/trigger-schedule-proposal-card"
+)["decideTriggerScheduleProposal"];
+
+async function loadHoldDecisionCore() {
+  return import("@cinatra-ai/agents/run-recommendation-core");
+}
+
+async function loadRunStartDispatcher(): Promise<DispatchRunStartForPrincipal> {
+  const mod = await import("@cinatra-ai/agents/run-dispatch-core");
+  return mod.dispatchRunStartForPrincipal;
+}
+
+async function loadDecideSchedule(): Promise<DecideTriggerScheduleProposal> {
+  const mod = await import("@/lib/lifecycle/trigger-schedule-proposal-card");
+  return mod.decideTriggerScheduleProposal;
 }
 import { LIFECYCLE_REF_MAX_LENGTH } from "@/lib/assistant-runtime/lifecycle-view-envelope";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
@@ -227,14 +293,43 @@ const inputSchema = z
      * still an authority this turn does not hold, and gate 3 still says so.
      */
     control: z.enum(LENT_ACTION_CONTROLS).optional(),
+    /**
+     * THE SKILLS CARD'S KEPT SET (cinatra#2853) — the full list of skill ids to
+     * keep, as the person described it.
+     *
+     * FOR THE SKILLS CARD'S `confirm` ONLY — every other arm ignores it, and a
+     * `skip` presses the card's Skip whatever this says.
+     *
+     * IT IS NOT A FREE VARIABLE. Every id must be one the card ACTUALLY
+     * OFFERED, read back under the person's own access at gate 5; a call naming
+     * anything else is REFUSED WHOLE and presses nothing — never quietly
+     * filtered, because a quiet filter turns "keep the SEO skill" into "keep
+     * nothing" and confirms that. Omitted means "everything the card offered",
+     * which is exactly what pressing Confirm without touching a chip does.
+     */
+    keep: z.array(z.string().min(1).max(512)).max(200).optional(),
+    /**
+     * THE SCHEDULE CARD'S ROWS (cinatra#2853) — what the person said the
+     * schedule should be.
+     *
+     * FOR THE SCHEDULE CARD'S `adjust` ONLY, and required by it — every other
+     * arm ignores it, and a schedule passed with `confirm` refuses the call. It is handed to the card's own
+     * `adjust` op, which validates it against the card's own schema and
+     * RE-PROPOSES; adjust writes nothing and arms nothing, so the worst a wrong
+     * value can do is draw rows the person can see and correct. Passing it with
+     * `confirm` REFUSES the call: rows the person has not seen must never be
+     * armed by the same act that draws them.
+     */
+    schedule: z.unknown().optional(),
   })
   .strict();
 
 export const LENT_ACTION_TOOL_DESCRIPTION =
   "Press ONE control of the ONE lifecycle card this message is bound to, as the person who typed it, with their permissions. " +
   "Usable ONLY when this turn was given the matching single-use grant; without it the call does nothing and says so. " +
-  "You do NOT choose WHICH control: the grant names the one control this message may press, and calling with the ref alone presses that one. " +
-  "Naming a different control is refused, and a control the card does not offer is refused too. " +
+  "The grant names the controls THIS MESSAGE may press — the card's own buttons, narrowed by the server to the ones the person's OWN WORDS named. " +
+  "Name the one they asked for in `control`, or omit it to press the first. " +
+  "A control the person did not name, and a control the card does not offer, are both refused — a decision they did not state is not yours to take. " +
   "You do NOT supply the text: what lands on the card is the person's own message, held on the server with the grant. " +
   "It fires at most once per message. Report the answer that comes back and add nothing to it.";
 
@@ -272,6 +367,12 @@ export async function handleLentAction(
     readonly resolveActor?: typeof resolveBoundTurnActor;
     readonly submitReviewDecision?: SubmitReviewDecisionAction;
     readonly approveScreen?: ApproveReviewTaskInternal;
+    /** The skills card's and the schedule card's own entries (cinatra#2853). */
+    readonly confirmHold?: ConfirmRecommendationForActor;
+    readonly skipHold?: SkipRecommendationForActor;
+    readonly writeSelection?: WriteRunSkillSelectionForActor;
+    readonly dispatchRunStart?: DispatchRunStartForPrincipal;
+    readonly decideSchedule?: DecideTriggerScheduleProposal;
     /** This message's own fills + its own attachments (cinatra#2934). */
     readonly readFills?: (
       runId: string,
@@ -342,13 +443,35 @@ export async function handleLentAction(
   // property of the mechanism rather than an instruction a prompt-injected model
   // could ignore. A row with no text lands an empty comment, never an invented
   // one.
+  // THE ROW IS SPENT ON ITS ANCHOR, NOT ON THE BUTTON PRESSED (cinatra#2853).
+  // The ledger row records one control — the grant's anchor — and its predicate
+  // is what makes the spend atomic and once-only; that property is unchanged,
+  // and so is "a row minted `fill` matches no spend". WHICH of this message's
+  // controls is pressed is authorized one line up, by the signed menu at gate 3,
+  // which is the claim a caller cannot forge. Passing the pressed control here
+  // instead would simply make every menu of more than one control unspendable.
+  // (`lent-action-grant.ts` records the one consequence of that for a `fill`
+  // grant, where the row's predicate is no longer a fourth independent lock.)
+  //
+  // WHAT THIS COSTS, NAMED (convergence round 1, finding 6): the row used to be
+  // a SECOND, independent check that the control being pressed was the control
+  // the grant was minted for. It no longer is — the database now sees the anchor
+  // whichever button of the menu runs — so that defence-in-depth is gone and the
+  // signed menu at gate 3 is the only place the control is checked. Restoring it
+  // means recording the menu (or a digest of it) beside the row, which is a
+  // schema change this slice does not make. The control is still checked TWICE
+  // — against the signed menu at gate 3, and against what the LIVE card lends at
+  // gate 5 — so what is gone is the database's independent third opinion, not
+  // the check. The properties the row still carries are unchanged and are the
+  // ones single-use rests on: one atomic statement, one winner, bound to the
+  // person and to the card.
   const consume = deps.consume ?? consumeLentActionGrant;
   const spend = await consume({
     jti: claims.jti,
     userId: frame.userId,
     orgId: frame.orgId,
     cardRefFingerprint: claims.cardRefFingerprint,
-    control,
+    control: claims.control,
   });
   if (spend.outcome !== "consumed") {
     return refuseNoAuthority("grant-already-spent", control);
@@ -372,6 +495,138 @@ export async function handleLentAction(
       null,
     );
     return say({ ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested", outcome });
+  }
+
+  // THE SKILLS CARD (cinatra#2853). Confirm and Skip, through the SAME two core
+  // functions the chip row's own buttons reach — `run-recommendation-core`,
+  // which the cookie action and the widget broker both call. Nothing is
+  // re-implemented: the hold-instance CAS, the execute-tier selection write, the
+  // verified release and the dispatch all run exactly as they do for a press.
+  if (bound.kind === "recommendation_hold") {
+    const core = deps.confirmHold && deps.skipHold && deps.writeSelection
+      ? null
+      : await loadHoldDecisionCore();
+    const who = {
+      actor: actorCtx.actor,
+      roleHints: actorCtx.roleHints ?? {},
+    } as Parameters<ConfirmRecommendationForActor>[0]["who"];
+    // THE DISPATCHER IS THE CANONICAL ONE, bound to this person. It re-reads the
+    // run and refuses one they do not own, so the release cannot start a run
+    // this person could not have started themselves.
+    const dispatchRunStart = deps.dispatchRunStart ?? (await loadRunStartDispatcher());
+    const dispatch = async ({ runId, templateSlug }: { runId: string; templateSlug: string }) =>
+      dispatchRunStart(
+        { runId, templateSlug },
+        { via: "session", userId: actorCtx.actor.userId ?? frame.userId },
+      );
+    if (control === "skip") {
+      const skip = deps.skipHold ?? core!.skipRecommendationForActor;
+      const outcome = await skip({
+        runId: bound.runId,
+        who,
+        holdRef: bound.holdRef,
+        dispatch,
+      });
+      return say({ ok: outcome.ok === true, outcome });
+    }
+    if (control !== "confirm") return refuseCardUnavailable();
+    // THE KEPT SET IS BOUNDED BY WHAT THE CARD OFFERED, AND AN ID THE CARD NEVER
+    // OFFERED IS A REFUSAL — not a silent drop (convergence round 1, finding 3).
+    //
+    // The ids come back from gate 5's own resolve, under this person's access,
+    // so a model naming a skill the card never showed cannot add one. Filtering
+    // it away QUIETLY was the defect: it turned "keep the SEO skill" into "keep
+    // nothing" and confirmed that, which is a decision nobody made. A call that
+    // names an id this card is not offering now presses nothing at all, and the
+    // person's own chips are still there.
+    //
+    // A call with NO `keep` confirms exactly what the card offered, which is what
+    // pressing Confirm without touching a chip does.
+    //
+    // THE RESIDUAL, NAMED WITHOUT ROUNDING IT DOWN (convergence round 2): WHICH
+    // subset a `keep` names is the assistant's reading of the person's words, so
+    // an induced call can confirm a DIFFERENT subset of the same offered skills.
+    // And a confirm is not a small act — it settles the hold and may dispatch
+    // the run, which is the card's own Confirm doing what it does. What the
+    // bound really gives is narrower and is worth stating exactly: the call
+    // cannot add a skill the card never offered, cannot reach another hold or
+    // another run, and cannot happen at all unless the person's own message
+    // named a confirm.
+    const offered = bound.offered.map((s) => s.skillId);
+    const asked = parsed.data.keep;
+    if (asked && asked.some((id) => !offered.includes(id))) {
+      return refuseCardUnavailable();
+    }
+    const confirmedSkillIds = asked ?? offered;
+    const confirm = deps.confirmHold ?? core!.confirmRecommendationForActor;
+    const write = deps.writeSelection ?? core!.writeRunSkillSelectionForActor;
+    const outcome = await confirm({
+      runId: bound.runId,
+      agentPackageName: bound.agentPackageName,
+      confirmedSkillIds,
+      who,
+      // The SAME execute-tier write the cookie action delegates to, resolved
+      // from this person's own credential — the broker route's construction.
+      writeSelection: (input) => write({ ...input, who }),
+      // The kept set the person settled by asking, so §V's third settled mark is
+      // reachable from the typed road exactly as it is from the chip's panel.
+      ...(asked ? { adjustedSkillIds: confirmedSkillIds } : {}),
+      holdRef: bound.holdRef,
+      dispatch,
+    });
+    return say({ ok: outcome.ok === true, outcome });
+  }
+
+  // THE SCHEDULE CARD (cinatra#2853). Adjust and Confirm, through the ONE entry
+  // every host's schedule card operates through — `decideTriggerScheduleProposal`
+  // — with this person's own identity. `text` is deliberately unused: this card
+  // places no words anywhere, so the person's message steers nothing but the
+  // assistant's own reading of it.
+  if (bound.kind === "schedule_proposal") {
+    if (control !== "adjust" && control !== "confirm") return refuseCardUnavailable();
+    const decide = deps.decideSchedule ?? (await loadDecideSchedule());
+    const role =
+      actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null;
+    const who = {
+      userId: actorCtx.actor.userId ?? frame.userId,
+      orgId: actorCtx.orgId ?? frame.orgId,
+      role,
+      access: { actor: actorCtx.actor, roles: actorCtx.roleHints },
+    };
+    // ONE SPEND, ONE CONTROL — AND A CONFIRM NEVER CARRIES AN ADJUSTMENT
+    // (convergence round 1, finding 2).
+    //
+    // An earlier draft ran the card's `adjust` op and then its `confirm` op
+    // under a single spend, on the reading that "make it 8 in the morning on
+    // weekdays and confirm" is one act. It is not, and the difference is exactly
+    // the safety property: `adjust` mints a NEW card ref, so the confirm would
+    // have run against a ref that was never fingerprinted into the grant and
+    // never passed gate 5 — and the rows it armed would be rows the person never
+    // saw, supplied by the model, on the strength of the word "confirm" alone.
+    // Two controls under one spend also contradicts the one thing this whole
+    // road promises.
+    //
+    // So a described change is an ADJUST and stops there: the new rows are drawn
+    // in front of the person, and the Confirm is theirs — the card's own button,
+    // or a second message. That is the plan's own model for values the assistant
+    // places ("the values appear in the form in front of them and they press the
+    // form's own button"), applied to the one card that can re-propose.
+    if (control === "confirm" && parsed.data.schedule !== undefined) {
+      return refuseCardUnavailable();
+    }
+    if (control === "adjust") {
+      // An adjust with no rows to place has nothing to re-propose.
+      if (parsed.data.schedule === undefined) return refuseCardUnavailable();
+      const adjusted = await decide({
+        ...who,
+        ref: bound.ref,
+        op: "adjust",
+        schedule: parsed.data.schedule,
+      });
+      return say({ ok: adjusted.kind === "reproposed", outcome: adjusted });
+    }
+    const outcome = await decide({ ...who, ref: bound.ref, op: "confirm" });
+    return say({ ok: outcome.kind === "confirmed", outcome });
   }
 
   // ONLY A HITL SCREEN HAS A CONTINUE (cinatra#2934, repaired after the picture
