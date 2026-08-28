@@ -35,10 +35,10 @@ import {
 } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  runSeedRequest,
   useConversationCredential,
   type ConversationCredential,
 } from "./conversation-credential";
+import { runSeedRequest } from "./run-seed-request";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
 
 // THE RUN-PAGE LINK IS GONE (cinatra#2997), AND SO IS THE BUILDER IT NEEDED.
@@ -127,7 +127,7 @@ function classifyStatus(status: number): LoadFailureReason {
 }
 
 // THE SEED'S ADDRESS AND THE CREDENTIAL IT TRAVELS ON now live in
-// `./conversation-credential` as `runSeedRequest` (cinatra#3044): the
+// `./run-seed-request` (cinatra#3044): the
 // transcript reads the SAME route to learn which lifecycle moment a run stands
 // at, and two copies of "how a run is read" is how the two reads drift into two
 // credentials. The rules are unchanged and are documented at the definition.

@@ -79,7 +79,8 @@ import {
   useRunMomentCard,
   type RunMomentCardReader,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
-import { runSeedRequest, useConversationCredential } from "./conversation-credential";
+import { useConversationCredential } from "./conversation-credential";
+import { runSeedRequest } from "./run-seed-request";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
