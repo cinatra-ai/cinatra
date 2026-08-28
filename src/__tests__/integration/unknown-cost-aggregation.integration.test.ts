@@ -38,7 +38,7 @@
  *
  * RUNNER (real DB required — the suite self-skips without one):
  *   SUPABASE_DB_URL=postgres://…@127.0.0.1:5434/postgres SUPABASE_SCHEMA=lane_2669x \
- *     pnpm exec vitest run --config vitest.integration-2669.config.ts
+ *     pnpm exec vitest run --config vitest/integration/2669.config.ts
  * The schema is CREATED in beforeAll and DROPPED in afterAll.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -70,7 +70,7 @@ const HAS_REAL_DB =
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
 /**
- * Set by `vitest.integration-2669.config.ts` and by nothing else. A suite whose
+ * Set by `vitest/integration/2669.config.ts` and by nothing else. A suite whose
  * only failure mode is "skipped" reports success by doing nothing — the same
  * shape of silence this issue is about — so the DEDICATED lane refuses to skip.
  */
@@ -299,7 +299,7 @@ describe.skipIf(!HAS_REAL_DB)(
         throw new Error(
           "the usage bus does not reach this schema — the emitter is stubbed or " +
             "SUPABASE_SCHEMA is not the schema this suite created. Run it with " +
-            "`--config vitest.integration-2669.config.ts`.",
+            "`--config vitest/integration/2669.config.ts`.",
         );
       });
       await admin.query(`TRUNCATE "${SCHEMA}"."usage_events"`);

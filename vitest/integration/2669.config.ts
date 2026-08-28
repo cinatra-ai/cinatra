@@ -16,7 +16,10 @@ import * as path from "node:path";
 // It does NOT inherit the root config — the root's stub set is exactly what has
 // to be undone here — so the alias list is stated explicitly, mirroring the
 // cinatra#2578 ledger tier.
-const root = __dirname;
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and every path below has to climb back out of it — the paths
+// themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
 
 export default defineConfig({
   resolve: {
