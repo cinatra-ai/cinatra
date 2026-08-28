@@ -79,8 +79,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 
 // THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
 // ratified and on main; a second hand-written copy of the same hosts, kinds,
@@ -106,6 +106,7 @@ import {
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
   requiredAssertionsFor,
+  resolveCaptureTarget,
   resolveLiveCapture,
   settledIsAbsence,
   sha256File,
@@ -672,9 +673,20 @@ export async function observeCapture({
   //    path afterwards, so every capture the gate went on to reject had already
   //    put a file on disk -- including one named by a path that escapes the
   //    tree. A path the record would be refused for is refused here instead.
+  //
+  //    LEXICALLY FIRST, for the clear message, and then RESOLVED. The lexical
+  //    rule cannot see the filesystem, and a shutter is a WRITE: a symlinked
+  //    capture root, a symlinked intermediate directory or an existing
+  //    symlinked target each redirect the write out of the root, and refusing
+  //    the record afterwards does not un-write the bytes -- which may have
+  //    landed on top of something. `resolveCaptureTarget` answers all three.
   const pathViolation = screenshotPathViolation(screenshot);
   if (pathViolation) {
     throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
+  }
+  const target = resolveCaptureTarget(screenshot, { repoRoot });
+  if (!target.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${target.detail}`);
   }
 
   // 1. The frames the host requires: resolve, COUNT, enter, read the URL there.
@@ -795,9 +807,28 @@ export async function observeCapture({
 
   const assertions = await measure();
 
-  // 3. The image, written and then hashed from disk.
-  const abs = join(repoRoot, screenshot);
-  await page.screenshot(abs, { framing: framing ?? "page" });
+  // 3. The image, written ATOMICALLY into the resolved directory and then
+  //    hashed from disk.
+  //
+  //    THE SHUTTER FIRES AT A NAME NOTHING ELSE HOLDS. Writing straight to the
+  //    final path would follow whatever sits there at that instant; the temp
+  //    name is fresh, is created inside the PARENT THAT WAS RESOLVED, and is
+  //    renamed into place. `rename` replaces the destination entry itself
+  //    rather than writing through it, so an entry that appeared in the
+  //    meantime is overwritten as a NAME and never followed as a link.
+  const abs = target.absReal;
+  const tmp = join(target.parentReal, `.${basename(abs)}.tmp-${process.pid}-${Date.now()}`);
+  try {
+    await page.screenshot(tmp, { framing: framing ?? "page" });
+    renameSync(tmp, abs);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // the temp file may never have been created; the original error wins
+    }
+    throw err;
+  }
 
   // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
   //    hydration, a poll, a streamed state change — and a record whose numbers
@@ -1076,13 +1107,21 @@ export const RECORD_TIERS = Object.freeze(["graded", "audit"]);
  */
 export function validateCaptureRecord(
   record,
-  { hashOf, hashPinnedOf, repoRoot = process.cwd(), tier = "graded" } = {},
+  {
+    hashOf,
+    hashPinnedOf,
+    repoRoot = process.cwd(),
+    tier = "graded",
+    virtualFilesystem: virtualFs = false,
+  } = {},
 ) {
-  // WHETHER THE CALLER BROUGHT ITS OWN FILESYSTEM. Production brings none: the
-  // acceptance gate and the driver pass `repoRoot` and let the default below
-  // hash from disk, so the resolution check above always runs for them.
-  const hashOfInjected = typeof hashOf === "function";
-  if (!hashOfInjected) hashOf = (rel) => sha256File(join(repoRoot, rel));
+  // WHETHER THE CALLER BROUGHT ITS OWN FILESYSTEM — an EXPLICIT option, never
+  // inferred from "it also passed a hasher". Inferring it is what let three
+  // real-disk callers (the walk observer, the capture driver and the held-turn
+  // producer) skip path resolution simply by supplying a reader. A hasher is
+  // now just a hasher; only `virtualFilesystem: true` replaces the filesystem,
+  // and only suites pass it.
+  const virtualFilesystem = virtualFs === true;
   const v = [];
   // A record is judged at the AUDIT tier when it is asked for (the driver, on
   // its own output) or when it SPEAKS that tier: a pinned `instance` is this
@@ -1190,29 +1229,38 @@ export function validateCaptureRecord(
           `${record.sha256} — the image and the record are not the same capture`,
       );
     }
-  } else if (typeof hashOf === "function") {
+  } else {
     // THE SAME RESOLUTION THIS TIER'S SIBLING DOES. A live path is only a
-    // capture if it resolves to a regular file inside the real capture root:
-    // a tracked `test-results -> .` symlink otherwise makes any file in the
-    // repository hash correctly under a capture-looking name. Skipped only for
-    // a caller that supplied its own `hashOf` -- a virtual filesystem, which is
-    // what the suites pass and what no production caller passes.
-    let resolutionFailed = false;
-    if (!hashOfInjected) {
+    // capture if it resolves to a regular, singly-linked file inside the real
+    // capture root: a `test-results -> .` symlink, a symlinked parent, or a
+    // hard link otherwise makes any file in the filesystem hash correctly under
+    // a capture-looking name.
+    let actual;
+    if (virtualFilesystem) {
+      try {
+        actual = hashOf(record.screenshot);
+      } catch {
+        v.push(`${where}: screenshot not found at ${record.screenshot}`);
+      }
+    } else {
       const resolved = resolveLiveCapture(record.screenshot, { repoRoot });
       if (!resolved.ok) {
         v.push(`${where}: ${resolved.detail}`);
-        resolutionFailed = true;
+      } else {
+        // HASHED AT THE RESOLVED PATH. Hashing the lexical path again would
+        // re-walk every symlink in it, so a parent retargeted between the
+        // resolution and the read would hand back different bytes than the ones
+        // just proved to be a capture. The canonical tier does the same.
+        // An injected hasher is consulted ONLY in virtual mode. On real disk
+        // the bytes that count are the ones at the path just resolved, and
+        // letting a caller substitute a reader here would reopen the seam this
+        // option was split out to close.
+        try {
+          actual = sha256File(resolved.realPath);
+        } catch {
+          v.push(`${where}: screenshot not found at ${record.screenshot}`);
+        }
       }
-    }
-    let actual;
-    if (resolutionFailed) {
-      // already reported; do not also report a hash that cannot be taken
-    } else
-    try {
-      actual = hashOf(record.screenshot);
-    } catch {
-      v.push(`${where}: screenshot not found at ${record.screenshot}`);
     }
     if (actual !== undefined && actual !== record.sha256) {
       v.push(
@@ -1541,7 +1589,14 @@ export function validateCaptureRecord(
  * ratified contract's own `validateCaptureIndex` beside this one, so every
  * record is judged by that half whatever this half grades.
  */
-export function validateCaptureIndex({ index, hashOf, hashPinnedOf, repoRoot = process.cwd(), tier = "graded" } = {}) {
+export function validateCaptureIndex({
+  index,
+  hashOf,
+  hashPinnedOf,
+  repoRoot = process.cwd(),
+  tier = "graded",
+  virtualFilesystem = false,
+} = {}) {
   const v = [];
   if (index === null || typeof index !== "object") {
     return ["the capture index is not an object"];
@@ -1596,7 +1651,7 @@ export function validateCaptureIndex({ index, hashOf, hashPinnedOf, repoRoot = p
         );
       } else byHash.set(record.sha256, cell);
     }
-    v.push(...validateCaptureRecord(record, { hashOf, hashPinnedOf, repoRoot, tier }));
+    v.push(...validateCaptureRecord(record, { hashOf, hashPinnedOf, repoRoot, tier, virtualFilesystem }));
   }
   return v;
 }
@@ -1896,10 +1951,16 @@ export async function observeWalkCell({
     readImpl,
     now,
   });
+  // THE VIRTUAL FILESYSTEM IS THE SUITE'S, NEVER THE RUN'S. A walk driven for
+  // real reads real bytes and takes the resolved-path check; a suite that
+  // supplied its own reader says so explicitly and gets its own bytes back.
+  const suiteSuppliedBytes = readImpl !== readFileSync;
   const violations = validateCaptureRecord(record, {
-    hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl),
     repoRoot,
     tier: "audit",
+    ...(suiteSuppliedBytes
+      ? { virtualFilesystem: true, hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl) }
+      : {}),
   });
   if (violations.length > 0) {
     throw new Error(

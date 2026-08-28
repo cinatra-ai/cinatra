@@ -611,12 +611,11 @@ async function recordCapture(
     }) => Promise<Record<string, unknown>>;
     validateCaptureRecord: (
       record: Record<string, unknown>,
-      io: { hashOf: (rel: string) => string; tier: "graded" | "audit" },
+      io: { repoRoot: string; tier: "graded" | "audit" },
     ) => unknown[];
-    hashFile: (abs: string) => string;
   };
   const { playwrightPage } = driver;
-  const { observeCapture, validateCaptureRecord, hashFile } = recorder;
+  const { observeCapture, validateCaptureRecord } = recorder;
 
   // WAIT FOR THE PIXELS BEFORE OPENING THE SHUTTER.
   //
@@ -671,8 +670,13 @@ async function recordCapture(
     build: "development",
     repoRoot: REPO_ROOT,
   });
+  // NO INJECTED HASHER. This is a REAL capture on a real disk, so it takes the
+  // shipped resolved-path check: the screenshot must be a regular, singly-linked
+  // file inside the real capture root. Supplying a reader here used to be read
+  // as "this caller brings its own filesystem" and skipped that check on the one
+  // producer that actually writes captures.
   const violations = validateCaptureRecord(record, {
-    hashOf: (rel: string) => hashFile(resolve(REPO_ROOT, rel)),
+    repoRoot: REPO_ROOT,
     tier: "audit",
   });
   expect(

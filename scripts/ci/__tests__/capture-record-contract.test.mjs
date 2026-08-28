@@ -10,6 +10,7 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { createHash } from "node:crypto";
 import {
+  linkSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +19,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { lstatSync as lstatSyncForTest } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -36,6 +38,7 @@ import {
   validateCaptureIndex,
   validateCaptureRecord,
   CAPTURE_OUTPUT_ROOT,
+  resolveCaptureTarget,
   resolveLiveCapture,
   isHistoricalPermalink,
   parsePermalink,
@@ -881,6 +884,7 @@ describe("a live screenshot must be written into the capture output root", () =>
     const found = codes(
       validateCaptureRecord(honestChatPending({ screenshot: shot, sha256: hashA }), {
         repoRoot,
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => hashA,
       }),
@@ -1040,5 +1044,163 @@ describe("a live screenshot is resolved on disk, not just spelled", () => {
   it("the hash is taken at the RESOLVED path", () => {
     const wrong = codes(validateCaptureRecord(record({ sha256: "d".repeat(64) }), { repoRoot: root }));
     expect(wrong).toContain("record/sha256-mismatch");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// A HARD LINK IS A SECOND NAME FOR THE SAME INODE, and neither `lstat` nor
+// `realpath` can see the other one: both answer INSIDE the root for
+// `ln <outside file> test-results/.../shot.png`. Link count is the only local
+// evidence that the bytes are reachable by another name.
+// ---------------------------------------------------------------------------
+describe("a live screenshot may not be hard-linked", () => {
+  let root;
+  const PNG = Buffer.from("PNG-BYTES");
+  const PNG_HASH = createHash("sha256").update(PNG).digest("hex");
+  const REL = "test-results/chat-hitl-held-turn-captures/linked.png";
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "capture-hardlink-"));
+    mkdirSync(join(root, "test-results", "chat-hitl-held-turn-captures"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "outside.png"), PNG);
+    linkSync(join(root, "src", "outside.png"), join(root, REL));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("REFUSES it, even though lstat and realpath both answer inside the root", () => {
+    const st = lstatSyncForTest(join(root, REL));
+    expect(st.isFile()).toBe(true);
+    expect(st.isSymbolicLink()).toBe(false);
+    expect(realpathSync(join(root, REL)).startsWith(realpathSync(join(root, "test-results")))).toBe(true);
+    const found = codes(
+      validateCaptureRecord(honestChatPending({ screenshot: REL, sha256: PNG_HASH }), {
+        repoRoot: root,
+      }),
+    );
+    expect(found).toContain("record/screenshot-hard-linked");
+    expect(found).not.toContain("record/sha256-mismatch");
+  });
+
+  it("a singly-linked capture beside it is still fine", () => {
+    const rel = "test-results/chat-hitl-held-turn-captures/plain.png";
+    writeFileSync(join(root, rel), PNG);
+    expect(
+      validateCaptureRecord(honestChatPending({ screenshot: rel, sha256: PNG_HASH }), {
+        repoRoot: root,
+      }),
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SEAM IS AN OPTION, NOT AN INFERENCE. It used to be "the caller injected a
+// reader", which quietly turned every real-disk caller that also wanted a
+// hasher into one that skipped resolution.
+// ---------------------------------------------------------------------------
+describe("an injected hasher does not buy an exemption", () => {
+  it("a hasher ALONE still gets the resolved containment check", () => {
+    const linked = mkdtempSync(join(tmpdir(), "capture-seam-"));
+    try {
+      writeFileSync(join(linked, "package.json"), "X");
+      symlinkSync(".", join(linked, "test-results"), "dir");
+      const record = honestChatPending({
+        screenshot: "test-results/package.json",
+        sha256: createHash("sha256").update("X").digest("hex"),
+      });
+      // A hasher, and nothing else: this must NOT skip resolution.
+      const withHasher = codes(
+        validateCaptureRecord(record, { repoRoot: linked, hashFile: () => record.sha256 }),
+      );
+      expect(withHasher).toContain("record/capture-root-is-symlink");
+      // The explicit opt-in is the ONLY thing that replaces the filesystem.
+      const virtual = codes(
+        validateCaptureRecord(record, {
+          repoRoot: linked,
+          virtualFilesystem: true,
+          fileExists: () => true,
+          hashFile: () => record.sha256,
+        }),
+      );
+      expect(virtual).toEqual([]);
+    } finally {
+      rmSync(linked, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BEFORE THE SHUTTER. A capture is a WRITE, and refusing the record afterwards
+// does not un-write the bytes — which may have landed on top of something.
+// ---------------------------------------------------------------------------
+describe("resolveCaptureTarget refuses a redirected write", () => {
+  let root;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "capture-target-"));
+    mkdirSync(join(root, "test-results", "captures"), { recursive: true });
+    mkdirSync(join(root, "outside"), { recursive: true });
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("admits an honest destination, resolved", () => {
+    const got = resolveCaptureTarget("test-results/captures/new.png", { repoRoot: root });
+    expect(got.ok).toBe(true);
+    expect(got.parentReal).toBe(realpathSync(join(root, "test-results", "captures")));
+    expect(got.absReal).toBe(join(got.parentReal, "new.png"));
+  });
+
+  it("refuses a SYMLINKED ROOT", () => {
+    const linked = mkdtempSync(join(tmpdir(), "capture-target-root-"));
+    try {
+      symlinkSync(".", join(linked, "test-results"), "dir");
+      const got = resolveCaptureTarget("test-results/x.png", { repoRoot: linked });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/root-is-symlink");
+    } finally {
+      rmSync(linked, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a SYMLINKED INTERMEDIATE DIRECTORY — the case a final-component check cannot see", () => {
+    symlinkSync(join(root, "outside"), join(root, "test-results", "sneaky"), "dir");
+    try {
+      const got = resolveCaptureTarget("test-results/sneaky/x.png", { repoRoot: root });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/parent-is-symlink");
+    } finally {
+      rmSync(join(root, "test-results", "sneaky"), { force: true });
+    }
+  });
+
+  it("refuses an EXISTING SYMLINKED TARGET — writing it would follow the link out", () => {
+    writeFileSync(join(root, "outside", "victim.png"), "OLD");
+    symlinkSync(join(root, "outside", "victim.png"), join(root, "test-results", "captures", "t.png"));
+    try {
+      const got = resolveCaptureTarget("test-results/captures/t.png", { repoRoot: root });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/target-is-symlink");
+      // ...and the file it points at is untouched, which is the whole point.
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(join(root, "test-results", "captures", "t.png"), { force: true });
+    }
+  });
+
+  it("refuses an EXISTING HARD-LINKED TARGET — writing through a second name", () => {
+    writeFileSync(join(root, "outside", "shared.png"), "OLD");
+    linkSync(join(root, "outside", "shared.png"), join(root, "test-results", "captures", "h.png"));
+    try {
+      const got = resolveCaptureTarget("test-results/captures/h.png", { repoRoot: root });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/target-hard-linked");
+    } finally {
+      rmSync(join(root, "test-results", "captures", "h.png"), { force: true });
+    }
+  });
+
+  it("refuses a parent that does not exist, and one outside the root", () => {
+    expect(resolveCaptureTarget("test-results/nope/x.png", { repoRoot: root }).code)
+      .toBe("capture/parent-missing");
   });
 });

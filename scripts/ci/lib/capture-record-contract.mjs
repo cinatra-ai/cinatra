@@ -48,7 +48,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -705,6 +705,19 @@ export function resolveLiveCapture(rel, io) {
       detail: `"${rel}" is not a regular file`,
     };
   }
+  // A HARD LINK IS THE SAME INODE UNDER A SECOND NAME, and neither `lstat` nor
+  // `realpath` can see the other name: both answer inside the root for
+  // `ln <outside-file> test-results/.../shot.png`. Link count is the only local
+  // evidence that a second name exists, so a capture must have exactly one.
+  // A file a run just wrote has nlink 1; anything else was linked deliberately.
+  if (st.nlink > 1) {
+    return {
+      ok: false,
+      code: "record/screenshot-hard-linked",
+      detail: `"${rel}" has ${st.nlink} links — a capture is reachable by ONE name, and a hard ` +
+        "link is a second name for bytes that may live anywhere in the filesystem",
+    };
+  }
 
   let real;
   try {
@@ -721,6 +734,112 @@ export function resolveLiveCapture(rel, io) {
     };
   }
   return { ok: true, realPath: real };
+}
+
+/**
+ * WHERE A CAPTURE MAY BE WRITTEN — resolved BEFORE the shutter.
+ *
+ * The pre-shutter check used to be the same LEXICAL test the validator once
+ * used, so the shutter could still be redirected by the filesystem while the
+ * later validation merely refused the record afterwards. By then the bytes are
+ * already outside the root: a symlinked capture root, a symlinked intermediate
+ * directory, or an existing symlinked target all send the write somewhere the
+ * run was never allowed to touch, and the run may have OVERWRITTEN something.
+ * Refusing the record after that is not the same as not doing it.
+ *
+ * So the destination is resolved the same way a committed one is:
+ *   1. the capture root is a real directory (not a symlink);
+ *   2. the target's PARENT resolves to a real directory beneath the resolved
+ *      root -- this is the intermediate-symlink case, which a check on the
+ *      final component alone cannot see;
+ *   3. an EXISTING target is a regular file, not a symlink, and not hard-linked
+ *      -- otherwise the write follows the link, or writes through a second name.
+ *
+ * @returns {{ok: true, parentReal: string, absReal: string}
+ *          | {ok: false, code: string, detail: string}}
+ */
+export function resolveCaptureTarget(rel, io) {
+  const lstat = io.lstat ?? lstatSync;
+  const realpath = io.realpath ?? realpathSync;
+  const rootAbs = join(io.repoRoot, CAPTURE_OUTPUT_ROOT.replace(/[/\\]+$/, ""));
+
+  let rootReal;
+  try {
+    if (lstat(rootAbs).isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "capture/root-is-symlink",
+        detail: `${CAPTURE_OUTPUT_ROOT} is a symlink — the capture root must be a real directory`,
+      };
+    }
+    rootReal = realpath(rootAbs);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/root-missing",
+      detail: `there is no ${CAPTURE_OUTPUT_ROOT} directory to write into`,
+    };
+  }
+
+  const abs = join(io.repoRoot, rel);
+  const parent = dirname(abs);
+  const base = basename(abs);
+  let parentReal;
+  try {
+    if (lstat(parent).isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "capture/parent-is-symlink",
+        detail: `the directory holding "${rel}" is a symlink — a capture is written into a real ` +
+          "directory inside the capture root, never through a link",
+      };
+    }
+    parentReal = realpath(parent);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/parent-missing",
+      detail: `the directory holding "${rel}" does not exist`,
+    };
+  }
+  if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) {
+    return {
+      ok: false,
+      code: "capture/parent-outside-capture-root",
+      detail: `"${rel}" would be written into ${parentReal}, which is not beneath ${rootReal}`,
+    };
+  }
+
+  const absReal = join(parentReal, base);
+  try {
+    const st = lstat(absReal);
+    if (st.isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "capture/target-is-symlink",
+        detail: `"${rel}" already exists as a symlink — writing it would follow the link out of ` +
+          "the capture root",
+      };
+    }
+    if (!st.isFile()) {
+      return {
+        ok: false,
+        code: "capture/target-not-a-regular-file",
+        detail: `"${rel}" already exists and is not a regular file`,
+      };
+    }
+    if (st.nlink > 1) {
+      return {
+        ok: false,
+        code: "capture/target-hard-linked",
+        detail: `"${rel}" already exists with ${st.nlink} links — writing it would write through a ` +
+          "second name for the same bytes",
+      };
+    }
+  } catch {
+    // Nothing there yet: the ordinary case for a fresh capture.
+  }
+  return { ok: true, parentReal, absReal };
 }
 
 /** sha256 of a file, read from DISK -- never re-derived from the record. */
@@ -889,7 +1008,8 @@ export function sha256Pinned(url, io = {}) {
  * Validate ONE record against its own claim.
  *
  * @param {object} record
- * @param {{repoRoot?: string, fileExists?: (p: string) => boolean, hashFile?: (p: string) => string,
+ * @param {{repoRoot?: string, virtualFilesystem?: boolean, fileExists?: (p: string) => boolean,
+ *          hashFile?: (p: string) => string,
  *          hashPinned?: (url: string, io: object) => object, readPinned?: Function, run?: Function}} [io]
  * @returns {Array<{code: string, detail: string}>}
  */
@@ -1056,15 +1176,15 @@ export function validateCaptureRecord(record, io = {}) {
         `output root, and a picture that has left the tree is cited as a pinned permalink instead`,
     );
   } else {
-    // THE VIRTUAL-FILESYSTEM SEAM, stated so it cannot be mistaken for a hole.
-    // A caller that injects `fileExists` is SUPPLYING the filesystem: `true`
-    // means "a regular file is really at exactly this path", which is the fact
-    // `resolveLiveCapture` would otherwise establish from disk. Only suites
-    // inject it -- every production caller (`chat-hitl-evidence-gate.mjs`,
-    // `chat-hitl-acceptance-gate.mjs`) passes `repoRoot` alone and therefore
-    // takes the resolved path below.
+    // THE VIRTUAL-FILESYSTEM SEAM IS ITS OWN OPTION, and that is the point.
+    // It used to be inferred from "the caller injected a file reader", which
+    // silently turned every hash-injecting caller into a caller that skipped
+    // path resolution -- including real ones. Supplying a hasher now says
+    // nothing about the filesystem; ONLY `virtualFilesystem: true` does, and it
+    // is passed by suites alone. Every real-disk caller passes `repoRoot` and
+    // gets the resolved check below whether or not it also brings a hasher.
     const abs = join(repoRoot, shot);
-    const resolved = io.fileExists
+    const resolved = io.virtualFilesystem
       ? fileExists(abs)
         ? { ok: true, realPath: abs }
         : { ok: false, code: "record/screenshot-missing", detail: `"${shot}" does not exist in the tree` }

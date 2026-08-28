@@ -25,9 +25,18 @@
 //   * a walk MERGES: it replaces what it rewrote, retires what it replaced, and
 //     leaves every other record where it stood.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -110,6 +119,10 @@ function pageAnswering(requirements, { url, overrides = {} } = {}) {
     screenshot: async (abs, options = {}) => {
       log.push(`screenshot:${options.framing ?? "(none)"}`);
       page.shots.push(abs);
+      // A REAL SHUTTER LEAVES A FILE. The recorder writes to a temp name in the
+      // resolved directory and renames it into place, so a stub that writes
+      // nothing is not standing in for a shutter at all.
+      writeFileSync(abs, BYTES);
     },
   };
   return page;
@@ -135,8 +148,21 @@ const RUN_DECIDED = {
   screenshot: PNG,
 };
 
+
+// A REAL capture root for the observer. `observeCapture` resolves its
+// destination before the shutter — the root, the parent directory and any
+// existing target — so a suite that drives it needs a real tree to write into.
+// The fake page's "shutter" just drops the fixture bytes at the path it is
+// handed, which is what a real one does at the point this suite cares about.
+const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-root-"));
+beforeAll(() => {
+  mkdirSync(join(OBSERVE_ROOT, "test-results", "2788-s9d-rework", "captures"), { recursive: true });
+  mkdirSync(join(OBSERVE_ROOT, "test-results", "capture-fixture"), { recursive: true });
+});
+afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
+
 const observe = (cell, page) =>
-  observeWalkCell({ page, cell, repoRoot: "/anywhere", readImpl: READ, now: NOW });
+  observeWalkCell({ page, cell, repoRoot: OBSERVE_ROOT, readImpl: READ, now: NOW });
 
 describe("the walk plan is judged before the browser opens", () => {
   it("accepts the committed S9d plan and reads its ten cells in walk order", () => {
@@ -326,6 +352,7 @@ describe("the walk cell is OBSERVED, and refused if it did not come out", () => 
     expect(
       validateCanonicalRecord(record, {
         repoRoot: "/anywhere",
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -392,6 +419,7 @@ describe("the kind is measured wherever it is drawn — the run-page cell", () =
     expect(
       validateCanonicalRecord(record, {
         repoRoot: "/anywhere",
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -470,7 +498,8 @@ describe("the preflight and the walk derive ONE state", () => {
     // the assertions below is itself the audit tier accepting it.
     const record = await observe(ADVISORY_CELL, page);
     expect(record.declaredState).toBe("advisory");
-    expect(validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })).toEqual([]);
+    expect(validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })).toEqual([]);
   });
 });
 
@@ -550,5 +579,78 @@ describe("the committed fixture is executable exactly as documented", () => {
       steps: [{ id: "s", cells: [{ ...walkCellsOf(readWalkPlan(WALK_PLAN_PATH))[0] }] }],
     };
     expect(rerootWalkPlanOutputs(modern)).toEqual(modern);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SHUTTER IS A WRITE. These drive the real observer against real temp trees
+// and assert it refuses BEFORE anything is written — the file the redirect
+// aimed at is still untouched afterwards, which is what "refused" has to mean.
+// ---------------------------------------------------------------------------
+describe("the observer refuses a redirected write before the shutter", () => {
+  const shot = (root, rel) =>
+    observeWalkCell({
+      page: pageAnswering(captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"), {
+        url: "http://localhost:3000/chat/org/agent/t-1",
+      }),
+      cell: { ...CHAT_PENDING, screenshot: rel },
+      repoRoot: root,
+      readImpl: READ,
+      now: NOW,
+    });
+
+  it("a SYMLINKED CAPTURE ROOT is refused, and nothing is written through it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-root-"));
+    try {
+      writeFileSync(join(root, "victim.txt"), "OLD");
+      symlinkSync(".", join(root, "test-results"), "dir");
+      await expect(shot(root, "test-results/victim.txt")).rejects.toThrow(/capture root must be a real directory/);
+      expect(readFileSync(join(root, "victim.txt"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a SYMLINKED INTERMEDIATE DIRECTORY is refused, and its target is untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-parent-"));
+    try {
+      mkdirSync(join(root, "test-results"), { recursive: true });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      symlinkSync(join(root, "outside"), join(root, "test-results", "sneaky"), "dir");
+      await expect(shot(root, "test-results/sneaky/victim.png")).rejects.toThrow(/is a symlink/);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an EXISTING SYMLINKED TARGET is refused, and the file it points at is untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-target-"));
+    try {
+      mkdirSync(join(root, "test-results", "c"), { recursive: true });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      symlinkSync(join(root, "outside", "victim.png"), join(root, "test-results", "c", "x.png"));
+      await expect(shot(root, "test-results/c/x.png")).rejects.toThrow(/already exists as a symlink/);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the honest destination IS written, and atomically — no temp file left behind", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-ok-"));
+    try {
+      mkdirSync(join(root, "test-results", "c"), { recursive: true });
+      const record = await shot(root, "test-results/c/ok.png");
+      expect(record.screenshot).toBe("test-results/c/ok.png");
+      expect(readFileSync(join(root, "test-results", "c", "ok.png"))).toEqual(BYTES);
+      const left = readdirSync(join(root, "test-results", "c"));
+      expect(left).toEqual(["ok.png"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
