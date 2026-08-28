@@ -1,0 +1,11 @@
+{
+  "S0__agent-hitl-screen-before-the-hold__site_widget__asking__light": "A run this round started earlier from the same widget parked at the agent's OWN setup screen BEFORE any recommendation hold — the card the capture contract declares composition-only on this host, drawn in a third-party application's widget column.",
+  "S1__agent-hitl-screen__site_widget__asking__light": "The agent's own setup screen inside the widget column, after the skills row settled: `agent_hitl_screen` declaring host `site_widget`, state `asking`, with its fields region and its own submit.",
+  "S1__hitl-card__site_widget__asking__light": "The SAME frame, written by the shipped recorder while it was being driven for the index cell it then refused. The refusal is quoted in README.md and in refusals.json; the picture is filed as a control, never as a record.",
+  "P1__run-progress-placeholder-absent__site_widget__light": "The widget column while the run worked: 260 polled samples, `[data-run-review-slot]` = 0 on every one, and no review-gate placeholder anywhere on this host.",
+  "P2__schedule-moment-in-the-widget__site_widget__light": "The run AT its schedule moment — `lifecycle_moment=schedule`, `lifecycle_card_kind=trigger_schedule_proposal`, `lifecycle_card_ref=null` — and the widget column drawing no schedule card at all.",
+  "P2__schedule-moment-in-the-widget__site_widget__dark": "The same reading in the palette the reader chose on the app's own control.",
+  "P3__review-absent-on-the-live-widget__site_widget__light": "The widget column with this run's artifact review gate PENDING in the database and no review card on the live page — after fifteen minutes of polling.",
+  "P4__review-absent-after-a-reload__site_widget__light": "The same conversation after the third-party page was reloaded and the widget signed in again: the gate is still pending and the column still draws no review card.",
+  "P5__relayed-refusal__site_widget__light": "The widget's own conversation answering a typed request to decide a card: the platform's sentence, said back."
+}

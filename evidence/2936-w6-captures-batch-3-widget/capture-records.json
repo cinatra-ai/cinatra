@@ -1,0 +1,1011 @@
+{
+  "records": [
+    {
+      "cell": "W1__recommendation-card__site_widget__held__light",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W1__recommendation-card__site_widget__held__light.png",
+      "sha256": "348ac4579d75e0576fab25d9aaf6e1466e5ed8d164eaab20be9c00ef0d6159fd",
+      "capturedAt": "2026-08-28T08:13:11.247Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "held",
+          "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
+          "data-can-decide": "true",
+          "class": "flex flex-col gap-2"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 240.3,
+      "widgetRegion": {
+        "x": 20,
+        "y": 95,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 237.9
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "osPrefersDark": false,
+      "runId": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+          "mark": "undecided",
+          "text": "Blog Idea Authoring SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ]
+    },
+    {
+      "cell": "W2__recommendation-card__site_widget__held__dark",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W2__recommendation-card__site_widget__held__dark.png",
+      "sha256": "4dcff98259d602d5c3b2e94977e2eb1dcda893d4cae5dcdfa04f22d892c02133",
+      "capturedAt": "2026-08-28T08:13:25.758Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 4,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "held",
+          "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
+          "data-can-decide": "true",
+          "class": "flex flex-col gap-2"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 153.8,
+      "widgetRegion": {
+        "x": 20,
+        "y": 95,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 16.7
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "osPrefersDark": false,
+      "runId": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+      "themeFacts": {
+        "want": "dark",
+        "pressed": true,
+        "appBefore": {
+          "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+          "stored": null,
+          "osPrefersDark": false
+        },
+        "appAfter": {
+          "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+          "stored": "dark",
+          "osPrefersDark": false
+        },
+        "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "followed": true
+      }
+    },
+    {
+      "cell": "W3__recommendation-card__site_widget__settled__light",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W3__recommendation-card__site_widget__settled__light.png",
+      "sha256": "242280471a084d0646c70d710a9a5faf23998a949ad164e8822ce1c52e940f9f",
+      "capturedAt": "2026-08-28T08:13:44.504Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2",
+          "data-run-recommendation-decision": "confirmed",
+          "data-run-recommendation-settled": "true"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 239.8,
+      "widgetRegion": {
+        "x": 20,
+        "y": 95,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 236.6
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "osPrefersDark": false,
+      "runId": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+          "mark": "confirmed",
+          "text": "Blog Idea Authoring SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "skipped",
+          "text": "Blog Writing SkillSkipped",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "confirmed",
+          "text": "Brand Voice Matcher SkillConfirmed",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "cell": "W4__recommendation-card__site_widget__settled__dark",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W4__recommendation-card__site_widget__settled__dark.png",
+      "sha256": "3b01ebcd4d5d5e804472462f43b28fa26e4a63090c2ae31c9384189be0c2c30e",
+      "capturedAt": "2026-08-28T08:13:49.590Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2",
+          "data-run-recommendation-decision": "confirmed",
+          "data-run-recommendation-settled": "true"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 155.7,
+      "widgetRegion": {
+        "x": 20,
+        "y": 68,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 22
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "osPrefersDark": false,
+      "runId": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+          "mark": "confirmed",
+          "text": "Blog Idea Authoring SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "skipped",
+          "text": "Blog Writing SkillSkipped",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "confirmed",
+          "text": "Brand Voice Matcher SkillConfirmed",
+          "actions": []
+        }
+      ]
+    },
+    {
+      "cell": "W13__recommendation-card__site_widget__settled__after-reload__light",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W13__recommendation-card__site_widget__settled__after-reload__light.png",
+      "sha256": "1cb948ff5aa2536280b25578ae05d4b034b2d1201223aed087b620d9cabb515f",
+      "capturedAt": "2026-08-28T08:14:31.748Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "site_widget",
+          "data-run-recommendation-decision": "confirmed",
+          "data-run-recommendation-settled": "true",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 239.9,
+      "widgetRegion": {
+        "x": 20,
+        "y": 95,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 237
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "osPrefersDark": false,
+      "before": {
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "site_widget",
+            "state": "decided"
+          }
+        ],
+        "conformance": [
+          "run-chip-row",
+          "chat-composer-primary"
+        ],
+        "actions": [],
+        "slots": 0,
+        "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress Awaiting input No messages yet. Type a message... Command Palette Search for a command to run..."
+      },
+      "after": {
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "site_widget",
+            "state": "decided"
+          }
+        ],
+        "conformance": [
+          "run-chip-row",
+          "chat-composer-primary"
+        ],
+        "actions": [],
+        "slots": 0,
+        "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress pending trigger No messages yet. Type a message... Command Palette Search for a command to run..."
+      },
+      "storedParts": [
+        {
+          "n": 0
+        }
+      ],
+      "scheduleParts": [
+        {
+          "n": 0
+        }
+      ]
+    },
+    {
+      "cell": "W14__recommendation-card__site_widget__settled__after-reload__dark",
+      "declaredHost": "site_widget",
+      "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W14__recommendation-card__site_widget__settled__after-reload__dark.png",
+      "sha256": "dda9b6e55240aca0ea47a14df1f971d2c451862f59e8a3d13e33ff1d0a32d4d5",
+      "capturedAt": "2026-08-28T08:14:36.794Z",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "widget",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "widget",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "site_widget",
+          "data-run-recommendation-decision": "confirmed",
+          "data-run-recommendation-settled": "true",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2"
+        }
+      },
+      "frames": {
+        "widget": {
+          "selector": ".cw-frame",
+          "url": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site"
+        }
+      },
+      "frameUrl": "/embed/assistant?assistant=wordpress&instanceId=w6b3-northwind-site",
+      "meanLuminance": 153.9,
+      "widgetRegion": {
+        "x": 20,
+        "y": 95,
+        "width": 722,
+        "height": 702,
+        "meanLuminance": 17.1
+      },
+      "pixels": {
+        "width": 2880,
+        "height": 1800
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "osPrefersDark": false,
+      "before": {
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "site_widget",
+            "state": "decided"
+          }
+        ],
+        "conformance": [
+          "run-chip-row",
+          "chat-composer-primary"
+        ],
+        "actions": [],
+        "slots": 0,
+        "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress Awaiting input No messages yet. Type a message... Command Palette Search for a command to run..."
+      },
+      "after": {
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "site_widget",
+            "state": "decided"
+          }
+        ],
+        "conformance": [
+          "run-chip-row",
+          "chat-composer-primary"
+        ],
+        "actions": [],
+        "slots": 0,
+        "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress pending trigger No messages yet. Type a message... Command Palette Search for a command to run..."
+      },
+      "storedParts": [
+        {
+          "n": 0
+        }
+      ],
+      "scheduleParts": [
+        {
+          "n": 0
+        }
+      ]
+    }
+  ],
+  "retires": []
+}
