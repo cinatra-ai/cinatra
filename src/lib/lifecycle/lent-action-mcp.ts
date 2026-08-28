@@ -122,6 +122,7 @@ import {
 } from "@/lib/lifecycle/bound-reference-resolver";
 import {
   LENT_ACTION_CONTROLS,
+  isLentActionControl,
   matchLentActionGrant,
   verifyLentActionGrant,
   type LentActionControl,
@@ -161,7 +162,37 @@ function say(payload: Record<string, unknown>): McpToolResult {
   };
 }
 
-function refuseNoAuthority(): McpToolResult {
+/**
+ * WHY A CALL WAS REFUSED — on the SERVER'S OWN LOG, never in the answer.
+ *
+ * The sentence the caller gets stays one sentence for every cause; that is the
+ * property, and it is not weakened here. But an operator reading a run could not
+ * tell a forged grant from a spent one either, and a road that refuses cannot be
+ * repaired from a sentence designed to say nothing. So the cause is written
+ * where only the operator can read it: a fixed token, the control the call
+ * asked for, and nothing else — no ref, no words, no identity.
+ */
+type LentActionRefusal =
+  | "input-shape"
+  | "no-grant-on-frame"
+  | "grant-does-not-verify"
+  | "grant-names-another-card-or-control"
+  | "grant-already-spent";
+
+export function noteLentActionRefusal(
+  cause: LentActionRefusal,
+  control: string | null,
+): void {
+  console.warn(
+    `[lent-action] refused: cause=${cause} control=${control ?? "-"}`,
+  );
+}
+
+function refuseNoAuthority(
+  cause: LentActionRefusal,
+  control: string | null = null,
+): McpToolResult {
+  noteLentActionRefusal(cause, control);
   return say({ ok: false, message: LENT_ACTION_NO_AUTHORITY });
 }
 
@@ -173,15 +204,37 @@ const inputSchema = z
   .object({
     /** The bound card's opaque ref — the one the turn was told about. */
     ref: z.string().min(1).max(LIFECYCLE_REF_MAX_LENGTH),
-    /** The ONE control to press. The grant names it too; both must agree. */
-    control: z.enum(LENT_ACTION_CONTROLS),
+    /**
+     * The control to press — OPTIONAL, and that is the repair (cinatra#2934,
+     * after the graded picture leg).
+     *
+     * WHY IT WAS A REQUIRED ARGUMENT, AND WHY THAT WAS WRONG. It was required so
+     * the call and the grant could be made to agree. But WHICH control this
+     * message may press is not a question the model answers: the SERVER decided
+     * it at send time, alone, from the card's own kind — `primaryControlFor` —
+     * and minted a grant naming that one. Gate 3 then compares the model's
+     * answer to the server's own. A free variable whose only correct value the
+     * server already holds cannot add safety; it can only ever produce a
+     * refusal, and it did: a message that plainly asked to be filled and sent
+     * came back "This message is not allowed to operate that control" while the
+     * FILL of that same message applied — which is only possible when the grant
+     * was live and matched the card, and the run's own rows show no spend, so
+     * what did not agree was the ARGUMENT.
+     *
+     * OMITTED NOW MEANS "the control this message was granted", which is the
+     * only control it could ever have pressed. A call that NAMES a different one
+     * is refused exactly as before — asking for Reject on a comment grant is
+     * still an authority this turn does not hold, and gate 3 still says so.
+     */
+    control: z.enum(LENT_ACTION_CONTROLS).optional(),
   })
   .strict();
 
 export const LENT_ACTION_TOOL_DESCRIPTION =
   "Press ONE control of the ONE lifecycle card this message is bound to, as the person who typed it, with their permissions. " +
   "Usable ONLY when this turn was given the matching single-use grant; without it the call does nothing and says so. " +
-  "The control must be one your grant names AND one the card actually offers; a grant naming anything else is refused. " +
+  "You do NOT choose WHICH control: the grant names the one control this message may press, and calling with the ref alone presses that one. " +
+  "Naming a different control is refused, and a control the card does not offer is refused too. " +
   "You do NOT supply the text: what lands on the card is the person's own message, held on the server with the grant. " +
   "It fires at most once per message. Report the answer that comes back and add nothing to it.";
 
@@ -234,24 +287,38 @@ export async function handleLentAction(
   } = {},
 ): Promise<McpToolResult> {
   const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) return refuseNoAuthority();
+  if (!parsed.success) {
+    return refuseNoAuthority(
+      "input-shape",
+      typeof (input as { control?: unknown } | null)?.control === "string"
+        ? ((input as { control: string }).control)
+        : null,
+    );
+  }
 
   // GATE 1 — a grant on the frame.
   const frame = readFrameGrant();
-  if (!frame) return refuseNoAuthority();
+  if (!frame) return refuseNoAuthority("no-grant-on-frame", parsed.data.control ?? null);
 
   // GATE 2 — the grant verifies.
   const claims = verifyLentActionGrant(frame.grant, { now: deps.now });
-  if (!claims) return refuseNoAuthority();
+  if (!claims) return refuseNoAuthority("grant-does-not-verify", parsed.data.control ?? null);
+
+  // THE CONTROL IS THE GRANT'S. A call that named one must still agree with it
+  // (gate 3 below refuses otherwise); a call that named none presses the one
+  // this message was granted, which is the only one it could have pressed.
+  const control = parsed.data.control ?? claims.control;
 
   // GATE 3 — the grant matches THIS call.
   const matches = matchLentActionGrant(claims, {
     userId: frame.userId,
     orgId: frame.orgId,
     cardRef: parsed.data.ref,
-    control: parsed.data.control,
+    control,
   });
-  if (!matches) return refuseNoAuthority();
+  if (!matches) {
+    return refuseNoAuthority("grant-names-another-card-or-control", control);
+  }
 
   // GATE 4 — the person's own credential, resolved live.
   const resolveActor = deps.resolveActor ?? resolveBoundTurnActor;
@@ -263,7 +330,9 @@ export async function handleLentAction(
   const bound = await resolve({ ref: parsed.data.ref, actorCtx });
   if (bound.kind === "absent") return refuseCardUnavailable();
   const lent = controlsLentBy(bound);
-  if (!lent.includes(parsed.data.control)) return refuseCardUnavailable();
+  if (!isLentActionControl(control) || !lent.includes(control)) {
+    return refuseCardUnavailable();
+  }
 
   // GATE 6 — spend the grant. Before the effect, atomically, once.
   //
@@ -279,16 +348,18 @@ export async function handleLentAction(
     userId: frame.userId,
     orgId: frame.orgId,
     cardRefFingerprint: claims.cardRefFingerprint,
-    control: parsed.data.control,
+    control,
   });
-  if (spend.outcome !== "consumed") return refuseNoAuthority();
+  if (spend.outcome !== "consumed") {
+    return refuseNoAuthority("grant-already-spent", control);
+  }
 
   const text = spend.messageText;
 
   // THE CARD'S OWN PATH.
   if (bound.kind === "review") {
     const submit = deps.submitReviewDecision ?? (await loadSubmitReviewDecision());
-    const disposition = reviewDisposition(parsed.data.control);
+    const disposition = reviewDisposition(control);
     if (!disposition) return refuseCardUnavailable();
     const outcome = await submit(
       bound.runId,

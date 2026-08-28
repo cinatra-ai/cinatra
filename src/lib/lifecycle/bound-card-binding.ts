@@ -678,7 +678,8 @@ export async function issueTurnLentActionGrant(input: {
         `person about anything you cannot work out.\n` +
         `· TO SUBMIT IT — ONLY when the person asks for that in so many words in this same ` +
         `message — FILL IT FIRST, then call \`lifecycle_bound_card_decide\` with that ref and ` +
-        `control "${control}", ONCE. A press with nothing filled in this message is refused by ` +
+        `NOTHING ELSE, ONCE. You do not choose which control: this message was granted exactly ` +
+        `one and the call presses that one. A press with nothing filled in this message is refused by ` +
         `the server, so the order is not advice. What is sent is what their screen was shown ` +
         `holding; you supply no values. A question about the screen is answered as a question ` +
         `and presses nothing.\n` +
@@ -691,7 +692,8 @@ export async function issueTurnLentActionGrant(input: {
     systemContext:
       `\n\nBOUND CARD. This message was sent with a review the person is looking at bound to the prompt window. ` +
       `You may press exactly ONE control on it, ONCE, by calling \`lifecycle_bound_card_decide\` ` +
-      `with ref "${binding.ref}" and control "${control}". You supply NO text: what lands on ` +
+      `with ref "${binding.ref}" and nothing else — this message was granted exactly one control ` +
+      `and the call presses that one, so you do not name it. You supply NO text: what lands on ` +
       "the card is the person's own message, held on the server. Do this only when the person " +
       "is asking for it; a question about the card is answered as a question and presses " +
       "nothing. Report what comes back and add nothing to it; where your sentence and the card " +

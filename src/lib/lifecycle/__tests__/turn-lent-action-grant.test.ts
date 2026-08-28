@@ -89,9 +89,16 @@ describe("a bound review lends ONE control, with the person's own words", () => 
     expect(record.mock.calls[0][1]).toBe("tighten the opening paragraph");
   });
 
-  it("tells the turn which ONE control it may press, and to add nothing", async () => {
+  it("tells the turn it holds ONE press, and that it does not name it", async () => {
+    // AMENDED for cinatra#2934 (after the graded picture leg). The turn is no
+    // longer told a control to pass back: WHICH control this message may press
+    // is the server's own answer, sealed into the grant, and an argument whose
+    // only correct value the server already holds could only ever be got wrong.
     const out = await issue();
-    expect(out.systemContext).toContain('control "comment"');
+    expect(out.systemContext).toContain("lifecycle_bound_card_decide");
+    expect(out.systemContext).toContain("this message was granted exactly one control");
+    expect(out.systemContext).toContain("so you do not name it");
+    expect(out.systemContext).not.toContain('control "comment"');
     expect(out.systemContext).toContain("You supply NO text");
   });
 
@@ -138,7 +145,9 @@ describe("what a send declines to lend", () => {
     expect(out.systemContext).toContain("lifecycle_bound_screen_fill");
     expect(out.systemContext).toContain("SUBMITS NOTHING");
     expect(out.systemContext).toContain("ONLY when the person asks for that in so many words");
-    expect(out.systemContext).toContain('control "submit"');
+    // AMENDED for cinatra#2934: the press is asked for with the ref alone.
+    expect(out.systemContext).toContain("You do not choose which control");
+    expect(out.systemContext).not.toContain('control "submit"');
   });
 
   it("lends NOTHING for an empty message — there is nothing to place", async () => {
