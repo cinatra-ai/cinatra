@@ -14,10 +14,22 @@
  *
  * Pinned here:
  *   - the run's NON-ADMINISTRATOR owner reaches the lists for their own run;
- *   - a member of ANOTHER organisation is refused, and no CRM capability is
- *     resolved or called on the way out;
+ *   - a member of ANOTHER organisation is refused with the hidden reading, and
+ *     no CRM capability is resolved or called on the way out;
+ *   - a member of the run's OWN organisation who is not its owner is refused
+ *     with the forbidden reading, and no CRM capability either;
  *   - a platform administrator is unchanged — still admitted;
  *   - an unknown run id is refused with the hidden-run absence.
+ *
+ * Each refusal is pinned to ONE exact (statusCode, reason) pair, never to a set
+ * of acceptable pairs, because the two pairs mean different things and are
+ * produced by different tiers: a caller outside the run's organisation is
+ * denied the run.read permission by the kernel, and enforceResourceAccess
+ * downgrades every *.read denial to 404/hidden so run ids cannot be enumerated;
+ * a caller inside the run's organisation passes the kernel and is refused one
+ * tier later by the run's own effective policy — owner-only by default — with
+ * 403/forbidden. A test that accepted either pair could not tell a leak of
+ * existence from a policy denial.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -94,6 +106,7 @@ const AUTH = { orgId: RUN_ORG_ID, can: () => true };
 const OWNER_ID = "u-3050-owner";       // non-administrator, member of the run's org
 const ADMIN_ID = "u-3050-admin";       // platform administrator
 const OUTSIDER_ID = "u-3050-outsider"; // member of a DIFFERENT organisation
+const MEMBER_ID = "u-3050-member";     // member of the run's OWN org, not the owner
 
 beforeAll(async () => {
   if (!hasDb) return;
@@ -112,6 +125,7 @@ beforeAll(async () => {
     [OWNER_ID, null],
     [ADMIN_ID, "admin"],
     [OUTSIDER_ID, null],
+    [MEMBER_ID, null],
   ] as Array<[string, string | null]>) {
     await c.query(
       `INSERT INTO public."user" (id, name, email, "emailVerified", role) VALUES ($1, $1, $2, true, $3) ON CONFLICT (id) DO NOTHING`,
@@ -122,6 +136,7 @@ beforeAll(async () => {
     [OWNER_ID, RUN_ORG_ID],
     [ADMIN_ID, RUN_ORG_ID],
     [OUTSIDER_ID, OTHER_ORG_ID],
+    [MEMBER_ID, RUN_ORG_ID],
   ]) {
     await c.query(
       `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt") VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
@@ -188,22 +203,40 @@ describe.skipIf(!hasDb)("fetchAvailableLists — authorized by the run's access"
     expect(searchListsMock).toHaveBeenCalledWith({ query: "", objectType: "contact" });
   });
 
-  it("a member of ANOTHER organisation is refused — no CRM capability resolved", async () => {
+  it("a member of ANOTHER organisation is refused with the hidden-run absence — no CRM capability resolved", async () => {
     const runId = await seedRun(OWNER_ID);
     callerRef.current = { userId: OUTSIDER_ID, orgId: OTHER_ORG_ID, role: "user" };
 
     const { fetchAvailableLists } = await import("../list-picker-actions");
-    let refusal: { statusCode?: number; reason?: string } | null = null;
-    try {
-      await fetchAvailableLists(runId);
-    } catch (err) {
-      refusal = err as { statusCode?: number; reason?: string };
-    }
-    expect(refusal).not.toBeNull();
-    // The run page's own refusal shapes — never a redirect to an
-    // administrator screen.
-    expect([403, 404]).toContain(refusal?.statusCode);
-    expect(["forbidden", "hidden"]).toContain(refusal?.reason);
+    // EXACTLY the hidden reading, not \"one of the refusal shapes\": the caller
+    // is outside the run's organisation, so the kernel cross-organisation guard
+    // denies the run.read permission, and enforceResourceAccess downgrades every
+    // *.read denial to 404/hidden so a probing caller cannot learn which run ids
+    // exist. Pinning the pair is what makes this test able to catch a regression
+    // that leaked existence as a 403.
+    await expect(fetchAvailableLists(runId)).rejects.toMatchObject({
+      statusCode: 404,
+      reason: "hidden",
+    });
+    expect(resolveCrmListReaderMock).not.toHaveBeenCalled();
+    expect(searchListsMock).not.toHaveBeenCalled();
+  });
+
+  it("a member of the run's OWN organisation who is not its owner is refused with the forbidden reading — no CRM capability resolved", async () => {
+    const runId = await seedRun(OWNER_ID);
+    callerRef.current = { userId: MEMBER_ID, orgId: RUN_ORG_ID, role: "user" };
+
+    const { fetchAvailableLists } = await import("../list-picker-actions");
+    // The OTHER exact reading, and the one that distinguishes the two: this
+    // caller shares the run's organisation, so the kernel allows run.read and
+    // the run's own effective policy — the owner-only default — is what
+    // refuses, at the policy tier, with 403/forbidden. Hidden and forbidden are
+    // therefore both real on this road and each is pinned to the case that
+    // produces it.
+    await expect(fetchAvailableLists(runId)).rejects.toMatchObject({
+      statusCode: 403,
+      reason: "forbidden",
+    });
     expect(resolveCrmListReaderMock).not.toHaveBeenCalled();
     expect(searchListsMock).not.toHaveBeenCalled();
   });
