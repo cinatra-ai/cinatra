@@ -46,7 +46,7 @@ import {
 } from "../../ci/lib/capture-record-contract.mjs";
 
 const KIND = "agent_hitl_screen";
-const PNG = "evidence/2821-fixture/shot.png";
+const PNG = "test-results/capture-fixture/shot.png";
 const HASH = createHash("sha256").update("fixture-bytes").digest("hex");
 const hashOf = (rel) => {
   if (rel !== PNG) throw new Error(`no such file: ${rel}`);
@@ -220,7 +220,7 @@ describe("the settled reading of this kind is an absence, and only of this kind"
 
 const PNG_BYTES = Buffer.from("hitl-decided-fixture");
 const PNG_HASH = createHash("sha256").update(PNG_BYTES).digest("hex");
-const WALK_PNG = "evidence/2930-fixture/decided.png";
+const WALK_PNG = "test-results/capture-fixture/decided.png";
 
 /** A screen with the transcript intact and no card of this kind on it. */
 function decidedChatPage({ rootCount = 0 } = {}) {

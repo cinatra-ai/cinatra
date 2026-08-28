@@ -65,7 +65,7 @@ import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-co
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
 
-const PNG = "evidence/2821-fixture/shot.png";
+const PNG = "test-results/capture-fixture/shot.png";
 const HASH = createHash("sha256").update("fixture-bytes").digest("hex");
 const hashOf = (rel) => {
   if (rel !== PNG) throw new Error(`no such file: ${rel}`);
@@ -187,7 +187,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
   });
 
   it("REFUSES a record whose screenshot is not on disk", () => {
-    const record = chatRecord({ screenshot: "evidence/2821-fixture/missing.png" });
+    const record = chatRecord({ screenshot: "test-results/capture-fixture/missing.png" });
     expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(/screenshot not found/);
   });
 
@@ -268,18 +268,18 @@ describe("the mislabeled capture — the defect this index was built after", () 
   });
 
   it("REFUSES a record not written by the one shared recorder", () => {
-    const record = chatRecord({ recordedBy: "evidence/2821/my-own-capture.mjs" });
+    const record = chatRecord({ recordedBy: "scripts/lane/my-own-capture.mjs" });
     expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
       /every record is written by the ONE shared recorder/,
     );
   });
 
-  it("REFUSES a screenshot outside evidence/ and a path that escapes the tree", () => {
+  it("REFUSES a screenshot outside the capture output root and a path that escapes the tree", () => {
     expect(validateCaptureRecord(chatRecord({ screenshot: "tmp/shot.png" }), { hashOf }).join("\n")).toMatch(
-      /must live under evidence\//,
+      /must live under test-results\//,
     );
     expect(
-      validateCaptureRecord(chatRecord({ screenshot: "evidence/../../etc/x.png" }), { hashOf }).join("\n"),
+      validateCaptureRecord(chatRecord({ screenshot: "test-results/../../etc/x.png" }), { hashOf }).join("\n"),
     ).toMatch(/repo-relative path inside the tree/);
   });
 });
@@ -684,7 +684,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
 // The BINDING: an unindexed screenshot counts as zero
 // ---------------------------------------------------------------------------
 
-function manifestClaiming(cell, file = "evidence/2821-fixture/README.md") {
+function manifestClaiming(cell, file = "test-results/capture-fixture/README.md") {
   return {
     rows: [
       { criterion: "x", disposition: "BUILT", e2eProofs: [{ file, testName: cell }] },
@@ -739,7 +739,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   // ratchet records it on all four. Two of its records stand in the committed
   // index; the chat_thread one was DRIVEN and refused HERE, by a state list
   // that read one vocabulary for four kinds
-  // (evidence/2791-s9g-conformance/capture-results.json).
+  // (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json).
   function advisoryChat(over = {}) {
     return chatRecord({
       cell: "G7__audit-card__chat_thread__advisory",
@@ -857,7 +857,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
           declaredHost: "chat_thread",
           kind,
           state: "advisory",
-          screenshot: "evidence/2788-s9d-rework/captures/z1-advisory.png",
+          screenshot: "test-results/capture-fixture/z1-advisory.png",
         },
       ];
       return plan;
@@ -1019,7 +1019,7 @@ describe("the manifest to capture-index binding", () => {
 
   it("REFUSES a record whose screenshot lives away from the proof that cites it", () => {
     const violations = auditManifestIndexBinding({
-      manifest: manifestClaiming("X1__chat_thread__held.png", "evidence/somewhere-else/README.md"),
+      manifest: manifestClaiming("X1__chat_thread__held.png", "test-results/somewhere-else/README.md"),
       index: indexOf([chatRecord({ cell: "X1__chat_thread__held" })]),
     });
     expect(violations.join("\n")).toMatch(/the image must sit with the proof that cites it/);

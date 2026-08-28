@@ -64,8 +64,8 @@
  * hand-writing a record with the recorder's id, a real screenshot's real hash,
  * and fabricated counts of one. Binding pixels to assertions would need an
  * attested capture run, which this repo does not have for ANY committed
- * evidence file — the same trust boundary already applies to every screenshot in
- * `evidence/`.
+ * evidence file — the same trust boundary already applies to every screenshot a
+ * capture run mints.
  *
  * So be exact about what IS closed. This gate catches the mislabel and the
  * omission: a capture whose recorded URL contradicts its declared host, a
@@ -101,8 +101,10 @@ import {
   RECORDER_ID,
   absenceInstanceViolations,
   captureHostAdmissibility,
+  isHistoricalPermalink,
   requiredAssertionsFor,
   settledIsAbsence,
+  sha256Pinned,
 } from "../../ci/lib/capture-record-contract.mjs";
 
 // Re-exported so the anchor contract reads the canonical answers through the
@@ -263,7 +265,7 @@ export const LIFECYCLE_KINDS = Object.freeze(Object.keys(CARD_KINDS));
  * `advisory` and nothing else, on every host it draws on. Two of its advisory
  * records stand in the index; the third was refused HERE, on `chat_thread`
  * alone, by an arm that enumerated this list for all four kinds (the driven
- * refusal is recorded in `evidence/2791-s9g-conformance/capture-results.json`).
+ * refusal is recorded in `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json`).
  *
  * THIS LIST STAYS THE TWO, deliberately. The anchor contract builds one ratified
  * anchor set per (host, kind, state) from it, so moving it would move the
@@ -395,6 +397,24 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
+ * WHERE A CAPTURE RUN WRITES.
+ *
+ * `test-results/` is the repo's existing run-artifact root: it is the Playwright
+ * config's `outputDir`, it is already gitignored, other suites already mint into
+ * it (`tests/e2e/setup/support/instance-state.ts`), and the CI job that runs the
+ * held-turn flow already uploads it. So a run leaves the tree clean by
+ * construction and nothing has to be pruned afterwards.
+ *
+ * It replaces the tracked proof-artifact tree that used to hold these files:
+ * minting proof pictures into the repository is what this root exists to stop.
+ * The path stays
+ * repo-relative because a record's `screenshot` field must be one -- an OS temp
+ * dir would need the record contract's path rule widened to absolute paths,
+ * which is a bigger change than this one and would weaken it for every record.
+ */
+export const CAPTURE_OUTPUT_ROOT = "test-results/";
+
+/**
  * The path rules a screenshot must satisfy, as a reusable check.
  *
  * Shared by the observer and the validator so a path the record would be
@@ -402,13 +422,18 @@ export function collectAssertions(specs, queryCount) {
  * validated afterwards, which left a file on disk for every capture the gate
  * then rejected — including paths that escape the tree entirely.
  */
-export function screenshotPathViolation(screenshot) {
+export function screenshotPathViolation(screenshot, { allowPinned = false } = {}) {
   if (!isNonEmptyString(screenshot)) return "no screenshot path";
+  // A PINNED record names a picture that has left the working tree. It is
+  // graded, not written, so only the READER may accept one: an observer about
+  // to fire the shutter and a walk plan describing what a run will write are
+  // both declaring an output path, and a URL is not one.
+  if (allowPinned && isHistoricalPermalink(screenshot)) return null;
   if (screenshot.startsWith("/") || screenshot.includes("..")) {
     return "screenshot must be a repo-relative path inside the tree";
   }
-  if (!screenshot.startsWith("evidence/")) {
-    return `screenshot must live under evidence/ — it is ${screenshot}`;
+  if (!screenshot.startsWith(CAPTURE_OUTPUT_ROOT)) {
+    return `screenshot must live under ${CAPTURE_OUTPUT_ROOT} — it is ${screenshot}`;
   }
   return null;
 }
@@ -975,9 +1000,15 @@ export const RECORD_TIERS = Object.freeze(["graded", "audit"]);
  *
  * `hashOf(relPath)` returns the file's sha256, or throws when the file is
  * missing — injected so the pinned tests drive the same validator CI runs.
+ * `hashPinnedOf(url, io)` does the same job for a record whose picture is
+ * pinned in history rather than on disk; it defaults to the ratified contract's
+ * `sha256Pinned`, which reads the blob back with `git cat-file`.
  * `tier` selects the grading above; it defaults to `graded`.
  */
-export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) {
+export function validateCaptureRecord(
+  record,
+  { hashOf, hashPinnedOf, repoRoot = process.cwd(), tier = "graded" } = {},
+) {
   const v = [];
   // A record is judged at the AUDIT tier when it is asked for (the driver, on
   // its own output) or when it SPEAKS that tier: a pinned `instance` is this
@@ -1065,12 +1096,26 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
 
   // --- the screenshot and its hash ---
   // The SAME check the observer runs before the shutter, so the two cannot
-  // disagree about which paths are writable.
-  const pathViolation = screenshotPathViolation(record?.screenshot);
+  // disagree about which paths are writable -- widened here, and ONLY here, to
+  // also take a record whose picture is pinned in history rather than on disk.
+  const pathViolation = screenshotPathViolation(record?.screenshot, { allowPinned: true });
   if (pathViolation) {
     v.push(`${where}: ${pathViolation}`);
   } else if (!SHA256_RE.test(record?.sha256 ?? "")) {
     v.push(`${where}: sha256 must be 64 lowercase hex characters`);
+  } else if (isHistoricalPermalink(record.screenshot)) {
+    // PINNED: the picture is read back out of history at the commit the
+    // permalink names, and the digest is re-derived from those bytes -- the
+    // same binding a live record gets, off `git cat-file` instead of the tree.
+    const got = (hashPinnedOf ?? sha256Pinned)(record.screenshot, { repoRoot });
+    if (!got.ok) {
+      v.push(`${where}: the pinned screenshot could not be read — ${got.reason}`);
+    } else if (got.sha256 !== record.sha256) {
+      v.push(
+        `${where}: the screenshot at ${record.screenshot} hashes to ${got.sha256}, not the recorded ` +
+          `${record.sha256} — the image and the record are not the same capture`,
+      );
+    }
   } else if (typeof hashOf === "function") {
     let actual;
     try {
@@ -1405,7 +1450,7 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
  * ratified contract's own `validateCaptureIndex` beside this one, so every
  * record is judged by that half whatever this half grades.
  */
-export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
+export function validateCaptureIndex({ index, hashOf, hashPinnedOf, repoRoot = process.cwd(), tier = "graded" } = {}) {
   const v = [];
   if (index === null || typeof index !== "object") {
     return ["the capture index is not an object"];
@@ -1453,7 +1498,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
         );
       } else byHash.set(record.sha256, cell);
     }
-    v.push(...validateCaptureRecord(record, { hashOf, tier }));
+    v.push(...validateCaptureRecord(record, { hashOf, hashPinnedOf, repoRoot, tier }));
   }
   return v;
 }
@@ -1486,7 +1531,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
 //
 // THE PLAN IS CHECKED BEFORE THE BROWSER LAUNCHES. A walk is long, expensive and
 // in S9d's case gated on a real 30-minute TTL; a cell name that contradicts its
-// own declaration, a screenshot path outside `evidence/`, two cells writing one
+// own declaration, a screenshot path outside the capture output root, two cells writing one
 // file — each is a refusal the index would issue at the END, and each is worth
 // issuing before the first click instead. Same reason the shutter check moved
 // ahead of the shutter.
@@ -1755,6 +1800,7 @@ export async function observeWalkCell({
   });
   const violations = validateCaptureRecord(record, {
     hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl),
+    repoRoot,
     tier: "audit",
   });
   if (violations.length > 0) {

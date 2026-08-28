@@ -53,7 +53,7 @@
  *   records; this flow writes its index beside its own screenshots, never to the
  *   canonical one. A run mints into the gitignored scratch directory named at
  *   `RUN_EVIDENCE_DIR` below, so a PASSING run leaves the tree clean and the
- *   committed reference set under `evidence/2824-s9k/` stays the frozen one.
+ *   reference set pinned in history stays the frozen one.
  * · "Exactly one job" is measured as "jobs naming this run" — every job whose id is
  *   the run id OR whose payload carries the run id, across every queue state,
  *   de-duplicated by job id — so a second dispatch under another id is seen. A
@@ -107,39 +107,40 @@ import {
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
-/**
- * THE FROZEN REFERENCE SET — committed, and never written by a run.
+/*
+ * THE FROZEN REFERENCE SET — pinned in history, and never written by a run.
  *
- * `evidence/2824-s9k/` holds the four graded PNGs and the provisional index this
- * PR posted as its proof. They are a REFERENCE: a reader compares a run against
- * them, and the hashes cited in the round comments stay true for as long as the
- * blobs do.
+ * The four graded PNGs and the provisional index this flow's PR posted as its
+ * proof are a REFERENCE: a reader compares a run against them. They are no
+ * longer carried in the working tree, so the reference is a HISTORICAL PERMALINK
+ * at the last commit that held them — an immutable pin, which is what a frozen
+ * set wanted to be all along. The hashes cited in the round comments stay true
+ * for as long as that commit does. It is a citation and nothing in this file
+ * reads it, so it is recorded here rather than bound to a dead constant:
+ *
+ *   https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2824-s9k
  */
-const REFERENCE_EVIDENCE_DIR = "evidence/2824-s9k";
 
 /**
- * WHERE A RUN ACTUALLY MINTS, and why it is not the directory above.
+ * WHERE A RUN MINTS.
  *
- * Writing the captures straight into the committed set made every single run —
- * a developer's, and the #2886 CI job's — rewrite four tracked PNGs and a tracked
- * index. That leaves a dirty tree after a PASSING run, and it means nothing ever
- * compares a run against the reference: the reference was simply overwritten by
- * whatever just happened.
+ * `test-results/` is the Playwright config's own `outputDir`: gitignored, already
+ * uploaded by the CI job that runs this flow, and already the root other suites
+ * mint into. A PASSING run therefore leaves `git status --porcelain` empty by
+ * construction rather than by a `.gitignore` line aimed at one directory.
  *
- * So a run mints into a SCRATCH directory that `.gitignore` covers, and the
- * committed set is refreshed only DELIBERATELY, by pointing this variable at it:
+ * It used to be a subdirectory of the committed reference set, because the S9h
+ * recorder refused any screenshot path outside the tracked proof tree. That rule
+ * now names this root instead (`CAPTURE_OUTPUT_ROOT` in the recorder): proof
+ * pictures do not belong in the product tree, so there is no tracked root left
+ * to be under.
  *
- *   E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+ * The env var still points a deliberate refresh anywhere:
  *
- * WHY THE SCRATCH PATH IS UNDER `evidence/` rather than under the config's
- * `test-results/` outputDir: the shipped S9h recorder REFUSES any screenshot path
- * outside `evidence/` (`screenshotPathViolation`), before the shutter, and that
- * rule is checked again by the validator that grades the record. A record is only
- * honest if its `screenshot` field names where the file really is, so the scratch
- * directory moves under the rule instead of the rule being widened for a test.
+ *   E2E_CHAT_HITL_EVIDENCE_DIR=test-results/my-refresh pnpm test:e2e:chat-hitl-held-turn
  */
 const RUN_EVIDENCE_DIR =
-  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? `${REFERENCE_EVIDENCE_DIR}/.run`;
+  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? "test-results/chat-hitl-held-turn-captures";
 
 /**
  * THE COLD-COMPILE BUDGET. On a cold dev route the FIRST `POST /api/chat` compiles
@@ -576,7 +577,7 @@ async function expectCardAtProducingSlot(
  * rather than being logged, because an evidence file nobody validated is worse than
  * no evidence file.
  *
- * The records go to `evidence/2824-s9k/`, NEVER to the canonical capture index:
+ * The records go to `RUN_EVIDENCE_DIR`, NEVER to the canonical capture index:
  * S9g alone adopts and canonicalizes AC-15 records, and `build: "development"`
  * labels every one of these as dev-runtime per the 2026-08-13 capture ruling.
  */

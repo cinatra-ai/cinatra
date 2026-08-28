@@ -24,9 +24,14 @@
 //   - a `pending` capture owes its decision controls; a `decided` capture owes
 //     their ABSENCE and a decided summary, so the easier requirement set cannot
 //     answer the harder claim;
-//   - the screenshot must exist where it says, be repo-relative, and hash to
-//     the recorded digest; and no two records may share a path or a digest, so
-//     one picture cannot furnish a whole index.
+//   - a LIVE screenshot must exist where it says, be repo-relative, and hash to
+//     the recorded digest; a PINNED one names a historical permalink into this
+//     repository at a full 40-char commit, and its bytes are read back out of
+//     history (`git cat-file`, one `git fetch --depth=1` per commit on a
+//     shallow checkout) and hashed to the SAME requirement -- a blob that
+//     cannot be produced is a finding, not a pass; and no two records may share
+//     a path or a digest either way, so one picture cannot furnish a whole
+//     index.
 //
 // THE HONEST LIMIT, stated because a gate that overclaims is worse than none:
 // these records are text, and text is forgeable. A person can hand-write a
@@ -41,6 +46,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,7 +80,7 @@ export const CAPTURE_INDEX_PATH = join(__dirname, "..", "chat-hitl-capture-index
  * audit index header said `scripts/audit/lib/chat-hitl-capture-recorder.mjs@1`,
  * and every one of the eight committed records said this. This value wins
  * because it is the one already stamped on real records, and the same string is
- * mirrored in each lane's own `evidence/<slice>/capture-records.json` twin --
+ * mirrored in each lane's own `capture-records.json` twin beside its captures --
  * changing the index copies would silently desynchronize them from evidence
  * this branch does not own. Identity here is PROSE: neither validator hashes it
  * or derives anything from it, so the choice is about which committed text stays
@@ -431,7 +437,7 @@ export function absenceInstanceViolations({ instance, kind, state }) {
  * requirement set for this state, arrived at by silence -- and silence did not
  * survive the third host, where the audit tier enumerates the states a record
  * may declare and refused the same card (the driven refusal is recorded in
- * `evidence/2791-s9g-conformance/capture-results.json`). Naming the token makes
+ * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json`). Naming the token makes
  * both halves read one vocabulary instead of one reading a state and the other
  * reading nothing.
  */
@@ -482,7 +488,7 @@ export const CANONICAL_CAPTURE_STATES = Object.freeze(["pending", "decided"]);
  * Two advisory records of that card already stand in the index (`run_card`,
  * `page_gate_region`); a third was DRIVEN on `chat_thread` and refused by the
  * audit tier, which enumerated one list for four kinds. The refusal is recorded
- * in `evidence/2791-s9g-conformance/capture-results.json`.
+ * in `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json`.
  *
  * IT ADDS NO ANCHOR. A kind's advisory requirement set is the set its two
  * ratified sets are BUILT from: a pending capture is that set plus the decision
@@ -628,16 +634,140 @@ export function sha256File(absPath) {
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
+ * A HISTORICAL PERMALINK into this repository, pinned to a full 40-char commit.
+ *
+ * Deliberately strict about the host, the repository and the sha length: a
+ * branch ref (`/blob/main/…`) moves under the claim and a short sha is
+ * ambiguous, so neither is a pin and neither is accepted here.
+ */
+export const PERMALINK_PREFIX = "https://github.com/cinatra-ai/cinatra/blob/";
+const PERMALINK = /^https:\/\/github\.com\/cinatra-ai\/cinatra\/blob\/[0-9a-f]{40}\/.+$/;
+export function isHistoricalPermalink(value) {
+  return typeof value === "string" && PERMALINK.test(value);
+}
+
+/**
+ * The in-repository path a permalink points at, or the value unchanged when it
+ * is already a repo-relative path. Lets a reader compare a pinned record and a
+ * live one on the SAME axis -- which is what the directory binding needs.
+ */
+export function repoPathOf(value) {
+  if (!isHistoricalPermalink(value)) return value;
+  return value.slice(PERMALINK_PREFIX.length).replace(/^[0-9a-f]{40}\//, "");
+}
+
+/** The commit and the path a pin names, or null when it is not a pin. */
+export function parsePermalink(value) {
+  if (!isHistoricalPermalink(value)) return null;
+  const rest = value.slice(PERMALINK_PREFIX.length);
+  return { sha: rest.slice(0, 40), path: rest.slice(41) };
+}
+
+// A PNG in this index runs to a few hundred KB; the ceiling is set well above
+// the largest committed capture so a legitimate blob is never truncated into a
+// hash mismatch, which would read as fraud rather than as a buffer limit.
+const PINNED_MAX_BUFFER = 64 * 1024 * 1024;
+
+// ONE fetch attempt per commit per process, and one read per (commit, path).
+// The index carries 111 records over 8 commits and both gates validate it, so
+// without these a run would spawn `git` hundreds of times and re-fetch the same
+// commit for every record that cites it.
+const pinnedFetchAttempts = new Set();
+const pinnedBytes = new Map();
+
+/**
+ * READ A PINNED ARTIFACT OUT OF THIS REPOSITORY'S OWN HISTORY.
+ *
+ * The picture left the working tree; it did NOT leave the repository. The blob
+ * is still reachable at the commit the permalink pins, so every check that used
+ * to read it off disk still runs -- it just reads `git cat-file` instead of
+ * `fs`. Nothing here is skipped and nothing is taken on trust.
+ *
+ * THE SHALLOW CHECKOUT. A CI job cloned at `fetch-depth: 1` does not have the
+ * pinned commit locally, so a miss is followed by ONE `git fetch --depth=1
+ * origin <sha>` for that commit and one retry. It is once per commit per
+ * process: a second record citing the same commit reuses the first attempt
+ * rather than re-fetching.
+ *
+ * A FAILURE IS A FINDING, NEVER A PASS. If the object cannot be produced --
+ * unreachable commit, deleted branch, no network, a path that is not in that
+ * tree -- the caller reports `capture/pinned-object-unreachable`. An
+ * unverifiable record is not a verified one.
+ *
+ * @param {string} url a pinned permalink
+ * @param {{repoRoot?: string, run?: Function, fetched?: Set<string>, cache?: Map<string, Buffer>}} [io]
+ * @returns {{ok: true, bytes: Buffer} | {ok: false, reason: string}}
+ */
+export function readPinnedArtifact(url, io = {}) {
+  const pin = parsePermalink(url);
+  if (!pin) return { ok: false, reason: `"${url}" is not a pinned permalink` };
+  const repoRoot = io.repoRoot ?? process.cwd();
+  const run = io.run ?? spawnSync;
+  const fetched = io.fetched ?? pinnedFetchAttempts;
+  const cache = io.cache ?? pinnedBytes;
+
+  const key = `${repoRoot}\u0000${pin.sha}:${pin.path}`;
+  const hit = cache.get(key);
+  if (hit) return { ok: true, bytes: hit };
+
+  const spec = `${pin.sha}:${pin.path}`;
+  const cat = () =>
+    run("git", ["cat-file", "blob", spec], { cwd: repoRoot, maxBuffer: PINNED_MAX_BUFFER });
+
+  let res = cat();
+  let fetchNote = "";
+  if (res?.status !== 0) {
+    // Not local. On a shallow clone that is expected, so ask for the ONE commit.
+    if (!fetched.has(pin.sha)) {
+      fetched.add(pin.sha);
+      const f = run("git", ["fetch", "--depth=1", "origin", pin.sha], { cwd: repoRoot });
+      if (f?.status !== 0) {
+        fetchNote = ` (fetch of ${pin.sha} failed: ${errText(f)})`;
+      }
+    } else {
+      fetchNote = ` (a fetch of ${pin.sha} was already attempted in this run)`;
+    }
+    res = cat();
+  }
+  if (res?.status !== 0 || !res?.stdout) {
+    return {
+      ok: false,
+      reason: `git cat-file could not produce ${spec}: ${errText(res)}${fetchNote}`,
+    };
+  }
+  const bytes = Buffer.isBuffer(res.stdout) ? res.stdout : Buffer.from(res.stdout);
+  cache.set(key, bytes);
+  return { ok: true, bytes };
+}
+
+function errText(res) {
+  if (!res) return "no result";
+  if (res.error) return String(res.error.message ?? res.error);
+  const err = res.stderr ? Buffer.from(res.stderr).toString("utf8").trim() : "";
+  return err || `exit ${res.status}`;
+}
+
+/** The sha256 of a pinned artifact, read from history. */
+export function sha256Pinned(url, io = {}) {
+  const read = io.readPinned ?? readPinnedArtifact;
+  const got = read(url, io);
+  if (!got.ok) return got;
+  return { ok: true, sha256: createHash("sha256").update(got.bytes).digest("hex") };
+}
+
+/**
  * Validate ONE record against its own claim.
  *
  * @param {object} record
- * @param {{repoRoot?: string, fileExists?: (p: string) => boolean, hashFile?: (p: string) => string}} [io]
+ * @param {{repoRoot?: string, fileExists?: (p: string) => boolean, hashFile?: (p: string) => string,
+ *          hashPinned?: (url: string, io: object) => object, readPinned?: Function, run?: Function}} [io]
  * @returns {Array<{code: string, detail: string}>}
  */
 export function validateCaptureRecord(record, io = {}) {
   const repoRoot = io.repoRoot ?? process.cwd();
   const fileExists = io.fileExists ?? existsSync;
   const hashFile = io.hashFile ?? sha256File;
+  const hashPinned = io.hashPinned ?? sha256Pinned;
   const v = [];
   const push = (code, detail) => v.push({ code, detail });
 
@@ -738,9 +868,41 @@ export function validateCaptureRecord(record, io = {}) {
   }
 
   // --- the screenshot ------------------------------------------------------
+  //
+  // TWO SHAPES, and only two. A LIVE record names a repo-relative path a run
+  // just wrote, and it is stat-ed and re-hashed here: the bytes on disk must be
+  // the bytes the record claims. A PINNED record names a HISTORICAL PERMALINK
+  // into this repository's own history, which is what a record becomes once its
+  // picture leaves the working tree.
+  //
+  // THE SAME RULE, A DIFFERENT SOURCE. The picture left the working tree; it did
+  // NOT leave the repository. A pinned record's bytes are read back out of
+  // history with `git cat-file` at the commit the permalink names, and the
+  // sha256 is RE-DERIVED from them and compared exactly as a live record's is.
+  // Nothing is skipped: a blob that cannot be produced is its own finding
+  // (`capture/pinned-object-unreachable`), never a pass.
   const shot = record.screenshot;
   if (typeof shot !== "string" || shot === "") {
     push("record/no-screenshot", "the record names no screenshot");
+  } else if (isHistoricalPermalink(shot)) {
+    if (!HEX64.test(String(record.sha256 ?? ""))) {
+      push("record/sha256-malformed", `"${record.sha256}" is not a sha256 digest`);
+    } else {
+      const got = hashPinned(shot, { repoRoot, readPinned: io.readPinned, run: io.run });
+      if (!got.ok) {
+        push("capture/pinned-object-unreachable", got.reason);
+      } else if (got.sha256 !== record.sha256) {
+        push(
+          "record/sha256-mismatch",
+          `"${shot}" hashes to ${got.sha256}, the record says ${record.sha256}`,
+        );
+      }
+    }
+  } else if (shot.startsWith("http://") || shot.startsWith("https://")) {
+    push(
+      "record/screenshot-not-a-pinned-permalink",
+      `"${shot}" is a URL but not a ${PERMALINK_PREFIX}<40-char sha>/ permalink into this repository`,
+    );
   } else if (shot.startsWith("/") || shot.includes("..")) {
     push(
       "record/screenshot-not-repo-relative",
@@ -909,7 +1071,7 @@ export function bindEvidenceCells(citedCells, indexResult, options = {}) {
     const record = indexResult.byCell.get(claim.cell);
     if (!record) {
       out.push({
-        code: "evidence/unbound-cell",
+        code: "capture/unbound-cell",
         cell: claim.cell,
         detail: `${cited.citedBy} cites a "${claim.host}" capture that no index record answers -- an unindexed screenshot counts as zero`,
       });
@@ -917,7 +1079,7 @@ export function bindEvidenceCells(citedCells, indexResult, options = {}) {
     }
     if (invalidCells.has(claim.cell)) {
       out.push({
-        code: "evidence/invalid-record",
+        code: "capture/invalid-record",
         cell: claim.cell,
         detail: `${cited.citedBy} cites a record that does not validate (see the record findings above)`,
       });

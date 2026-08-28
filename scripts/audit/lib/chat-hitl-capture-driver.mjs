@@ -21,7 +21,7 @@
  * USAGE, from a checkout with a running app and a signed-in storage state:
  *
  *   node scripts/audit/lib/chat-hitl-capture-driver.mjs \
- *     --plan evidence/<slice>/capture-plan.json \
+ *     --plan test-results/<slice>/capture-plan.json \
  *     --out  scripts/ci/chat-hitl-capture-index.json   # the default
  *
  * The plan is a JSON array of cells:

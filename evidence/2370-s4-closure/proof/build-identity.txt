@@ -1,6 +1,0 @@
-sha=59d3164086a60f83bd6d81dbd5b3d4b6cf7bb94d
-BUILD_ID=vu4XdHaOOtpvSAnRO31ly
-node=v24.19.0
-pnpm=11.1.2
-next=
-next=16.2.10 (from next start banner)

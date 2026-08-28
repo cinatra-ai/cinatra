@@ -15,7 +15,7 @@
  *      the action that performs it.
  *
  * There is no DOM runner in this workspace (see setup/key/__tests__), so the
- * RENDERED states are proven by the live walk in evidence/2093-s6-setup; what
+ * RENDERED states are proven by the live walk in https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2093-s6-setup; what
  * is pinned here is the behaviour those renders read from.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";

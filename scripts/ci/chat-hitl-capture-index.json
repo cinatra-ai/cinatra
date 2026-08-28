@@ -35,19 +35,19 @@
     "from the SAME run: the skills question and the decided skills, in the chat AND on the run",
     "page, light and dark. The two R6 cells were first graded a FAIL on the settled rail entry",
     "and have since been RE-SHOT, on their own real run, on the commit that fixes it; they are",
-    "graded PASS from the new pixels in evidence/2790-s9f-host-parity/PLAN-WALK.md) and the S9d",
+    "graded PASS from the new pixels in https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/PLAN-WALK.md) and the S9d",
     "SCHEDULE group (S9d-C1 / C2 / C3 / C5 / C6) -- each record carries its own `note`:",
     "",
-    "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), evidence/2855-settled-outcome. A1 is the gate",
+    "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2855-settled-outcome. A1 is the gate",
     "  region on the review page. A3 / A4 / A5 are chat_thread: a real gate PENDING, the same card",
     "  SETTLED on its own floor naming its outcome and its decider with no Refresh beside it, and",
     "  one that LAPSED rather than being decided.",
     "",
-    "  B1 / B2 / B3 / B4 - cinatra#2852 (PR #2863), evidence/2852-before-after. The re-shot chip",
+    "  B1 / B2 / B3 / B4 - cinatra#2852 (PR #2863), https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2852-before-after. The re-shot chip",
     "  row: every suggestion accepted, then one chip dismissed, with the count line in the decision",
     "  floor in both -- B1 / B2 on the page gate region, B3 / B4 in a real transcript.",
     "",
-    "  C1 / C2 / C3 - site_widget - cinatra#2754 (PR #2870), evidence/2754-island-wire. The card",
+    "  C1 / C2 / C3 - site_widget - cinatra#2754 (PR #2870), https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2754-island-wire. The card",
     "  in the embedded conversation column on a genuinely cross-site host page, the same card",
     "  with the island expanded, and a NEGATIVE CONTROL with one character of the island",
     "  credential flipped. Each of the three was validated by capture-record-contract.mjs and came",
@@ -58,7 +58,7 @@
     "is not empty, and it has not been chat_thread-only since the C-series arrived.",
     "",
     "MIND THE C1 / C2 NAMES. The site_widget C1 and C2 here are NOT the chat_thread C1 and C2 the",
-    "acceptance manifest cites from evidence/2573-s7-visuals-lane. Those two cells are still",
+    "acceptance manifest cites from https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2573-s7-visuals-lane. Those two cells are still",
     "UNBOUND and the gate is still honestly red for them. The S7 run observed THREE of the four",
     "anchors a chat_thread record owes -- the /chat URL class, data-lifecycle-card-host=chat_thread,",
     "and the card root, pending and decided respectively -- and never looked for",
@@ -83,7 +83,7 @@
     "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
     "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all.",
     "",
-    "THE P-GROUP - cinatra#2904, evidence/2904-settled-gate-review-page. FIVE records on page_gate_region,",
+    "THE P-GROUP - cinatra#2904, https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page. FIVE records on page_gate_region,",
     "all of them the review page's own gate region at /agents/<vendor>/<package>/<runId>/review/<taskId>.",
     "P1 is the PENDING control: a gate this lane produced through materializeBlogPostBodyArtifact -> the",
     "produced-event outbox -> the app's own review-orchestration sweep, with its live decision floor. P2 and",
@@ -115,7 +115,7 @@
     "",
     "THE SCHEDULE GROUP IS NOT HERE - cinatra#2788 (PR #2939, S9d), and its absence is the honest",
     "state rather than an omission. This file used to carry TEN records of the schedule card from",
-    "S9d round 1 (evidence/2788-s9d-schedule-card): A1 / A2 and B1 / B2 in a transcript, R1 / R2 on",
+    "S9d round 1 (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-schedule-card): A1 / A2 and B1 / B2 in a transcript, R1 / R2 on",
     "the run page, P1 / P2 on the review page, and E1 / E2 - two records whose cell names carried",
     "`standin`, because that round could not reach the expired phase through the server and stood in",
     "the RESOLVE RESPONSE. All ten are RETIRED here, for two separate reasons that both stand on",
@@ -132,7 +132,7 @@
     "    names, and a stand-in is not acceptable evidence at any tier.",
     "",
     "WHAT REPLACES THEM IS NOW RECORDED. The rework's walk was driven THROUGH THIS RECORDER -",
-    "`node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json",
+    "`node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/capture-walk.json",
     "--merge` - over the shipped product: a schedule stated into the /chat composer, answered by the",
     "shipped `schedule_proposal_render` producer, one press of Confirm, the run page's schedule step",
     "opened by a real press of the rail row, and the expired reading after the shipped 30-minute window",
@@ -143,7 +143,7 @@
     "stated rather than staged: the schedule is armed and has not fired, so the run has produced",
     "nothing for anybody to review - see that round's TIMELINE.md.",
     "",
-    "THE WALK IS A COMMITTED PLAN. evidence/2788-s9d-rework/capture-walk.json is that same path written",
+    "THE WALK IS A COMMITTED PLAN. https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/capture-walk.json is that same path written",
     "as a plan this driver executes (`--walk`), with the ten cells it produces and the ten cells above",
     "named as the ones it retires. It closes the gap that made the earlier round unrecordable:",
     "`driveCapture` knows one shape of capture - open a URL, wait, shoot - and C1 and C2 are ONE card",
@@ -174,7 +174,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5/review/lifecycle-review%3A28c4a63d1b6068e89bdd57f6c24f35ca3c2c47d928531997d2c2b6355b94a8ac",
-      "screenshot": "evidence/2855-settled-outcome/captures/A1__review-card__page_gate_region__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2855-settled-outcome/captures/A1__review-card__page_gate_region__pending.png",
       "sha256": "80bda0f5d21c0a25b6d30f9429d63d377d13e9d74cd36349c98a073841c59960",
       "assertions": [
         {
@@ -229,7 +229,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/settled-outcome-capture-b",
-      "screenshot": "evidence/2855-settled-outcome/captures/A3__review-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2855-settled-outcome/captures/A3__review-card__chat_thread__pending.png",
       "sha256": "2dbc34ed6f397c5659dbcd18165fe88d5268d6dfafb227eabba545be11cc87af",
       "assertions": [
         {
@@ -289,7 +289,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/settled-outcome-capture-b",
-      "screenshot": "evidence/2855-settled-outcome/captures/A4__review-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2855-settled-outcome/captures/A4__review-card__chat_thread__decided.png",
       "sha256": "6fc261f2ac5b70eaf9cba17d4e4f51158e2b9802902592a2324f84b1092f8eff",
       "assertions": [
         {
@@ -349,7 +349,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/settled-outcome-capture-c",
-      "screenshot": "evidence/2855-settled-outcome/captures/A5__review-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2855-settled-outcome/captures/A5__review-card__chat_thread__decided.png",
       "sha256": "5326a8075890a11a06033b95c385510e140de0d62bfd8082012a059588668561",
       "assertions": [
         {
@@ -409,7 +409,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
-      "screenshot": "evidence/2852-before-after/captures/B1__review-card__page_gate_region__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2852-before-after/captures/B1__review-card__page_gate_region__pending.png",
       "sha256": "b92701b75ed185036257c0f0d2f7a41fd09cc60a7087fe473dc2321a7c30415d",
       "assertions": [
         {
@@ -514,7 +514,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
-      "screenshot": "evidence/2852-before-after/captures/B2__review-card__page_gate_region__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2852-before-after/captures/B2__review-card__page_gate_region__pending.png",
       "sha256": "1e7aa38e54c0294a2b458dc871d58f3be1a6453da7028867fd54106192d22591",
       "assertions": [
         {
@@ -619,7 +619,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
-      "screenshot": "evidence/2852-before-after/captures/B3__review-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2852-before-after/captures/B3__review-card__chat_thread__pending.png",
       "sha256": "e37f4c9cd4716dffc99dcbb19f8dfff848b4c6a0eba7ceae894a8da1c7aa1d47",
       "assertions": [
         {
@@ -729,7 +729,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
-      "screenshot": "evidence/2852-before-after/captures/B4__review-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2852-before-after/captures/B4__review-card__chat_thread__pending.png",
       "sha256": "054622e2d885a66c5dbb84d080c9fcb832928315d242223b8647cf58ab3b09d2",
       "assertions": [
         {
@@ -840,7 +840,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2754-island-wire/captures/C1__review-card__site_widget__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2754-island-wire/captures/C1__review-card__site_widget__pending.png",
       "sha256": "8c129c24a727cd03e1706ade60e1960c456a7de5006ca6572f8affdb00397094",
       "assertions": [
         {
@@ -906,7 +906,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2754-island-wire/captures/C2__review-card__site_widget__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2754-island-wire/captures/C2__review-card__site_widget__pending.png",
       "sha256": "69e4d235d786dd0f129b32caa601d3356a29fee9c31fa85e8e7098baf9a678fa",
       "assertions": [
         {
@@ -972,7 +972,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2754-island-wire/captures/C3__review-card__site_widget__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2754-island-wire/captures/C3__review-card__site_widget__pending.png",
       "sha256": "524da8a0245f241988da20d1cafae2920594c27669a5e793ff07e66db52e2b68",
       "assertions": [
         {
@@ -1037,7 +1037,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
-      "screenshot": "evidence/2841-v-redraw/captures/V1__recommendation-card__run_card__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V1__recommendation-card__run_card__held.png",
       "sha256": "6357b228aa6f5248bb730d7d460478586f68d35505682dc8fd4c0aca34e74d4e",
       "assertions": [
         {
@@ -1177,7 +1177,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
-      "screenshot": "evidence/2841-v-redraw/captures/V2__recommendation-card__run_card__held__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V2__recommendation-card__run_card__held__dark.png",
       "sha256": "a73f28de395a783289eeb05656c3dbded3396a118602e6acede4b93224a46e56",
       "assertions": [
         {
@@ -1317,7 +1317,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
-      "screenshot": "evidence/2841-v-redraw/captures/V3__recommendation-card__run_card__held__mid-decision.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V3__recommendation-card__run_card__held__mid-decision.png",
       "sha256": "e54e170a76ffd8e857288ffe569634b63ab1ce4e4f83daff34e087a2f54406db",
       "assertions": [
         {
@@ -1457,7 +1457,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
-      "screenshot": "evidence/2841-v-redraw/captures/V4__recommendation-card__run_card__held__adjust-panel.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V4__recommendation-card__run_card__held__adjust-panel.png",
       "sha256": "e4e9db6065674db1d47ab0cb92aabed440fece0ade8635f427094551d4c47f1a",
       "assertions": [
         {
@@ -1597,7 +1597,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
-      "screenshot": "evidence/2841-v-redraw/captures/V5__recommendation-card__run_card__settled.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V5__recommendation-card__run_card__settled.png",
       "sha256": "6fa953ea0421db932ce6d11dcc4dc5ca4d7f335732b304632fc3539d438d54ba",
       "assertions": [
         {
@@ -1737,7 +1737,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
-      "screenshot": "evidence/2841-v-redraw/captures/V6__recommendation-card__run_card__settled__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V6__recommendation-card__run_card__settled__dark.png",
       "sha256": "f6b8161902c15637a8d017e0a914cdf6e6e628b7dfe540f3da5900cbc79ccebf",
       "assertions": [
         {
@@ -1877,7 +1877,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
-      "screenshot": "evidence/2841-v-redraw/captures/V7__recommendation-card__run_card__held__read-only.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V7__recommendation-card__run_card__held__read-only.png",
       "sha256": "f0bd880b0322c0de9a0250616306ce07ef2b77befca9bf3069b53fd9128f9cfa",
       "assertions": [
         {
@@ -2017,7 +2017,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
-      "screenshot": "evidence/2841-v-redraw/captures/V8__recommendation-card__run_card__held__trigger-position.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V8__recommendation-card__run_card__held__trigger-position.png",
       "sha256": "524dc562232a0b9bc0ca2c6eaf331b08da22bb2199d003e9421b49d1330704a3",
       "assertions": [
         {
@@ -2157,7 +2157,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
-      "screenshot": "evidence/2841-v-redraw/captures/V9__recommendation-card__run_card__decided__page.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2841-v-redraw/captures/V9__recommendation-card__run_card__decided__page.png",
       "sha256": "8e11cd071d5f2b68147c983c444c4ed0cd233b13adedfbd0edd0c250df76a5d2",
       "assertions": [
         {
@@ -2296,7 +2296,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7361390f-450f-4d1a-b82b-7f2df1184d2e",
       "build": "development",
-      "screenshot": "evidence/2825-s9l-survival/captures/D1__review-card__chat_thread__slack-layout__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2825-s9l-survival/captures/D1__review-card__chat_thread__slack-layout__held.png",
       "sha256": "0395564933141b5f394f8349ce79210516b9b68fa66ec329a8d0ed30aa23e86c",
       "capturedAt": "2026-08-20T22:55:47.508Z",
       "assertions": [
@@ -2365,7 +2365,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/34b05ce8-3d52-4b3c-85b0-786c11b56684",
       "build": "development",
-      "screenshot": "evidence/2825-s9l-survival/captures/D2__review-card__chat_thread__chatgpt-layout__error-turn__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2825-s9l-survival/captures/D2__review-card__chat_thread__chatgpt-layout__error-turn__held.png",
       "sha256": "4574e4ac446d47dd21a122f4bbc6c70211a5878771e1915410e04b7c00663c91",
       "capturedAt": "2026-08-20T22:56:07.682Z",
       "assertions": [
@@ -2434,7 +2434,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ed1582d4-5829-4ed0-9015-ac3885b2d656",
       "build": "development",
-      "screenshot": "evidence/2825-s9l-survival/captures/D3__review-card__chat_thread__slack-layout__error-turn__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2825-s9l-survival/captures/D3__review-card__chat_thread__slack-layout__error-turn__held.png",
       "sha256": "959c6528f0ef8bf3fb9da58f92fcbaaa5b422f3483a11221fdffbd23bc9b92f5",
       "capturedAt": "2026-08-20T22:56:29.507Z",
       "assertions": [
@@ -2504,7 +2504,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
-      "screenshot": "evidence/2865-section-i-hierarchy/captures/I1__review-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2865-section-i-hierarchy/captures/I1__review-card__chat_thread__pending.png",
       "sha256": "3457e80244c2b2b7f9301c389ea8c09a59cecbacab4e8321ca5beb378dd2b22d",
       "assertions": [
         {
@@ -2569,7 +2569,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
-      "screenshot": "evidence/2865-section-i-hierarchy/captures/I2__review-card__chat_thread__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2865-section-i-hierarchy/captures/I2__review-card__chat_thread__pending__dark.png",
       "sha256": "d009107356501f6a8f5e835177f6212861275cf9b7dba81e36be008c824e6324",
       "assertions": [
         {
@@ -2634,7 +2634,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
-      "screenshot": "evidence/2865-section-i-hierarchy/captures/I3__review-card__chat_thread__pending__composer-bound.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2865-section-i-hierarchy/captures/I3__review-card__chat_thread__pending__composer-bound.png",
       "sha256": "8303cc90015b1b15c815e452a345fd237f08f06da15134d15e59d7e60e731fcc",
       "assertions": [
         {
@@ -2700,7 +2700,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2865-section-i-hierarchy/captures/I4__review-card__site_widget__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2865-section-i-hierarchy/captures/I4__review-card__site_widget__pending.png",
       "sha256": "9a355744773784d740cfa269edc40193e603f3cddfd6853fd9bc61c669083ebe",
       "assertions": [
         {
@@ -2786,7 +2786,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2865-section-i-hierarchy/captures/I5__review-card__site_widget__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2865-section-i-hierarchy/captures/I5__review-card__site_widget__pending__dark.png",
       "sha256": "b5d444bf83cb70d33400408dfb3b8fc41b61a2627f1782adeaad484030b0fdd4",
       "assertions": [
         {
@@ -2870,7 +2870,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/s9g-review-gate-chat-cell",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G1__review-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G1__review-card__chat_thread__pending.png",
       "sha256": "2c90b11b97cce4414670b589636cdd5f0a7d0094b961d1cb3e3bc3a03ba7a4e0",
       "capturedAt": "2026-08-21T23:30:52.496Z",
       "assertions": [
@@ -2941,7 +2941,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/s9g-review-gate-chat-cell",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G2__review-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G2__review-card__chat_thread__decided.png",
       "sha256": "09298b101316128726857d09eba178104c7a1c25abd77d6ed8fbfde5d62a61bc",
       "capturedAt": "2026-08-21T23:38:14.873Z",
       "assertions": [
@@ -3021,7 +3021,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5200e7a2-ae0b-4d36-9a32-e3f2535e9d4d/review/lifecycle-review%3Ac398a9ba2af728c52b895cd40e9549523c079a6b2d8424dff5698f3cc01e99a5",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G3__review-card__page_gate_region__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G3__review-card__page_gate_region__pending.png",
       "sha256": "7ffbab79c03ce4407a74862247474411ca51f228200f8601ac96138b0f9b63c7",
       "capturedAt": "2026-08-21T23:31:20.163Z",
       "assertions": [
@@ -3084,7 +3084,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G5__audit-card__run_card__advisory.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G5__audit-card__run_card__advisory.png",
       "sha256": "b05dc3b1a1fe60bcc9e360b0c581376823b53b2dd6518ec6020e3d53f7f09faa",
       "capturedAt": "2026-08-21T23:31:48.642Z",
       "assertions": [
@@ -3138,7 +3138,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005/review/lifecycle-review%3Arepair%3A0db50f40-4a20-4e82-ba2c-14b40c16e286%3A1?view=verification",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G6__audit-card__page_gate_region__advisory.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G6__audit-card__page_gate_region__advisory.png",
       "sha256": "7441c9c7c65b8945c908248d1d7f6d0aa0361523c187f174077c6c380bb1305c",
       "capturedAt": "2026-08-21T23:37:36.495Z",
       "assertions": [
@@ -3192,7 +3192,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b752a702-65b8-48a5-bb16-e281ba989a3e",
       "build": "development",
-      "screenshot": "evidence/2791-s9g-conformance/captures/G8__recommendation-card__run_card__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/captures/G8__recommendation-card__run_card__held.png",
       "sha256": "1bd66ee03c1983a4be00d842337c4f01c0d0cffd67c7fc53b4485dc6d1f4f957",
       "capturedAt": "2026-08-21T23:43:42.239Z",
       "assertions": [
@@ -3277,7 +3277,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
-      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-1__recommendation-hold__chat_thread__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/S9b-1__recommendation-hold__chat_thread__held.png",
       "sha256": "e220d43a4065cb339be473252d4cae4b4521d57e13a6da4b0c3b6965650ca1fb",
       "assertions": [
         {
@@ -3342,7 +3342,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
-      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-2__recommendation-hold__chat_thread__held__root.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/S9b-2__recommendation-hold__chat_thread__held__root.png",
       "sha256": "165869921db845bd6111ef7092b7bc8f539e3eb8e37ca030bec014dc2ec9fb57",
       "assertions": [
         {
@@ -3407,7 +3407,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
-      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-2b__recommendation-hold__chat_thread__held__shaped.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/S9b-2b__recommendation-hold__chat_thread__held__shaped.png",
       "sha256": "b1a41cf62b9c77820c201aa95cdf41728ffeaf31ead340da9457e9baa1f2e0ca",
       "assertions": [
         {
@@ -3472,7 +3472,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
-      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-3__recommendation-hold__chat_thread__decided__confirmed.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/S9b-3__recommendation-hold__chat_thread__decided__confirmed.png",
       "sha256": "31fe769c723dca7c7fd364f890da452a8f3c65dcf6286433cd2a8c532cd9e30d",
       "assertions": [
         {
@@ -3537,7 +3537,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/f8c15f63-a50d-42b1-b7a6-a8407b2f21ff",
-      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-4__recommendation-hold__chat_thread__decided__skipped.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/S9b-4__recommendation-hold__chat_thread__decided__skipped.png",
       "sha256": "3edd2640f5c7401e2c65c6e47ae9e49283eb7cc79199ee00dd049b59701074f3",
       "assertions": [
         {
@@ -3601,7 +3601,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/32bf900f-c0ba-4ec0-bb18-a09e1788886b",
       "build": "development",
-      "screenshot": "evidence/2893-zero-chip-settled/captures/C0__recommendation-card__run_card__held__per-chip-control.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2893-zero-chip-settled/captures/C0__recommendation-card__run_card__held__per-chip-control.png",
       "sha256": "3ca674d7b02432833c40945bfb72e1fa1b4d5372d39913b12cf3b5856b7b8681",
       "capturedAt": "2026-08-22T09:01:04.774Z",
       "assertions": [
@@ -3712,7 +3712,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/32bf900f-c0ba-4ec0-bb18-a09e1788886b",
       "build": "development",
-      "screenshot": "evidence/2893-zero-chip-settled/captures/C1__recommendation-card__run_card__settled__per-chip-control.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2893-zero-chip-settled/captures/C1__recommendation-card__run_card__settled__per-chip-control.png",
       "sha256": "ca9d0b3644500297b83d2d49555b1e38a093239cfd6017d9bfdd2971b36e58b0",
       "capturedAt": "2026-08-22T09:02:15.893Z",
       "assertions": [
@@ -3824,7 +3824,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5b85cff4-8da7-4725-a2d8-4b5288b28c75",
       "build": "development",
-      "screenshot": "evidence/2893-zero-chip-settled/captures/C3__recommendation-card__run_card__settled__zero-chip.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2893-zero-chip-settled/captures/C3__recommendation-card__run_card__settled__zero-chip.png",
       "sha256": "ac8753253a1560a81f344fad41bd5e406e405c811298ac802e57139678539e5e",
       "capturedAt": "2026-08-22T09:03:33.094Z",
       "assertions": [
@@ -3936,7 +3936,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5b85cff4-8da7-4725-a2d8-4b5288b28c75",
       "build": "development",
-      "screenshot": "evidence/2893-zero-chip-settled/captures/C4__recommendation-card__run_card__settled__zero-chip__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2893-zero-chip-settled/captures/C4__recommendation-card__run_card__settled__zero-chip__dark.png",
       "sha256": "c59bfba6fb273bde1809d42a93a9917594d684ba8c24315f629e5996ce36842d",
       "capturedAt": "2026-08-22T09:03:39.334Z",
       "assertions": [
@@ -4048,7 +4048,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/94265eef-5a02-4e07-940a-8d0cf705fa3d/review/lifecycle-review%3A8756e5927f75e9c4628ea297a76f8272e63d66f0505f3ce23471a5d35c1ef135",
       "build": "development",
-      "screenshot": "evidence/2904-settled-gate-review-page/captures/P1__review-card__page_gate_region__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page/captures/P1__review-card__page_gate_region__pending.png",
       "sha256": "553f5bb46b5eeabf548b0dd01833dff9d2b21a56bbc34b43effc8504ba58c773",
       "capturedAt": "2026-08-22T19:00:00.001Z",
       "assertions": [
@@ -4130,7 +4130,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cafdc215-0467-4b9e-8c1c-b4c50285fe4c/review/lifecycle-review%3A8a5e610bc0e53f22e5a3b82744a7b6a5b08ab37fa484bbe75d3c3e2069cb47cb",
       "build": "development",
-      "screenshot": "evidence/2904-settled-gate-review-page/captures/P2__review-card__page_gate_region__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page/captures/P2__review-card__page_gate_region__decided.png",
       "sha256": "0c35f653a2e678b24361c05e7095dbe3fa1b7729300315fbc86f3ac3dbda587a",
       "capturedAt": "2026-08-22T19:00:43.713Z",
       "assertions": [
@@ -4239,7 +4239,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cafdc215-0467-4b9e-8c1c-b4c50285fe4c/review/lifecycle-review%3A8a5e610bc0e53f22e5a3b82744a7b6a5b08ab37fa484bbe75d3c3e2069cb47cb",
       "build": "development",
-      "screenshot": "evidence/2904-settled-gate-review-page/captures/P3__review-card__page_gate_region__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page/captures/P3__review-card__page_gate_region__decided__dark.png",
       "sha256": "28cd0db4d050cae89c80b9701802840c41a8321e0d33a76b1ea80be331a8b606",
       "capturedAt": "2026-08-22T19:00:58.784Z",
       "assertions": [
@@ -4348,7 +4348,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3044501c-ddf9-4ba2-8f02-58fd16906045/review/lifecycle-review%3A42f0cad8b460992d382d5d807665deef84c1adfd077b34f3e184faa25b376fca",
       "build": "development",
-      "screenshot": "evidence/2904-settled-gate-review-page/captures/P4__review-card__page_gate_region__decided__rejected.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page/captures/P4__review-card__page_gate_region__decided__rejected.png",
       "sha256": "1e5bc450af435e64d125a9552f946481eaea427ffcd16c038a0ed3090cb8ef98",
       "capturedAt": "2026-08-22T19:01:43.458Z",
       "assertions": [
@@ -4457,7 +4457,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3044501c-ddf9-4ba2-8f02-58fd16906045/review/lifecycle-review%3A42f0cad8b460992d382d5d807665deef84c1adfd077b34f3e184faa25b376fca",
       "build": "development",
-      "screenshot": "evidence/2904-settled-gate-review-page/captures/P5__review-card__page_gate_region__decided__rejected__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page/captures/P5__review-card__page_gate_region__decided__rejected__dark.png",
       "sha256": "6bc0933746f4672f116d75ee4592b34cfda537dd58ca684aab929afcda660ac2",
       "capturedAt": "2026-08-22T19:01:58.351Z",
       "assertions": [
@@ -4566,7 +4566,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
       "sha256": "064fbd044500cf0d50bc46ca31aaea48a1ec2a64b653c5fc1f2c9a5b0b4207dc",
       "capturedAt": "2026-08-24T17:21:14.338Z",
       "assertions": [
@@ -4637,7 +4637,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
       "sha256": "3d960614b45231411efdf971d366a88cdfb3fb902bb2a9e2392de21531d77aa3",
       "capturedAt": "2026-08-24T17:21:18.067Z",
       "assertions": [
@@ -4708,7 +4708,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
       "sha256": "a56b17646f5b896cb31237ce4424b47584cf60ac4e71097e7a7dc34b2cd41eaf",
       "capturedAt": "2026-08-24T17:21:18.434Z",
       "assertions": [
@@ -4788,7 +4788,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
       "sha256": "65a3d02ad9b46131b8ef75e9e176a78f3f9a373776d60117414fca4f1f8d63af",
       "capturedAt": "2026-08-24T17:21:22.510Z",
       "assertions": [
@@ -4868,7 +4868,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
       "sha256": "ddd1973a5607cb2281606623ee3bae19328354a7844ee1521214a4e75fb31b7f",
       "capturedAt": "2026-08-24T15:23:49.729Z",
       "assertions": [
@@ -4939,7 +4939,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
       "sha256": "43cbeb53bd69d9afae925dbcd0e1f8ecce1938f39e1c15979cc8bf8165c529d2",
       "capturedAt": "2026-08-24T15:23:52.428Z",
       "assertions": [
@@ -5010,7 +5010,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
       "build": "development",
-      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/080a24f603f24ac3c92ed1c95656bd896959fa6b/evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided.png",
       "sha256": "f38260425b318bc4e6050edb14c3f92aaf5e6c176a31924cc21379f31d3aff72",
       "capturedAt": "2026-08-25T16:27:28.976Z",
       "assertions": [
@@ -5082,7 +5082,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
       "build": "development",
-      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/080a24f603f24ac3c92ed1c95656bd896959fa6b/evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided__dark.png",
       "sha256": "4378036ebc41ccd62dda54126cd416f36c5a7864d23d88391c34a835381c28a9",
       "capturedAt": "2026-08-25T16:27:45.065Z",
       "assertions": [
@@ -5154,7 +5154,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
       "sha256": "e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f",
       "capturedAt": "2026-08-24T17:43:31.059Z",
       "assertions": [
@@ -5234,7 +5234,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
       "sha256": "ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e",
       "capturedAt": "2026-08-24T17:43:36.383Z",
       "assertions": [
@@ -5316,7 +5316,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/H1__recommendation-card__site_widget__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/H1__recommendation-card__site_widget__held.png",
       "sha256": "d198d11d88ae15487e29c90831f1c9975143b4ca17126262bd5fcf7704dd14cc",
       "assertions": [
         {
@@ -5392,7 +5392,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/H2__recommendation-card__site_widget__held__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/H2__recommendation-card__site_widget__held__dark.png",
       "sha256": "9cae507d28b2815f8eec24994e0bf5e4f2110b7032b361bad892227bf7dae3f8",
       "assertions": [
         {
@@ -5468,7 +5468,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/H3__recommendation-card__site_widget__held__mid-decision.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/H3__recommendation-card__site_widget__held__mid-decision.png",
       "sha256": "52140e89061dc8634c30a09920202b6f7ef799a4e812cba6cb62ac2becda5b22",
       "assertions": [
         {
@@ -5544,7 +5544,7 @@
       "declaredState": "decided",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
       "sha256": "51baf67a688d3f7b3805e2d1ce7bb1ad1dbba90eb34f2b25600173594f5d656a",
       "assertions": [
         {
@@ -5619,7 +5619,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R2__recommendation-card__page_gate_region__decided__above-gate.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R2__recommendation-card__page_gate_region__decided__above-gate.png",
       "sha256": "be6abcbc8b2b3efc1d27de3671c1ff29b1001b8c4e455da72f463544db6f31d2",
       "assertions": [
         {
@@ -5804,7 +5804,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R4__recommendation-card__page_gate_region__decided__above-gate__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R4__recommendation-card__page_gate_region__decided__above-gate__dark.png",
       "sha256": "c9170b63bd630b22f95db19ed0f2cba7556a69f047dc72208b13f300559e86d1",
       "assertions": [
         {
@@ -5990,7 +5990,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
       "sha256": "37482bf668e35da6e8067eb1e37441276d8a86918f03b09639de64980c323400",
       "assertions": [
         {
@@ -6066,7 +6066,7 @@
       "declaredState": "pending",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
       "sha256": "a25587ed998819f88717666f6ea5fa29abdbd6074b4473c8c5f822c8e8f0a175",
       "assertions": [
         {
@@ -6142,7 +6142,7 @@
       "declaredState": "decided",
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
       "sha256": "3ed2e53450e0c6ee3fa13fbd8c8a970d9f4cb24cd6c5629a7847197dcec85c19",
       "assertions": [
         {
@@ -6217,7 +6217,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided.png",
       "sha256": "e5c6d30097b875c1786e70a35b546bee6fbe5c6dd3ee23561fc50b5b7f9f2eb1",
       "assertions": [
         {
@@ -6398,7 +6398,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aa84c060-15e9-4298-90fe-8cb33c130d6b/review/lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S4__recommendation-card__page_gate_region__decided__dark.png",
       "sha256": "90dab47d1d03c1443db618d729609bbdca17b05b5672f2eb3a5f5570adadef50",
       "assertions": [
         {
@@ -6579,7 +6579,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held.png",
       "sha256": "e3c7d6789dfc5b4854713764f9d1ecfc52d65888836d5d596cc49604202948c1",
       "assertions": [
         {
@@ -6780,7 +6780,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held__dark.png",
       "sha256": "e6718a55984715a522335b00a592eb4b00e98a0cf4b166e0c67b53f2ae8e3a38",
       "assertions": [
         {
@@ -6981,7 +6981,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aef0f05a-94c9-41ed-a497-798603ecd6bc",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held.png",
       "sha256": "a34f7b442d842ea26af6fe2b6ec98da3304bf5d0aa8dd9dbf95f5429e739924b",
       "assertions": [
         {
@@ -7187,7 +7187,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aef0f05a-94c9-41ed-a497-798603ecd6bc",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held__dark.png",
       "sha256": "e44d48c8229f2d06d0d6a7dde1815776ebb9c8c1aba2a8b30dbd491f3a0c2f0d",
       "assertions": [
         {
@@ -7393,7 +7393,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided.png",
       "sha256": "9f377efb92c613d62abc65b7c3fbc63e21101192d510c7ea7ded09dd34cfbbcb",
       "assertions": [
         {
@@ -7572,7 +7572,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided__dark.png",
       "sha256": "54828703ebaa93d84976d9c2f890cba4e13c3cfc222e4165371410a364713fe3",
       "assertions": [
         {
@@ -7751,7 +7751,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aef0f05a-94c9-41ed-a497-798603ecd6bc",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
       "sha256": "5eaf5a46d1770161949fda232460d3a7f0eaf776692bbba5b37ee0ade486a801",
       "assertions": [
         {
@@ -7954,7 +7954,7 @@
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/aef0f05a-94c9-41ed-a497-798603ecd6bc",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
       "sha256": "2c11583633b2ac83f2e9ae49238df7442215725e384f98f4588d0b614c0c60d7",
       "assertions": [
         {
@@ -8157,7 +8157,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9002128d-9782-4420-9faf-aafc753a66e6",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S5__review-card__run_card__in-conversation__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S5__review-card__run_card__in-conversation__pending.png",
       "sha256": "56742ba70bcbfd0f9c41c77fa51eae4d301154d96d23db6709e5d8c0116980c9",
       "assertions": [
         {
@@ -8341,7 +8341,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9002128d-9782-4420-9faf-aafc753a66e6",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/S5__review-card__run_card__in-conversation__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/S5__review-card__run_card__in-conversation__pending__dark.png",
       "sha256": "d0a212a8d765c7c2d1fb720950e83187611654a193fbd0d098cdb9014ab31767",
       "assertions": [
         {
@@ -8525,7 +8525,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c0614eeb-07ed-4e16-9a1e-88133a780cfa",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R7__review-card__run_card__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R7__review-card__run_card__pending.png",
       "sha256": "9dab65857e3d9a3218b2ce35114e1f5c2b5ca931d7f901b208beeb173aa4ce67",
       "assertions": [
         {
@@ -8693,7 +8693,7 @@
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c0614eeb-07ed-4e16-9a1e-88133a780cfa",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R7__review-card__run_card__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/captures/R7__review-card__run_card__pending__dark.png",
       "sha256": "97ab220e1c666a2b33987a1b3c1f92fef47a703d1d86a11d4ad6c4981813ecfe",
       "assertions": [
         {
@@ -8860,7 +8860,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending.png",
       "sha256": "2b950a5f0670d16bff4de7484dc7cd2f32aafe65351c159ada649474514a5212",
       "capturedAt": "2026-08-27T14:12:26.454Z",
       "assertions": [
@@ -8953,7 +8953,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9003,7 +9003,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-pending__hitl-card__chat_thread__pending__dark.png",
       "sha256": "da312059634130477a700ec82aca88eb71cb494d91879fe6f7b22c906dd5cd9c",
       "capturedAt": "2026-08-27T14:12:42.924Z",
       "assertions": [
@@ -9096,7 +9096,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9146,7 +9146,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending.png",
       "sha256": "3d3f5148b7f189122e0518c55eca71df7bed8d51eacc3305d1b2de0d25d0c240",
       "capturedAt": "2026-08-27T14:12:55.588Z",
       "assertions": [
@@ -9231,7 +9231,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9281,7 +9281,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HR-pending__hitl-card__run_card__pending__dark.png",
       "sha256": "a0057a70c126f0ddeee39e41b7cab3fb9aa90d7d0988feb1a6004ffe50998988",
       "capturedAt": "2026-08-27T14:13:07.459Z",
       "assertions": [
@@ -9366,7 +9366,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9416,7 +9416,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending.png",
       "sha256": "69f352e1379090056b1d095ffc0851face759bc5ae1a458542549b421e4f0202",
       "capturedAt": "2026-08-27T14:16:56.152Z",
       "assertions": [
@@ -9509,7 +9509,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9559,7 +9559,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-midrun-pending__hitl-card__chat_thread__pending__dark.png",
       "sha256": "c91204348f06dd393b0d2132fe20fbbab1ba2b38cfd3f7c90562a4e81c6897a1",
       "capturedAt": "2026-08-27T14:17:12.261Z",
       "assertions": [
@@ -9652,7 +9652,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9702,7 +9702,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending.png",
       "sha256": "30f87e4ffe94cbb2d9f2eb640b1c7f39d0e51490e5fe0750bf756f9a5857a3ef",
       "capturedAt": "2026-08-27T14:17:24.909Z",
       "assertions": [
@@ -9787,7 +9787,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9837,7 +9837,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6928e825-6eb0-49da-88ae-a9faf446a5bc",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HR-midrun-pending__hitl-card__run_card__pending__dark.png",
       "sha256": "f0c60f62baf1d1a2b9aa9d4327226b37cdcf18ea09c0388c7ac1ea82e78f3b40",
       "capturedAt": "2026-08-27T14:17:37.442Z",
       "assertions": [
@@ -9922,7 +9922,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -9972,7 +9972,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided.png",
       "sha256": "8cb5a4eea73d1168606a9c16024acf91299b8d9aee47ffab99bb5c45a93c510f",
       "capturedAt": "2026-08-27T14:15:42.796Z",
       "assertions": [
@@ -10042,7 +10042,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -10092,7 +10092,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-decided__hitl-card__chat_thread__decided__dark.png",
       "sha256": "cb668c63a7f82cda1f120e9674333f42ff420fad0d8b11b7bc1737895b2fb369",
       "capturedAt": "2026-08-27T14:15:54.713Z",
       "assertions": [
@@ -10162,7 +10162,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -10212,7 +10212,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided.png",
       "sha256": "88fc08c0a69b9f0ea2a88d1a7e4b2de962f8afb00c7baeb1ff8dadf52594530f",
       "capturedAt": "2026-08-27T14:23:41.516Z",
       "assertions": [
@@ -10282,7 +10282,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -10332,7 +10332,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/e84977d4-3427-4210-9b6b-d3b7d42d8fce",
       "build": "development",
-      "screenshot": "evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/fc40fcc60ff112484f983a83971571649b1d4d40/evidence/2930-w3-hitl-card/cells/HC-midrun-decided__hitl-card__chat_thread__decided__dark.png",
       "sha256": "f53a013dc790b7c1dc59e714721dfcb9eb9989a5722d5fd4c67a8c0dda14a865",
       "capturedAt": "2026-08-27T14:23:54.596Z",
       "assertions": [
@@ -10402,7 +10402,7 @@
         }
       ],
       "providerEvidence": {
-        "providerConfiguredThrough": "the app own /setup/model form (evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
+        "providerConfiguredThrough": "the app own /setup/model form (https://github.com/cinatra-ai/cinatra/blob/1fb86826b078b7031c422cfab7c60c0182d9b8f3/evidence/2790-s9f-host-parity/drivers/17-provider-setup-through-the-app.mjs), inside the operator secret-manager run wrapper",
         "usage": [
           {
             "provider": "openai",
@@ -10452,7 +10452,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c3455510-6980-4584-afcf-99cc25082f9a",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A1__recommendation-card__chat_thread__pending__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A1__recommendation-card__chat_thread__pending__light.png",
       "sha256": "a3fa8291b9f6f2083bcc55176b3c971aeb0c828b2d8bd0750ab3067a95f576d6",
       "capturedAt": "2026-08-27T21:44:35.946Z",
       "assertions": [
@@ -10544,7 +10544,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c3455510-6980-4584-afcf-99cc25082f9a",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A1__recommendation-card__chat_thread__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A1__recommendation-card__chat_thread__pending__dark.png",
       "sha256": "fb1037052f9c4934befa5331791928b74846900ca6bacdea83a86c0299a8e223",
       "capturedAt": "2026-08-27T21:44:52.704Z",
       "assertions": [
@@ -10636,7 +10636,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e8729686-57f8-4b5b-9437-f5bf5be8ab63",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A2__recommendation-card__run_card__pending__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A2__recommendation-card__run_card__pending__light.png",
       "sha256": "2540a311e0e16e9d8a5b0b3997ec834380d2a9e9bb62edd3e45b8816abb20123",
       "capturedAt": "2026-08-27T21:50:20.479Z",
       "assertions": [
@@ -10719,7 +10719,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e8729686-57f8-4b5b-9437-f5bf5be8ab63",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A2__recommendation-card__run_card__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A2__recommendation-card__run_card__pending__dark.png",
       "sha256": "b2fbab4a4e1ebbdd42433f0479fcf833cc48873bf1e036e90a7284a66c3db97a",
       "capturedAt": "2026-08-27T21:50:37.158Z",
       "assertions": [
@@ -10802,7 +10802,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c3455510-6980-4584-afcf-99cc25082f9a",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A3__recommendation-card__chat_thread__decided__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A3__recommendation-card__chat_thread__decided__light.png",
       "sha256": "d07b8c95d001da94935f0420931e0c24df584369565e7bb23c4c8b820edcce44",
       "capturedAt": "2026-08-27T22:04:32.517Z",
       "assertions": [
@@ -10904,7 +10904,7 @@
       "declaredHost": "chat_thread",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c3455510-6980-4584-afcf-99cc25082f9a",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A3__recommendation-card__chat_thread__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A3__recommendation-card__chat_thread__decided__dark.png",
       "sha256": "fd1e87ff3dffeb55b9a878e1d02fec2366148ecd6dc7980ea159ba1e88c3b6e4",
       "capturedAt": "2026-08-27T22:04:50.377Z",
       "assertions": [
@@ -11006,7 +11006,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e8729686-57f8-4b5b-9437-f5bf5be8ab63",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A4__recommendation-card__run_card__decided__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A4__recommendation-card__run_card__decided__light.png",
       "sha256": "3f282133293d703074359b52df3831ddec74fad37b6c2ab94f351f9a9f6b19ad",
       "capturedAt": "2026-08-27T22:05:07.450Z",
       "assertions": [
@@ -11099,7 +11099,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e8729686-57f8-4b5b-9437-f5bf5be8ab63",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures/cells/A4__recommendation-card__run_card__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/1fab6d971738dbed8a12af07d3018e7d186a2fc7/evidence/2936-w6-captures/cells/A4__recommendation-card__run_card__decided__dark.png",
       "sha256": "e50f22f98f912193961fd94bb62734fa0b994068098beb06db2bc3c354fa5253",
       "capturedAt": "2026-08-27T22:05:24.201Z",
       "assertions": [
@@ -11192,7 +11192,7 @@
       "declaredHost": "page_gate_region",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1/review/lifecycle-review%3A73aee18a3265252fd9e0173b451271734068f86239062b8e4414c6a95c09f289",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B4__review-card__page_gate_region__pending__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/f275dcb2d31a243ccf5a1dda155186fbb8f1dc7f/evidence/2936-w6-captures-batch-2/cells/B4__review-card__page_gate_region__pending__dark.png",
       "sha256": "6935ef172ed83b9f2babafc88e689f397b081968735814d97a796cd308a036bd",
       "capturedAt": "2026-08-28T00:24:38.614Z",
       "assertions": [
@@ -11254,7 +11254,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2418eb-372e-487c-afa9-cc3436cbb050",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B3__review-card__run_card__decided__conversation__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/f275dcb2d31a243ccf5a1dda155186fbb8f1dc7f/evidence/2936-w6-captures-batch-2/cells/B3__review-card__run_card__decided__conversation__dark.png",
       "sha256": "360dda2e5aa2a10de9cbf2570a5eca34df57e4081dd134a736a7c441406e5afa",
       "capturedAt": "2026-08-28T01:21:06.628Z",
       "assertions": [
@@ -11325,7 +11325,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/f275dcb2d31a243ccf5a1dda155186fbb8f1dc7f/evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__light.png",
       "sha256": "ca1ab0ad847769202ed4bfca3e93003500e92a85bd2318082879f73aefa99073",
       "capturedAt": "2026-08-28T01:21:44.278Z",
       "assertions": [
@@ -11396,7 +11396,7 @@
       "declaredHost": "run_card",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/f275dcb2d31a243ccf5a1dda155186fbb8f1dc7f/evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__dark.png",
       "sha256": "d480bd567a34116986ac31139989217d486b0edae5e66f1a5e4f18a15cdc9d0a",
       "capturedAt": "2026-08-28T01:21:57.665Z",
       "assertions": [
@@ -11467,7 +11467,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W1__recommendation-card__site_widget__held__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W1__recommendation-card__site_widget__held__light.png",
       "sha256": "348ac4579d75e0576fab25d9aaf6e1466e5ed8d164eaab20be9c00ef0d6159fd",
       "capturedAt": "2026-08-28T08:13:11.247Z",
       "assertions": [
@@ -11638,7 +11638,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W2__recommendation-card__site_widget__held__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W2__recommendation-card__site_widget__held__dark.png",
       "sha256": "4dcff98259d602d5c3b2e94977e2eb1dcda893d4cae5dcdfa04f22d892c02133",
       "capturedAt": "2026-08-28T08:13:25.758Z",
       "assertions": [
@@ -11783,7 +11783,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W3__recommendation-card__site_widget__settled__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W3__recommendation-card__site_widget__settled__light.png",
       "sha256": "242280471a084d0646c70d710a9a5faf23998a949ad164e8822ce1c52e940f9f",
       "capturedAt": "2026-08-28T08:13:44.504Z",
       "assertions": [
@@ -11948,7 +11948,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W4__recommendation-card__site_widget__settled__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W4__recommendation-card__site_widget__settled__dark.png",
       "sha256": "3b01ebcd4d5d5e804472462f43b28fa26e4a63090c2ae31c9384189be0c2c30e",
       "capturedAt": "2026-08-28T08:13:49.590Z",
       "assertions": [
@@ -12113,7 +12113,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W13__recommendation-card__site_widget__settled__after-reload__light.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W13__recommendation-card__site_widget__settled__after-reload__light.png",
       "sha256": "1cb948ff5aa2536280b25578ae05d4b034b2d1201223aed087b620d9cabb515f",
       "capturedAt": "2026-08-28T08:14:31.748Z",
       "assertions": [
@@ -12293,7 +12293,7 @@
       "declaredHost": "site_widget",
       "finalUrl": "/?cinatra=http%3A%2F%2Flocalhost%3A3000&assistant=wordpress&instanceId=w6b3-northwind-site&thread=w6b3-northwind-quarterly",
       "build": "development",
-      "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/W14__recommendation-card__site_widget__settled__after-reload__dark.png",
+      "screenshot": "https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/cells/W14__recommendation-card__site_widget__settled__after-reload__dark.png",
       "sha256": "dda9b6e55240aca0ea47a14df1f971d2c451862f59e8a3d13e33ff1d0a32d4d5",
       "capturedAt": "2026-08-28T08:14:36.794Z",
       "assertions": [

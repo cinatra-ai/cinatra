@@ -48,7 +48,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const WALK_PLAN_PATH = join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json");
 const S9D_WALK = JSON.parse(readFileSync(WALK_PLAN_PATH, "utf8"));
 
-const PNG = "evidence/2821-fixture/walk.png";
+const PNG = "test-results/capture-fixture/walk.png";
 const BYTES = Buffer.from("walk-fixture-bytes");
 const HASH = createHash("sha256").update(BYTES).digest("hex");
 const READ = () => BYTES;
@@ -160,7 +160,7 @@ describe("the walk plan is judged before the browser opens", () => {
     // asserts `[data-lifecycle-card-host]`, and neither screen draws a card —
     // one is the shipped trigger screen, the other lists the schedule as a rail
     // ROW. Both are photographed as PAGE CONTROLS instead
-    // (`evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
+    // (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
     // same reader, filed with their hashes, and given no record.
     const cardless = S9D_WALK.steps.filter((s) => s.id === "setup-scheduling-step");
     expect(cardless).toHaveLength(1);
@@ -272,7 +272,7 @@ describe("the walk plan is judged before the browser opens", () => {
     );
   });
 
-  it("REFUSES two cells writing one image, and a screenshot outside evidence/", () => {
+  it("REFUSES two cells writing one image, and a screenshot outside the capture output root", () => {
     const plan = structuredClone(S9D_WALK);
     const withCells = plan.steps.filter((s) => (s.cells ?? []).length > 0);
     withCells[1].cells[0].screenshot = withCells[0].cells[0].screenshot;

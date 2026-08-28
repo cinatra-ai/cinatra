@@ -33,14 +33,14 @@ import {
 const REPO_ROOT = join(dirname(CAPTURE_INDEX_PATH), "..", "..");
 
 let repoRoot;
-const IMAGE_A = "evidence/fixture/C1__review-card__chat_thread__pending.png";
-const IMAGE_B = "evidence/fixture/C2__review-card__chat_thread__decided.png";
+const IMAGE_A = "test-results/capture-fixture/C1__review-card__chat_thread__pending.png";
+const IMAGE_B = "test-results/capture-fixture/C2__review-card__chat_thread__decided.png";
 let hashA;
 let hashB;
 
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "s9h-capture-"));
-  mkdirSync(join(repoRoot, "evidence", "fixture"), { recursive: true });
+  mkdirSync(join(repoRoot, "test-results", "capture-fixture"), { recursive: true });
   writeFileSync(join(repoRoot, IMAGE_A), "PNG-A");
   writeFileSync(join(repoRoot, IMAGE_B), "PNG-B");
   hashA = createHash("sha256").update("PNG-A").digest("hex");
@@ -243,7 +243,7 @@ describe("validateCaptureRecord", () => {
   it("refuses a screenshot that is not there, and one that escapes the tree", () => {
     expect(
       codes(
-        validateCaptureRecord(honestChatPending({ screenshot: "evidence/nope.png" }), {
+        validateCaptureRecord(honestChatPending({ screenshot: "test-results/nope.png" }), {
           repoRoot,
         }),
       ),
@@ -388,7 +388,7 @@ describe("bindEvidenceCells", () => {
   it("treats an unindexed screenshot as zero", () => {
     const result = validateCaptureIndex({ records: [] }, { repoRoot });
     expect(codes(bindEvidenceCells(cited, result))).toEqual([
-      "evidence/unbound-cell",
+      "capture/unbound-cell",
     ]);
   });
 
@@ -406,7 +406,7 @@ describe("bindEvidenceCells", () => {
       { repoRoot },
     );
     expect(codes(bindEvidenceCells(cited, result))).toEqual([
-      "evidence/invalid-record",
+      "capture/invalid-record",
     ]);
   });
 });
@@ -418,7 +418,7 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
   // Two advisory records of it already stand in the committed index, on
   // `run_card` and on `page_gate_region`; the third was driven on `chat_thread`
   // and refused by the audit tier's state list rather than by the screen
-  // (evidence/2791-s9g-conformance/capture-results.json).
+  // (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json).
   function advisoryAudit(over = {}) {
     return {
       cell: "G7__audit-card__chat_thread__advisory",
@@ -576,7 +576,7 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       // REVIEW moment, which batch 1 could not reach because its run package had
       // never been published to the instance's own registry. This round publishes
       // it first (with a registry readback) and both of its runs open their
-      // review. `evidence/2936-w6-captures-batch-2/` carries the run ids, the DB
+      // review. `https://github.com/cinatra-ai/cinatra/blob/f275dcb2d31a243ccf5a1dda155186fbb8f1dc7f/evidence/2936-w6-captures-batch-2/` carries the run ids, the DB
       // timeline and the grading.
       //
       //   artifact_review_gate | page_gate_region | pending   5 -> 6
@@ -634,7 +634,7 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       // that the run card would show it. `trigger_schedule_proposal |
       // site_widget` did not move either: the widget's own conversation
       // answered the schedule request with the shipped fixed refusal.
-      // `evidence/2936-w6-captures-batch-3-widget/` carries the run ids, the
+      // `https://github.com/cinatra-ai/cinatra/blob/c2e708cb4466623c3a4c4ef7cb2113c319def399/evidence/2936-w6-captures-batch-3-widget/` carries the run ids, the
       // measurements and the code facts.
       "recommendation_hold | site_widget | decided": 6,
       "recommendation_hold | site_widget | pending": 7,

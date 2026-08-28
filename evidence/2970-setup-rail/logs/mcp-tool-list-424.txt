@@ -1,7 +1,0 @@
-# The 424 the app server logged on a cold first turn, and its own retry line.
-# Copied verbatim from the app server's log; nothing else from that log is here.
-
-[openai.ts] Stream iteration error at step 1: Error retrieving tool list from MCP server: 'cinatra'. Http status code: 424 (Failed Dependency) Error: Error retrieving tool list from MCP server: 'cinatra'. Http status code: 424 (Failed Dependency)
-[openai] MCP tool enumeration failed (424) — retrying stream without MCP tool (dev)
-[openai.ts] Stream iteration error at step 1: Error retrieving tool list from MCP server: 'cinatra'. Http status code: 424 (Failed Dependency) Error: Error retrieving tool list from MCP server: 'cinatra'. Http status code: 424 (Failed Dependency)
-[openai] MCP tool enumeration failed (424) — retrying stream without MCP tool (dev)

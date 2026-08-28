@@ -76,6 +76,9 @@ import { fileURLToPath } from "node:url";
 
 import {
   CAPTURE_INDEX_PATH,
+  isHistoricalPermalink,
+  readPinnedArtifact,
+  repoPathOf,
   validateCaptureIndex as validateCanonicalIndex,
 } from "../ci/lib/capture-record-contract.mjs";
 import {
@@ -160,7 +163,30 @@ function loadManifest(manifestPath = MANIFEST_PATH) {
  * catches is the case that actually happens — the file was renamed, or the test
  * was deleted.
  */
-export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = null) {
+export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = null, readPinnedImpl = null) {
+  // A PINNED PROOF. Once a proof document leaves the working tree, the row cites
+  // it as a historical permalink into this repository at a full 40-char commit.
+  // The document is READ BACK FROM THAT COMMIT with `git cat-file`, and the
+  // lexical check below runs on those bytes exactly as it runs on a file in the
+  // tree -- same rule, different source. A blob that cannot be produced is
+  // reported, never waved through.
+  if (isHistoricalPermalink(proof.file)) {
+    const got = (readPinnedImpl ?? readPinnedArtifact)(proof.file, { repoRoot });
+    if (!got.ok) {
+      return { ok: false, reason: `pinned proof unreachable: ${got.reason}` };
+    }
+    const pinnedSource = got.bytes.toString("utf8");
+    if (!pinnedSource.includes(proof.testName)) {
+      return { ok: false, reason: `no "${proof.testName}" in ${proof.file}` };
+    }
+    return { ok: true, pinned: true };
+  }
+  if (proof.file?.startsWith("http://") || proof.file?.startsWith("https://")) {
+    return {
+      ok: false,
+      reason: `"${proof.file}" is a URL but not a pinned permalink into this repository`,
+    };
+  }
   const abs = resolve(repoRoot, proof.file);
   let source;
   try {
@@ -287,7 +313,7 @@ export function auditCaptureIndex({
   const canonical = validateCanonicalIndex(index, { repoRoot }).violations.map(
     (v) => `[canonical] ${v.cell ? `record "${v.cell}": ` : ""}${v.code} — ${v.detail}`,
   );
-  return [...canonical, ...validateCaptureIndex({ index, hashOf, tier })];
+  return [...canonical, ...validateCaptureIndex({ index, hashOf, repoRoot, tier })];
 }
 
 /** A cell name without its image extension. */
@@ -400,10 +426,16 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       continue;
     }
     // The image must live where the citing proof lives. Without this the row
-    // cites `evidence/A/README.md` while its record points at a screenshot in
-    // `evidence/B`, and the two halves of the claim never meet.
-    const claimDir = claim.file.slice(0, claim.file.lastIndexOf("/"));
-    if (claimDir && !record.screenshot.startsWith(`${claimDir}/`)) {
+    // cites one proof folder's README while its record points at a screenshot
+    // in another, and the two halves of the claim never meet. Both sides are
+    // read as the IN-REPOSITORY PATH first, so a pinned permalink and a live
+    // path are compared on the same axis and the binding survives the pin --
+    // the two halves may be pinned at different commits (each file's own last
+    // one), which is why the commit is not part of the comparison.
+    const claimPath = repoPathOf(claim.file);
+    const shotPath = repoPathOf(record.screenshot);
+    const claimDir = claimPath.slice(0, claimPath.lastIndexOf("/"));
+    if (claimDir && !shotPath.startsWith(`${claimDir}/`)) {
       violations.push(
         `manifest row ${claim.row} cites "${claim.cell}" from ${claim.file}, but its record's ` +
           `screenshot is ${record.screenshot} — the image must sit with the proof that cites it`,
