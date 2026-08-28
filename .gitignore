@@ -138,3 +138,8 @@ Desktop.ini
 # Env files and secrets
 *.key
 .codex-verdicts/
+
+# proof artifacts never live in the checkout (evidence/ and pr-evidence/ are
+# ignored by the branch that removes the tracked evidence/ tree)
+verification/
+docs/internals/proofs/
