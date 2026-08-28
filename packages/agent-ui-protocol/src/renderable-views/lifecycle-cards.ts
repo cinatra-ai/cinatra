@@ -33,6 +33,7 @@ import type { RenderableViewBase } from "../renderable-views";
 // than in a new leaf of its own.
 import {
   triggerScheduleProposalViewBodySchema,
+  type ProposedSchedule,
   type TriggerScheduleProposalViewBody,
 } from "./trigger-schedule-proposal-view";
 
@@ -127,6 +128,84 @@ export const LIFECYCLE_MOMENT_CARD_KIND = {
  */
 export function lifecycleMomentParksRun(moment: LifecycleMoment): boolean {
   return moment !== "audit";
+}
+
+// ---------------------------------------------------------------------------
+// The SCHEDULE moment's default — one statement, read by the runner and by the
+// two surfaces that draw the card (cinatra#2936)
+// ---------------------------------------------------------------------------
+
+/** What the schedule screen offers before a person's run begins. */
+export type ScheduleDefault =
+  | { readonly kind: "run_after_setup" }
+  | { readonly kind: "stated"; readonly schedule: unknown }
+  | { readonly kind: "none"; readonly why: string };
+
+/**
+ * The schedule moment's own default, stated once.
+ *
+ * Run right after setup, UNLESS the person stated a schedule in the conversation
+ * or changed it on the screen — and NEVER for a run nobody is present for. A
+ * schedule has no artifact type, destination or origin, so it is not a row in
+ * the policy table and no organization rule governs it: the decision is the
+ * runner's own, and `@cinatra-ai/agents/lifecycle-coordinator` is where it is
+ * declared and exported from.
+ *
+ * IT IS STATED HERE FOR THE REASON THE RESOLVE ENVELOPE ABOVE IS. The two
+ * surfaces that draw a schedule are CLIENT modules and the coordinator is
+ * `server-only`, so a decision whose only statement sat in the coordinator's own
+ * file could not reach a screen except as a second copy of itself — which is
+ * exactly what had happened: the scheduling step preselected "Run right after
+ * setup" from a local default of its own, and the decision was stated twice.
+ * This module is tier-neutral and already on every route graph that carries the
+ * barrel, so stating it here costs no locked route a module and leaves the
+ * coordinator, the card's server-side body and the form reading ONE answer.
+ *
+ * Nothing this function returns ARMS anything and `launchAgentRun` does not call
+ * it: it answers what the SCREEN offers.
+ */
+export function scheduleDefaultForLaunch(input: {
+  humanPresent: boolean;
+  /** A schedule the person already stated, if any. */
+  statedSchedule?: unknown;
+}): ScheduleDefault {
+  if (!input.humanPresent) {
+    return {
+      kind: "none",
+      why: "nobody is present for this run — the schedule it was given applies and no screen is shown",
+    };
+  }
+  if (input.statedSchedule !== undefined && input.statedSchedule !== null) {
+    return { kind: "stated", schedule: input.statedSchedule };
+  }
+  return { kind: "run_after_setup" };
+}
+
+/**
+ * The row the schedule screen opens on — the decision above, applied.
+ *
+ * One mapping, so the answer becomes rows in one place: `run_after_setup` is the
+ * immediate row ("Run right after setup"), `stated` is the schedule the person
+ * stated, filled into the form's own rows.
+ *
+ * `null` IS A REFUSAL, NOT A DEFAULT. For a run nobody is present for the screen
+ * is not offered at all — "the schedule it was given applies" — so a surface that
+ * reached one anyway has nothing to preselect, and must draw no selection rather
+ * than invent one.
+ */
+export function scheduleScreenSelection(input: {
+  humanPresent: boolean;
+  statedSchedule?: ProposedSchedule | null;
+}): ProposedSchedule | null {
+  const answer = scheduleDefaultForLaunch(input);
+  switch (answer.kind) {
+    case "none":
+      return null;
+    case "stated":
+      return answer.schedule as ProposedSchedule;
+    default:
+      return { kind: "immediate" };
+  }
 }
 
 /**
