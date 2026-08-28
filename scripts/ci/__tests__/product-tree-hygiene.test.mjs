@@ -86,11 +86,18 @@ const EXAMPLES = [
   ["packages/x/.planning/PLAN.md", "any-depth:.planning/"],
   ["evidence/2824-s9k/capture.png", "any-depth:evidence/"],
   ["pr-evidence/1446/before.png", "any-depth:pr-evidence/"],
+  ["proofs/1785/item3.txt", "any-depth:proofs/"],
+  ["docs/internals/proofs/1785-a6/item3.proof.txt", "any-depth:proofs/"],
+  ["packages/x/proofs/a.png", "any-depth:proofs/"],
+  ["proof/57-x/a.png", "any-depth:proof/"],
+  ["docs/proof/57-x/a.png", "any-depth:proof/"],
   // root-anchored directories.
   ["data/postgres/pg_wal/000000010000000000000001", "root:data/"],
   ["dev/cinatra-docs/README.md", "root:dev/"],
   ["extensions/cinatra-ai-wordpress/package.json", "root:extensions/"],
   ["test-results/chat-hitl-held-turn/trace.zip", "root:test-results/"],
+  ["verification/1630-x/shot.png", "root:verification/"],
+  ["verification/1630-slice-b-host-prove/screenshots/01-image-render.png", "root:verification/"],
   // root-anchored files.
   ["next-env.d.ts", "root:next-env.d.ts"],
   [".env.local", "root:.env.local"],
@@ -184,6 +191,35 @@ describe("anchoring", () => {
     expect(ruleFor("packages/x/.env.local")).toBeUndefined();
     expect(ruleFor(".env.example")).toBeUndefined();
     expect(ruleFor(".env.local.example")).toBeUndefined();
+  });
+
+  it("verification/ is root-anchored: a nested verification/ module is NOT caught", () => {
+    expect(ruleFor("packages/x/src/verification/index.ts")).toBeUndefined();
+    expect(ruleFor("src/lib/verification/check.ts")).toBeUndefined();
+    expect(ruleFor("verification/1630-x/shot.png")).toBe("root:verification/");
+  });
+
+  it("a SUBSTRING of a forbidden name is not a segment, so it is NOT caught", () => {
+    // The words are ordinary English; only a path SEGMENT equal to the name is
+    // a finding. These are real tracked product paths in this repo.
+    expect(ruleFor("src/lib/lifecycle/host-verification.ts")).toBeUndefined();
+    expect(ruleFor("src/lib/lifecycle/lifecycle-verification.ts")).toBeUndefined();
+    expect(
+      ruleFor("src/lib/lifecycle/__tests__/lifecycle-verification.test.ts"),
+    ).toBeUndefined();
+    expect(ruleFor("tests/fixtures/echo-proof/a.png")).toBeUndefined();
+    expect(
+      ruleFor("tests/fixtures/works-after-agent/cinatra-works-after/echo-proof/package.json"),
+    ).toBeUndefined();
+    expect(ruleFor(".github/workflows/works-after-proof.yml")).toBeUndefined();
+    expect(ruleFor("evidence/2043-s5/PROOF.md")).toBe("any-depth:evidence/");
+  });
+
+  it("a proof directory is caught at any depth, under any parent", () => {
+    expect(ruleFor("proofs/a.png")).toBe("any-depth:proofs/");
+    expect(ruleFor("docs/internals/proofs/1785-a6/x.txt")).toBe("any-depth:proofs/");
+    expect(ruleFor("packages/x/proofs/a.png")).toBe("any-depth:proofs/");
+    expect(ruleFor("docs/proof/57-x/a.png")).toBe("any-depth:proof/");
   });
 
   it("the CONSOLIDATED home vitest/integration/<NNNN>.config.ts is NOT caught", () => {

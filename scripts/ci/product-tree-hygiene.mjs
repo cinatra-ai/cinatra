@@ -29,7 +29,15 @@
 //     (a workspace package named `extensions`). Those are product. Only the
 //     ROOT `data/` and `extensions/` are the local-runtime clone targets the
 //     ruling is about, so those rules anchor at the root and the nested product
-//     paths are untouched — by ANCHORING, never by an allowlist.
+//     paths are untouched — by ANCHORING, never by an allowlist. `verification/`
+//     is root-anchored for the same reason: the proof dump was at the root,
+//     while `verification` is an ordinary word a product module may be named
+//     for.
+//
+// Every rule matches a path SEGMENT, never a substring. The segment has to
+// EQUAL the forbidden name, so real product paths that merely contain the word
+// stay untouched: `src/lib/lifecycle/lifecycle-verification.ts` is a module,
+// and `tests/fixtures/**/echo-proof/` is a named fixture.
 //
 // There is NO allowlist file, deliberately. An allowlist is how a rule like
 // this dies: the first exception is argued once, and after that the list is the
@@ -67,13 +75,18 @@ export const ANY_DEPTH_DIRS = [
   ".planning",
   "evidence",
   "pr-evidence",
+  // The same disease under other folder names, found by an org-wide sweep:
+  // proof directories accreted per issue. `proof` and `proofs` are never a
+  // legitimate product segment at any depth — a proof is recorded on the PR.
+  "proofs",
+  "proof",
 ];
 
 /**
  * Directory names forbidden only at the ROOT — nested, each is a real product
  * name in this repo (see the header). Root-anchored, not allowlisted.
  */
-export const ROOT_DIRS = ["data", "dev", "extensions", "test-results"];
+export const ROOT_DIRS = ["data", "dev", "extensions", "test-results", "verification"];
 
 /** Individual files forbidden at the ROOT. */
 export const ROOT_FILES = [

@@ -146,3 +146,10 @@ Desktop.ini
 # /dev/, /extensions/, test-results/, __pycache__/, next-env.d.ts, and
 # .env.local / .env.*.local (covered by the `.env*` glob).
 .pytest_cache/
+# Proof dumps under their several folder names. An org-wide sweep found the same
+# artifacts accreting per issue under each of these; a proof is recorded on the
+# PR, never committed. (evidence/ and pr-evidence/ are added by the sibling
+# change that removes the tracked ones.)
+/verification/
+proofs/
+proof/
