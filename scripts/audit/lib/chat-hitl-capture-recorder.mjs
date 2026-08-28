@@ -101,6 +101,7 @@ import {
   RECORDER_ID,
   absenceInstanceViolations,
   captureHostAdmissibility,
+  CAPTURE_OUTPUT_ROOT,
   isHistoricalPermalink,
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
@@ -413,8 +414,57 @@ export function collectAssertions(specs, queryCount) {
  * repo-relative because a record's `screenshot` field must be one -- an OS temp
  * dir would need the record contract's path rule widened to absolute paths,
  * which is a bigger change than this one and would weaken it for every record.
+ *
+ * RE-EXPORTED, NEVER REDECLARED. The ratified contract owns this string because
+ * BOTH tiers have to refuse the same paths, and a second copy here is exactly
+ * how the two tiers came to disagree about it: the canonical tier never had the
+ * rule at all, so a record naming any tracked file passed the required gate.
  */
-export const CAPTURE_OUTPUT_ROOT = "test-results/";
+export { CAPTURE_OUTPUT_ROOT };
+
+/**
+ * THE ROOT A COMMITTED WALK PLAN WAS WRITTEN AGAINST.
+ *
+ * Plans older than the tree cleanup name their output paths under the proof
+ * tree that captures were minted into at the time. That tree is gone.
+ */
+export const HISTORICAL_OUTPUT_ROOT = PINNED_ARTIFACT_ROOT;
+
+/**
+ * Move a walk plan's OUTPUT paths onto the live capture root.
+ *
+ * A walk plan is a document: it says which cells to shoot and where to put the
+ * pictures. The "where" is the only part that has moved, so it is the only part
+ * rewritten here -- every cell id, host, kind, state, viewport, action and
+ * assertion is left exactly as committed. A plan already written against
+ * `CAPTURE_OUTPUT_ROOT` is returned unchanged; this is a no-op for anything
+ * authored since the cleanup.
+ *
+ * IT IS SHIPPED CODE, not test scaffolding, because THE DRIVER LOADS PLANS
+ * THROUGH IT. When only the suites re-rooted, the suites graded a plan the real
+ * CLI never saw: `--walk <the committed fixture>` -- the command the capture
+ * index documents -- died in preflight with ten output-root violations while
+ * the tests were green. One loader, one plan, both halves.
+ *
+ * @returns {object} a deep copy; the caller may mutate it freely
+ */
+export function rerootWalkPlanOutputs(plan) {
+  const out = structuredClone(plan);
+  for (const step of out?.steps ?? []) {
+    for (const cell of step?.cells ?? []) {
+      if (typeof cell.screenshot === "string" && cell.screenshot.startsWith(HISTORICAL_OUTPUT_ROOT)) {
+        cell.screenshot =
+          CAPTURE_OUTPUT_ROOT + cell.screenshot.slice(HISTORICAL_OUTPUT_ROOT.length);
+      }
+    }
+  }
+  return out;
+}
+
+/** Read a walk plan from disk the ONE way — the driver's path and the suites'. */
+export function readWalkPlan(path, readImpl = readFileSync) {
+  return rerootWalkPlanOutputs(JSON.parse(readImpl(path, "utf8")));
+}
 
 /**
  * The path rules a screenshot must satisfy, as a reusable check.

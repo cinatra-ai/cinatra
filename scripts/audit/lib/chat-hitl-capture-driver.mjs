@@ -50,6 +50,7 @@ import {
   observeWalkCell,
   validateCaptureRecord,
   validateWalkPlan,
+  readWalkPlan,
   walkCellsOf,
 } from "./chat-hitl-capture-recorder.mjs";
 
@@ -509,7 +510,11 @@ async function main(argv) {
   let records;
   let retires = [];
   if (walkPath) {
-    const walk = JSON.parse(readFileSync(walkPath, "utf8"));
+    // THROUGH THE SHIPPED LOADER, never a bare read: a committed plan names its
+    // outputs under the proof tree that is gone, and the loader moves them onto
+    // the live capture root so preflight passes on the plan as committed. It is
+    // the same call the suites make, so what they grade is what this runs.
+    const walk = readWalkPlan(walkPath);
     retires = walk.retires ?? [];
     records = await driveWalk({
       plan: walk,

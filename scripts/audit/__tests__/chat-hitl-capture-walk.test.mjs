@@ -27,21 +27,30 @@
 
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { validateCaptureRecord as validateCanonicalRecord } from "../../ci/lib/capture-record-contract.mjs";
+import {
+  CAPTURE_INDEX_PATH,
+  validateCaptureRecord as validateCanonicalRecord,
+} from "../../ci/lib/capture-record-contract.mjs";
 import {
   CAPTURE_FRAMINGS,
+  CAPTURE_OUTPUT_ROOT,
+  HISTORICAL_OUTPUT_ROOT,
   RECORDER_ID,
   WALK_ACTIONS,
   captureRequirementsFor,
   mergeWalkRecords,
   observeWalkCell,
+  readWalkPlan,
+  rerootWalkPlanOutputs,
+  screenshotPathViolation,
   validateWalkPlan,
   walkCellState,
   walkCellsOf,
 } from "../lib/chat-hitl-capture-recorder.mjs";
-import { loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
+import { WALK_PLAN_PATH, loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 
 // The committed round-5 plan, byte for byte, with its OUTPUT paths on the
 // current capture root — see the loader for why that one rewrite happens.
@@ -462,5 +471,84 @@ describe("the preflight and the walk derive ONE state", () => {
     const record = await observe(ADVISORY_CELL, page);
     expect(record.declaredState).toBe("advisory");
     expect(validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE DOCUMENTED COMMAND HAS TO RUN. `scripts/ci/chat-hitl-capture-index.json`
+// tells a reader to drive this exact fixture with
+// `chat-hitl-capture-driver.mjs --walk <it>`. The driver used to read the file
+// raw while only the suites re-rooted its outputs, so that command died in
+// preflight with ten output-root violations and the suites graded a plan the
+// real CLI never saw. These cases load through the DRIVER'S OWN call.
+// ---------------------------------------------------------------------------
+describe("the committed fixture is executable exactly as documented", () => {
+  it("the capture index documents this fixture path, and no path that is gone", () => {
+    const prose = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8")).$comment.join("\n");
+    const relative = WALK_PLAN_PATH.slice(WALK_PLAN_PATH.indexOf("scripts/"));
+    expect(prose).toContain(`--walk ${relative}`);
+    // The path it USED to document no longer exists in any tree this repo has.
+    expect(prose).not.toContain("evidence/2788-s9d-rework/capture-walk.json");
+  });
+
+  it("the driver's own loader preflights the fixture with ZERO violations", () => {
+    // readWalkPlan is what `--walk` calls; nothing here re-implements it.
+    const plan = readWalkPlan(WALK_PLAN_PATH);
+    expect(validateWalkPlan(plan)).toEqual([]);
+  });
+
+  it("loads TEN cells, every output re-rooted onto the live capture root", () => {
+    const shots = walkCellsOf(readWalkPlan(WALK_PLAN_PATH)).map((c) => c.screenshot);
+    expect(shots).toHaveLength(10);
+    for (const shot of shots) {
+      expect(shot.startsWith(CAPTURE_OUTPUT_ROOT), shot).toBe(true);
+      expect(screenshotPathViolation(shot)).toBe(null);
+    }
+    expect(shots).toEqual([
+      "test-results/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
+      "test-results/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
+      "test-results/2788-s9d-rework/captures/C2__chat-configured__light.png",
+      "test-results/2788-s9d-rework/captures/C2__chat-configured__dark.png",
+      "test-results/2788-s9d-rework/captures/C3__run-page-configured__light.png",
+      "test-results/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
+      "test-results/2788-s9d-rework/captures/C6__chat-ran__light.png",
+      "test-results/2788-s9d-rework/captures/C6__chat-ran__dark.png",
+      "test-results/2788-s9d-rework/captures/C5__chat-expired__light.png",
+      "test-results/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+    ]);
+  });
+
+  it("the FIXTURE BYTES are untouched — only the loaded copy is re-rooted", () => {
+    const raw = readFileSync(WALK_PLAN_PATH, "utf8");
+    expect(raw).toContain("evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png");
+    expect(raw).not.toContain("test-results/");
+    // ...and the loader hands back a COPY, so a mutating suite cannot poison it.
+    const a = readWalkPlan(WALK_PLAN_PATH);
+    a.steps[0].cells = [];
+    expect(walkCellsOf(readWalkPlan(WALK_PLAN_PATH))).toHaveLength(10);
+  });
+
+  it("re-rooting touches ONLY the output paths — every graded field is as committed", () => {
+    const committed = JSON.parse(readFileSync(WALK_PLAN_PATH, "utf8"));
+    const loaded = readWalkPlan(WALK_PLAN_PATH);
+    const strip = (plan) =>
+      JSON.stringify(plan, (key, value) => (key === "screenshot" ? undefined : value));
+    expect(strip(loaded)).toBe(strip(committed));
+    // ...and each output differs by its ROOT alone.
+    const outs = (plan) => walkCellsOf(plan).map((c) => c.screenshot);
+    expect(outs(loaded)).toEqual(
+      outs(committed).map((s) => CAPTURE_OUTPUT_ROOT + s.slice(HISTORICAL_OUTPUT_ROOT.length)),
+    );
+  });
+
+  it("a plan ALREADY on the live root is passed through unchanged", () => {
+    // The re-rooting is a rescue for committed plans, not a transform every
+    // plan is subject to: anything authored since the cleanup is untouched.
+    const modern = {
+      slice: "modern",
+      steps: [{ id: "s", cells: [{ ...walkCellsOf(readWalkPlan(WALK_PLAN_PATH))[0] }] }],
+    };
+    expect(rerootWalkPlanOutputs(modern)).toEqual(modern);
   });
 });

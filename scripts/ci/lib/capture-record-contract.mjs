@@ -672,6 +672,23 @@ export function repoPathOf(value) {
  */
 export const PINNED_ARTIFACT_ROOT = "evidence/";
 
+/**
+ * THE ROOT A LIVE CAPTURE IS WRITTEN INTO.
+ *
+ * The counterpart of `PINNED_ARTIFACT_ROOT`: `evidence/` is where captures USED
+ * to be committed, this is where a run mints them now. `test-results/` is the
+ * Playwright config's own `outputDir` and is gitignored, so a passing run leaves
+ * the tree clean by construction.
+ *
+ * IT IS DEFINED HERE, ONCE, because the RECORD CONTRACT is what both tiers read
+ * and the canonical tier is the one the required workflow invokes. It used to be
+ * declared in the recorder alone, so the audit tier enforced it and this tier
+ * did not -- and a record citing `package.json` with that file's real hash
+ * satisfied every canonical rule there was. The recorder now re-exports this
+ * constant rather than keeping a second copy of the string.
+ */
+export const CAPTURE_OUTPUT_ROOT = "test-results/";
+
 /** The commit and the path a pin names, or null when it is not a pin. */
 export function parsePermalink(value) {
   if (!isHistoricalPermalink(value)) return null;
@@ -930,6 +947,16 @@ export function validateCaptureRecord(record, io = {}) {
     push(
       "record/screenshot-not-repo-relative",
       `"${shot}" is not a repo-relative path`,
+    );
+  } else if (!shot.startsWith(CAPTURE_OUTPUT_ROOT)) {
+    // A LIVE RECORD MUST NAME A CAPTURE, not merely a file that exists and
+    // hashes correctly. Without this arm any tracked path in the repository --
+    // `package.json`, a source file -- satisfied the rest of this contract, and
+    // the workflow that invokes this tier directly would go green on it.
+    push(
+      "record/screenshot-outside-capture-root",
+      `"${shot}" is not under ${CAPTURE_OUTPUT_ROOT} — a live capture is written into the run ` +
+        `output root, and a picture that has left the tree is cited as a pinned permalink instead`,
     );
   } else {
     const abs = join(repoRoot, shot);

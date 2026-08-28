@@ -27,12 +27,16 @@ import {
   requiredAssertionsFor,
   validateCaptureIndex,
   validateCaptureRecord,
+  CAPTURE_OUTPUT_ROOT,
   isHistoricalPermalink,
   parsePermalink,
   readPinnedArtifact,
   repoPathOf,
   sha256Pinned,
 } from "../lib/capture-record-contract.mjs";
+// The recorder's re-export, so the suite proves the two tiers share ONE string
+// rather than two copies that happen to match today.
+import { CAPTURE_OUTPUT_ROOT as recorderCaptureOutputRoot } from "../../audit/lib/chat-hitl-capture-recorder.mjs";
 
 /** The tree the committed index's screenshots are resolved against. */
 const REPO_ROOT = join(dirname(CAPTURE_INDEX_PATH), "..", "..");
@@ -833,5 +837,82 @@ describe("readPinnedArtifact — reading a proof out of history", () => {
     const dup = result.violations.filter((v) => v.code === "index/duplicate-screenshot-path");
     expect(dup).toHaveLength(1);
     expect(dup[0].detail).toMatch(/DIFFERENT commits/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE CAPTURE ROOT, ON THE CANONICAL TIER. This is the tier the required
+// workflow invokes on its own, so a rule the audit tier alone enforces is a
+// rule this gate does not have. A record naming any tracked file with that
+// file's real hash used to satisfy every canonical rule there was.
+// ---------------------------------------------------------------------------
+describe("a live screenshot must be written into the capture output root", () => {
+  it("REFUSES an arbitrary tracked file even when the hash is genuinely right", () => {
+    // `package.json` exists and the digest below is really its digest — the
+    // only thing wrong with this record is that it is not a capture.
+    const real = readFileSync(join(REPO_ROOT, "package.json"));
+    const found = codes(
+      validateCaptureRecord(
+        honestChatPending({
+          screenshot: "package.json",
+          sha256: createHash("sha256").update(real).digest("hex"),
+        }),
+        { repoRoot: REPO_ROOT },
+      ),
+    );
+    expect(found).toContain("record/screenshot-outside-capture-root");
+    // ...and it is refused for THAT reason, not for a hash it does satisfy.
+    expect(found).not.toContain("record/sha256-mismatch");
+    expect(found).not.toContain("record/screenshot-missing");
+  });
+
+  it("ACCEPTS the run scratch path a real held-turn run mints into", () => {
+    const shot = "test-results/chat-hitl-held-turn-captures/C1__review-card__chat_thread__pending.png";
+    const found = codes(
+      validateCaptureRecord(honestChatPending({ screenshot: shot, sha256: hashA }), {
+        repoRoot,
+        fileExists: () => true,
+        hashFile: () => hashA,
+      }),
+    );
+    expect(found).not.toContain("record/screenshot-outside-capture-root");
+    expect(found).toEqual([]);
+  });
+
+  it("the root is the SHARED constant, so both tiers refuse the same paths", () => {
+    expect(CAPTURE_OUTPUT_ROOT).toBe("test-results/");
+    expect(recorderCaptureOutputRoot).toBe(CAPTURE_OUTPUT_ROOT);
+  });
+
+  it("ACCEPTS a pinned permalink under the historical proof root", () => {
+    const BYTES = Buffer.from("PINNED");
+    const hash = createHash("sha256").update(BYTES).digest("hex");
+    const found = codes(
+      validateCaptureRecord(
+        honestChatPending({
+          screenshot: `https://github.com/cinatra-ai/cinatra/blob/${"a".repeat(40)}/evidence/round/shot.png`,
+          sha256: hash,
+        }),
+        { repoRoot: "/repo", readPinned: () => ({ ok: true, bytes: BYTES }) },
+      ),
+    );
+    expect(found).not.toContain("record/screenshot-outside-capture-root");
+    expect(found).not.toContain("record/pinned-screenshot-outside-proof-root");
+    expect(found).toEqual([]);
+  });
+
+  it("REFUSES a pinned permalink OUTSIDE the historical proof root", () => {
+    const BYTES = Buffer.from("PINNED");
+    const found = codes(
+      validateCaptureRecord(
+        honestChatPending({
+          screenshot: `https://github.com/cinatra-ai/cinatra/blob/${"a".repeat(40)}/src/app/icon.png`,
+          sha256: createHash("sha256").update(BYTES).digest("hex"),
+        }),
+        { repoRoot: "/repo", readPinned: () => ({ ok: true, bytes: BYTES }) },
+      ),
+    );
+    expect(found).toContain("record/pinned-screenshot-outside-proof-root");
   });
 });
