@@ -39,6 +39,7 @@ import {
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { runReviewStepReading } from "../run-review-slot-reading";
 
 const TEST_SCHEMA = "cinatra_test_produced_review_3007";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -1198,6 +1199,256 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
         released: true,
         terminal: "completed",
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE SLOT THE RUN SURFACES READ (cinatra#3046).
+  //
+  // The ordering above is a fact about rows; this is the fact the SCREENS need
+  // from the same rows. A run parked here is `pending_approval` and carries no
+  // artifact-review interrupt, which is indistinguishable — from the shape of
+  // the pause alone — from a run stopped on a question somebody has to answer.
+  // Measured on real runs, that is exactly what the surfaces did: they redrew
+  // the run's last ANSWERED question, with a live Continue, and drew the review
+  // the run was actually waiting on nowhere at all.
+  //
+  // `readRunReviewSlot` is the one reader every run surface asks, so the park is
+  // answered there, from the run's own row, beside the two facts about the gate.
+  // These proofs drive it end to end against the real store: park, read, decide,
+  // release, read again.
+  // -------------------------------------------------------------------------
+  describe("SLOT", () => {
+    it("park → slot says parked, with the gate it opened; release → slot says decided", async () => {
+      const runId = `run-${randomUUID()}`;
+      await seedRun(runId);
+      const ev = await produceFor(runId);
+
+      // Before anything parks, the run owes no review anybody can see.
+      const beforePark = await gateStore.readRunReviewSlot(runId);
+      expect(beforePark.parkedOnProducedReview).toBe(false);
+
+      const outcome = await hold.holdRunForProducedReview(
+        {
+          runId,
+          orgId: ORG,
+          fromStatus: "running",
+          stepResults: terminalPayload(),
+          withheld: { status: "completed" },
+        },
+        AUTHORITY,
+      );
+      expect(outcome).toEqual({ held: true, reason: "gate-undecided" });
+
+      // THE PARKED READING: the run says it is waiting on the review of what it
+      // produced, and the slot names the gate that review is.
+      const taskId = autoReviewTaskId(ev.eventId);
+      const parked = await gateStore.readRunReviewSlot(runId);
+      expect(parked).toEqual({
+        reviewTaskId: taskId,
+        awaiting: false,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(parked)).toBe("review");
+      // …while the run itself has not reached any terminal status.
+      expect((await readRun(runId))?.status).toBe("pending_approval");
+      expect((await readRun(runId))?.completed_at).toBeNull();
+
+      // THE DECISION, taken on the gate the slot named — the same commit the
+      // card's own bar makes.
+      await decide(runId, taskId, "approve", ev);
+
+      // DECIDED, AND NOT YET RELEASED — a real, observable window, because the
+      // decision and the terminal write are two writes. The run is still parked
+      // and its OWN gate is already `resolved`; the slot must go on naming it, or
+      // the decided card the reader is looking at regresses to a placeholder.
+      const decidedButHeld = await gateStore.readRunReviewSlot(runId);
+      expect(decidedButHeld).toEqual({
+        reviewTaskId: taskId,
+        awaiting: false,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(decidedButHeld)).toBe("review");
+
+      // …and then the release this branch built.
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "completed",
+      });
+
+      // THE DECIDED READING: the same gate, and the park is gone with the
+      // withheld terminal write the release performed.
+      const released = await gateStore.readRunReviewSlot(runId);
+      expect(released).toEqual({
+        reviewTaskId: taskId,
+        awaiting: false,
+        parkedOnProducedReview: false,
+      });
+      expect(runReviewStepReading(released)).toBe("review");
+      expect((await readRun(runId))?.status).toBe("completed");
+    });
+
+    it("a park whose gate is not minted yet reads WORKING — the placeholder's window", async () => {
+      // The park's first half: the produced event is still awaiting its
+      // orchestration, so there is no gate row to address and the surface draws
+      // the placeholder rather than a question or a completion notice.
+      const runId = `run-${randomUUID()}`;
+      await seedOutboxRow(runId, { status: "pending" });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot).toEqual({
+        reviewTaskId: null,
+        awaiting: true,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(slot)).toBe("working");
+    });
+
+    it("a park that failed CLOSED still reads as a park, though it has neither gate nor pending row", async () => {
+      // `gate-unresolvable`: the linkage is real and names a gate this org has no
+      // row for. There is nothing for the outbox or the gate read to report, and
+      // the run is still held — so the park's own marker is the only thing that
+      // keeps the surface from drawing the answered question again.
+      const runId = `run-${randomUUID()}`;
+      await seedOutboxRow(runId, { continuationAddress: `gate-gone-${randomUUID()}` });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot).toEqual({
+        reviewTaskId: null,
+        awaiting: false,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(slot)).toBe("working");
+      expect((await hold.resolveProducedReviewHold(ORG, runId)).held).toBe(true);
+    });
+
+    it("a park names the gate its OWN production linked, not a newer unlinked one", async () => {
+      // The correlation is the linkage the producing transaction wrote, so a gate
+      // that was minted LATER but belongs to nothing this run produced cannot
+      // displace the one the run is actually held for.
+      const runId = `run-${randomUUID()}`;
+      const heldGate = `gate-held-${randomUUID()}`;
+      await seedGateRow(heldGate, { runId, status: "pending" });
+      await seedOutboxRow(runId, { continuationAddress: heldGate });
+      await seedGateRow(`gate-unlinked-${randomUUID()}`, { runId, status: "pending" });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const linkedTask = (
+        await pool(
+          `SELECT review_task_id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id = $1`,
+          [heldGate],
+        )
+      ).rows[0] as { review_task_id: string };
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot).toEqual({
+        reviewTaskId: linkedTask.review_task_id,
+        awaiting: false,
+        parkedOnProducedReview: true,
+      });
+    });
+
+    it("a run producing AGAIN is not drawn with the review it already answered", async () => {
+      // The second-review shape with its REAL history: the first production was
+      // processed and is linked to a gate that was decided, and the linkage stays
+      // on the row for ever. The run then produces again and parks with that
+      // event still pending, so the gate it is being held for does not exist yet.
+      // Naming the decided one there draws a review the reader already answered
+      // in place of the one that is about to open.
+      const runId = `run-${randomUUID()}`;
+      const firstGate = `gate-first-${randomUUID()}`;
+      await seedGateRow(firstGate, { runId, status: "resolved" });
+      await seedOutboxRow(runId, { status: "processed", continuationAddress: firstGate });
+      await seedOutboxRow(runId, { status: "pending" });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot).toEqual({
+        reviewTaskId: null,
+        awaiting: true,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(slot)).toBe("working");
+    });
+
+    it("an UNDECIDED linked gate wins over a newer decided one — it is what holds the run", async () => {
+      const runId = `run-${randomUUID()}`;
+      const openGate = `gate-open-${randomUUID()}`;
+      const laterDecided = `gate-later-${randomUUID()}`;
+      await seedGateRow(openGate, { runId, status: "pending" });
+      await seedGateRow(laterDecided, { runId, status: "resolved" });
+      await seedOutboxRow(runId, { continuationAddress: openGate });
+      await seedOutboxRow(runId, { continuationAddress: laterDecided });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const openTask = (
+        await pool(
+          `SELECT review_task_id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id = $1`,
+          [openGate],
+        )
+      ).rows[0] as { review_task_id: string };
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot.reviewTaskId).toBe(openTask.review_task_id);
+      expect(slot.parkedOnProducedReview).toBe(true);
+    });
+
+    it("a park does NOT name the run's EARLIER decided review — that is not what holds it", async () => {
+      // The second-review shape, which is the one a "newest gate wins" read gets
+      // wrong. Gate A is decided; the run produced again and is parked; gate B is
+      // not minted yet. Naming gate A there draws a review the reader already
+      // answered over the one the run is actually being held for — and nothing on
+      // the surface could tell them apart. A run that is still held cannot be held
+      // by a gate that is resolved, so a resolved gate is not this park's gate.
+      const runId = `run-${randomUUID()}`;
+      await seedGateRow(`gate-decided-${randomUUID()}`, { runId, status: "resolved" });
+      await seedOutboxRow(runId, { status: "pending" });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      const parked = await gateStore.readRunReviewSlot(runId);
+      expect(parked).toEqual({
+        reviewTaskId: null,
+        awaiting: true,
+        parkedOnProducedReview: true,
+      });
+      expect(runReviewStepReading(parked)).toBe("working");
+
+      // AND IT COMES BACK once the run is no longer held: a decided review is
+      // read-only history on a finished run, which is the reading it always had.
+      await pool(
+        `UPDATE "${q(TEST_SCHEMA)}"."agent_runs"
+           SET status = 'completed', step_results = NULL WHERE id = $1`,
+        [runId],
+      );
+      const released = await gateStore.readRunReviewSlot(runId);
+      expect(released.parkedOnProducedReview).toBe(false);
+      expect(released.reviewTaskId).not.toBeNull();
+      expect(runReviewStepReading(released)).toBe("review");
+    });
+
+    it("a TEMPLATE-DECLARED park is not one — the question keeps its surface", async () => {
+      // The line the reading must not cross. A run parked by a gate its template
+      // declared carries no withheld terminal write, so it is not a produced
+      // review park however many gates it has on file — and the surface must go
+      // on drawing the gate the run is really blocked on.
+      const runId = `run-${randomUUID()}`;
+      const gateId = `gate-declared-${randomUUID()}`;
+      await seedGateRow(gateId, { runId, status: "pending" });
+      await seedParkedRun(runId, [
+        { kind: "wayflow_response", output: "an interrupt, not a park" },
+      ]);
+
+      const slot = await gateStore.readRunReviewSlot(runId);
+      expect(slot.parkedOnProducedReview).toBe(false);
+      expect(slot.reviewTaskId).not.toBeNull();
+    });
+
+    it("a run that never parked reads false, whatever its status", async () => {
+      const runId = `run-${randomUUID()}`;
+      await seedRun(runId, "running");
+      expect((await gateStore.readRunReviewSlot(runId)).parkedOnProducedReview).toBe(false);
+      const unknown = `run-${randomUUID()}`;
+      expect((await gateStore.readRunReviewSlot(unknown)).parkedOnProducedReview).toBe(false);
     });
   });
 });

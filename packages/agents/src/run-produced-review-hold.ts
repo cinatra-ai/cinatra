@@ -194,6 +194,39 @@ export function stripWithheldTerminal(stepResults: unknown): unknown[] {
   return out;
 }
 
+/**
+ * IS THIS RUN PARKED ON THE REVIEW OF WHAT IT PRODUCED? (cinatra#3046.)
+ *
+ * The park's own reading, for the surfaces that have to DRAW it. `pending_approval`
+ * means two different things: a QUESTION the run stopped on and a person has to
+ * answer, or a REVIEW the run's own output opened and this module is holding it
+ * for. They draw opposite screens, and until this was asked no surface could tell
+ * them apart — so a run parked on its review had its last ANSWERED question
+ * redrawn with a live Continue, and the review it was waiting on was drawn
+ * nowhere.
+ *
+ * THE PAIR IS THE ANSWER, and neither half is enough. The STATUS alone is what a
+ * run waiting on a setup field sits in too. The MARKER alone outlives nothing —
+ * `releaseHeldRun` strips it with the terminal write — but a row that has left
+ * the parked status is not held by anything any more, whatever a payload says.
+ *
+ * PURE, and no read of its own: it is handed the two columns and answers from
+ * them, so the caller pays for the row it was already reading. The gate the park
+ * waits for is a SEPARATE question, answered beside this one by the run's review
+ * slot — a park whose gate has not been minted yet is exactly the window the
+ * working placeholder is drawn for.
+ *
+ * It lives HERE, with the writer of the marker it reads, so the two cannot drift
+ * into two ideas of what a park is.
+ */
+export function isParkedOnProducedReview(run: {
+  status: string | null | undefined;
+  stepResults: unknown;
+}): boolean {
+  if (run.status !== PARKED_STATUS) return false;
+  return readWithheldTerminal(parseStepResults(run.stepResults)) !== null;
+}
+
 // ---------------------------------------------------------------------------
 // The row-grounded question.
 // ---------------------------------------------------------------------------

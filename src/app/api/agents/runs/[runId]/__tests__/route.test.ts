@@ -18,11 +18,35 @@ const readAgentRunMessages = vi.fn();
 const readAgentTemplateById = vi.fn();
 const deriveRunHitlContext = vi.fn();
 const readRunReviewSlot = vi.fn(
-  async (runId: string): Promise<{ reviewTaskId: string | null; awaiting: boolean }> => {
+  async (
+    runId: string,
+  ): Promise<{
+    reviewTaskId: string | null;
+    awaiting: boolean;
+    parkedOnProducedReview: boolean;
+  }> => {
     void runId;
-    return { reviewTaskId: null, awaiting: false };
+    return { reviewTaskId: null, awaiting: false, parkedOnProducedReview: false };
   },
 );
+// cinatra#3046 — the park's own reading, re-exported by the store this route
+// already reads the slot through. The real one is a pure predicate over two
+// columns; this stub is the same predicate, so a case can drive it by handing
+// the route a run row rather than by stubbing an answer.
+const PARK_MARKER = "lifecycle_review_withheld_terminal";
+function parkedRunRow(over: Record<string, unknown> = {}) {
+  return {
+    id: "run-1",
+    templateId: "tpl-1",
+    status: "pending_approval",
+    error: null,
+    inputParams: {},
+    stepResults: [
+      { kind: "wayflow_response", [PARK_MARKER]: { status: "completed" } },
+    ],
+    ...over,
+  };
+}
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -42,6 +66,12 @@ vi.mock("@cinatra-ai/agents", () => ({
 // secret, which no unit tree holds).
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   readRunReviewSlot: (runId: string) => readRunReviewSlot(runId),
+  isParkedOnProducedReview: (run: { status?: unknown; stepResults?: unknown }) =>
+    run?.status === "pending_approval" &&
+    Array.isArray(run?.stepResults) &&
+    run.stepResults.some(
+      (e) => typeof e === "object" && e !== null && PARK_MARKER in (e as object),
+    ),
 }));
 vi.mock("@/lib/lifecycle/lifecycle-card-ref", () => ({
   encodeLifecycleGateRef: (p: { runId: string; reviewTaskId: string }) =>
@@ -205,6 +235,7 @@ describe("GET /api/agents/runs/[runId]", () => {
     readRunReviewSlot.mockResolvedValueOnce({
       reviewTaskId: "review-task-1",
       awaiting: false,
+      parkedOnProducedReview: false,
     });
 
     const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
@@ -219,7 +250,11 @@ describe("GET /api/agents/runs/[runId]", () => {
     requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
     readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tpl-1", status: "completed" });
     readAgentRunMessages.mockResolvedValue([]);
-    readRunReviewSlot.mockResolvedValueOnce({ reviewTaskId: null, awaiting: true });
+    readRunReviewSlot.mockResolvedValueOnce({
+      reviewTaskId: null,
+      awaiting: true,
+      parkedOnProducedReview: false,
+    });
 
     const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
     await expect(res.json()).resolves.toMatchObject({
@@ -240,6 +275,67 @@ describe("GET /api/agents/runs/[runId]", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       reviewGate: { ref: null, awaiting: false },
+    });
+  });
+
+  // cinatra#3046 — the third fact of the slot. Without it the run card cannot
+  // tell a run parked on the review of what it produced from a run parked on a
+  // question, so it drew the question, with a live Continue on it.
+  it("carries the produced-review park, so the card can tell the two pauses apart", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue(parkedRunRow());
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockResolvedValueOnce({
+      reviewTaskId: "review-task-1",
+      awaiting: false,
+      parkedOnProducedReview: true,
+    });
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      status: "pending_approval",
+      reviewGate: {
+        ref: "ref:run-1:review-task-1",
+        awaiting: false,
+        producedReviewPark: true,
+      },
+    });
+  });
+
+  it("a run parked on a QUESTION is not carried as a park", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue(
+      parkedRunRow({ stepResults: [{ kind: "wayflow_response" }] }),
+    );
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockResolvedValueOnce({
+      reviewTaskId: "review-task-1",
+      awaiting: false,
+      parkedOnProducedReview: false,
+    });
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    await expect(res.json()).resolves.toMatchObject({
+      reviewGate: { producedReviewPark: false },
+    });
+  });
+
+  // THE FAIL-SOFT IS NOT ALLOWED TO REVIVE THE QUESTION. The two facts about the
+  // GATE degrade to "no review here" when the slot read throws; the PARK is a
+  // fact about the row this route has already read, so it survives the failure.
+  // Answering "not parked" there would put a live Continue back on a gate the
+  // run answered minutes ago.
+  it("answers the park from the run row when the slot read fails", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue(parkedRunRow());
+    readAgentRunMessages.mockResolvedValue([]);
+    readRunReviewSlot.mockRejectedValueOnce(new Error("db down"));
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      reviewGate: { ref: null, awaiting: false, producedReviewPark: true },
     });
   });
 

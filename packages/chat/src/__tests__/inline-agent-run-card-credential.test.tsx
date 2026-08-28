@@ -218,6 +218,39 @@ describe("the review-slot reader asks with the host's own credential", () => {
     }
   });
 
+  // cinatra#3046 — and it carries the slot's THIRD fact. Without it the
+  // conversation's card cannot tell a run parked on the review of what it
+  // produced from a run parked on a question, and it drew the question, with a
+  // live Continue on it.
+  it("carries the produced-review park through, on the host's own credential", async () => {
+    render(brokerHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        fetchCalls.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ...SEED_BODY,
+            status: "pending_approval",
+            reviewGate: { ref: "lcr-park", awaiting: false, producedReviewPark: true },
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    const read = panelProps.current!.readReviewSlot as () => Promise<unknown>;
+    await expect(read()).resolves.toEqual({
+      ref: "lcr-park",
+      awaiting: false,
+      producedReviewPark: true,
+    });
+  });
+
   it("REFUSED: no reader is handed down, so nothing is ever read", async () => {
     panelProps.current = null;
     render(refusedHost(<InlineAgentRunCard runId={RUN_ID} />));

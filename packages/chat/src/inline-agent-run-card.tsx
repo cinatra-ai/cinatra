@@ -115,7 +115,14 @@ type SeedData = {
    * card's first paint already knows whether it is the placeholder or the
    * review screen.
    */
-  reviewGate?: { ref: string | null; awaiting: boolean } | null;
+  reviewGate?: {
+    ref: string | null;
+    awaiting: boolean;
+    /** The run is parked on the review of what it produced (cinatra#3046), so
+     *  the card draws that review where the run is drawn rather than redrawing
+     *  the question the run already moved past. */
+    producedReviewPark?: boolean;
+  } | null;
 };
 
 type LoadFailureReason = "not-found" | "forbidden" | "transient" | "unaddressable";
@@ -182,7 +189,13 @@ function reviewSlotReader(
   credential: ConversationCredential,
   runId: string,
 ):
-  | ((signal: AbortSignal) => Promise<{ ref: string | null; awaiting: boolean } | null>)
+  | ((
+      signal: AbortSignal,
+    ) => Promise<{
+      ref: string | null;
+      awaiting: boolean;
+      producedReviewPark: boolean;
+    } | null>)
   | undefined {
   const request = seedRequest(credential, runId);
   if (!request) return undefined;
@@ -190,7 +203,11 @@ function reviewSlotReader(
     const res = await fetch(request.url, { ...request.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      reviewGate?: { ref?: string | null; awaiting?: boolean } | null;
+      reviewGate?: {
+        ref?: string | null;
+        awaiting?: boolean;
+        producedReviewPark?: boolean;
+      } | null;
     };
     if (!data?.reviewGate) return null;
     return {
@@ -198,6 +215,11 @@ function reviewSlotReader(
         ? data.reviewGate.ref
         : null,
       awaiting: Boolean(data.reviewGate.awaiting),
+      // cinatra#3046 — the third fact of the same slot, carried on the SAME
+      // credential as the other two. Without it the conversation's card cannot
+      // tell a run parked on its own review from a run parked on a question, and
+      // it drew the question.
+      producedReviewPark: Boolean(data.reviewGate.producedReviewPark),
     };
   };
 }

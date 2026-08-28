@@ -896,9 +896,16 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
 // holds the placeholder across it.
 // ---------------------------------------------------------------------------
 
-/** The run's review slot: the server-minted ticket for its review screen, and
- *  whether a produced output's review question is still open. */
-export type RunReviewSlot = { ref: string | null; awaiting: boolean };
+/** The run's review slot: the server-minted ticket for its review screen,
+ *  whether a produced output's review question is still open, and whether the
+ *  RUN is parked on that review (cinatra#3046 — the pause belongs to the review,
+ *  not to a question somebody has to answer). Optional so a surface that has not
+ *  been told reads the same "not parked" this type meant before the field. */
+export type RunReviewSlot = {
+  ref: string | null;
+  awaiting: boolean;
+  producedReviewPark?: boolean;
+};
 
 /**
  * Reads the slot with the surface's OWN credential, and with the caller's abort
@@ -910,7 +917,11 @@ export type RunReviewSlotReader = (
   signal: AbortSignal,
 ) => Promise<RunReviewSlot | null>;
 
-export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = { ref: null, awaiting: false };
+export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = {
+  ref: null,
+  awaiting: false,
+  producedReviewPark: false,
+};
 
 /**
  * How often the slot is re-read while it is waiting for a gate, how many times,
@@ -935,6 +946,9 @@ export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = { ref: null, awaiting: false
  * counted; the deadline aborts it, which both frees the request and lets the
  * count move.
  */
+/** The status a run waits on a gate in — its own review's, or a question's. */
+const PARKED_RUN_STATUS = "pending_approval";
+
 const SLOT_READ_LIMIT = 30;
 const SLOT_HOLD_LIMIT = 5;
 const SLOT_READ_TIMEOUT_MS = 8000;
@@ -948,12 +962,16 @@ function slotReadDelay(reads: number): number {
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
-  const slot = (data as { reviewGate?: { ref?: unknown; awaiting?: unknown } })
-    ?.reviewGate;
+  const slot = (
+    data as {
+      reviewGate?: { ref?: unknown; awaiting?: unknown; producedReviewPark?: unknown };
+    }
+  )?.reviewGate;
   if (!slot) return null;
   return {
     ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
     awaiting: Boolean(slot.awaiting),
+    producedReviewPark: Boolean(slot.producedReviewPark),
   };
 }
 
@@ -1015,13 +1033,32 @@ export function useRunReviewSlot({
     setProbe({ answered: false, reads: 0 });
   }
   const answered = probe.answered;
+  // Is this run held on the review of what it produced? Read off the slot's own
+  // answer beside the status, because the two together are what the park is.
+  const isProducedReviewPark =
+    status === PARKED_RUN_STATUS && slot.producedReviewPark === true;
 
   useEffect(() => {
-    // Only after the work is done. While the run is still working there is
-    // nothing to find, and the placeholder is already the right drawing.
-    if (status !== "completed") return;
-    // Answered under this status, with nothing further owed.
-    if (answered && !slot.awaiting) return;
+    // WHEN THERE IS SOMETHING TO FIND. After the work is done, as before — and
+    // ALSO while the run is parked (cinatra#3046). A run whose output opened a
+    // review waits in `pending_approval` for the decision, so its review's ticket
+    // arrives under THAT status and never under `completed`; a reader that only
+    // looked at a finished run learned about the park's gate exactly never, and
+    // the surface it fed drew the question the run had already answered. While
+    // the run is still working there is nothing to find and the placeholder is
+    // already the right drawing.
+    if (status !== "completed" && status !== PARKED_RUN_STATUS) return;
+    // Answered under this status, with nothing further owed. A run parked on its
+    // PRODUCED OUTPUT'S review always owes another look (cinatra#3046): its gate
+    // can be minted or repaired while the run's status does not move at all, and
+    // the status is this reader's only other freshness signal — so an answer taken
+    // once under such a park would be believed for as long as the park lasted. The
+    // belt below still ends it.
+    //
+    // A run parked on a QUESTION pays nothing for this: the exception is the
+    // PARK's, read off the slot's own answer, not the status's — an ordinary
+    // approval pause answers once and stops, exactly as it did.
+    if (answered && !slot.awaiting && !isProducedReviewPark) return;
     if (probe.reads >= SLOT_READ_LIMIT) return;
     let cancelled = false;
     const timer = window.setTimeout(
@@ -1061,7 +1098,7 @@ export function useRunReviewSlot({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [status, slot.awaiting, answered, probe.reads, read]);
+  }, [status, slot.awaiting, answered, probe.reads, read, isProducedReviewPark]);
 
   return {
     slot,
@@ -1079,10 +1116,19 @@ export function useRunReviewSlot({
     // holds indefinitely: past the budget the surface draws the run's own
     // terminal rendering and the reader goes on looking behind it, so a late
     // answer still swaps the review in.
+    //
+    // AND A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW HOLDS IT TOO
+    // (cinatra#3046) — that IS the window the placeholder is for: the run is held
+    // for a review whose gate row does not exist yet. It is held on the SAME belt
+    // as every other reading rather than for ever: a park that never resolves to a
+    // gate is converged by the recurring sweep, which moves the run's status and
+    // re-keys this reader, and until then the surface must not be a spinner
+    // nothing can end.
     mayStillOpen:
-      status === "completed" &&
       probe.reads < SLOT_READ_LIMIT &&
-      (slot.awaiting ||
-        (!answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1))),
+      ((status === "completed" &&
+        (slot.awaiting ||
+          (!answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1)))) ||
+        isProducedReviewPark),
   };
 }
