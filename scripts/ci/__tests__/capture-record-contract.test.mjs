@@ -572,7 +572,29 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "artifact_review_gate | chat_thread | decided": 3,
       "artifact_review_gate | chat_thread | pending": 10,
       "artifact_review_gate | page_gate_region | decided": 4,
-      "artifact_review_gate | page_gate_region | pending": 5,
+      // MOVED AGAIN 2026-08-28 by cinatra#2936 W6 part 2b batch 2 (+4) — the
+      // REVIEW moment, which batch 1 could not reach because its run package had
+      // never been published to the instance's own registry. This round publishes
+      // it first (with a registry readback) and both of its runs open their
+      // review. `evidence/2936-w6-captures-batch-2/` carries the run ids, the DB
+      // timeline and the grading.
+      //
+      //   artifact_review_gate | page_gate_region | pending   5 -> 6
+      //     the dark sibling of the review page with the gate still open.
+      //   artifact_review_gate | run_card | decided           0 -> 3
+      //     the settled card after Approve was pressed on the run page's OWN
+      //     decision bar: light and dark on the run page, and the DARK sibling of
+      //     the same card as the CONVERSATION draws it. That third one is on a
+      //     /chat path and declares `run_card` on purpose — the settled review the
+      //     conversation draws is the inline run card, which `HOST_URL_CLASS`
+      //     already admits on two classes for exactly this reason. The
+      //     `chat_thread`-declared sibling was DRIVEN and the shipped recorder
+      //     REFUSED it ("host \"chat_thread\" requires
+      //     [data-lifecycle-card-host=\"chat_thread\"] PRESENT (root-scoped); the
+      //     record observed 0"), so that cell stays where it was rather than being
+      //     answered by a picture of a differently-hosted card.
+      "artifact_review_gate | page_gate_region | pending": 6,
+      "artifact_review_gate | run_card | decided": 3,
       "artifact_review_gate | run_card | pending": 4,
       "artifact_review_gate | site_widget | pending": 5,
       // MOVED by cinatra#2936 W6 part 2b batch 1 (+8): one real run's
@@ -594,6 +616,6 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(101);
+    expect(index.records.length).toBe(105);
   });
 });
