@@ -111,6 +111,7 @@ import {
   finalizeExternalA2ARun,
   recoverProducedReviewHold,
   ProducedReviewHoldUnpersistedError,
+  PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
   CINATRA_ENDNODE_OUTPUTS_SENTINEL,
 } from "../execution";
 import type { AgentRunRecord } from "../store";
@@ -668,27 +669,52 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
     holdSpy.mockResolvedValue({ held: false, reason: "no-produced-output" });
   });
 
+  const recovery = {
+    withheld: { status: "completed" as const },
+    stepResults: [{ kind: "wayflow_response", output: "the draft" }],
+  };
+
   it("records the hold when the review still holds the run, and writes nothing", async () => {
     holdSpy.mockResolvedValue({ held: true, reason: "gate-undecided" });
 
     await recoverProducedReviewHold({
       runId: "run-3007",
       run: { orgId: "org-3007", status: "running" },
-      withheld: { status: "completed" },
+      recovery,
       authority: TEST_AUTHORITY,
     });
 
     expect(holdSpy).toHaveBeenCalledTimes(1);
-    expect((holdInput() as { withheld: { status: string } }).withheld.status).toBe("completed");
+    const input = holdInput() as {
+      withheld: { status: string };
+      stepResults: Array<Record<string, unknown>>;
+    };
+    expect(input.withheld.status).toBe("completed");
+    // The payload the failed attempt was withholding travels with it.
+    expect(input.stepResults[0]?.output).toBe("the draft");
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
   });
 
-  it("performs the withheld terminal write when nothing holds the run", async () => {
+  it("performs the withheld terminal write, payload and derivation included", async () => {
     await recoverProducedReviewHold({
       runId: "run-3007",
       run: { orgId: "org-3007", status: "running" },
-      withheld: { status: "failed", error: "the flow failed" },
+      recovery: {
+        withheld: {
+          status: "completed",
+          derivationOutbox: {
+            orgId: "org-3007",
+            templateId: "tmpl-3007",
+            packageVersion: "1.0.0",
+            createdBy: "user-a",
+            content: "the draft",
+            contentIsJson: false,
+            contentHash: "hash-3007",
+          },
+        },
+        stepResults: recovery.stepResults,
+      },
       authority: TEST_AUTHORITY,
     });
 
@@ -696,9 +722,46 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
       [string, string, string, Record<string, unknown> | undefined, unknown]
     >;
     expect(calls).toHaveLength(1);
-    expect([calls[0][1], calls[0][2]]).toEqual(["running", "failed"]);
-    expect(String(calls[0][3]?.error)).toBe("the flow failed");
-    expect(agUiEventTypes()).toContain("RUN_ERROR");
+    expect([calls[0][1], calls[0][2]]).toEqual(["running", "completed"]);
+    expect(calls[0][3]?.stepResults).toEqual(recovery.stepResults);
+    expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: "hash-3007" });
+    expect(agUiEventTypes()).toContain("RUN_FINISHED");
+  });
+
+  it("announces the run's end only AFTER the terminal write lands", async () => {
+    const order: string[] = [];
+    storeMock.transitionRunStatus.mockImplementation(async () => {
+      order.push("transition");
+      return undefined;
+    });
+    publishAgUiEventSpy.mockImplementation(async () => {
+      order.push("announce");
+      return undefined;
+    });
+
+    await recoverProducedReviewHold({
+      runId: "run-3007",
+      run: { orgId: "org-3007", status: "running" },
+      recovery: { withheld: { status: "failed", error: "the flow failed" } },
+      authority: TEST_AUTHORITY,
+    });
+
+    expect(order).toEqual(["transition", "announce"]);
+  });
+
+  it("a STALE terminal write announces NOTHING — another writer owns the row", async () => {
+    storeMock.transitionRunStatus.mockRejectedValue(
+      new storeMock.RunTransitionError({ code: "stale_from_status" }),
+    );
+
+    await recoverProducedReviewHold({
+      runId: "run-3007",
+      run: { orgId: "org-3007", status: "running" },
+      recovery: { withheld: { status: "failed", error: "the flow failed" } },
+      authority: TEST_AUTHORITY,
+    });
+
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
   });
 
   it("throws again while the hold still cannot be recorded, so the worker re-delivers", async () => {
@@ -708,7 +771,7 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
       recoverProducedReviewHold({
         runId: "run-3007",
         run: { orgId: "org-3007", status: "running" },
-        withheld: { status: "completed" },
+        recovery,
         authority: TEST_AUTHORITY,
       }),
     ).rejects.toBeInstanceOf(ProducedReviewHoldUnpersistedError);
@@ -716,21 +779,38 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 
-  it("the thrown sentinel carries the terminal write still owed", async () => {
+  it("the thrown sentinel carries the whole terminal write still owed", async () => {
+    materializeRunArtifactsSpy.mockResolvedValue([
+      { ok: true, outputId: "draft", nodeId: "end", extension: "@cinatra-ai/blog-post-artifact" },
+    ]);
     holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
 
-    const err = await failRunOnWayflowDispatchError({
-      runId: "run-3007",
-      orgId: "org-3007",
-      runError: "the WayFlow runtime could not be reached (fetch failed)",
-      authority: TEST_AUTHORITY,
-    }).catch((e: unknown) => e as ProducedReviewHoldUnpersistedError);
+    const err = (await run().catch((e: unknown) => e)) as ProducedReviewHoldUnpersistedError;
 
     expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
-    expect((err as ProducedReviewHoldUnpersistedError).withheld).toEqual({
-      status: "failed",
-      error: "the WayFlow runtime could not be reached (fetch failed)",
-    });
-    expect((err as ProducedReviewHoldUnpersistedError).delayMs).toBeGreaterThan(0);
+    expect(err.recovery.withheld.status).toBe("completed");
+    // The payload and the derivation capture ride with it: the run's row never
+    // received them, so the re-delivered attempt is the only thing that has them.
+    expect(err.recovery.stepResults?.[0]).toMatchObject({ kind: "wayflow_response" });
+    expect(err.recovery.withheld.derivationOutbox?.contentHash).toEqual(expect.any(String));
+    expect(err.delayMs).toBeGreaterThan(0);
+  });
+
+  it("an OVERSIZED payload is left behind rather than put on the queue", async () => {
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+
+    const huge = "x".repeat(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES + 1);
+    const err = (await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError: huge,
+      authority: TEST_AUTHORITY,
+    }).catch((e: unknown) => e)) as ProducedReviewHoldUnpersistedError;
+
+    expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+    // The verdict still travels; the payload does not.
+    expect(err.recovery.withheld.status).toBe("failed");
+    expect(err.recovery.stepResults).toBeUndefined();
   });
 });

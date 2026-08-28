@@ -802,19 +802,33 @@ export const PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS = 15 * 1000;
  */
 export const MAX_PRODUCED_REVIEW_HOLD_PARKS = 5;
 
+/**
+ * How large the carried terminal payload may be before the re-delivery drops it.
+ *
+ * The park write failing means the run's OWN row never received the payload
+ * either, so the re-delivered attempt is the only thing that still has it — it
+ * has to travel on the job. But job data is a queue record, not a place to put
+ * an unbounded run output, so an oversized payload is left behind and the
+ * recovery lands the run with what its row already holds. Bounded loss on a rare
+ * write fault, against an unbounded queue record on every one.
+ */
+export const PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES = 256_000;
+
+/** The terminal write still owed, as a re-delivered attempt carries it. */
+export type ProducedReviewRecovery = {
+  withheld: WithheldTerminalWrite;
+  /** The terminal step-results payload, when it fits (see the cap above). */
+  stepResults?: unknown[];
+};
+
 export class ProducedReviewHoldUnpersistedError extends Error {
   readonly runId: string;
   readonly delayMs: number;
-  /** The terminal write still owed, carried so the re-delivered attempt can
-   *  record the park (or perform the write) without re-executing the run. The
-   *  derivation capture is deliberately NOT carried — it is an enrichment, and a
-   *  job payload is the wrong place for a run's whole output. */
-  readonly withheld: { status: "completed" | "failed"; error?: string };
-  constructor(args: {
-    runId: string;
-    withheld: { status: "completed" | "failed"; error?: string };
-    delayMs?: number;
-  }) {
+  /** Carried so the re-delivered attempt can finish the run without re-executing
+   *  it: the same verdict, payload and derivation capture the failed attempt was
+   *  withholding. */
+  readonly recovery: ProducedReviewRecovery;
+  constructor(args: { runId: string; recovery: ProducedReviewRecovery; delayMs?: number }) {
     const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
     super(
       `run ${args.runId}: the produced-output review hold could not be recorded — ` +
@@ -823,7 +837,7 @@ export class ProducedReviewHoldUnpersistedError extends Error {
     this.name = "ProducedReviewHoldUnpersistedError";
     this.runId = args.runId;
     this.delayMs = delayMs;
-    this.withheld = args.withheld;
+    this.recovery = args.recovery;
   }
 }
 
@@ -873,7 +887,10 @@ async function producedReviewHoldsRun(args: {
       `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write, attempt re-delivered (fail-closed):`,
       err,
     );
-    throw new ProducedReviewHoldUnpersistedError({ runId, withheld: recoveryWithheld(args.withheld) });
+    throw new ProducedReviewHoldUnpersistedError({
+      runId,
+      recovery: buildProducedReviewRecovery(runId, args.withheld, args.stepResults),
+    });
   }
   if (!outcome.held) return false;
   // The one held outcome with nothing durable behind it (the park write itself
@@ -883,19 +900,39 @@ async function producedReviewHoldsRun(args: {
   if (outcome.reason === "hold-unpersisted") {
     throw new ProducedReviewHoldUnpersistedError({
       runId,
-      withheld: recoveryWithheld(args.withheld),
+      recovery: buildProducedReviewRecovery(runId, args.withheld, args.stepResults),
     });
   }
   return true;
 }
 
-/** The withheld write reduced to what a re-delivered attempt can carry. */
-function recoveryWithheld(
+/** The terminal write reduced to what a re-delivered attempt can carry: the
+ *  whole thing when it fits the cap, the verdict alone when it does not. */
+function buildProducedReviewRecovery(
+  runId: string,
   withheld: WithheldTerminalWrite,
-): { status: "completed" | "failed"; error?: string } {
+  stepResults: readonly unknown[],
+): ProducedReviewRecovery {
+  const full: ProducedReviewRecovery = {
+    withheld,
+    ...(stepResults.length > 0 ? { stepResults: [...stepResults] } : {}),
+  };
+  let size = Number.POSITIVE_INFINITY;
+  try {
+    size = JSON.stringify(full)?.length ?? Number.POSITIVE_INFINITY;
+  } catch {
+    // Not serializable ⇒ it cannot ride the queue at all.
+  }
+  if (size <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) return full;
+  console.warn(
+    `[produced-review-hold] run=${runId} terminal payload too large to carry on the re-delivery ` +
+      `(${size} bytes) — the recovery will land the run with the payload its row already holds`,
+  );
   return {
-    status: withheld.status,
-    ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+    withheld: {
+      status: withheld.status,
+      ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+    },
   };
 }
 
@@ -913,18 +950,20 @@ function recoveryWithheld(
 export async function recoverProducedReviewHold(args: {
   runId: string;
   run: { orgId: string; status: AgentRunStatus };
-  withheld: { status: "completed" | "failed"; error?: string };
+  recovery: ProducedReviewRecovery;
   authority: OrgWriteAuthority | undefined;
 }): Promise<void> {
-  const { runId, run, withheld, authority } = args;
+  const { runId, run, recovery, authority } = args;
+  const withheld = recovery.withheld;
   if (
     await producedReviewHoldsRun({
       runId,
       orgId: run.orgId,
       fromStatus: run.status,
-      // Empty: the park keeps the row's OWN step results (see `parkRun`), which
-      // is what the previous attempt's payload has become.
-      stepResults: [],
+      // The payload the failed attempt was withholding, when it could travel.
+      // Empty ⇒ the park keeps the row's OWN step results (see `parkRun`), which
+      // is the most that survived.
+      stepResults: recovery.stepResults ?? [],
       withheld,
       authority,
       where: "hold recovery",
@@ -934,41 +973,52 @@ export async function recoverProducedReviewHold(args: {
     return;
   }
   // Nothing holds the run, so the terminal write the previous attempt never made
-  // is owed now.
-  if (withheld.status === "failed") {
-    await Promise.resolve(
-      publishAgUiEvent(runId, {
-        type: "RUN_ERROR",
-        threadId: runId,
-        runId,
-        message: withheld.error ?? "the run ended without recording its result",
-        timestamp: Date.now(),
-      } as never),
-    ).catch(() => undefined);
-  } else {
-    await Promise.resolve(
-      publishAgUiEvent(runId, {
-        type: "RUN_FINISHED",
-        threadId: runId,
-        runId,
-        status: "completed",
-        timestamp: Date.now(),
-      } as never),
-    ).catch(() => undefined);
-  }
+  // is owed now — with its payload and, on the success edge, its derivation
+  // capture, exactly as the original transition would have carried them.
+  //
+  // The CAS comes FIRST and the announcement only after it LANDS: a terminal
+  // event published ahead of the write would tell every client the run ended
+  // even when a concurrent stop or release owned the row. That is the order
+  // every other terminal path here uses.
+  let transitioned = true;
   await transitionRunStatus(
     runId,
     run.status,
     withheld.status,
     {
       ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+      ...(recovery.stepResults ? { stepResults: recovery.stepResults } : {}),
       ...(withheld.status === "completed" ? { completedAt: new Date() } : {}),
+      ...(withheld.status === "completed" && withheld.derivationOutbox
+        ? { derivationOutbox: withheld.derivationOutbox }
+        : {}),
     },
     authority,
   ).catch((e) => {
-    if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+    if (e instanceof RunTransitionError && e.code === "stale_from_status") {
+      transitioned = false;
+      console.log(
+        `[produced-review-hold] run=${runId} left ${run.status} concurrently — recovery announces nothing`,
+      );
+      return;
+    }
     throw e;
   });
+  if (!transitioned) return;
+  await Promise.resolve(
+    publishAgUiEvent(
+      runId,
+      (withheld.status === "completed"
+        ? { type: "RUN_FINISHED", threadId: runId, runId, status: "completed", timestamp: Date.now() }
+        : {
+            type: "RUN_ERROR",
+            threadId: runId,
+            runId,
+            message: withheld.error ?? "the run ended without recording its result",
+            timestamp: Date.now(),
+          }) as never,
+    ),
+  ).catch(() => undefined);
   console.log(
     `[produced-review-hold] run=${runId} recovery performed the withheld ${withheld.status} write`,
   );
@@ -2500,7 +2550,7 @@ export async function runAgentBuilderExecutionJob(
     resumedFromSetup?: boolean;
     // cinatra#3007: set ONLY by the worker's unrecordable-hold re-delivery. Its
     // presence makes this leg a hold recovery rather than a dispatch.
-    producedReviewHold?: { status: "completed" | "failed"; error?: string };
+    producedReviewHold?: ProducedReviewRecovery;
     producedReviewHoldPark?: number;
   },
   jobId: string,
@@ -2545,7 +2595,7 @@ async function runAgentBuilderExecutionJobInner(
     // cinatra#2523 — see the outer signature.
     resumedFromSetup?: boolean;
     // cinatra#3007 — see the outer signature.
-    producedReviewHold?: { status: "completed" | "failed"; error?: string };
+    producedReviewHold?: ProducedReviewRecovery;
     producedReviewHoldPark?: number;
   },
   jobId: string,
@@ -2589,7 +2639,7 @@ async function runAgentBuilderExecutionJobInner(
     await recoverProducedReviewHold({
       runId,
       run: { orgId: run.orgId, status: run.status as AgentRunStatus },
-      withheld: holdRecovery,
+      recovery: holdRecovery,
       authority: executionAuthority,
     });
     return;

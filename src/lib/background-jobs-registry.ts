@@ -1477,7 +1477,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           );
           await job.updateData({
             ...(job.data as Record<string, unknown>),
-            producedReviewHold: err.withheld,
+            producedReviewHold: err.recovery,
             producedReviewHoldPark: parks + 1,
           });
           await job.moveToDelayed(Date.now() + err.delayMs, job.token);
