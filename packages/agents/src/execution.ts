@@ -34,6 +34,7 @@ import { readRunTriggerByRunId } from "./trigger-store";
 import {
   resolveTemplateInputSchema,
   assertValuesMatchDeclaredObjectTypes,
+  assertUnsatisfiableHiddenInputs,
 } from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
@@ -2524,6 +2525,20 @@ async function runAgentBuilderExecutionJobInner(
       (run.inputParams ?? {}) as Record<string, unknown>,
       "Run cannot start",
     );
+    // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
+    // above. That one asks "is what we already hold the right shape?"; this one
+    // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
+    // `default`, absent from the required list and written by no product path,
+    // can not: the setup loop below filters hidden fields out of `pendingFields`,
+    // so the run falls straight through to dispatch and the runtime refuses it
+    // seconds after the tick, naming a field nobody was ever shown. Fail here
+    // instead, naming the agent and the input.
+    await assertUnsatisfiableHiddenInputs({
+      properties,
+      alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
+      packageName: template.packageName ?? "<unknown agent>",
+      packageVersion: template.packageVersion,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);

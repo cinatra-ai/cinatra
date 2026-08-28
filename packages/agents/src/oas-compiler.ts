@@ -1753,6 +1753,21 @@ export async function compileOasAgentJson(opts: {
       }
     | undefined;
   const startInputs = startNode?.inputs ?? [];
+  // The FLOW's own `inputs` — the descriptor pyagentspec starts the
+  // conversation from, and therefore the only one whose `default` decides
+  // whether the runtime will accept an omission (cinatra#3003). The StartNode
+  // copy can drift from it; taking the default from THERE would let a
+  // StartNode-only default land in the stored schema and clear the
+  // pre-dispatch guard's suspicion before it ever reads the Flow.
+  const flowInputDefaults = new Map<string, unknown>(
+    (Array.isArray(parsed.inputs) ? parsed.inputs : [])
+      .filter(
+        (i): i is Record<string, unknown> =>
+          !!i && typeof i === "object" && !Array.isArray(i),
+      )
+      .filter((i) => "default" in i && typeof i.title === "string")
+      .map((i) => [i.title as string, i.default]),
+  );
   const startRequired = startNode?.metadata?.cinatra?.required ?? [];
   const startHidden = startNode?.metadata?.cinatra?.hidden ?? [];
   const startRenderers = startNode?.metadata?.cinatra?.inputRenderers ?? {};
@@ -1813,6 +1828,16 @@ export async function compileOasAgentJson(opts: {
     if (startRenderers[title]) propShape["x-renderer"] = startRenderers[title];
     if (startDataSources[title]) propShape["x-data-source"] = startDataSources[title];
     if (startHidden.includes(title)) propShape["x-hidden"] = true;
+    // `default` decides whether the RUNTIME accepts a start message that omits
+    // this input — a flow input without one MUST be in the message or
+    // `start_conversation` refuses the run (cinatra#3003). Without this copy a
+    // template compiled at install time lost the single field the pre-dispatch
+    // satisfiability check reads. Taken from the FLOW descriptor (see
+    // `flowInputDefaults` above), not from `prop`, so the stored schema can
+    // never claim a default the runtime will not honour. Membership rather than
+    // truthiness: `"default": ""` is the canonical hidden-input declaration and
+    // satisfies the runtime like any other value.
+    if (flowInputDefaults.has(title)) propShape.default = flowInputDefaults.get(title);
     inputSchemaProperties[title] = propShape;
   }
   const inputSchema: Record<string, unknown> = {
