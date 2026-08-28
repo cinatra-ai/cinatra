@@ -575,11 +575,17 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "artifact_review_gate | page_gate_region | pending": 5,
       "artifact_review_gate | run_card | pending": 4,
       "artifact_review_gate | site_widget | pending": 5,
-      "recommendation_hold | chat_thread | decided": 4,
-      "recommendation_hold | chat_thread | pending": 5,
+      // MOVED by cinatra#2936 W6 part 2b batch 1 (+8): one real run's
+      // recommendation hold, photographed pending and settled, in the
+      // conversation and on the run page, in BOTH themes — two records per
+      // bucket. Nothing moved between buckets; the four cells this round wrote
+      // to each gained its light/dark pair, which is what a census ratchet is
+      // for.
+      "recommendation_hold | chat_thread | decided": 6,
+      "recommendation_hold | chat_thread | pending": 7,
       "recommendation_hold | page_gate_region | decided": 4,
-      "recommendation_hold | run_card | decided": 8,
-      "recommendation_hold | run_card | pending": 10,
+      "recommendation_hold | run_card | decided": 10,
+      "recommendation_hold | run_card | pending": 12,
       "recommendation_hold | site_widget | decided": 2,
       "recommendation_hold | site_widget | pending": 5,
       "trigger_schedule_proposal | chat_thread | decided": 4,
@@ -588,6 +594,6 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(93);
+    expect(index.records.length).toBe(101);
   });
 });
