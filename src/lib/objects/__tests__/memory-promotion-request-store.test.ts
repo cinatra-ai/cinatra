@@ -22,8 +22,10 @@ vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
 }));
 
+import { MEMORY_PROMOTION_REQUEST_TABLE, memoryPromotionRequestSchemaQueries } from "../memory-promotion-request-schema";
 import {
   buildMemoryPromotionApproveClaim,
+  buildMemoryPromotionRequesterMembershipAssert,
   buildMemoryPromotionTeamContainmentAssert,
   casRejectMemoryPromotionRequest,
   countAudienceVisibleMemoryDuplicates,
@@ -125,6 +127,94 @@ describe("the team-containment assert (the co-committed one)", () => {
   });
 });
 
+// cinatra#1381 review, finding 4. Approve re-checked the TEAM's containment but
+// not the REQUESTER's membership, so a requester removed from the target team
+// while their request sat pending still got the row moved into it.
+describe("the requester-membership assert (the second co-committed one)", () => {
+  it("is BUILT, never run", () => {
+    buildMemoryPromotionRequesterMembershipAssert({ teamId: "team-9", userId: "u-member" });
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
+
+  it("asserts THIS user is in THAT team and raises when they are not", () => {
+    const stmt = buildMemoryPromotionRequesterMembershipAssert({ teamId: "team-9", userId: "u-member" });
+    expect(stmt.text).toContain('FROM public."teamMember" tm');
+    expect(stmt.text).toContain('WHERE tm."teamId" = $1 AND tm."userId" = $2');
+    expect(stmt.text).toMatch(/1 \/ CASE WHEN EXISTS/);
+    expect(stmt.values).toEqual(["team-9", "u-member"]);
+  });
+
+  it("LOCKS the membership row, so a concurrent removal cannot commit underneath", () => {
+    const stmt = buildMemoryPromotionRequesterMembershipAssert({ teamId: "team-9", userId: "u-member" });
+    expect(stmt.text).toMatch(/FOR SHARE/);
+  });
+
+  it("writes nothing: it is a predicate, not a mutation", () => {
+    const stmt = buildMemoryPromotionRequesterMembershipAssert({ teamId: "team-9", userId: "u-member" });
+    expect(stmt.text).not.toMatch(/UPDATE|INSERT|DELETE/);
+  });
+});
+
+// Both co-commit statements and the claim carry a TYPED kind, so the canonical
+// writer's co-commit seam can refuse anything else (review finding 7).
+describe("every co-commit statement names its kind", () => {
+  it("tags the claim and both asserts with the kind the writer allows", () => {
+    expect(
+      buildMemoryPromotionApproveClaim({
+        id: "req-1",
+        orgId: "org-1",
+        decidedBy: "u-admin",
+        expectedRowVersion: 3,
+      }).kind,
+    ).toBe("memory-promotion-approve-claim");
+    expect(buildMemoryPromotionTeamContainmentAssert({ teamId: "t", orgId: "o" }).kind).toBe(
+      "memory-promotion-team-containment-assert",
+    );
+    expect(buildMemoryPromotionRequesterMembershipAssert({ teamId: "t", userId: "u" }).kind).toBe(
+      "memory-promotion-requester-membership-assert",
+    );
+  });
+});
+
+// cinatra#1381 review, finding 8, the single mutation survivor. Replacing the
+// UNIQUE constraint with an always-true CHECK left every suite green, because
+// the store suite only asserted that a duplicate-key ERROR maps to `conflict`,
+// which a hand-thrown error satisfies. The one-pending rule is a property of
+// the emitted DDL, so it is asserted over the emitted DDL. The two-transaction
+// race that proves the constraint actually fires lives in
+// `memory-promotion-atomic-apply.integration.test.ts`, against a real database.
+describe("the one-pending constraint is in the emitted DDL", () => {
+  const createTable = () => {
+    const stmt = memoryPromotionRequestSchemaQueries("cinatra").find((q) =>
+      q.text.includes(`CREATE TABLE IF NOT EXISTS "cinatra"."${MEMORY_PROMOTION_REQUEST_TABLE}"`),
+    );
+    if (!stmt) throw new Error("no CREATE TABLE statement emitted");
+    return stmt.text;
+  };
+
+  it("emits a UNIQUE constraint over the generated pending_object_id column", () => {
+    expect(createTable()).toContain("CONSTRAINT mpr_one_pending UNIQUE (pending_object_id)");
+  });
+
+  it("generates pending_object_id as object_id WHILE PENDING and NULL otherwise", () => {
+    // UNIQUE does not conflict NULLs, so this is what lets any number of DECIDED
+    // requests for one row coexist while at most one PENDING request may exist.
+    expect(createTable()).toContain(
+      "pending_object_id  text GENERATED ALWAYS AS (CASE WHEN status = 'pending' THEN object_id END) STORED",
+    );
+  });
+
+  it("expresses the rule as a table CONSTRAINT, never a separate CREATE UNIQUE INDEX", () => {
+    // A standalone CREATE UNIQUE INDEX on an existing table is what the
+    // schema-migration gate refuses without a migration artifact. The DDL's own
+    // comments discuss that phrase, so match the EXECUTABLE text only.
+    const executable = (text: string) => text.replace(/--[^\n]*/g, "");
+    for (const q of memoryPromotionRequestSchemaQueries("cinatra")) {
+      expect(executable(q.text)).not.toMatch(/CREATE\s+UNIQUE\s+INDEX/i);
+    }
+  });
+});
+
 describe("the request-only transitions", () => {
   it("reject CASes pending -> rejected and never names the objects table", () => {
     casRejectMemoryPromotionRequest({ id: "req-1", orgId: "org-1", decidedBy: "u-admin", note: "dup" });
@@ -133,6 +223,63 @@ describe("the request-only transitions", () => {
     expect(q.text).toContain("WHERE id = $1 AND org_id = $2 AND status = 'pending'");
     expect(q.text).not.toMatch(/"objects"/);
     expect(q.values).toEqual(["req-1", "org-1", "u-admin", "dup"]);
+  });
+
+  // codex round 1 of the #1381 review round. The ladder's membership pre-check
+  // and this write are two operations; a membership revoked in between would
+  // otherwise let a now-non-member reject an organization's request for good.
+  it("carries the decider's MEMBERSHIP inside the same statement, with a row lock", () => {
+    casRejectMemoryPromotionRequest({
+      id: "req-1",
+      orgId: "org-1",
+      decidedBy: "u-admin",
+      note: "dup",
+      requireMemberUserId: "u-admin",
+    });
+    const q = lastQuery();
+    expect(q.text).toContain('FROM public."member" m');
+    expect(q.text).toContain('WHERE m."organizationId" = $2 AND m."userId" = $5');
+    expect(q.text).toContain("AND EXISTS (SELECT 1 FROM member_locked)");
+    // FOR SHARE, so a concurrent revocation waits for this statement rather
+    // than committing underneath it.
+    expect(q.text).toMatch(/FOR SHARE/);
+    expect(q.values).toEqual(["req-1", "org-1", "u-admin", "dup", "u-admin"]);
+  });
+
+  // codex round 2 of the #1381 review round: a lost CAS has two causes and one
+  // rowCount, so the statement measures BOTH at its own snapshot rather than
+  // leaving the caller to ask a second time about a newer world.
+  it("returns the membership count alongside the update count, from ONE snapshot", () => {
+    casRejectMemoryPromotionRequest({
+      id: "req-1",
+      orgId: "org-1",
+      decidedBy: "u-admin",
+      requireMemberUserId: "u-admin",
+    });
+    const q = lastQuery();
+    expect(q.text).toContain("(SELECT count(*) FROM updated)::int AS updated");
+    expect(q.text).toContain("(SELECT count(*) FROM member_locked)::int AS member");
+  });
+
+  it.each([
+    ["a win", { updated: 1, member: 1 }, { ok: true }],
+    ["a lost membership arm", { updated: 0, member: 0 }, { ok: false, reason: "not_a_member" }],
+    ["a concurrent decider", { updated: 0, member: 1 }, { ok: false, reason: "not_pending" }],
+  ])("maps %s to its own cause", (_label, row, expected) => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [row], rowCount: 1 }]);
+    expect(
+      casRejectMemoryPromotionRequest({
+        id: "req-1",
+        orgId: "org-1",
+        decidedBy: "u-admin",
+        requireMemberUserId: "u-admin",
+      }),
+    ).toEqual(expected);
+  });
+
+  it("omits the membership arm entirely when no membership is required", () => {
+    casRejectMemoryPromotionRequest({ id: "req-1", orgId: "org-1", decidedBy: "u-admin" });
+    expect(lastQuery().text).not.toContain('public."member"');
   });
 
   it("supersede CASes pending -> superseded and never names the objects table", () => {
@@ -189,11 +336,32 @@ describe("the advisory duplicate query — AC4's privacy properties, in the SQL"
       viewerId: "u-admin",
     });
     const q = lastQuery();
-    expect(q.text).toContain("(other.visibility = 'organization' OR other.owner_level = 'organization')");
+    expect(q.text).toContain("(other.visibility = 'organization')");
     // No team clause at all, so the org target cannot see team-owned rows.
     expect(q.text).not.toContain("other.owner_level = 'team'");
     expect(q.values).toEqual(["org-1", "mem-1", "@cinatra-ai/memory:concept"]);
   });
+
+  // cinatra#1381 review, finding 6. `owner_level = 'organization'` was an arm of
+  // the audience predicate on BOTH targets. It is a NEAR-MISS of the reader's
+  // rule: `organization/team` is a legal tuple and no clause in
+  // `derived-store-ownership.ts` admits it to an ordinary member or admin, so
+  // the arm let the count be raised by a row the approver cannot read. It is the
+  // same existence-oracle class the team arm was narrowed to close.
+  it.each(["organization", "team"] as const)(
+    "never asks about org-OWNED rows by owner level alone (%s target)",
+    (toVisibility) => {
+      countAudienceVisibleMemoryDuplicates({
+        orgId: "org-1",
+        objectId: "mem-1",
+        objectType: "@cinatra-ai/memory:concept",
+        toVisibility,
+        toOwnerId: toVisibility === "team" ? "team-9" : "org-1",
+        viewerId: "u-admin",
+      });
+      expect(lastQuery().text).not.toContain("other.owner_level = 'organization'");
+    },
+  );
 
   it("adds ONLY the target team's own rows for a team target — never a user-owned team-visible row", () => {
     countAudienceVisibleMemoryDuplicates({

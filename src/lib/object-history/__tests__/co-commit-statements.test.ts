@@ -15,7 +15,11 @@
 //      caller prepends (the #1939 Stage D correctness property);
 //   3. a co-commit statement that RAISES aborts the whole apply — the widen,
 //      its history event and its outbox row go with it;
-//   4. omitting the option changes nothing (every existing caller is unaffected).
+//   4. omitting the option changes nothing (every existing caller is unaffected);
+//   5. the seam is STRUCTURALLY closed (cinatra#1381 review, finding 7): it
+//      accepts a typed descriptor from a closed set of kinds and one
+//      read-shaped statement, so no caller can splice transaction control into
+//      the guarded transaction it rides.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -49,6 +53,7 @@ vi.mock("../change-set", () => ({
 
 import { historyAwareUpsert } from "../canonical-writer";
 import { VersionConflictError } from "../errors";
+import type { CoCommitStatement } from "../types";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 const authority: OrgWriteAuthority = { orgId: "org_1", can: () => true };
@@ -62,12 +67,54 @@ function batchStatements(): Array<{ text: string; values?: unknown[] }> {
   }>;
 }
 
-const claim = {
-  text: "WITH claimed AS (UPDATE memory_promotion_request SET status = 'approved' WHERE id = $1) SELECT 1",
+// The REAL statements the three allowed kinds name. They are the exact text the
+// store's builders emit, because the writer's guard pins each kind to the SHAPE
+// of the statement its builder produces (codex round 1 of the #1381 review
+// round: a `kind` on its own is a label, not proof).
+const claim: CoCommitStatement = {
+  kind: "memory-promotion-approve-claim",
+  text: `WITH claimed AS (
+             UPDATE "cinatra"."memory_promotion_request"
+             SET status = 'approved',
+                 decided_by = $3,
+                 decided_at = now(),
+                 decision_note = $4,
+                 updated_at = now()
+             WHERE id = $1 AND org_id = $2 AND status = 'pending' AND row_version = $5
+             RETURNING id
+           ),
+           claim_assert AS (
+             SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM claimed) THEN 1 ELSE 0 END AS ok
+           )
+           SELECT ok FROM claim_assert`,
   values: ["req-1"],
 };
 
-function upsert(coCommitStatements?: Array<{ text: string; values?: unknown[] }>) {
+const containment: CoCommitStatement = {
+  kind: "memory-promotion-team-containment-assert",
+  text: `WITH locked AS (
+             SELECT 1 AS ok
+             FROM public."team" t
+             WHERE t.id = $1 AND t."organizationId" = $2
+             FOR SHARE
+           )
+           SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM locked) THEN 1 ELSE 0 END AS ok`,
+  values: ["team-1", "org_1"],
+};
+
+const membership: CoCommitStatement = {
+  kind: "memory-promotion-requester-membership-assert",
+  text: `WITH locked AS (
+             SELECT 1 AS ok
+             FROM public."teamMember" tm
+             WHERE tm."teamId" = $1 AND tm."userId" = $2
+             FOR SHARE
+           )
+           SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM locked) THEN 1 ELSE 0 END AS ok`,
+  values: ["team-1", "u-member"],
+};
+
+function upsert(coCommitStatements?: ReadonlyArray<CoCommitStatement>) {
   return historyAwareUpsert(
     { id: "mem_1", type: "@cinatra-ai/memory:concept", data: { conceptId: "a" }, orgId: "org_1" },
     {
@@ -120,7 +167,7 @@ describe("co-commit statements ride the SAME guarded transaction", () => {
   });
 
   it("preserves the write's result as the LAST batch entry", () => {
-    const result = upsert([claim, { text: "SELECT 2" }]);
+    const result = upsert([claim, containment]);
     expect(batchStatements()).toHaveLength(3);
     expect(result.objectId).toBe("mem_1");
     expect(result.resultVersion).toBe(1);
@@ -128,7 +175,7 @@ describe("co-commit statements ride the SAME guarded transaction", () => {
 
   it("copies the caller's values array rather than aliasing it", () => {
     const values = ["req-1"];
-    upsert([{ text: claim.text, values }]);
+    upsert([{ kind: claim.kind, text: claim.text, values }]);
     expect(batchStatements()[0].values).toEqual(values);
     expect(batchStatements()[0].values).not.toBe(values);
   });
@@ -147,5 +194,168 @@ describe("co-commit statements ride the SAME guarded transaction", () => {
     const queued = batchStatements();
     expect(queued).toHaveLength(1);
     expect(queued[0].text).toContain('"objects"');
+  });
+});
+
+// ── the STRUCTURAL guard (cinatra#1381 review, finding 7) ───────────────────
+//
+// The seam splices caller text verbatim into the guarded batch. Before this
+// guard its guarantees lived only in a doc comment, so `{ text: "COMMIT" }`
+// would have ended the guarded transaction, released the advisory lock and left
+// the write running outside it. Each case below is that class of statement,
+// refused BEFORE anything is queued.
+describe("the co-commit seam refuses a statement it cannot vouch for", () => {
+  const refused: Array<[string, CoCommitStatement]> = [
+    [
+      "an unknown kind",
+      { kind: "something-else" as CoCommitStatement["kind"], text: claim.text },
+    ],
+    [
+      "a bare COMMIT",
+      { kind: "memory-promotion-approve-claim", text: "COMMIT" },
+    ],
+    [
+      "a bare ROLLBACK",
+      { kind: "memory-promotion-approve-claim", text: "ROLLBACK" },
+    ],
+    [
+      "a SAVEPOINT",
+      { kind: "memory-promotion-approve-claim", text: "SAVEPOINT s1" },
+    ],
+    [
+      "a BEGIN",
+      { kind: "memory-promotion-approve-claim", text: "BEGIN" },
+    ],
+    [
+      "a second statement smuggled after a separator",
+      { kind: "memory-promotion-approve-claim", text: `${claim.text}; COMMIT` },
+    ],
+    // A kind is a LABEL. These carry a known kind and a plausible opener and
+    // still do something no builder does.
+    [
+      "a data-modifying CTE wearing the claim's kind",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: "WITH changed AS (DELETE FROM sensitive_table RETURNING 1) SELECT count(*) FROM changed",
+      },
+    ],
+    [
+      "a write wearing an ASSERT's kind",
+      {
+        kind: "memory-promotion-team-containment-assert",
+        text: "WITH changed AS (DELETE FROM sensitive_table RETURNING 1) SELECT count(*) FROM changed",
+      },
+    ],
+    [
+      "the claim's own text under an assert's kind",
+      { kind: "memory-promotion-team-containment-assert", text: claim.text },
+    ],
+    [
+      "a containment assert that reads a DIFFERENT table",
+      {
+        kind: "memory-promotion-team-containment-assert",
+        text: membership.text,
+      },
+    ],
+    [
+      "a bare SELECT with no shape at all",
+      { kind: "memory-promotion-approve-claim", text: "SELECT 2" },
+    ],
+    // codex round 2 of the #1381 review round. A full-text regex pinned the
+    // builder's exact prose while leaving the TABLE and the CTE LIST to the
+    // caller. These are the statements it let through.
+    [
+      "a claim that updates a table of the caller's choosing",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: claim.text.replace('"cinatra"."memory_promotion_request"', "public.victim"),
+      },
+    ],
+    [
+      "a claim with a second CTE appended to it",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: claim.text.replace(
+          "           claim_assert AS (",
+          "           evil AS (SELECT pg_sleep(60)),\n           claim_assert AS (",
+        ),
+      },
+    ],
+    [
+      "an assert with a second CTE appended to it",
+      {
+        kind: "memory-promotion-team-containment-assert",
+        text: containment.text.replace(
+          "WITH locked AS (",
+          "WITH evil AS (SELECT pg_sleep(60)), locked AS (",
+        ),
+      },
+    ],
+    [
+      "a claim carrying a SECOND write verb",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: claim.text.replace("RETURNING id", "RETURNING (DELETE FROM other RETURNING 1)"),
+      },
+    ],
+    // codex round 3: without a LEFT identifier boundary, any table whose name
+    // ends with the allowed one passes the write-target check.
+    [
+      "a claim updating a table whose name merely ENDS with the allowed one",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: claim.text.replace(
+          '"cinatra"."memory_promotion_request"',
+          "public.victim_memory_promotion_request",
+        ),
+      },
+    ],
+    [
+      "a claim updating an UNQUALIFIED table of the right name",
+      {
+        kind: "memory-promotion-approve-claim",
+        text: claim.text.replace('"cinatra"."memory_promotion_request"', "memory_promotion_request"),
+      },
+    ],
+    [
+      "a read-only kind wearing a write",
+      {
+        kind: "memory-promotion-requester-membership-assert",
+        text: membership.text.replace("SELECT 1 AS ok", "DELETE FROM t RETURNING 1 AS ok"),
+      },
+    ],
+  ];
+
+  it.each(refused)("refuses %s and queues NOTHING", (_label, statement) => {
+    expect(() => upsert([statement])).toThrow(/co-commit statement/);
+    expect(mocks.buildGuardedOrgWriteBatch).not.toHaveBeenCalled();
+    expect(mocks.runGuardedOrgWriteBatchSync).not.toHaveBeenCalled();
+  });
+
+  it("still accepts all three real callers, in the order the apply sends them", () => {
+    expect(() => upsert([containment, membership, claim])).not.toThrow();
+    expect(batchStatements()).toHaveLength(4);
+  });
+});
+
+// The shapes the writer pins are the shapes the STORE's builders emit. If a
+// builder's text drifts, the writer refuses it and this test says so, rather
+// than the drift being discovered in production.
+describe("the pinned shapes match the real builders", () => {
+  it("accepts the statements the memory promotion store actually produces", async () => {
+    const store = await import("@/lib/objects/memory-promotion-request-store");
+    const real = [
+      store.buildMemoryPromotionTeamContainmentAssert({ teamId: "team-1", orgId: "org_1" }),
+      store.buildMemoryPromotionRequesterMembershipAssert({ teamId: "team-1", userId: "u-member" }),
+      store.buildMemoryPromotionApproveClaim({
+        id: "req-1",
+        orgId: "org_1",
+        decidedBy: "u-admin",
+        note: null,
+        expectedRowVersion: 3,
+      }),
+    ];
+    expect(() => upsert(real)).not.toThrow();
+    expect(batchStatements()).toHaveLength(4);
   });
 });

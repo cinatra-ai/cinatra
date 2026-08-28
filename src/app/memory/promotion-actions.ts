@@ -20,17 +20,18 @@
 // ---------------------------------------------------------------------------
 
 import { revalidatePath } from "next/cache";
-import { z } from "zod";
 
 import { getActorContext, getAuthSession } from "@/lib/auth-session";
-import { requestMemoryPromotion } from "@/lib/memory/memory-promotion-request";
+import {
+  memoryPromotionRequestPayloadSchema,
+  requestMemoryPromotion,
+} from "@/lib/memory/memory-promotion-request";
 
-const inputSchema = z.object({
-  memoryId: z.string().min(1),
-  toVisibility: z.enum(["team", "organization"]),
-  /** Required for a team target (the team that will own the widened row). */
-  targetTeamId: z.string().min(1).optional(),
-});
+// The SHARED payload schema, imported from the service both request surfaces
+// route through (cinatra#1381 review, finding 9). It is the same object the
+// `memory_promote_request` MCP tool validates against, so a value one surface
+// accepts is a value the other accepts.
+const inputSchema = memoryPromotionRequestPayloadSchema;
 
 export type RequestMemoryPromotionActionResult =
   | { ok: true; requestId: string }

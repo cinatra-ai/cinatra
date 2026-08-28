@@ -29,6 +29,8 @@ import "server-only";
 // object row — promotion is via approvals, not direct writes.
 // ---------------------------------------------------------------------------
 
+import { z } from "zod";
+
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { decideResourceAccessForActorContext } from "@/lib/authz/enforce-resource-access";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
@@ -41,6 +43,37 @@ import {
 } from "@/lib/objects/memory-row-promotion";
 
 export type { MemoryPromotionVisibility, CreateMemoryPromotionResult };
+
+/**
+ * An identifier a caller supplies: NON-BLANK after trimming, and BOUNDED.
+ *
+ * `.min(1)` alone accepted `"   "` and a 1 MiB string on both request surfaces
+ * (cinatra#1381 review, finding 9). Each value reaches the store as a lookup
+ * key, and the 1 MiB one was echoed back inside the `not_found` message. Every
+ * refusal was still correct and nothing leaked, so this is hardening: a blank
+ * id is a client bug worth naming, and no real object or team id is anywhere
+ * near the cap.
+ */
+const identifierField = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200);
+
+/**
+ * The request payload BOTH surfaces validate: the `memory_promote_request` MCP
+ * tool and the `requestMemoryPromotionAction` server action. It lives with the
+ * service they already share so the two cannot drift: two hand-kept twins is
+ * exactly how one surface ends up accepting what the other refuses.
+ */
+export const memoryPromotionRequestPayloadSchema = z.object({
+  memoryId: identifierField,
+  toVisibility: z.enum(["team", "organization"]),
+  /** Required for a team target (the team that will own the widened row). */
+  targetTeamId: identifierField.optional(),
+});
+
+export type MemoryPromotionRequestPayload = z.infer<typeof memoryPromotionRequestPayloadSchema>;
 
 export interface RequestMemoryPromotionInput {
   orgId: string;

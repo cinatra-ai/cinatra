@@ -1219,22 +1219,39 @@ function memoryLocationSegment(key: string, index: number): string {
  * `provenance`, `frontmatter` (values AND keys) and `links` are all
  * author-controlled and all scanned.
  */
-const MEMORY_SCAN_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
+export const MEMORY_SCAN_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "externalId",
   "bundleId",
   "cinatraAgentRunId",
 ]);
 
 /**
- * Scan a memory envelope's content surface. THROWS a PrimitiveInvocationError
- * on a hit and on a scan that could not complete.
+ * The INGEST GATE'S ENVELOPE SCAN, as a pure verdict.
  *
  * The scanned surface is everything a bundle author controls and a reader will
  * later be shown. It is the whole object minus {@link MEMORY_SCAN_EXCLUDED_KEYS},
  * walked to the bottom — VALUES and KEYS alike, because a key hides a
  * credential just as well.
+ *
+ * EXPORTED so a SECOND gate over the same envelopes cannot re-derive the
+ * surface and answer differently (cinatra#1381 review, finding 2). The memory
+ * row-promotion gate asks the same question about the same rows at approve
+ * time; deriving its own surface made it scan `externalId`, `bundleId` and
+ * `cinatraAgentRunId`: the three fields THIS scan excludes by name. All three
+ * are on every stored row, so it refused every real memory row. Any gate that
+ * must agree with ingest calls this function; nothing re-implements it.
+ *
+ * Returns a VERDICT rather than throwing, so a caller that owes its user a
+ * value instead of an exception does not have to invert one. The write path's
+ * `scanMemoryConceptEnvelopeForSecrets` maps this verdict to the
+ * PrimitiveInvocationError it always raised, unchanged.
  */
-function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): void {
+export function inspectMemoryConceptEnvelopeForSecrets(
+  data: Record<string, unknown>,
+):
+  | { clean: true }
+  | { clean: false; failure: "scan-failed"; location: string | null; message: string }
+  | { clean: false; failure: "secret-detected"; location: string; pattern: string } {
   const values: Array<{ location: string; value: string }> = [];
   const seen = new Set<object>();
   const walk = (node: unknown, location: string, depth: number): void => {
@@ -1276,14 +1293,12 @@ function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): voi
       walk(entry, segment, 0);
     });
   } catch (err) {
-    throw new PrimitiveInvocationError({
-      code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
-      message: `the memory secret scan could not complete, so this concept was not stored: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-      retryable: false,
-      details: {},
-    });
+    return {
+      clean: false,
+      failure: "scan-failed",
+      location: null,
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 
   for (const { location, value } of values) {
@@ -1291,25 +1306,47 @@ function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): voi
     try {
       label = detectMemorySecretPattern(value);
     } catch (err) {
-      throw new PrimitiveInvocationError({
-        code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
-        message: `the memory secret scan could not complete at ${location}, so this concept was not stored: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        retryable: false,
-        details: {},
-      });
+      return {
+        clean: false,
+        failure: "scan-failed",
+        location,
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
     if (label !== null) {
-      throw new PrimitiveInvocationError({
-        code: OBJECTS_MEMORY_SECRET_DETECTED,
-        message: `this memory concept carries a credential-shaped literal (${label}) at ${location} and was not stored; remove it from the source file and sync again`,
-        retryable: false,
-        // Shape + location only. The matched text is never echoed back.
-        details: { location, pattern: label },
-      });
+      return { clean: false, failure: "secret-detected", location, pattern: label };
     }
   }
+  return { clean: true };
+}
+
+/**
+ * Scan a memory envelope's content surface on the WRITE path. THROWS a
+ * PrimitiveInvocationError on a hit and on a scan that could not complete.
+ * The decision itself is {@link inspectMemoryConceptEnvelopeForSecrets}; this
+ * wrapper only chooses how the write path reports it.
+ */
+function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): void {
+  const verdict = inspectMemoryConceptEnvelopeForSecrets(data);
+  if (verdict.clean) return;
+  if (verdict.failure === "scan-failed") {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+      message:
+        verdict.location === null
+          ? `the memory secret scan could not complete, so this concept was not stored: ${verdict.message}`
+          : `the memory secret scan could not complete at ${verdict.location}, so this concept was not stored: ${verdict.message}`,
+      retryable: false,
+      details: {},
+    });
+  }
+  throw new PrimitiveInvocationError({
+    code: OBJECTS_MEMORY_SECRET_DETECTED,
+    message: `this memory concept carries a credential-shaped literal (${verdict.pattern}) at ${verdict.location} and was not stored; remove it from the source file and sync again`,
+    retryable: false,
+    // Shape + location only. The matched text is never echoed back.
+    details: { location: verdict.location, pattern: verdict.pattern },
+  });
 }
 
 /**

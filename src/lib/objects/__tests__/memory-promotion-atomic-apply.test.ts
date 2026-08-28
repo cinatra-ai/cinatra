@@ -17,14 +17,24 @@ const mocks = vi.hoisted(() => ({
   run: vi.fn((_ctx: unknown, fn: () => unknown) => fn()),
   // store
   readMemoryPromotionRequestById: vi.fn(),
-  buildMemoryPromotionApproveClaim: vi.fn(() => ({ text: "CLAIM SQL", values: ["req-1"] })),
-  buildMemoryPromotionTeamContainmentAssert: vi.fn(() => ({ text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] })),
+  buildMemoryPromotionApproveClaim: vi.fn((): { kind: string; text: string; values: string[] } => ({
+    kind: "memory-promotion-approve-claim",
+    text: "CLAIM SQL",
+    values: ["req-1"],
+  })),
+  buildMemoryPromotionTeamContainmentAssert: vi.fn(() => ({ kind: "memory-promotion-team-containment-assert", text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] })),
+  buildMemoryPromotionRequesterMembershipAssert: vi.fn(() => ({ kind: "memory-promotion-requester-membership-assert", text: "MEMBERSHIP ASSERT SQL", values: ["team-9", "u-member"] })),
   markMemoryPromotionRequestSuperseded: vi.fn(() => true),
   casRejectMemoryPromotionRequest: vi.fn(() => true),
   listMemoryPromotionRequests: vi.fn(() => []),
   countMemoryPromotionRequests: vi.fn(() => 0),
   createMemoryPromotionRequest: vi.fn(),
-  readTeamInOrgSync: vi.fn(() => ({ id: "team-9", name: "Growth" })),
+  readTeamInOrgSync: vi.fn(
+    (input: { teamId: string; orgId: string; memberUserId?: string }): { id: string; name: string } | null => ({
+      id: input.teamId,
+      name: "Growth",
+    }),
+  ),
   countAudienceVisibleMemoryDuplicates: vi.fn(() => 0),
   getObjectById: vi.fn(),
 }));
@@ -33,6 +43,7 @@ vi.mock("@/lib/objects/memory-promotion-request-store", () => ({
   readMemoryPromotionRequestById: mocks.readMemoryPromotionRequestById,
   buildMemoryPromotionApproveClaim: mocks.buildMemoryPromotionApproveClaim,
   buildMemoryPromotionTeamContainmentAssert: mocks.buildMemoryPromotionTeamContainmentAssert,
+  buildMemoryPromotionRequesterMembershipAssert: mocks.buildMemoryPromotionRequesterMembershipAssert,
   markMemoryPromotionRequestSuperseded: mocks.markMemoryPromotionRequestSuperseded,
   casRejectMemoryPromotionRequest: mocks.casRejectMemoryPromotionRequest,
   listMemoryPromotionRequests: mocks.listMemoryPromotionRequests,
@@ -84,6 +95,16 @@ const REQUEST = {
   updatedAt: "2026-08-20T00:00:00.000Z",
 };
 
+/** The same request, re-targeted at a TEAM: the shape both co-commit asserts
+ *  are built for. */
+const TEAM_REQUEST = {
+  ...REQUEST,
+  toVisibility: "team" as const,
+  toOwnerLevel: "team",
+  toOwnerId: "team-9",
+  toOwnerLabel: "Growth",
+};
+
 const ROW = {
   id: "mem-1",
   type: MEMORY_CONCEPT_TYPE_ID,
@@ -110,8 +131,9 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) if (typeof m === "function" && "mockClear" in m) m.mockClear();
   mocks.readMemoryPromotionRequestById.mockReturnValue(REQUEST);
   mocks.getObjectById.mockReturnValue(ROW);
-  mocks.buildMemoryPromotionApproveClaim.mockReturnValue({ text: "CLAIM SQL", values: ["req-1"] });
-  mocks.buildMemoryPromotionTeamContainmentAssert.mockReturnValue({ text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] });
+  mocks.buildMemoryPromotionApproveClaim.mockReturnValue({ kind: "memory-promotion-approve-claim", text: "CLAIM SQL", values: ["req-1"] });
+  mocks.buildMemoryPromotionTeamContainmentAssert.mockReturnValue({ kind: "memory-promotion-team-containment-assert", text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] });
+  mocks.buildMemoryPromotionRequesterMembershipAssert.mockReturnValue({ kind: "memory-promotion-requester-membership-assert", text: "MEMBERSHIP ASSERT SQL", values: ["team-9", "u-member"] });
   mocks.verifySessionAuthority.mockResolvedValue({ orgId: "org-1", can: () => true });
   mocks.historyAwareUpsert.mockReturnValue({ objectId: "mem-1", resultVersion: 4 });
   mocks.getStore.mockReturnValue(undefined);
@@ -130,37 +152,61 @@ describe("the production atomic apply", () => {
     });
     expect(mocks.historyAwareUpsert).toHaveBeenCalledTimes(1);
     const [, options] = mocks.historyAwareUpsert.mock.calls[0];
-    expect(options.coCommitStatements).toEqual([{ text: "CLAIM SQL", values: ["req-1"] }]);
+    expect(options.coCommitStatements).toEqual([
+      { kind: "memory-promotion-approve-claim", text: "CLAIM SQL", values: ["req-1"] },
+    ]);
   });
 
   it("an ORGANIZATION target co-commits the claim ALONE — there is no team to contain", async () => {
     await approve();
     const [, options] = mocks.historyAwareUpsert.mock.calls[0];
-    expect(options.coCommitStatements).toEqual([{ text: "CLAIM SQL", values: ["req-1"] }]);
+    expect(options.coCommitStatements).toEqual([
+      { kind: "memory-promotion-approve-claim", text: "CLAIM SQL", values: ["req-1"] },
+    ]);
     expect(mocks.buildMemoryPromotionTeamContainmentAssert).not.toHaveBeenCalled();
+    expect(mocks.buildMemoryPromotionRequesterMembershipAssert).not.toHaveBeenCalled();
   });
 
-  it("a TEAM target co-commits the CONTAINMENT ASSERT too, ahead of the claim (codex round 1, finding 1)", async () => {
-    const teamRequest = {
-      ...REQUEST,
-      toVisibility: "team" as const,
-      toOwnerLevel: "team",
-      toOwnerId: "team-9",
-      toOwnerLabel: "Growth",
-    };
-    mocks.readMemoryPromotionRequestById.mockReturnValue(teamRequest);
+  it("a TEAM target co-commits BOTH asserts ahead of the claim (codex round 1 finding 1; review finding 4)", async () => {
+    mocks.readMemoryPromotionRequestById.mockReturnValue(TEAM_REQUEST);
     await expect(approve()).resolves.toEqual({ ok: true });
     expect(mocks.buildMemoryPromotionTeamContainmentAssert).toHaveBeenCalledWith({
       teamId: "team-9",
       orgId: "org-1",
     });
+    // The REQUESTER's membership, not the approver's: the request surface only
+    // ever admitted a team the requester belonged to.
+    expect(mocks.buildMemoryPromotionRequesterMembershipAssert).toHaveBeenCalledWith({
+      teamId: "team-9",
+      userId: "u-member",
+    });
     const [, options] = mocks.historyAwareUpsert.mock.calls[0];
-    // Containment first: a team that is not in this organization AT COMMIT TIME
-    // aborts the claim, the widen, the history event and the outbox row.
+    // Asserts first: a team that is not in this organization AT COMMIT TIME, or
+    // a requester who is not in it, aborts the claim, the widen, the history
+    // event and the outbox row.
     expect(options.coCommitStatements).toEqual([
-      { text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] },
-      { text: "CLAIM SQL", values: ["req-1"] },
+      { kind: "memory-promotion-team-containment-assert", text: "TEAM ASSERT SQL", values: ["team-9", "org-1"] },
+      { kind: "memory-promotion-requester-membership-assert", text: "MEMBERSHIP ASSERT SQL", values: ["team-9", "u-member"] },
+      { kind: "memory-promotion-approve-claim", text: "CLAIM SQL", values: ["req-1"] },
     ]);
+  });
+
+  it("REFUSES a TEAM target whose requester has left the team, before the apply (review finding 4)", async () => {
+    mocks.readMemoryPromotionRequestById.mockReturnValue(TEAM_REQUEST);
+    // The team is still in the org; the REQUESTER is no longer in the team. The
+    // production reader answers null exactly for that shape.
+    mocks.readTeamInOrgSync.mockImplementation((input: { memberUserId?: string }) =>
+      input.memberUserId ? null : { id: "team-9", name: "Growth" },
+    );
+    await expect(approve()).resolves.toMatchObject({
+      ok: false,
+      code: "invalid_state",
+      message: expect.stringContaining("no longer a member"),
+    });
+    expect(mocks.historyAwareUpsert).not.toHaveBeenCalled();
+    expect(mocks.buildMemoryPromotionApproveClaim).not.toHaveBeenCalled();
+    // The request is NOT destroyed: a member admin can still reject it.
+    expect(mocks.markMemoryPromotionRequestSuperseded).not.toHaveBeenCalled();
   });
 
   it("pins the widen to the CAPTURED row version and writes the target tuple", async () => {

@@ -186,8 +186,42 @@ export type HistoryWriteOptions = {
    * The statements' RESULTS are not returned — the write's own result stays the
    * last batch entry. A co-commit statement therefore signals failure the only
    * way a batch can: by raising.
+   *
+   * STRUCTURAL, not documentary (cinatra#1381 review, finding 7): each entry
+   * names a {@link CoCommitStatementKind} from a closed set, and the writer
+   * refuses an unknown kind, a statement that is not one WITH/SELECT, and a
+   * statement carrying a `;`. So the seam cannot be handed a transaction-control
+   * statement that would end the guarded transaction out from under the write.
    */
-  coCommitStatements?: ReadonlyArray<{ text: string; values?: readonly unknown[] }>;
+  coCommitStatements?: ReadonlyArray<CoCommitStatement>;
+};
+
+/**
+ * The CLOSED set of co-commit statement kinds. A co-commit statement runs
+ * verbatim inside the write's guarded transaction, so the seam cannot be left
+ * as "any string a caller passes": a caller that passed a transaction-control
+ * statement would end the guarded transaction early, release the advisory lock
+ * and leave the write running outside it. Naming each kind here makes the set
+ * of statements that may ride the seam reviewable in one place, and the writer
+ * refuses a kind it does not know (cinatra#1381 review, finding 7).
+ *
+ * Adding a kind is a deliberate act: add it here, and add the builder that
+ * produces it to the list in the writer's guard comment.
+ */
+export type CoCommitStatementKind =
+  /** `buildMemoryPromotionApproveClaim`: the pending -> approved CAS claim. */
+  | "memory-promotion-approve-claim"
+  /** `buildMemoryPromotionTeamContainmentAssert`: the locking team assert. */
+  | "memory-promotion-team-containment-assert"
+  /** `buildMemoryPromotionRequesterMembershipAssert`: the locking membership
+   *  assert that re-checks the requester at approve time. */
+  | "memory-promotion-requester-membership-assert";
+
+/** A typed co-commit statement descriptor. */
+export type CoCommitStatement = {
+  readonly kind: CoCommitStatementKind;
+  readonly text: string;
+  readonly values?: readonly unknown[];
 };
 
 export type VersionConflictReason =

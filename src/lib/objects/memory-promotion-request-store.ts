@@ -8,6 +8,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import type { CoCommitStatement } from "@/lib/object-history/types";
 
 import { MEMORY_PROMOTION_REQUEST_TABLE } from "./memory-promotion-request-schema";
 
@@ -314,30 +315,82 @@ export function countMemoryPromotionRequests(input: {
  * is why a reject is a plain single-statement update while an approve is the
  * co-committed claim below.
  */
+export type MemoryPromotionRejectOutcome =
+  | { ok: true }
+  /** The request was not pending: somebody else decided it first. */
+  | { ok: false; reason: "not_pending" }
+  /** The decider held no membership in this organization AT THE WRITE. */
+  | { ok: false; reason: "not_a_member" };
+
 export function casRejectMemoryPromotionRequest(input: {
   id: string;
   orgId: string;
   decidedBy: string;
   note?: string | null;
-}): boolean {
+  /** The decider whose org MEMBERSHIP must hold AT THE MOMENT OF THE WRITE.
+   *  Omit only for a caller that has no membership to assert. */
+  requireMemberUserId?: string;
+}): MemoryPromotionRejectOutcome {
   ensurePostgresSchema();
   const schema = q();
+  const values: unknown[] = [input.id, input.orgId, input.decidedBy, input.note ?? null];
+
+  // MEMBERSHIP IN THE SAME STATEMENT, AND ITS OWN ANSWER OUT OF IT.
+  //
+  // The ladder pre-checks the decider's membership so the ordinary refusal has
+  // an actionable message. That read and this write are two operations, so a
+  // membership revoked in between would otherwise let a now-non-member reject
+  // an organization's request permanently. Carrying the predicate INSIDE the
+  // UPDATE closes that window: one statement is one snapshot, and `FOR SHARE`
+  // makes a concurrent revocation wait for this statement rather than commit
+  // underneath it.
+  //
+  // WHY THE STATEMENT ALSO RETURNS THE MEMBERSHIP COUNT (codex round 2 of the
+  // #1381 review round). A lost CAS has two possible causes and one rowCount,
+  // so asking a SECOND time afterwards cannot say which: the second read sees a
+  // newer world and would report "decided concurrently" for a membership that
+  // was restored, or `not_authorized` for a race that a real member lost. Both
+  // counts are measured HERE, at one snapshot, so the cause the caller is told
+  // is the cause that actually applied.
+  let text: string;
+  if (input.requireMemberUserId === undefined) {
+    text = `WITH updated AS (
+  UPDATE "${schema}"."${T}"
+  SET status = 'rejected', decided_by = $3, decided_at = now(),
+      decision_note = $4, updated_at = now()
+  WHERE id = $1 AND org_id = $2 AND status = 'pending'
+  RETURNING id
+)
+SELECT (SELECT count(*) FROM updated)::int AS updated, 1 AS member`;
+  } else {
+    values.push(input.requireMemberUserId);
+    text = `WITH member_locked AS (
+  SELECT 1 AS ok FROM public."member" m
+  WHERE m."organizationId" = $2 AND m."userId" = $${values.length}
+  FOR SHARE
+),
+updated AS (
+  UPDATE "${schema}"."${T}"
+  SET status = 'rejected', decided_by = $3, decided_at = now(),
+      decision_note = $4, updated_at = now()
+  WHERE id = $1 AND org_id = $2 AND status = 'pending'
+    AND EXISTS (SELECT 1 FROM member_locked)
+  RETURNING id
+)
+SELECT (SELECT count(*) FROM updated)::int AS updated,
+       (SELECT count(*) FROM member_locked)::int AS member`;
+  }
+
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
-    queries: [
-      {
-        text: `UPDATE "${schema}"."${T}"
-SET status = 'rejected',
-    decided_by = $3,
-    decided_at = now(),
-    decision_note = $4,
-    updated_at = now()
-WHERE id = $1 AND org_id = $2 AND status = 'pending'`,
-        values: [input.id, input.orgId, input.decidedBy, input.note ?? null],
-      },
-    ],
+    queries: [{ text, values }],
   });
-  return (res?.rowCount ?? 0) === 1;
+  const row = (res?.rows?.[0] ?? {}) as { updated?: number; member?: number };
+  if (Number(row.updated ?? 0) === 1) return { ok: true };
+  // Membership first: it is the stronger statement about this caller, and at
+  // this one snapshot it is the reason the UPDATE could not have matched.
+  if (Number(row.member ?? 0) === 0) return { ok: false, reason: "not_a_member" };
+  return { ok: false, reason: "not_pending" };
 }
 
 /** Move a pending request to `superseded` (an edit-after-request invalidated
@@ -390,9 +443,10 @@ export function buildMemoryPromotionApproveClaim(input: {
   /** The version the request captured. Pinned in the WHERE as well, so a
    *  request whose captured anchor was somehow rewritten cannot be claimed. */
   expectedRowVersion: number;
-}): { text: string; values: unknown[] } {
+}): CoCommitStatement {
   const schema = q();
   return {
+    kind: "memory-promotion-approve-claim",
     text: `WITH claimed AS (
              UPDATE "${schema}"."${T}"
              SET status = 'approved',
@@ -445,8 +499,9 @@ export function buildMemoryPromotionApproveClaim(input: {
 export function buildMemoryPromotionTeamContainmentAssert(input: {
   teamId: string;
   orgId: string;
-}): { text: string; values: unknown[] } {
+}): CoCommitStatement {
   return {
+    kind: "memory-promotion-team-containment-assert",
     text: `WITH locked AS (
              SELECT 1 AS ok
              FROM public."team" t
@@ -455,6 +510,43 @@ export function buildMemoryPromotionTeamContainmentAssert(input: {
            )
            SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM locked) THEN 1 ELSE 0 END AS ok`,
     values: [input.teamId, input.orgId],
+  };
+}
+
+/**
+ * The REQUESTER-MEMBERSHIP assert, as a CO-COMMIT statement.
+ *
+ * The request surface only ever opens a TEAM request for a team the REQUESTER
+ * belongs to. That condition was checked once, when the request was opened, and
+ * a pending request can outlive it: a requester removed from the team while the
+ * request sat pending would otherwise still get the row moved into that team
+ * (cinatra#1381 review, finding 4).
+ *
+ * Same shape and same reasoning as the containment assert next to it. It LOCKS
+ * the membership row `FOR SHARE`, so a concurrent DELETE of that membership
+ * blocks until this transaction commits or rolls back, and the membership the
+ * assert reports is the membership at COMMIT time. It raises the same way every
+ * other in-transaction assert on this path does (division by zero on an empty
+ * match), so a race resolves as a stale snapshot rather than a widen into a
+ * team the requester has left.
+ *
+ * The decide ladder pre-checks the same predicate for an actionable message;
+ * this statement is the guarantee for the window the pre-check cannot cover.
+ */
+export function buildMemoryPromotionRequesterMembershipAssert(input: {
+  teamId: string;
+  userId: string;
+}): CoCommitStatement {
+  return {
+    kind: "memory-promotion-requester-membership-assert",
+    text: `WITH locked AS (
+             SELECT 1 AS ok
+             FROM public."teamMember" tm
+             WHERE tm."teamId" = $1 AND tm."userId" = $2
+             FOR SHARE
+           )
+           SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM locked) THEN 1 ELSE 0 END AS ok`,
+    values: [input.teamId, input.userId],
   };
 }
 
@@ -472,8 +564,11 @@ export function buildMemoryPromotionTeamContainmentAssert(input: {
  *      other person holds a similar private note. This is the AC's "never
  *      inspect or signal another user's private row", written as a predicate.
  *   2. the audience predicate is the TARGET's, INTERSECTED with what the
- *      VIEWER may already see. For an organization target that is the
- *      org-visible rows. For a TEAM target the team's own rows are counted ONLY
+ *      VIEWER may already see, and every arm of it is a clause the CANONICAL
+ *      read filter (`derived-store-ownership.ts`) would also admit, never a
+ *      near-miss of one. For an organization target that is the org-VISIBLE
+ *      rows (`visibility = 'organization'`), not the org-OWNED ones: an
+ *      org-owned row that is only team-visible is readable by nobody here. For a TEAM target the team's own rows are counted ONLY
  *      when the viewer is a member of that team — an org admin reviewing a
  *      promotion into a team they are not in would otherwise learn that the team
  *      already holds a concept with this identity, which is an existence oracle
@@ -501,7 +596,19 @@ export function countAudienceVisibleMemoryDuplicates(input: {
   ensurePostgresSchema();
   const schema = q();
   const values: unknown[] = [input.orgId, input.objectId, input.objectType];
-  let audience = `(other.visibility = 'organization' OR other.owner_level = 'organization')`;
+  // The ORGANIZATION arm is `visibility = 'organization'` and NOTHING ELSE.
+  //
+  // It used to also carry `OR other.owner_level = 'organization'`, which is a
+  // NEAR-MISS of the reader's rule rather than the reader's rule (cinatra#1381
+  // review, finding 6). `owner_level = 'organization'` with
+  // `visibility = 'team'` is a legal tuple in the canonical vocabulary, and NO
+  // clause in `derived-store-ownership.ts` admits it to an ordinary member or
+  // admin, so that arm let the count be raised by a row the approver cannot
+  // read, which is the existence oracle the team arm was narrowed to close.
+  // Every row this flow actually promotes to an organization target is written
+  // `organization/organization`, so the narrowed arm still counts them all.
+  const orgVisible = `other.visibility = 'organization'`;
+  let audience = `(${orgVisible})`;
   if (input.toVisibility === "team") {
     values.push(input.toOwnerId);
     const teamParam = `$${values.length}`;
@@ -510,7 +617,7 @@ export function countAudienceVisibleMemoryDuplicates(input: {
     audience = `((other.owner_level = 'team' AND other.owner_id = ${teamParam}
                   AND EXISTS (SELECT 1 FROM public."teamMember" tm
                               WHERE tm."teamId" = ${teamParam} AND tm."userId" = ${viewerParam}))
-                 OR other.visibility = 'organization' OR other.owner_level = 'organization')`;
+                 OR ${orgVisible})`;
   }
   const key = (alias: string) =>
     `lower(btrim(coalesce(${alias}.data->'frontmatter'->>'title', ${alias}.data->>'conceptId', '')))`;

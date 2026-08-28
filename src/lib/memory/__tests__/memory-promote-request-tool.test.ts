@@ -21,9 +21,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/mcp-tool-scope", () => ({ resolveScope: mocks.resolveScope }));
-vi.mock("../memory-promotion-request", () => ({
-  requestMemoryPromotion: mocks.requestMemoryPromotion,
-}));
+// The SERVICE is mocked; its PAYLOAD SCHEMA is the real one, because that
+// schema is the thing both request surfaces now share (review finding 9).
+vi.mock("../memory-promotion-request", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    memoryPromotionRequestPayloadSchema: actual.memoryPromotionRequestPayloadSchema,
+    requestMemoryPromotion: mocks.requestMemoryPromotion,
+  };
+});
 
 import { registerMemoryPromotionPrimitives } from "../mcp";
 
@@ -110,12 +116,51 @@ describe("the handler", () => {
     expect(mocks.requestMemoryPromotion).not.toHaveBeenCalled();
   });
 
-  it("rejects an out-of-matrix visibility at the schema, before any read", async () => {
+  // cinatra#1381 review, finding 10. The tool used to `parse` and let the schema
+  // error ESCAPE, while its server-action twin `safeParse`d and answered
+  // `invalid_state`, against a module header that promises refusals are VALUES
+  // and that this tool never throws. It now answers the way its twin does.
+  it.each([
+    ["a visibility outside the matrix", { memoryId: "mem-1", toVisibility: "public" }],
+    ["a narrowing visibility", { memoryId: "mem-1", toVisibility: "private" }],
+    ["an empty memoryId", { memoryId: "", toVisibility: "organization" }],
+    ["a blank memoryId", { memoryId: "   ", toVisibility: "organization" }],
+    ["a blank targetTeamId", { memoryId: "mem-1", toVisibility: "team", targetTeamId: "  " }],
+    ["a missing payload", undefined],
+    ["a payload that is not an object", "mem-1"],
+  ])("refuses %s as a VALUE: invalid_state, never a throw", async (_label, payload) => {
     const { handler } = registered();
-    await expect(handler({ memoryId: "mem-1", toVisibility: "public" })).rejects.toThrow();
-    await expect(handler({ memoryId: "mem-1", toVisibility: "private" })).rejects.toThrow();
-    await expect(handler({ memoryId: "", toVisibility: "organization" })).rejects.toThrow();
+    const res = await handler(payload);
+    expect(res.structuredContent).toEqual({
+      ok: false,
+      code: "invalid_state",
+      message: "Invalid promotion request payload.",
+    });
     expect(mocks.requestMemoryPromotion).not.toHaveBeenCalled();
+  });
+
+  // cinatra#1381 review, finding 9. `.min(1)` accepted "   " and a 1 MiB string
+  // on both surfaces, and the 1 MiB value was echoed back inside the
+  // `not_found` message.
+  it("refuses an identifier past the byte cap on either field", async () => {
+    const { handler } = registered();
+    const huge = "m".repeat(1024 * 1024);
+    expect((await handler({ memoryId: huge, toVisibility: "organization" })).structuredContent).toMatchObject({
+      ok: false,
+      code: "invalid_state",
+    });
+    expect(
+      (await handler({ memoryId: "mem-1", toVisibility: "team", targetTeamId: huge })).structuredContent,
+    ).toMatchObject({ ok: false, code: "invalid_state" });
+    expect(mocks.requestMemoryPromotion).not.toHaveBeenCalled();
+  });
+
+  it("TRIMS the identifiers it accepts, so a padded id is one lookup key", async () => {
+    const { handler } = registered();
+    await handler({ memoryId: "  mem-1  ", toVisibility: "team", targetTeamId: " team-9 " });
+    expect(mocks.requestMemoryPromotion).toHaveBeenCalledWith(
+      expect.objectContaining({ memoryId: "mem-1", targetTeamId: "team-9" }),
+    );
   });
 
   it("returns business refusals as VALUES so an agent can branch on `code`", async () => {
@@ -152,6 +197,27 @@ describe("the scope resolver this tool inherits", () => {
       // Neither file may hold a second copy of the precedence rule.
       expect(source).not.toContain("function resolveScope(");
     }
+  });
+
+  // cinatra#1381 review, finding 9. Two hand-kept twins is how one surface ends
+  // up accepting what the other refuses; the schema now has ONE definition and
+  // both surfaces import it.
+  it("BOTH request surfaces validate against the SAME schema object", async () => {
+    const service = await import("../memory-promotion-request");
+    const { meta } = registered();
+    expect(meta.inputSchema).toBe(service.memoryPromotionRequestPayloadSchema);
+
+    const here = dirname(fileURLToPath(import.meta.url));
+    const action = readFileSync(
+      join(here, "..", "..", "..", "app", "memory", "promotion-actions.ts"),
+      "utf8",
+    );
+    expect(action).toContain("memoryPromotionRequestPayloadSchema");
+    // No second literal schema anywhere on either surface.
+    expect(action).not.toMatch(/z\.object\(/);
+    expect(
+      readFileSync(join(here, "..", "mcp.ts"), "utf8"),
+    ).not.toMatch(/z\.object\(/);
   });
 
   it("NO module on this flow reads a dev-bypass env var", () => {

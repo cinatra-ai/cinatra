@@ -44,6 +44,15 @@ import { mcpRequestContextStorage } from "@/lib/mcp-request-context";
 //      failure below therefore leaves the request PENDING and the row
 //      UNTOUCHED.
 //
+//      That property rests on the widen's CAS miss ABORTING IN SQL, not on a
+//      JavaScript check after the batch commits. It did not, until cinatra#1381
+//      review finding 1: the canonical writer's assert column was pruned by the
+//      planner, so a miss returned an all-null row and the claim committed
+//      while the widen did not. The writer now projects the assert column and
+//      raises 22012 on a miss, and
+//      `memory-promotion-atomic-apply.integration.test.ts` proves it against a
+//      real Postgres with the real statement sequence. A mocked writer cannot.
+//
 // EVERY heavy reader/writer is resolved through injected deps. Tests inject a
 // complete in-memory deps object over the SAME code path (DI — never a live
 // DB), so the CAS / matrix / scan / authorization ladders are proven without
@@ -51,10 +60,7 @@ import { mcpRequestContextStorage } from "@/lib/mcp-request-context";
 // ---------------------------------------------------------------------------
 
 import type { ApprovalViewer } from "@/lib/approvals/sources/types";
-import {
-  collectMemoryScannableStrings,
-  detectMemoryCredentialPattern,
-} from "@cinatra-ai/memory/secret-scan";
+import { inspectMemoryConceptEnvelopeForSecrets } from "@cinatra-ai/objects/mcp-handlers";
 import {
   verifySessionAuthority,
   OrgWriteAuthorityError,
@@ -193,22 +199,33 @@ export function widenTargetFor(
   return { ok: true, ownerLevel: "team", ownerId: targetTeamId };
 }
 
-// ── fail-closed secret/PII scan (the #1378 detector, REUSED) ────────────────
+// ── fail-closed secret/PII scan (THE INGEST GATE'S OWN SCAN, REUSED) ───────
 
 /**
- * Fail-CLOSED credential scan of the CAS-BOUND memory content, using the
- * cinatra#1378 detector (`@cinatra-ai/memory/secret-scan`) rather than a second
- * implementation — a promotion gate with its own regex set would drift away
- * from the ingest gate and let through exactly what ingest refuses.
+ * Fail-CLOSED credential scan of the CAS-BOUND memory content.
  *
- * Fail-closed in both directions, the same way #1378 is: a credential-shaped
- * literal ANYWHERE in the envelope is NOT clean, and a scan that cannot
- * COMPLETE (a cyclic value, a bound exceeded, a scanner error) is NOT clean
- * either. "Could not look" and "looked and found nothing" must never produce
- * the same answer.
+ * IT IS THE INGEST GATE'S SCAN, CALLED, not a second gate over the same
+ * envelopes. `inspectMemoryConceptEnvelopeForSecrets` is the exact function
+ * `objects_save` / `objects_update` run before a memory concept is stored, so
+ * the surface, the exclusions and the detector are one implementation and
+ * cannot drift.
  *
- * The matched text is never returned — only the boolean and, for the caller's
- * message, nothing at all.
+ * WHY THAT IS LOAD-BEARING (cinatra#1381 review, finding 2). This gate used to
+ * walk the envelope itself with `collectMemoryScannableStrings`, which, by
+ * design and by its own header, excludes NOTHING by name. The ingest gate
+ * excludes three keys by name: `externalId` (a sha256 hex digest), `bundleId`
+ * and `cinatraAgentRunId` (uuids). All three are server-stamped onto EVERY
+ * stored memory concept, and the detector flags all three, correctly, as
+ * high-entropy tokens. So the promotion gate refused every real memory row
+ * while its fixtures, which omitted those fields, stayed green. A gate that
+ * must agree with ingest has to BE ingest's gate.
+ *
+ * Fail-closed in both directions: a credential-shaped literal anywhere in the
+ * scanned surface is NOT clean, and a scan that cannot COMPLETE (a cyclic
+ * value, a bound exceeded, a scanner error) is NOT clean either. "Could not
+ * look" and "looked and found nothing" must never produce the same answer.
+ *
+ * The matched text and its location are never returned: only the boolean.
  */
 export function scanMemoryContentForSecrets(content: unknown): { clean: boolean } {
   try {
@@ -217,11 +234,7 @@ export function scanMemoryContentForSecrets(content: unknown): { clean: boolean 
       // this scan can vouch for, so it is not clean.
       return { clean: false };
     }
-    const values = collectMemoryScannableStrings(content, "data");
-    for (const { value } of values) {
-      if (detectMemoryCredentialPattern(value) !== null) return { clean: false };
-    }
-    return { clean: true };
+    return { clean: inspectMemoryConceptEnvelopeForSecrets(content as Record<string, unknown>).clean };
   } catch {
     return { clean: false };
   }
@@ -244,7 +257,17 @@ export interface MemoryPromotionDeps {
     requestedBy?: string;
     excludeRequester?: string;
   }): number;
-  casReject(input: { id: string; orgId: string; decidedBy: string; note?: string | null }): boolean;
+  /** CAS pending -> rejected. The outcome names its OWN cause, measured at the
+   *  statement's single snapshot, so a lost CAS never has to be explained by a
+   *  second read of a newer world. */
+  casReject(input: {
+    id: string;
+    orgId: string;
+    decidedBy: string;
+    note?: string | null;
+    /** The decider whose membership must ALSO hold at the moment of the write. */
+    requireMemberUserId?: string;
+  }): store.MemoryPromotionRejectOutcome;
   markSuperseded(input: { id: string; orgId: string }): boolean;
   createRequest(input: {
     orgId: string;
@@ -292,6 +315,15 @@ export interface MemoryPromotionDeps {
     note: string | null;
   }): Promise<ApplyOutcome>;
   scanContent(content: unknown): { clean: boolean };
+  /** Is the DECIDER a member of `actor.orgId`? Resolved through the SAME
+   *  membership-grounded org-write mint the atomic apply runs, so a platform
+   *  admin who is not a member answers `false`. The REJECT path asks directly,
+   *  because it writes no object row and so has no apply to carry the mint.
+   *
+   *  "Not a member" is a VALUE. An INFRASTRUCTURE failure THROWS, so a database
+   *  outage can never be reported as a permanent authorization refusal (codex
+   *  round 1 of the #1381 review round). */
+  isDeciderAMember(actor: ApprovalViewer): Promise<boolean>;
 }
 
 let cachedProdDeps: Promise<MemoryPromotionDeps> | null = null;
@@ -338,17 +370,24 @@ async function productionDeps(): Promise<MemoryPromotionDeps> {
             note: input.note,
             expectedRowVersion: input.request.rowVersion,
           });
-          // TEAM containment, INSIDE the transaction (codex round 1, finding
-          // 1). The decide ladder already pre-checked it for an actionable
-          // message; this closes the window between that read and the commit,
-          // so a team deleted or moved to another organization in between
-          // aborts the whole apply instead of becoming the row's owner.
+          // TEAM containment AND REQUESTER MEMBERSHIP, INSIDE the transaction
+          // (codex round 1 finding 1; cinatra#1381 review finding 4). The
+          // decide ladder already pre-checked both for an actionable message;
+          // these close the window between that read and the commit, so a team
+          // deleted or moved to another organization, or a requester removed
+          // from it, aborts the whole apply instead of becoming the row's
+          // owner. Both LOCK the row they read, so the fact they report is the
+          // fact at COMMIT time.
           const coCommit =
             input.request.toOwnerLevel === "team"
               ? [
                   store.buildMemoryPromotionTeamContainmentAssert({
                     teamId: input.request.toOwnerId,
                     orgId: input.request.orgId,
+                  }),
+                  store.buildMemoryPromotionRequesterMembershipAssert({
+                    teamId: input.request.toOwnerId,
+                    userId: input.request.requestedBy,
                   }),
                   claim,
                 ]
@@ -412,6 +451,18 @@ async function productionDeps(): Promise<MemoryPromotionDeps> {
         }
       },
       scanContent: (content) => scanMemoryContentForSecrets(content),
+      isDeciderAMember: async (actor) => {
+        try {
+          await verifySessionAuthority(actor.userId, actor.orgId);
+          return true;
+        } catch (error) {
+          // ONLY the membership refusal is a false. Everything else is infra
+          // and must escape, so the ladder reports `transient` rather than a
+          // permanent "you are not a member".
+          if (error instanceof OrgWriteAuthorityError) return false;
+          throw error;
+        }
+      },
     } satisfies MemoryPromotionDeps;
   })();
   return cachedProdDeps;
@@ -420,6 +471,16 @@ async function productionDeps(): Promise<MemoryPromotionDeps> {
 async function resolveDeps(override?: MemoryPromotionDeps): Promise<MemoryPromotionDeps> {
   return override ?? productionDeps();
 }
+
+/**
+ * TEST SEAM. The real-DB integration proof needs the PRODUCTION deps with ONE
+ * reader wrapped, so it can commit a concurrent edit inside the window between
+ * the decide ladder's row read and the apply transaction: the window
+ * cinatra#1381 review finding 1 walks through. Everything else on that run is
+ * production: the real claim statement, the real containment asserts, the real
+ * `historyAwareUpsert` against the real DDL.
+ */
+export const __internals = { productionDeps };
 
 // ── title projection ────────────────────────────────────────────────────────
 
@@ -690,24 +751,29 @@ export interface DecideMemoryPromotionArgs {
  *   1. reviewer is not an org admin                → 'not_authorized'
  *   2. request unknown (or another org's)          → 'not_found'
  *   3. request not pending                          → 'invalid_state'
- *   4. reject  → CAS pending->rejected, row UNTOUCHED; a lost CAS is 'conflict'
+ *   4. reject  → the decider's MEMBERSHIP is re-checked (the platform role at
+ *                step 1 is not membership), then CAS pending->rejected, row
+ *                UNTOUCHED; a lost CAS is 'conflict'
  *   5. approve →
  *        a. no expectedVersion                      → 'version_required'
  *        b. the row vanished / is not a memory row / is another org's
  *                                                   → 'not_found'
- *        c. the reviewer's snapshot != the request's captured version, OR the
- *           live row moved past it (edit-after-request) → SUPERSEDE the request,
- *           'stale_snapshot'
- *        d. the LIVE tuple -> the request's target is not an allowed transition
+ *        c. the echoed token is not the version under review → 'version_required',
+ *           request left PENDING (a client-side fault says nothing about the row)
+ *        d. the LIVE row moved past the anchor (edit-after-request)
+ *                                                   → SUPERSEDE, 'stale_snapshot'
+ *        e. the LIVE tuple -> the request's target is not an allowed transition
  *                                                   → 'narrowing'/'invalid_state'
- *        e. an ORGANIZATION target that is not the reviewer's org, or a TEAM
- *           target no longer in it                  → 'not_authorized'/'invalid_state'
- *        f. content fails the fail-closed secret scan → 'secret_scan'
- *        g. THE ATOMIC APPLY — one transaction: claim the request, widen the
- *           row, append immutable history, enqueue the Graphiti re-projection.
- *           A CAS miss inside it rolls everything back; the request is then
- *           re-read to say whether a concurrent DECIDER won ('conflict') or the
- *           ROW moved ('stale_snapshot', and the request is superseded).
+ *        f. an ORGANIZATION target that is not the reviewer's org, a TEAM
+ *           target no longer in it, or a REQUESTER no longer in that team
+ *                                                   → 'not_authorized'/'invalid_state'
+ *        g. content fails the fail-closed secret scan → 'secret_scan'
+ *        h. THE ATOMIC APPLY, one transaction: assert the team containment and
+ *           the requester's membership, claim the request, widen the row, append
+ *           immutable history, enqueue the Graphiti re-projection. A CAS miss
+ *           inside it rolls everything back; the request is then re-read to say
+ *           whether a concurrent DECIDER won ('conflict') or the ROW moved
+ *           ('stale_snapshot', and the request is superseded).
  */
 export async function decideMemoryPromotion(
   args: DecideMemoryPromotionArgs,
@@ -716,8 +782,10 @@ export async function decideMemoryPromotion(
   const deps = await resolveDeps(depsOverride);
   const { viewer } = args;
 
-  // 1. authorization — cheap, first, fail-closed. The org-write authority mint
-  //    inside the apply is the second, membership-grounded half of it.
+  // 1. authorization: cheap, first, fail-closed. This bit is the ADMIN role
+  //    only; MEMBERSHIP is the second half, and BOTH branches now take it: the
+  //    approve path through the org-write authority minted inside the apply,
+  //    the reject path through the explicit mint at step 4.
   if (!viewer.isAdmin) {
     return { ok: false, code: "not_authorized", message: "Only an admin can decide a memory promotion request." };
   }
@@ -737,13 +805,52 @@ export async function decideMemoryPromotion(
 
   // 4. reject — the row is NEVER touched; a lost CAS is a conflict.
   if (args.action === "reject") {
-    const won = deps.casReject({
+    // MEMBERSHIP, not the platform role. `viewer.isAdmin` at step 1 is the
+    // PLATFORM role (`isPlatformAdmin(session)` / `platformRole ===
+    // 'platform_admin'`), which says nothing about this organization. On the
+    // approve path the org-write authority minted inside the apply is the
+    // second, membership-grounded half of the gate, and it correctly refuses a
+    // platform admin who is not a member. The reject path writes no object row,
+    // so it has no apply to carry that half, and a rejection is PERMANENT for
+    // the request. Without this the same non-member could list an
+    // organization's promotion inbox and reject its requests for good
+    // (cinatra#1381 review, finding 11).
+    let isMember: boolean;
+    try {
+      isMember = await deps.isDeciderAMember(viewer);
+    } catch {
+      // Infra, not authorization. Nothing was written, so the retry is safe.
+      return { ok: false, code: "transient", message: "The promotion decision failed; retry it." };
+    }
+    if (!isMember) {
+      return {
+        ok: false,
+        code: "not_authorized",
+        message:
+          "You are not a member of this organization, so you cannot decide this promotion request.",
+      };
+    }
+    // The membership rides INSIDE the reject CAS as well, so a membership
+    // revoked between the read above and this write refuses the reject rather
+    // than letting a now-non-member decide the request for good. The statement
+    // reports WHICH arm it lost on, measured at its own snapshot, so the answer
+    // below is about the write that was attempted and not about a newer world.
+    const rejected = deps.casReject({
       id: request.id,
       orgId: viewer.orgId,
       decidedBy: viewer.userId,
       note: args.reason ?? null,
+      requireMemberUserId: viewer.userId,
     });
-    if (!won) {
+    if (!rejected.ok) {
+      if (rejected.reason === "not_a_member") {
+        return {
+          ok: false,
+          code: "not_authorized",
+          message:
+            "You are not a member of this organization, so you cannot decide this promotion request.",
+        };
+      }
       return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
     }
     return { ok: true };
@@ -758,7 +865,6 @@ export async function decideMemoryPromotion(
   if (args.expectedVersion == null || args.expectedVersion === "") {
     return { ok: false, code: "version_required", message: "A promotion approval requires the reviewed row version." };
   }
-  const expected = Number(args.expectedVersion);
 
   // 5b. the row must still exist, still be a memory row, still be this org's.
   const object = deps.readObject(request.objectId, viewer.orgId);
@@ -766,9 +872,29 @@ export async function decideMemoryPromotion(
     return { ok: false, code: "not_found", message: `The memory row '${request.objectId}' no longer exists.` };
   }
 
-  // 5c. CAS: the reviewer's snapshot must match the request's captured version,
-  // and the LIVE row must not have moved past it. Either mismatch supersedes.
-  if (!Number.isFinite(expected) || expected !== request.rowVersion || object.version !== request.rowVersion) {
+  // 5c. THE TOKEN THE REVIEWER ECHOED BACK. A token that does not name the
+  // version under review is a CLIENT-SIDE fault: a stale open tab, a forged
+  // value, a client bug. It says NOTHING about the row, so it must not destroy
+  // the request: the request stays PENDING and the reviewer re-opens it
+  // (cinatra#1381 review, finding 3). Only 5d, which looks at the LIVE row,
+  // may supersede.
+  //
+  // Compared as an EXACT STRING against the anchor. `Number()` accepted "03",
+  // " 3 ", "3.0", "3e0", "0x3" and "+3" as the token for version 3; none of
+  // them is the token this surface issued, and an exact comparison is one rule
+  // instead of a numeric-coercion table.
+  if (args.expectedVersion !== String(request.rowVersion)) {
+    return {
+      ok: false,
+      code: "version_required",
+      message: "The submitted row version is not the version under review; re-open the request and approve it again.",
+    };
+  }
+
+  // 5d. THE LIVE ROW. The row itself must not have moved past the reviewed
+  // anchor: an edit after the request means the reviewer approved content that
+  // is no longer there, so the request is SUPERSEDED rather than applied.
+  if (object.version !== request.rowVersion) {
     // The supersede is itself a CAS, and its answer is USED (codex round 1,
     // finding 3): losing it means a concurrent decider already moved the
     // request, so saying "the request was superseded" would be a false
@@ -783,7 +909,7 @@ export async function decideMemoryPromotion(
     };
   }
 
-  // 5d. the transition matrix, measured against the LIVE tuple (never-narrow
+  // 5e. the transition matrix, measured against the LIVE tuple (never-narrow
   // included: none of the three allowed moves narrows).
   const from: ScopeTuple = { ownerLevel: object.ownerLevel, visibility: object.visibility };
   const to: ScopeTuple = { ownerLevel: request.toOwnerLevel, visibility: request.toVisibility };
@@ -802,7 +928,7 @@ export async function decideMemoryPromotion(
     };
   }
 
-  // 5e. APPROVER AUTHORITY OVER THE TARGET SCOPE.
+  // 5f. APPROVER AUTHORITY OVER THE TARGET SCOPE.
   //
   // An ORGANIZATION target must be the reviewer's OWN org: the row's new owner
   // id is written verbatim, so a request carrying a foreign org id must never
@@ -814,16 +940,25 @@ export async function decideMemoryPromotion(
       message: "This request names an organization other than yours as its target.",
     };
   }
-  // A TEAM target must STILL exist in this org at approve time — a deleted or
-  // now-foreign team id must never become the row's owner.
+  // A TEAM target must STILL exist in this org at approve time, and the
+  // REQUESTER must STILL be a member of it. Both were checked when the request
+  // was opened; a pending request can outlive either, and neither may be
+  // assumed at the moment the row actually moves.
   //
-  // RESIDUAL, stated rather than hidden: this containment read is not inside
-  // the apply transaction, so a team deleted or reassigned in the window
-  // between it and the commit ends up as the row's owner id. The blast radius
-  // is confidentiality-FAIL-CLOSED: reads are org_id-scoped first, so a team id
-  // now foreign to this org matches no reader here, and a deleted team id
-  // matches nobody — the row becomes LESS visible, never more. True atomicity
-  // needs the containment predicate inside the writer's own transactional CTE.
+  // WHY MEMBERSHIP IS RE-CHECKED (cinatra#1381 review, finding 4): the request
+  // surface admits a team target only for a team the REQUESTER belongs to, so
+  // "a member widens a row into their own team" is the whole shape being
+  // approved. A requester removed from that team while the request sat pending
+  // is asking for a move nobody may now make, and the reviewer affirming the
+  // request has no way to see that from the row.
+  //
+  // BOTH READS ARE PRE-CHECKS, not the guarantee. They run first because they
+  // give the reviewer an actionable message. The guarantee is that the SAME two
+  // predicates ride INSIDE the apply transaction as locking co-commit asserts
+  // (`buildMemoryPromotionTeamContainmentAssert`,
+  // `buildMemoryPromotionRequesterMembershipAssert`), so a team deleted, moved
+  // to another organization, or emptied of the requester between here and the
+  // commit ABORTS the whole apply rather than becoming the row's owner.
   if (request.toOwnerLevel === "team") {
     const team = deps.readTeamInOrg({ teamId: request.toOwnerId, orgId: viewer.orgId });
     if (!team) {
@@ -833,9 +968,21 @@ export async function decideMemoryPromotion(
         message: "The target team no longer exists in this organization — reject this request.",
       };
     }
+    const requesterStillInTeam = deps.readTeamInOrg({
+      teamId: request.toOwnerId,
+      orgId: viewer.orgId,
+      memberUserId: request.requestedBy,
+    });
+    if (!requesterStillInTeam) {
+      return {
+        ok: false,
+        code: "invalid_state",
+        message: "The requester is no longer a member of the target team; reject this request.",
+      };
+    }
   }
 
-  // 5f. fail-closed secret scan of the CAS-BOUND content. It runs on the row
+  // 5g. fail-closed secret scan of the CAS-BOUND content. It runs on the row
   // read under the version guard above, so a credential planted between the
   // request and this approve is scanned — and refused — rather than promoted.
   if (!deps.scanContent(object.data).clean) {
@@ -846,7 +993,7 @@ export async function decideMemoryPromotion(
     };
   }
 
-  // 5g. THE ATOMIC APPLY.
+  // 5h. THE ATOMIC APPLY.
   let applied: ApplyOutcome;
   try {
     applied = await deps.applyApproval({

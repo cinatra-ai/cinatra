@@ -865,7 +865,7 @@
     {
       "primitiveName": "memory_promote_request",
       "file": "src/lib/memory/mcp.ts",
-      "line": 50
+      "line": 51
     },
     {
       "primitiveName": "metric_cost_budget_get",

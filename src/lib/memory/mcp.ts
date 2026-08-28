@@ -14,18 +14,19 @@ import "server-only";
 // (e.g. `conflict` = a request is already pending for this row).
 // ---------------------------------------------------------------------------
 
-import { z } from "zod";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 
 import { resolveScope } from "@/lib/mcp-tool-scope";
-import { requestMemoryPromotion } from "./memory-promotion-request";
+import {
+  memoryPromotionRequestPayloadSchema,
+  requestMemoryPromotion,
+} from "./memory-promotion-request";
 
-const promoteRequestSchema = z.object({
-  memoryId: z.string().min(1),
-  toVisibility: z.enum(["team", "organization"]),
-  /** Required for a team target (the team that will own the widened row). */
-  targetTeamId: z.string().min(1).optional(),
-});
+// The payload schema is the SHARED one, imported from the service both request
+// surfaces already route through (cinatra#1381 review, finding 9). Keeping a
+// twin here is how the tool and the server action end up disagreeing about
+// what a valid id is.
+const promoteRequestSchema = memoryPromotionRequestPayloadSchema;
 
 const TOOL_META = {
   memory_promote_request: {
@@ -51,7 +52,20 @@ export function registerMemoryPromotionPrimitives(server: McpRuntimeToolServer):
     "memory_promote_request",
     { title: "memory_promote_request", ...TOOL_META.memory_promote_request },
     (async (input: unknown) => {
-      const parsed = promoteRequestSchema.parse(input);
+      // safeParse, NOT parse (cinatra#1381 review, finding 10). This module's
+      // own header promises that refusals are VALUES in the envelope and that
+      // it never throws, and its server-action twin already answers a malformed
+      // payload with `invalid_state`. A schema error escaping from here was the
+      // one way the two surfaces disagreed.
+      const parsedInput = promoteRequestSchema.safeParse(input);
+      if (!parsedInput.success) {
+        return envelope({
+          ok: false,
+          code: "invalid_state",
+          message: "Invalid promotion request payload.",
+        });
+      }
+      const parsed = parsedInput.data;
       const { orgId, userId, actor } = resolveScope();
       // A promotion request must be attributable to a USER principal: it keys
       // the requester's "Your requests" listing, the reviewer inbox excludes

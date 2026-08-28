@@ -8,7 +8,11 @@
 //
 // Every heavy reader/writer is injected — no DB — so the ladder is exercised
 // directly, over the SAME code path production uses.
+import { createHash } from "node:crypto";
+
 import { describe, it, expect, vi } from "vitest";
+
+import { MEMORY_SCAN_EXCLUDED_KEYS } from "@cinatra-ai/objects/mcp-handlers";
 
 import {
   createMemoryRowPromotionRequest,
@@ -55,17 +59,48 @@ function requestRow(over: Partial<MemoryPromotionRequestRow> = {}): MemoryPromot
   };
 }
 
+// A REAL stored envelope, not a reduced one (cinatra#1381 review, finding 2).
+//
+// The three fields below are stamped onto EVERY memory concept the product
+// stores, and every one of them is a high-entropy token the detector flags by
+// design: `externalId` is a 64-character sha256 digest, `bundleId` and
+// `cinatraAgentRunId` are uuids. The ingest gate excludes them BY NAME. The
+// promotion gate did not, and its fixture omitted all three, so the suite was
+// green while the feature refused every row the product actually holds. The
+// fixture now carries them, so the two gates can never diverge again without a
+// red test.
+const BUNDLE_ID = "9f4d9e0a-1b2c-4d3e-8f5a-6b7c8d9e0f1a";
+const CONCEPT_ID = "runbooks/deployment";
+const AGENT_RUN_ID = "0b1f8c2d-3e4a-4b5c-9d6e-7f8a9b0c1d2e";
+
+/** `sha256(UTF-8(bundleId + NUL + conceptId))`, lowercase hex: the digest the
+ *  server recomputes and pins on the envelope. */
+function externalIdFor(bundleId: string, conceptId: string): string {
+  return createHash("sha256").update(`${bundleId}\u0000${conceptId}`, "utf8").digest("hex");
+}
+
+/** The stored `data` of one real memory row. */
+function memEnvelope(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    conceptId: CONCEPT_ID,
+    bundleId: BUNDLE_ID,
+    externalId: externalIdFor(BUNDLE_ID, CONCEPT_ID),
+    cinatraAgentRunId: AGENT_RUN_ID,
+    okfType: "procedure",
+    okfVersion: "0.1",
+    frontmatter: { type: "procedure", title: "Deployment runbook" },
+    bodyMarkdown: "Run the deploy script. Nothing secret here.",
+    links: [],
+    provenance: { tool: "@cinatra-ai/memory:sync", toolVersion: "0.1.0" },
+    ...over,
+  };
+}
+
 function memObject(over: Partial<PromotableMemoryObject> = {}): PromotableMemoryObject {
   return {
     id: "mem-1",
     type: MEMORY_CONCEPT_TYPE_ID,
-    data: {
-      conceptId: "runbooks/deployment",
-      okfType: "procedure",
-      frontmatter: { type: "procedure", title: "Deployment runbook" },
-      bodyMarkdown: "Run the deploy script. Nothing secret here.",
-      links: [],
-    },
+    data: memEnvelope(),
     version: 3,
     visibility: "private",
     ownerLevel: "user",
@@ -91,6 +126,14 @@ function harness(
       | { ok: false; reason: "cas_miss" | "not_found" | "transient" | "not_authorized" };
     applyThrows?: boolean;
     teamMissing?: boolean;
+    /** The team exists, but the REQUESTER is no longer a member of it. */
+    requesterLeftTeam?: boolean;
+    /** The DECIDER holds the platform-admin bit but no membership in this org. */
+    deciderIsNotAMember?: boolean;
+    /** The membership read itself fails (infra), which is NOT an authz answer. */
+    membershipReadThrows?: boolean;
+    /** Which arm the reject CAS lost on, when it loses. */
+    rejectLostBecause?: "not_pending" | "not_a_member";
     rejectWins?: boolean;
     duplicates?: number;
     duplicatesThrow?: boolean;
@@ -108,15 +151,23 @@ function harness(
     }),
     listRequests: vi.fn(() => requests),
     countRequests: vi.fn(() => requests.length),
-    casReject: vi.fn(() => cfg.rejectWins ?? true),
+    casReject: vi.fn(() =>
+      (cfg.rejectWins ?? true)
+        ? ({ ok: true } as const)
+        : ({ ok: false, reason: cfg.rejectLostBecause ?? "not_pending" } as const),
+    ),
     markSuperseded: vi.fn(() => cfg.supersedeWins ?? true),
     createRequest: vi.fn((input: Parameters<MemoryPromotionDeps["createRequest"]>[0]) => {
       if (cfg.createThrows) throw cfg.createThrows;
       return requestRow({ id: "req-new", ...input });
     }),
-    readTeamInOrg: vi.fn((input: { teamId: string }) =>
-      cfg.teamMissing ? null : { id: input.teamId, name: "Growth" },
-    ),
+    readTeamInOrg: vi.fn((input: { teamId: string; memberUserId?: string }) => {
+      if (cfg.teamMissing) return null;
+      // The production reader takes ONE membership argument and answers null for
+      // both "no such team here" and "that user is not in it".
+      if (cfg.requesterLeftTeam && input.memberUserId) return null;
+      return { id: input.teamId, name: "Growth" };
+    }),
     readObject: vi.fn(() => (cfg.object === undefined ? memObject() : cfg.object)),
     countAudienceDuplicates: vi.fn(() => {
       if (cfg.duplicatesThrow) throw new Error("duplicate query boom");
@@ -130,6 +181,11 @@ function harness(
     scanContent: vi.fn((content: unknown) => {
       if (cfg.scanThrows) throw new Error("scanner boom");
       return cfg.scan ?? scanMemoryContentForSecrets(content);
+    }),
+    isDeciderAMember: vi.fn(async () => {
+      // Infra failures THROW; "not a member" is a VALUE.
+      if (cfg.membershipReadThrows) throw new Error("membership read boom");
+      return !cfg.deciderIsNotAMember;
     }),
   };
   const deps = spies as unknown as MemoryPromotionDeps;
@@ -217,6 +273,51 @@ describe("the fail-closed credential scan", () => {
     expect(scanMemoryContentForSecrets(null).clean).toBe(false);
     expect(scanMemoryContentForSecrets("sk-ant-not-an-envelope").clean).toBe(false);
     expect(scanMemoryContentForSecrets([{ a: 1 }]).clean).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1381 review, finding 2: the promotion gate IS the ingest gate.
+//
+// The gate used to derive its own scanned surface, which excluded nothing by
+// name, while the ingest gate excludes three server-stamped keys by name. Those
+// keys are on every stored row and the detector flags all three, so the gate
+// refused 100/100 realistic envelopes while its own reduced fixture stayed
+// green. These are the properties that make that impossible to reintroduce.
+// ---------------------------------------------------------------------------
+
+describe("the scan and the INGEST gate are one gate", () => {
+  it("clears a REAL stored envelope: the exact shape the product persists", () => {
+    expect(scanMemoryContentForSecrets(memEnvelope()).clean).toBe(true);
+  });
+
+  it("excludes exactly the three keys the ingest gate excludes, and no others", () => {
+    expect([...MEMORY_SCAN_EXCLUDED_KEYS].sort()).toEqual([
+      "bundleId",
+      "cinatraAgentRunId",
+      "externalId",
+    ]);
+  });
+
+  it.each(["externalId", "bundleId", "cinatraAgentRunId"])(
+    "would refuse %s on its own: the exclusion is BY NAME, not because the value is tame",
+    (key) => {
+      // The same value, under a key nothing excludes, is a refusal. That is why
+      // deriving the surface independently refused every real row.
+      const envelope = memEnvelope();
+      const value = envelope[key];
+      expect(typeof value).toBe("string");
+      expect(scanMemoryContentForSecrets({ ...envelope, smuggled: value }).clean).toBe(false);
+    },
+  );
+
+  it("still refuses a credential planted in a field the ingest gate does NOT exclude", () => {
+    // The exclusion is three keys wide, not a hole in the gate.
+    expect(
+      scanMemoryContentForSecrets(
+        memEnvelope({ bodyMarkdown: "deploy with sk-ant-abcdefghijklmnopqrstuvwxyz012345" }),
+      ).clean,
+    ).toBe(false);
   });
 });
 
@@ -374,6 +475,41 @@ describe("decide — authorization", () => {
     expect(spies.applyApproval).not.toHaveBeenCalled();
   });
 
+  // cinatra#1381 review, finding 4. Request time passed `memberUserId`; approve
+  // time read the team with NO member argument, so a requester removed from the
+  // target team while their request sat pending still got the row moved in.
+  it("REFUSES a team target whose REQUESTER has left the team, and leaves the request pending", async () => {
+    const { deps, spies } = harness({
+      request: requestRow({ toVisibility: "team", toOwnerLevel: "team", toOwnerId: "team-9", toOwnerLabel: "Growth" }),
+      requesterLeftTeam: true,
+    });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "invalid_state",
+      message: expect.stringContaining("no longer a member"),
+    });
+    // The membership is re-checked FOR THE REQUESTER, not for the approving admin.
+    expect(spies.readTeamInOrg).toHaveBeenCalledWith({
+      teamId: "team-9",
+      orgId: "org-1",
+      memberUserId: "u-member",
+    });
+    expect(spies.applyApproval).not.toHaveBeenCalled();
+    expect(spies.markSuperseded).not.toHaveBeenCalled();
+  });
+
+  it("APPLIES a team target whose requester is STILL a member", async () => {
+    const { deps, spies } = harness({
+      request: requestRow({ toVisibility: "team", toOwnerLevel: "team", toOwnerId: "team-9", toOwnerLabel: "Growth" }),
+    });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toEqual({ ok: true });
+    expect(spies.applyApproval).toHaveBeenCalledTimes(1);
+  });
+
   it("maps the decider's missing org-write authority to a PERMANENT not_authorized, leaving the request pending", async () => {
     const { deps, spies } = harness({ apply: { ok: false, reason: "not_authorized" } });
     await expect(
@@ -392,14 +528,55 @@ describe("decide — the CAS version guard", () => {
     expect(spies.applyApproval).not.toHaveBeenCalled();
   });
 
-  it("refuses a FORGED expectedVersion that differs from the request's captured version", async () => {
-    for (const forged of ["4", "2", "999", "not-a-number", "3.5"]) {
+  // cinatra#1381 review, finding 3. Every token below used to call
+  // markSuperseded and answer "The memory row changed since this promotion was
+  // requested". The row did NOT change: a stale open tab, a forged value or a
+  // client bug silently destroyed a member's pending request and blamed an edit
+  // that never happened. A token fault is a REFUSAL; only the LIVE row may
+  // supersede.
+  it.each([
+    ["a higher version", "4"],
+    ["a lower version", "2"],
+    ["a version that never existed", "999"],
+    ["a value that does not parse", "not-a-number"],
+    ["a fraction", "3.5"],
+    ["NaN", "NaN"],
+    ["Infinity", "Infinity"],
+    ["an empty array literal", "[]"],
+    ["the string undefined", "undefined"],
+    ["an injection attempt", "3; DROP TABLE x"],
+  ])("REFUSES %s and leaves the request PENDING: it never supersedes", async (_label, forged) => {
+    const { deps, spies } = harness();
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: forged, viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "version_required" });
+    expect(spies.markSuperseded).not.toHaveBeenCalled();
+    expect(spies.applyApproval).not.toHaveBeenCalled();
+  });
+
+  // The reviewer's minor, same finding: the token was compared with `Number()`,
+  // so seven spellings the surface never issued were accepted as version 3. An
+  // exact string comparison is one rule instead of a coercion table.
+  it.each(["03", " 3 ", "3.0", "3e0", "0x3", "+3", "3 "])(
+    "does not accept the numeric look-alike %j as the token for version 3",
+    async (lookAlike) => {
       const { deps, spies } = harness();
       await expect(
-        decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: forged, viewer: admin }, deps),
-      ).resolves.toMatchObject({ ok: false, code: "stale_snapshot" });
+        decideMemoryPromotion(
+          { requestId: "req-1", action: "approve", expectedVersion: lookAlike, viewer: admin },
+          deps,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "version_required" });
       expect(spies.applyApproval).not.toHaveBeenCalled();
-    }
+    },
+  );
+
+  it("accepts the EXACT token the review row carries, and applies", async () => {
+    const { deps, spies } = harness();
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin }, deps),
+    ).resolves.toEqual({ ok: true });
+    expect(spies.applyApproval).toHaveBeenCalledTimes(1);
   });
 
   it("SUPERSEDES the request when the row was edited after the request (approve-after-edit)", async () => {
@@ -469,6 +646,9 @@ describe("decide — reject", () => {
       orgId: "org-1",
       decidedBy: "u-admin",
       note: "duplicate",
+      // The membership rides INSIDE the CAS as well, so it cannot go stale
+      // between the check and the write (codex round 1 of the review round).
+      requireMemberUserId: "u-admin",
     });
     expect(spies.applyApproval).not.toHaveBeenCalled();
     expect(spies.markSuperseded).not.toHaveBeenCalled();
@@ -481,6 +661,56 @@ describe("decide — reject", () => {
     await expect(
       decideMemoryPromotion({ requestId: "req-1", action: "reject", reason: "no", viewer: admin }, deps),
     ).resolves.toMatchObject({ ok: false, code: "conflict" });
+  });
+
+  // cinatra#1381 review, finding 11. `viewer.isAdmin` is the PLATFORM role, not
+  // organization membership. Approve takes a membership-grounded mint inside
+  // the apply and refuses such an actor; reject writes no object row, so it had
+  // no second half at all, and a rejection is PERMANENT.
+  it("REFUSES a platform admin who is not a member of this organization, and rejects NOTHING", async () => {
+    const { deps, spies } = harness({ deciderIsNotAMember: true });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "reject", reason: "no", viewer: admin }, deps),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "not_authorized",
+      message: expect.stringContaining("not a member of this organization"),
+    });
+    expect(spies.casReject).not.toHaveBeenCalled();
+    expect(spies.readObject).not.toHaveBeenCalled();
+  });
+
+  it("takes the SAME membership mint the approve path takes", async () => {
+    const { deps, spies } = harness();
+    await decideMemoryPromotion(
+      { requestId: "req-1", action: "reject", reason: "duplicate", viewer: admin },
+      deps,
+    );
+    expect(spies.isDeciderAMember).toHaveBeenCalledWith(admin);
+  });
+
+  // codex round 1 of the #1381 review round. A database outage inside the
+  // membership read is INFRASTRUCTURE. Reporting it as `not_authorized` would
+  // tell a real org admin, permanently, that they are not a member.
+  it("reports an INFRA failure in the membership read as transient, never not_authorized", async () => {
+    const { deps, spies } = harness({ membershipReadThrows: true });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "reject", reason: "no", viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "transient" });
+    expect(spies.casReject).not.toHaveBeenCalled();
+  });
+
+  // codex round 2 of the #1381 review round. A lost CAS has two causes and one
+  // rowCount, so a SECOND read afterwards cannot say which: it sees a newer
+  // world. The statement therefore reports its own cause, measured at its own
+  // snapshot, and the ladder just forwards it.
+  it("reports a lost reject CAS as not_authorized when the MEMBERSHIP arm is what lost", async () => {
+    const { deps, spies } = harness({ rejectWins: false, rejectLostBecause: "not_a_member" });
+    await expect(
+      decideMemoryPromotion({ requestId: "req-1", action: "reject", reason: "no", viewer: admin }, deps),
+    ).resolves.toMatchObject({ ok: false, code: "not_authorized" });
+    // No second membership read: one call, the pre-check.
+    expect(spies.isDeciderAMember).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed on an unknown action", async () => {

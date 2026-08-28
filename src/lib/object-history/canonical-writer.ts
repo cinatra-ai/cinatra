@@ -57,6 +57,8 @@ import {
 } from "./event-snapshot";
 import type {
   ChangeSetHandle,
+  CoCommitStatement,
+  CoCommitStatementKind,
   HistoryActor,
   HistoryEffect,
   HistoryOperation,
@@ -364,13 +366,26 @@ function buildCreateStatement(args: CreateStmtArgs): {
                 $30, $31, now()
              FROM inserted
            ),
+           -- CAS ASSERT. ok MUST STAY IN THE OUTER PROJECTION BELOW
+           -- (cas_assert.ok AS cas_ok). It is not decoration and it is not a
+           -- debugging leftover: Postgres prunes an output column no outer
+           -- projection references, and a pruned division is never evaluated,
+           -- so dropping cas_ok turns this assert back into a statement that
+           -- returns an all-null row on a CAS miss INSTEAD OF RAISING. A miss
+           -- that only shows up as a null row is decided in JavaScript AFTER
+           -- the transaction has committed, which is fine for a lone write and
+           -- is NOT fine for a co-committed one (coCommitStatements): the
+           -- co-committed statement would commit while the write did not.
+           -- Measured on the pinned Postgres 18.4: without ok projected the
+           -- statement does not raise; with it projected a miss raises 22012.
            cas_assert AS (
              SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM inserted) THEN 1 ELSE 0 END AS ok
            )
            SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                   created_by, org_id, source, run_id, agent_id, package_version,
                   agent_spec_version, version, deleted_at,
-                  owner_level, owner_id, visibility, project_id, row_json
+                  owner_level, owner_id, visibility, project_id, row_json,
+                  cas_assert.ok AS cas_ok
            FROM cas_assert LEFT JOIN inserted ON TRUE`,
     values: [
       args.id, // $1
@@ -481,13 +496,16 @@ function buildUpdateStatement(args: UpdateStmtArgs): {
                 $30, $31, now()
              FROM updated
            ),
+           -- CAS ASSERT. ok MUST STAY IN THE OUTER PROJECTION; see
+           -- buildCreateStatement for why removing it silently disarms it.
            cas_assert AS (
              SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM updated) THEN 1 ELSE 0 END AS ok
            )
            SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                   created_by, org_id, source, run_id, agent_id, package_version,
                   agent_spec_version, version, deleted_at,
-                  owner_level, owner_id, visibility, project_id, row_json
+                  owner_level, owner_id, visibility, project_id, row_json,
+                  cas_assert.ok AS cas_ok
            FROM cas_assert LEFT JOIN updated ON TRUE`,
     values: [
       args.id, // $1
@@ -597,10 +615,13 @@ function buildSoftDeleteStatement(args: SoftDeleteStmtArgs): {
                 $18, $19, now()
              FROM deleted
            ),
+           -- CAS ASSERT. ok MUST STAY IN THE OUTER PROJECTION; see
+           -- buildCreateStatement for why removing it silently disarms it.
            cas_assert AS (
              SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM deleted) THEN 1 ELSE 0 END AS ok
            )
-           SELECT id, version, org_id, type, project_id, owner_level, owner_id, visibility, row_json
+           SELECT id, version, org_id, type, project_id, owner_level, owner_id, visibility, row_json,
+                  cas_assert.ok AS cas_ok
            FROM cas_assert LEFT JOIN deleted ON TRUE`,
     values: [
       args.id, // $1
@@ -693,10 +714,13 @@ function buildUndeleteStatement(args: UndeleteStmtArgs): {
                 $14, $15, now()
              FROM undeleted
            ),
+           -- CAS ASSERT. ok MUST STAY IN THE OUTER PROJECTION; see
+           -- buildCreateStatement for why removing it silently disarms it.
            cas_assert AS (
              SELECT 1 / CASE WHEN EXISTS (SELECT 1 FROM undeleted) THEN 1 ELSE 0 END AS ok
            )
-           SELECT id, version, org_id, type, project_id, owner_level, owner_id, visibility, row_json
+           SELECT id, version, org_id, type, project_id, owner_level, owner_id, visibility, row_json,
+                  cas_assert.ok AS cas_ok
            FROM cas_assert LEFT JOIN undeleted ON TRUE`,
     values: [
       args.id, // $1
@@ -739,6 +763,130 @@ export const __internals = {
 // Public API
 // ===========================================================================
 
+
+/**
+ * WHAT EACH CO-COMMIT KIND IS ALLOWED TO BE.
+ *
+ * A `kind` on its own is a LABEL, not proof: nothing stops a caller from
+ * stamping a known kind on other SQL. So each kind also names the SHAPE of the
+ * statement it stands for, checked STRUCTURALLY rather than by matching the
+ * builder's text character for character:
+ *
+ *   `ctes`   the EXACT set of top-level CTE names the statement may declare.
+ *            A statement that adds one is refused, which is what stops a second
+ *            CTE being appended to a legitimate-looking one.
+ *   `writes` whether this kind may write at all, and if so the ONLY table it
+ *            may write. Every other kind is refused for carrying a write verb.
+ *
+ * Naming the CTE set and the write target rather than the whole statement is
+ * deliberate. A full-text regex is BOTH weaker (a table name it does not pin is
+ * a table the caller chooses) and more brittle (a harmless alias or a quoted
+ * column breaks it), and this seam has to keep working while its builders are
+ * maintained.
+ *
+ * THE HONEST BOUNDARY. This is a text check, so it cannot see a side effect
+ * hidden inside a function call: `SELECT some_function()` is a SELECT. No
+ * text-level guard can. The alternative, moving the promotion SQL into the
+ * canonical writer so that no caller-supplied text exists, would put a subject's
+ * statements inside the shared writer, which is the layering this seam exists
+ * to avoid. What the guard does buy is that a caller cannot end the guarded
+ * transaction, cannot append a statement, cannot write to a table this seam
+ * does not name, and cannot smuggle a CTE past it. The seam is first-party and
+ * in-process; both builders are fully parameterised and interpolate no caller
+ * data. `co-commit-statements.test.ts` drives the REAL builders through this
+ * guard, so a builder edit that leaves the named shape is caught here rather
+ * than in production.
+ *
+ * Adding a kind is a deliberate act: add it to `CoCommitStatementKind`, and add
+ * its shape here. A kind with no shape is refused.
+ */
+type CoCommitShape = {
+  /** The exact top-level CTE names, in order. */
+  readonly ctes: readonly string[];
+  /** The ONLY table this kind may write, or null when it may not write. */
+  readonly writesTable: string | null;
+  /** A table the statement MUST read, so a kind cannot stand in for its twin.
+   *  Always written QUOTED, so it is self-delimiting as a substring. */
+  readonly readsTable: string;
+};
+
+const CO_COMMIT_STATEMENT_SHAPES: ReadonlyMap<CoCommitStatementKind, CoCommitShape> = new Map([
+  // `buildMemoryPromotionApproveClaim`.
+  [
+    "memory-promotion-approve-claim",
+    {
+      ctes: ["claimed", "claim_assert"],
+      writesTable: "memory_promotion_request",
+      readsTable: '"memory_promotion_request"',
+    },
+  ],
+  // `buildMemoryPromotionTeamContainmentAssert`.
+  [
+    "memory-promotion-team-containment-assert",
+    { ctes: ["locked"], writesTable: null, readsTable: 'public."team"' },
+  ],
+  // `buildMemoryPromotionRequesterMembershipAssert`.
+  [
+    "memory-promotion-requester-membership-assert",
+    { ctes: ["locked"], writesTable: null, readsTable: 'public."teamMember"' },
+  ],
+]);
+
+const CO_COMMIT_WRITE_VERB = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|ALTER|CREATE|GRANT|REVOKE|COPY)\b/i;
+/** Every top-level `<name> AS (` in a WITH list. */
+const CO_COMMIT_CTE_DECL = /(?:^\s*WITH\s+|,\s*)([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(/g;
+
+function coCommitCteNames(text: string): string[] {
+  const names: string[] = [];
+  CO_COMMIT_CTE_DECL.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CO_COMMIT_CTE_DECL.exec(text)) !== null) names.push(m[1]!);
+  return names;
+}
+
+function assertCoCommitStatementShape(statement: CoCommitStatement): void {
+  const shape = CO_COMMIT_STATEMENT_SHAPES.get(statement.kind);
+  const refuse = (why: string): never => {
+    throw new Error(`canonical writer: refusing a co-commit statement ('${statement.kind}'): ${why}`);
+  };
+  if (shape === undefined) refuse("unknown kind");
+  if (typeof statement.text !== "string") refuse("it carries no SQL text");
+  const text = statement.text;
+  // A `;` would let a caller append a second statement. `COMMIT` ends the
+  // guarded transaction, releases the advisory lock and leaves the write
+  // running outside it.
+  if (text.includes(";")) refuse("it carries a statement separator");
+  if (!/^\s*WITH\s/i.test(text)) refuse("every co-commit statement opens with WITH");
+
+  const declared = coCommitCteNames(text);
+  const expected = shape!.ctes;
+  if (declared.length !== expected.length || declared.some((n, i) => n !== expected[i])) {
+    refuse(`its CTEs are [${declared.join(", ")}], not [${expected.join(", ")}]`);
+  }
+  if (!text.includes(shape!.readsTable)) refuse(`it does not read ${shape!.readsTable}`);
+
+  const writes = CO_COMMIT_WRITE_VERB.test(text);
+  if (shape!.writesTable === null) {
+    if (writes) refuse("this kind is a read-only assert and must not write");
+    return;
+  }
+  // The writing kind may write ONE table, named here rather than chosen by the
+  // caller, and may carry exactly one write verb.
+  const verbs = text.match(new RegExp(CO_COMMIT_WRITE_VERB.source, "gi")) ?? [];
+  if (verbs.length !== 1 || verbs[0]!.toUpperCase() !== "UPDATE") {
+    refuse("this kind is exactly one UPDATE");
+  }
+  // The target must be a SCHEMA-QUALIFIED identifier whose table part is exactly
+  // the named table, bounded on BOTH sides. Without the left boundary
+  // `public.victim_memory_promotion_request` ends with the allowed name and
+  // passes (codex round 3 of the #1381 review round); without the right one,
+  // `..._request_shadow` does.
+  const target = new RegExp(
+    `UPDATE\\s+(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\\.(?:"${shape!.writesTable}"|${shape!.writesTable}(?![A-Za-z0-9_$]))`,
+    "i",
+  );
+  if (!target.test(text)) refuse(`it does not UPDATE a schema-qualified ${shape!.writesTable}`);
+}
 
 // cas_assert raises Postgres `division_by_zero` (SQLSTATE 22012)
 // when the write CTE returned zero rows. Convert that into a typed
@@ -884,10 +1032,13 @@ export function historyAwareUpsert(
   // batch, so they run under the same org advisory lock and the same
   // capability guard as the write itself, and the write's own result stays the
   // LAST entry (`.at(-1)` below) whatever the caller adds.
-  const coCommit = (options.coCommitStatements ?? []).map((s) => ({
-    text: s.text,
-    ...(s.values ? { values: [...s.values] } : {}),
-  }));
+  const coCommit = (options.coCommitStatements ?? []).map((s) => {
+    assertCoCommitStatementShape(s);
+    return {
+      text: s.text,
+      ...(s.values ? { values: [...s.values] } : {}),
+    };
+  });
   const batch = buildGuardedOrgWriteBatch(
     { orgId, capability: "content.write", authority: options.authority },
     [...coCommit, statement],
@@ -909,8 +1060,13 @@ export function historyAwareUpsert(
     throw e;
   }
   // With the cas_assert LEFT JOIN, when CAS hits we always get exactly one
-  // row from cas_assert padded with the write columns. When CAS misses,
-  // the SQL above raised and we already converted in the catch block.
+  // row from cas_assert padded with the write columns. When CAS misses, the
+  // SQL above RAISED (the assert column is projected, so it is evaluated) and
+  // the catch block already converted it. This null check is the belt to that
+  // braces: it is unreachable on a database that honours the assert, and it
+  // keeps the SAME VersionConflictError contract for every existing caller.
+  // It is NOT the primary signal. It cannot be, because it runs after the
+  // batch has committed and so cannot roll a co-committed statement back.
   const row = result?.rows[0];
   if (!row || row.id == null) {
     const current = readObjectRowForSnapshot(schema, id);
