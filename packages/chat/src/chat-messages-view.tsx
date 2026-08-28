@@ -70,6 +70,17 @@ import {
 // same reason the §V renderer is: the barrel drags the whole agents client
 // graph into every consumer, and this leaf is all the transcript needs.
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
+// The run's OWN reading of the moment it stands at (cinatra#3044), reached by
+// the same subpath the host declaration is, and for the same reason.
+import {
+  isConversationMomentCardKind,
+  parseRunMomentCard,
+  runMomentCardIsOpen,
+  useRunMomentCard,
+  type RunMomentCardReader,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
+import { runSeedRequest, useConversationCredential } from "./conversation-credential";
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -246,12 +257,19 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 function AgentRunTurnSlot({
   runId,
   slot,
+  views,
   onActiveGateChange,
   children,
 }: {
   runId: string;
   /** The part index this container is the slot for (S9i's positional mark). */
   slot: number;
+  /** The MOMENT views this step produced, raw, as the wire carries them
+   *  (cinatra#3044) — the platform-injected parts whose card is this run's own
+   *  reading. They are handed over UNRENDERED, because whether one is still the
+   *  run's reading is a question only the run's row answers; every other view
+   *  the step produced arrives already rendered in `children`. */
+  views: readonly Record<string, unknown>[];
   onActiveGateChange?: (
     runId: string,
     gate: ChatGateDescriptor | null,
@@ -265,6 +283,108 @@ function AgentRunTurnSlot({
   );
   const runCardWaits = runCardWaitsForRecommendation(hold);
   const decided = recommendationWasDecided(hold);
+
+  // ONE SLOT, TWO READINGS (cinatra#3044).
+  //
+  // This container is the ONE place the drawing gives this run in the turn: the
+  // progress reading while it works, the moment's card when a moment opens,
+  // then that card's settled reading. A run-progress card stacked above the
+  // moment's card is two readings in one slot, and the person then meets a card
+  // that says "Awaiting input · No messages yet" standing between the
+  // assistant's sentence and the form they are being asked to fill in.
+  //
+  // WHAT DECIDES IT IS THE RUN'S OWN ROW, read here rather than derived from
+  // the turn's content, because the turn's content cannot answer it on either
+  // road. The tab that STREAMED this turn will never see the part the platform
+  // wrote into the stored turn afterwards — that is the silent wait — and a
+  // RELOADED turn carries the part for ever, including after the run has moved
+  // on, so the part's presence alone would keep the run's own reading away.
+  //
+  // THE READ IS THE RUN'S OWN, on the surface's own credential: the same route
+  // the inline panel seeds from, which is what already turns "queued" into
+  // "Awaiting input" on this page. That makes the moment reach the OPEN page
+  // live, and the card mount here with no reload.
+  const credential = useConversationCredential();
+  const momentReader = useMemo<RunMomentCardReader | null>(() => {
+    const request = runSeedRequest(credential, runId);
+    // A host that cannot say who is asking reads NOTHING, and the turn keeps
+    // exactly the reading it drew before this rule existed.
+    if (!request) return null;
+    return async (signal) => {
+      const response = await fetch(request.url, { ...request.init, signal });
+      if (!response.ok) return null;
+      return parseRunMomentCard(await response.json());
+    };
+  }, [credential, runId]);
+  const {
+    card: momentCard,
+    answered: momentAnswered,
+    gaveUp: momentUnreadable,
+  } = useRunMomentCard({ read: momentReader });
+  const momentIsOpen = runMomentCardIsOpen(momentCard);
+  // WHAT THE TURN'S OWN CONTENT CARRIES FOR THIS MOMENT. The platform-injected
+  // part is the carriage a reload reads, and it is drawn HERE — inside the
+  // producing part's own container — exactly as every slotted view is.
+  //
+  // USABLE OR NOT CARRIED AT ALL. `carriedMomentView` is what the caller
+  // recognised as a moment's card AND could address: this container reconstructs
+  // the payload from it, so a part with no reference, or one written at a schema
+  // version this bundle does not know, is not something to hold a place with. It
+  // is not silently dropped either — the caller leaves it in the ordinary
+  // slotted views, where it draws the registry's own fallback exactly as any
+  // other unreadable view does.
+  const carriedMoment = views.find(carriedMomentView) as
+    | { viewType?: string; ref?: string }
+    | undefined;
+  const turnCarriesMomentCard = carriedMoment !== undefined;
+
+  // THE ONE MOMENT CARD THIS SLOT DRAWS, and where its identity comes from.
+  //
+  //   · THE ROW ANSWERED AND STATES THE MOMENT — the card is addressed by the
+  //     reference the row states. The row is the authority: it is what the
+  //     reload's resolver answers from, and it is the only thing that is right
+  //     on BOTH roads (the streamed turn that carries no part, and the reloaded
+  //     turn that carries one for ever).
+  //   · THE ROW HAS NOT ANSWERED YET — the turn's own part holds the place, so
+  //     a reader who opens a parked conversation sees the card immediately and
+  //     a read that never lands never empties a turn that has one.
+  //   · THE ROW ANSWERED AND STATES NO SUCH MOMENT — NOTHING. This is the
+  //     "run right after setup" road: the run moved on, so its slot goes back
+  //     to the run's own reading and the part it still carries draws nothing
+  //     beside it. Leaving that part to draw itself is how a settled schedule
+  //     card would end up standing next to the next gate's card.
+  //   · THE RUN CANNOT BE READ AT ALL — nothing either, and the run's own
+  //     reading comes back below. This is the fail-open case, and it fails open
+  //     to ONE reading rather than to both: a card whose currency nothing can
+  //     establish is exactly the stale card standing in the run's place that
+  //     this whole rule exists to prevent, and drawing it beside the run's
+  //     progress reading would be the two-readings defect again. Nothing is
+  //     lost for good — the first read that lands brings the card back.
+  const stillLooking = !momentAnswered && !momentUnreadable;
+  const momentKind = momentIsOpen
+    ? momentCard.kind
+    : stillLooking
+      ? (carriedMoment?.viewType ?? null)
+      : null;
+  const momentRef = momentIsOpen
+    ? momentCard.ref
+    : stillLooking
+      ? (carriedMoment?.ref ?? null)
+      : null;
+
+  // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
+  // slot. It also WAITS on a turn that carries the moment's card until the run
+  // has been read: drawing it on "not yet" and taking it away on the answer
+  // would show the stacked reading briefly, every single time a parked
+  // conversation is opened. An ordinary run pays nothing for this — its turn
+  // carries no moment card, so it draws exactly when it always did.
+  //
+  // AND THE WAIT FAILS OPEN. A read that never lands — a dead endpoint, a
+  // surface with no credential — must not be able to leave a turn with nothing
+  // in it at all: once the watch has given up unanswered, the run's own reading
+  // comes back and the turn draws what it drew before this rule existed.
+  const runCardStandsDown =
+    momentIsOpen || (turnCarriesMomentCard && stillLooking);
 
   // WHEN THE RUN STARTS ASKING, AND HOW THIS TURN HEARS ABOUT IT
   // (cinatra#2930, lifecycle-b W3).
@@ -391,7 +511,7 @@ function AgentRunTurnSlot({
           moment renders nothing — which is also what makes it survive a
           transcript reload. */}
       <AgentHitlScreenCard runId={runId} wireRef={gateSignal} />
-      {runCardWaits ? null : (
+      {runCardWaits || runCardStandsDown ? null : (
         <InlineAgentRunCard
           runId={runId}
           onActiveGateChange={onGateChange}
@@ -400,8 +520,55 @@ function AgentRunTurnSlot({
       )}
       {/* Inline undo for a recent restorable change-set produced by this run. */}
       <UndoActionChip runId={runId} />
+      {/* THE MOMENT'S ONE CARD (cinatra#3044).
+          ONE mount, whichever road the reader arrived by: the page that STARTED
+          the run has no part in its copy of the turn (the turn was streamed
+          here and the platform wrote the part into the STORED turn afterwards),
+          and a reloaded turn has one for ever. Both draw through the SAME
+          registry every other slotted view draws through, in the producing
+          part's own container, under this column's declared host — so the card
+          a person meets live and the card they meet after a reload are the same
+          card in the same place. See the selection above for which reference it
+          is addressed by, and for why a run that has moved on draws none. */}
+      {momentKind && momentRef ? (
+        <RenderableViewCard
+          data={{
+            viewType: momentKind,
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: momentRef,
+          }}
+        />
+      ) : null}
       {children}
     </div>
+  );
+}
+
+/**
+ * IS THIS PRODUCED VIEW A MOMENT'S CARD THIS COLUMN CAN ADDRESS (cinatra#3044)?
+ *
+ * ONE definition, used by the caller that hands moment views to the run's
+ * container and by the container that decides what to draw with them, so the
+ * two cannot disagree about which views left the ordinary slotted list.
+ *
+ * IT IS DELIBERATELY STRICT. The run's container reconstructs the payload from
+ * what this returns, so anything it cannot address — a kind it does not draw
+ * from the run, a missing or empty reference, a schema version this bundle does
+ * not know — is NOT a moment's card here. Such a view stays in the ordinary
+ * slotted views and meets the registry's own validation and fallback, which is
+ * the forward-compatibility contract every other view already has.
+ */
+function carriedMomentView(view: Record<string, unknown>): boolean {
+  const candidate = view as {
+    viewType?: unknown;
+    ref?: unknown;
+    schemaVersion?: unknown;
+  };
+  return (
+    isConversationMomentCardKind(candidate.viewType) &&
+    typeof candidate.ref === "string" &&
+    candidate.ref.length > 0 &&
+    candidate.schemaVersion === LIFECYCLE_VIEW_SCHEMA_VERSION
   );
 }
 
@@ -474,7 +641,22 @@ function OrderedPartsSection({
         // card, never inside it: the run card is a `run_card` host of its own,
         // and a chat card rendered in that subtree would be another host's mount.
         const producedViews = part.kind === "tool_call" ? (part.views ?? []) : [];
-        const slottedViews = producedViews.map((view, i) => (
+        // A MOMENT'S CARD IS NOT DRAWN FROM HERE (cinatra#3044). Every other
+        // view a step produced is its own reading and draws unconditionally;
+        // a lifecycle MOMENT's card is the run's reading, and whether it is
+        // still the run's reading is a question only the run's own row can
+        // answer. So it is handed to the run's container below, which draws
+        // exactly one — never a settled moment card standing beside the run's
+        // next reading. In a container that is not a run's (no `agent_run`
+        // part), a moment view has no run to be measured against and draws as
+        // it always did.
+        const momentViews = producedViews.filter(carriedMomentView);
+        const isRunSlot =
+          part.kind === "tool_call" && isRunStartToolName(part.name) && !!part.runId;
+        const slottedViews = (isRunSlot
+          ? producedViews.filter((view) => !momentViews.includes(view))
+          : producedViews
+        ).map((view, i) => (
           <RenderableViewCard
             key={`slot-${idx}-view-${i}`}
             data={view}
@@ -494,6 +676,7 @@ function OrderedPartsSection({
               key={`agent-run-${part.runId}`}
               runId={part.runId}
               slot={idx}
+              views={momentViews}
               onActiveGateChange={onActiveGateChange}
             >
               {slottedViews}
