@@ -9,7 +9,15 @@
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -28,6 +36,7 @@ import {
   validateCaptureIndex,
   validateCaptureRecord,
   CAPTURE_OUTPUT_ROOT,
+  resolveLiveCapture,
   isHistoricalPermalink,
   parsePermalink,
   readPinnedArtifact,
@@ -914,5 +923,122 @@ describe("a live screenshot must be written into the capture output root", () =>
       ),
     );
     expect(found).toContain("record/pinned-screenshot-outside-proof-root");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// ROOT CONTAINMENT IS RESOLVED, NOT SPELLED. Every case here builds a REAL
+// temp tree with REAL symlinks, because the hole this closes is a filesystem
+// fact that no string test can see: `test-results -> .` makes
+// `test-results/package.json` start with the capture root, exist, and hash to
+// whatever that file hashes to.
+// ---------------------------------------------------------------------------
+describe("a live screenshot is resolved on disk, not just spelled", () => {
+  let root;
+  const PNG = Buffer.from("PNG-BYTES");
+  const PNG_HASH = createHash("sha256").update(PNG).digest("hex");
+  const REL = "test-results/chat-hitl-held-turn-captures/C1__review-card__chat_thread__pending.png";
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "capture-root-"));
+    mkdirSync(join(root, "test-results", "chat-hitl-held-turn-captures"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, REL), PNG);
+    writeFileSync(join(root, "src", "secret.png"), PNG);
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const record = (overrides = {}) =>
+    honestChatPending({ screenshot: REL, sha256: PNG_HASH, ...overrides });
+
+  it("the honest case still passes — a regular file inside a real root", () => {
+    expect(validateCaptureRecord(record(), { repoRoot: root })).toEqual([]);
+    const resolved = resolveLiveCapture(REL, { repoRoot: root });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.realPath).toBe(realpathSync(join(root, REL)));
+  });
+
+  it("a SYMLINKED ROOT is refused before anything under it is considered", () => {
+    // `test-results -> .` — the exact escape: the path spells the capture root
+    // and lands on the repository root, so any file in the repo is reachable.
+    const linked = mkdtempSync(join(tmpdir(), "capture-linkroot-"));
+    try {
+      writeFileSync(join(linked, "package.json"), PNG);
+      symlinkSync(".", join(linked, "test-results"), "dir");
+      const found = codes(
+        validateCaptureRecord(
+          honestChatPending({ screenshot: "test-results/package.json", sha256: PNG_HASH }),
+          { repoRoot: linked },
+        ),
+      );
+      expect(found).toContain("record/capture-root-is-symlink");
+      // ...and it is NOT waved through on a hash that genuinely matches.
+      expect(found).not.toContain("record/sha256-mismatch");
+      expect(found).not.toEqual([]);
+    } finally {
+      rmSync(linked, { recursive: true, force: true });
+    }
+  });
+
+  it("a symlinked FILE inside the root pointing OUTSIDE is refused", () => {
+    const rel = "test-results/chat-hitl-held-turn-captures/escape.png";
+    symlinkSync(join(root, "src", "secret.png"), join(root, rel));
+    try {
+      const found = codes(validateCaptureRecord(record({ screenshot: rel }), { repoRoot: root }));
+      expect(found).toContain("record/screenshot-symlink");
+      expect(found).not.toContain("record/sha256-mismatch");
+    } finally {
+      rmSync(join(root, rel), { force: true });
+    }
+  });
+
+  it("a symlinked file pointing INSIDE the root is ALSO refused — a capture is a regular file", () => {
+    // DOCUMENTED DECISION. The link lands in a legitimate place, so a
+    // containment-only rule would admit it. It is still refused: a capture is a
+    // file a run wrote, and admitting the "harmless" inward link would mean the
+    // check has to reason about where each link lands — the reasoning that
+    // failed in the first place. One rule, no exceptions, nothing to get wrong.
+    const rel = "test-results/chat-hitl-held-turn-captures/alias.png";
+    symlinkSync(join(root, REL), join(root, rel));
+    try {
+      const found = codes(validateCaptureRecord(record({ screenshot: rel }), { repoRoot: root }));
+      expect(found).toContain("record/screenshot-symlink");
+    } finally {
+      rmSync(join(root, rel), { force: true });
+    }
+  });
+
+  it("a directory named like a capture is refused", () => {
+    const rel = "test-results/chat-hitl-held-turn-captures/adir.png";
+    mkdirSync(join(root, rel), { recursive: true });
+    try {
+      expect(codes(validateCaptureRecord(record({ screenshot: rel }), { repoRoot: root })))
+        .toContain("record/screenshot-not-a-regular-file");
+    } finally {
+      rmSync(join(root, rel), { recursive: true, force: true });
+    }
+  });
+
+  it("a missing file is still reported as missing", () => {
+    const found = codes(
+      validateCaptureRecord(record({ screenshot: "test-results/gone.png" }), { repoRoot: root }),
+    );
+    expect(found).toContain("record/screenshot-missing");
+  });
+
+  it("no capture root at all reads as a missing screenshot, not as a pass", () => {
+    const bare = mkdtempSync(join(tmpdir(), "capture-noroot-"));
+    try {
+      expect(codes(validateCaptureRecord(record(), { repoRoot: bare })))
+        .toContain("record/screenshot-missing");
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("the hash is taken at the RESOLVED path", () => {
+    const wrong = codes(validateCaptureRecord(record({ sha256: "d".repeat(64) }), { repoRoot: root }));
+    expect(wrong).toContain("record/sha256-mismatch");
   });
 });

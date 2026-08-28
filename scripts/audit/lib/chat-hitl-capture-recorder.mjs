@@ -106,7 +106,9 @@ import {
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
   requiredAssertionsFor,
+  resolveLiveCapture,
   settledIsAbsence,
+  sha256File,
   sha256Pinned,
 } from "../../ci/lib/capture-record-contract.mjs";
 
@@ -1076,6 +1078,11 @@ export function validateCaptureRecord(
   record,
   { hashOf, hashPinnedOf, repoRoot = process.cwd(), tier = "graded" } = {},
 ) {
+  // WHETHER THE CALLER BROUGHT ITS OWN FILESYSTEM. Production brings none: the
+  // acceptance gate and the driver pass `repoRoot` and let the default below
+  // hash from disk, so the resolution check above always runs for them.
+  const hashOfInjected = typeof hashOf === "function";
+  if (!hashOfInjected) hashOf = (rel) => sha256File(join(repoRoot, rel));
   const v = [];
   // A record is judged at the AUDIT tier when it is asked for (the driver, on
   // its own output) or when it SPEAKS that tier: a pinned `instance` is this
@@ -1184,7 +1191,24 @@ export function validateCaptureRecord(
       );
     }
   } else if (typeof hashOf === "function") {
+    // THE SAME RESOLUTION THIS TIER'S SIBLING DOES. A live path is only a
+    // capture if it resolves to a regular file inside the real capture root:
+    // a tracked `test-results -> .` symlink otherwise makes any file in the
+    // repository hash correctly under a capture-looking name. Skipped only for
+    // a caller that supplied its own `hashOf` -- a virtual filesystem, which is
+    // what the suites pass and what no production caller passes.
+    let resolutionFailed = false;
+    if (!hashOfInjected) {
+      const resolved = resolveLiveCapture(record.screenshot, { repoRoot });
+      if (!resolved.ok) {
+        v.push(`${where}: ${resolved.detail}`);
+        resolutionFailed = true;
+      }
+    }
     let actual;
+    if (resolutionFailed) {
+      // already reported; do not also report a hash that cannot be taken
+    } else
     try {
       actual = hashOf(record.screenshot);
     } catch {

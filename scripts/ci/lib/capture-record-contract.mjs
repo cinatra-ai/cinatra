@@ -47,8 +47,8 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -626,6 +626,103 @@ function pathOf(url) {
   }
 }
 
+/**
+ * WHERE A LIVE CAPTURE REALLY IS — resolved, not merely spelled.
+ *
+ * Root containment used to be a STRING TEST, and a string test is defeated by
+ * the filesystem: a tracked symlink `test-results -> .` makes
+ * `test-results/package.json` start with the capture root, exist, and hash to
+ * whatever `package.json` hashes to. `existsSync` and the hasher both follow
+ * the link, so every remaining rule was satisfied by a file that is not a
+ * capture. The lexical checks upstream of this (no `..`, no absolute path, no
+ * URL, the root prefix) are kept -- they give a clear message for the ordinary
+ * mistakes -- but CONTAINMENT is decided here, on resolved paths.
+ *
+ * FOUR THINGS ARE REQUIRED, and each has its own finding:
+ *   1. the capture root is a real directory, not a symlink -- a symlinked root
+ *      relocates every capture at once, so it is refused before anything under
+ *      it is considered;
+ *   2. the candidate exists;
+ *   3. the candidate is a REGULAR FILE. `lstat`, not `stat`: a symlink is
+ *      refused even when it points back INSIDE the root. A capture is a file a
+ *      run wrote, and a link is a second name for a file somebody else wrote --
+ *      allowing the "harmless" inward link would mean the check has to reason
+ *      about where each link lands, which is the reasoning that failed here;
+ *   4. the RESOLVED path sits beneath the RESOLVED root.
+ *
+ * @param {string} rel the record's repo-relative screenshot path
+ * @param {{repoRoot: string, lstat?: Function, realpath?: Function}} io
+ * @returns {{ok: true, realPath: string} | {ok: false, code: string, detail: string}}
+ */
+export function resolveLiveCapture(rel, io) {
+  const lstat = io.lstat ?? lstatSync;
+  const realpath = io.realpath ?? realpathSync;
+  // TRAILING SEPARATOR STRIPPED FIRST. `join` keeps it, and `lstat` on a path
+  // that ends in `/` follows the final symlink by POSIX rule -- so the root
+  // symlink check silently passed on `test-results/` while catching nothing.
+  const rootAbs = join(io.repoRoot, CAPTURE_OUTPUT_ROOT.replace(/[/\\]+$/, ""));
+
+  let rootReal;
+  try {
+    if (lstat(rootAbs).isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "record/capture-root-is-symlink",
+        detail: `${CAPTURE_OUTPUT_ROOT} is a symlink — the capture root must be a real directory, ` +
+          "or every path under it can be relocated at once",
+      };
+    }
+    rootReal = realpath(rootAbs);
+  } catch {
+    // No capture root at all: nothing live can be inside it. Reported against
+    // the file, because that is what the record actually claims exists.
+    return {
+      ok: false,
+      code: "record/screenshot-missing",
+      detail: `"${rel}" does not exist in the tree (there is no ${CAPTURE_OUTPUT_ROOT} directory)`,
+    };
+  }
+
+  const abs = join(io.repoRoot, rel);
+  let st;
+  try {
+    st = lstat(abs);
+  } catch {
+    return { ok: false, code: "record/screenshot-missing", detail: `"${rel}" does not exist in the tree` };
+  }
+  if (st.isSymbolicLink()) {
+    return {
+      ok: false,
+      code: "record/screenshot-symlink",
+      detail: `"${rel}" is a symlink — a capture is a regular file a run wrote, and a link is a ` +
+        "second name for a file written somewhere else, inside the root or outside it",
+    };
+  }
+  if (!st.isFile()) {
+    return {
+      ok: false,
+      code: "record/screenshot-not-a-regular-file",
+      detail: `"${rel}" is not a regular file`,
+    };
+  }
+
+  let real;
+  try {
+    real = realpath(abs);
+  } catch {
+    return { ok: false, code: "record/screenshot-missing", detail: `"${rel}" does not exist in the tree` };
+  }
+  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+    return {
+      ok: false,
+      code: "record/screenshot-outside-capture-root",
+      detail: `"${rel}" resolves to ${real}, which is not beneath ${rootReal} — the path spells the ` +
+        "capture root but does not land in it",
+    };
+  }
+  return { ok: true, realPath: real };
+}
+
 /** sha256 of a file, read from DISK -- never re-derived from the record. */
 export function sha256File(absPath) {
   return createHash("sha256").update(readFileSync(absPath)).digest("hex");
@@ -959,13 +1056,27 @@ export function validateCaptureRecord(record, io = {}) {
         `output root, and a picture that has left the tree is cited as a pinned permalink instead`,
     );
   } else {
+    // THE VIRTUAL-FILESYSTEM SEAM, stated so it cannot be mistaken for a hole.
+    // A caller that injects `fileExists` is SUPPLYING the filesystem: `true`
+    // means "a regular file is really at exactly this path", which is the fact
+    // `resolveLiveCapture` would otherwise establish from disk. Only suites
+    // inject it -- every production caller (`chat-hitl-evidence-gate.mjs`,
+    // `chat-hitl-acceptance-gate.mjs`) passes `repoRoot` alone and therefore
+    // takes the resolved path below.
     const abs = join(repoRoot, shot);
-    if (!fileExists(abs)) {
-      push("record/screenshot-missing", `"${shot}" does not exist in the tree`);
+    const resolved = io.fileExists
+      ? fileExists(abs)
+        ? { ok: true, realPath: abs }
+        : { ok: false, code: "record/screenshot-missing", detail: `"${shot}" does not exist in the tree` }
+      : resolveLiveCapture(shot, { repoRoot, lstat: io.lstat, realpath: io.realpath });
+    if (!resolved.ok) {
+      push(resolved.code, resolved.detail);
     } else if (!HEX64.test(String(record.sha256 ?? ""))) {
       push("record/sha256-malformed", `"${record.sha256}" is not a sha256 digest`);
     } else {
-      const actual = hashFile(abs);
+      // Hashed at the RESOLVED path, so the bytes that are hashed are the bytes
+      // that were just proved to be a regular file inside the root.
+      const actual = hashFile(resolved.realPath);
       if (actual !== record.sha256) {
         push(
           "record/sha256-mismatch",

@@ -92,7 +92,6 @@ import {
 } from "./lib/anchor-contract.mjs";
 import {
   chatThreadRequirementsFor,
-  hashFile,
   hostTokenInCell,
   kindTokenInCell,
   stateTokenInCell,
@@ -303,7 +302,12 @@ export function loadCaptureIndex(indexPath = CAPTURE_INDEX_PATH) {
 export function auditCaptureIndex({
   index = loadCaptureIndex(),
   repoRoot = DEFAULT_REPO_ROOT,
-  hashOf = (rel) => hashFile(resolve(repoRoot, rel)),
+  // NO DEFAULT HASHER. It used to default to a plain "hash whatever is at this
+  // path" reader, and injecting a hasher is what tells the validator its caller
+  // is supplying a virtual filesystem -- so this entrypoint was opting itself
+  // out of the resolved-path check on every run. Left undefined, the validator
+  // hashes from disk AND resolves the path first. A suite may still pass one.
+  hashOf,
   tier = "graded",
 } = {}) {
   // THE CANONICAL FLOOR, FIRST, for EVERY record. The ratified contract owns

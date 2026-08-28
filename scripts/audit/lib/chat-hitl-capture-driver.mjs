@@ -44,7 +44,6 @@ import { CAPTURE_INDEX_RELATIVE_PATH } from "../../ci/lib/capture-record-contrac
 import {
   CAPTURE_INDEX_SCHEMA_VERSION,
   RECORDER_ID,
-  hashFile,
   mergeWalkRecords,
   observeCapture,
   observeWalkCell,
@@ -243,8 +242,11 @@ export async function driveCapture({ plan, repoRoot = process.cwd(), log = conso
         // extras when it reads a committed index, because the canonical driver
         // writes honest records that claim none of them; what THIS driver
         // produces owes every one, and owes it here, before anything is written.
+        // NO INJECTED HASHER: passing one marks the caller as supplying its own
+        // filesystem and skips the resolved-path check. The validator hashes
+        // from disk under `repoRoot` and resolves the path itself.
         const violations = validateCaptureRecord(record, {
-          hashOf: (rel) => hashFile(resolve(repoRoot, rel)),
+          repoRoot,
           tier: "audit",
         });
         if (violations.length > 0) {
