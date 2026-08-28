@@ -1,0 +1,116 @@
+{
+  "at": "2026-08-28T11:20:41.336Z",
+  "run": {
+    "id": "67d76eb1-5806-4129-a555-e187b78bbf6d",
+    "status": "completed",
+    "source_type": "agent_builder",
+    "human_present": true,
+    "error": null,
+    "created_at": "2026-08-28T11:12:56.271Z",
+    "template_id": "19fec033-7a5a-41c5-8bea-35d848398908",
+    "lifecycle_moment": null,
+    "lifecycle_card_kind": null,
+    "lifecycle_card_ref": null
+  },
+  "hitlGates": [
+    {
+      "review_task_id": "setup-67d76eb1-5806-4129-a555-e187b78bbf6d",
+      "field_name": "idea",
+      "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+      "created_at": "2026-08-28T11:13:35.652Z"
+    },
+    {
+      "review_task_id": "wayflow-191dafd6-a4c4-4d23-a0bf-520209851dc7",
+      "field_name": null,
+      "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+      "created_at": "2026-08-28T11:15:07.926Z"
+    }
+  ],
+  "artifactReviewGates": [
+    {
+      "id": "dbd3372a-2f85-4fe4-b856-eb13d83f16c8",
+      "review_task_id": "lifecycle-review:2a4391dfb07190415f554844ae0c7abc3dbf854387877e60c53d9d9bcca59912",
+      "status": "pending",
+      "disposition": null,
+      "created_at": "2026-08-28T11:16:16.321Z",
+      "resolved_at": null
+    }
+  ],
+  "recommendationPark": {
+    "unavailable": "run_recommendation_parks: relation \"cinatra.run_recommendation_parks\" does not exist"
+  },
+  "selectedSkillRevisions": [
+    {
+      "skill_id": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+      "selection_source": "recommended_confirmed"
+    },
+    {
+      "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "selection_source": "user_adjusted"
+    },
+    {
+      "skill_id": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "selection_source": "recommended_confirmed"
+    }
+  ],
+  "skillsUsed": [
+    {
+      "skill_id": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring"
+    },
+    {
+      "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing"
+    },
+    {
+      "skill_id": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher"
+    }
+  ],
+  "recommendationSkips": {
+    "unavailable": "run_recommendation_skips: column \"skill_id\" does not exist"
+  },
+  "assignedSkills": [
+    {
+      "skill_id": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+      "owner_type": "organization",
+      "owner_id": "c043b311-8df1-46e4-9c11-1f925ca71434"
+    },
+    {
+      "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "owner_type": "organization",
+      "owner_id": "c043b311-8df1-46e4-9c11-1f925ca71434"
+    },
+    {
+      "skill_id": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "owner_type": "organization",
+      "owner_id": "c043b311-8df1-46e4-9c11-1f925ca71434"
+    },
+    {
+      "skill_id": "@cinatra-ai/web-research-skill:web-research",
+      "owner_type": "organization",
+      "owner_id": "c043b311-8df1-46e4-9c11-1f925ca71434"
+    }
+  ],
+  "installedExtensions": [
+    {
+      "package_name": "@cinatra-ai/blog-draft-writer-agent",
+      "status": "active",
+      "version": "0.1.4"
+    },
+    {
+      "package_name": "@cinatra-ai/blog-post-artifact",
+      "status": "active",
+      "version": "0.1.4"
+    },
+    {
+      "package_name": "@cinatra-ai/context-selection-agent",
+      "status": "active",
+      "version": "0.1.1"
+    }
+  ],
+  "assistantTurns": 13,
+  "turnsCarryingRecommendationHold": 0,
+  "runsOnThisInstance": 4,
+  "verificationRecords": 0,
+  "llmUsage": {
+    "unavailable": "llm_usage: relation \"cinatra.llm_usage\" does not exist"
+  }
+}
