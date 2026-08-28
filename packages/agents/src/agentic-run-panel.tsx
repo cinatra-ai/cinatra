@@ -43,6 +43,8 @@ import {
   defaultRunReviewSlotReader,
   useComposerFocusStore,
   useComposerTarget,
+  useLifecycleCardAuth,
+  useLifecycleCardFrame,
   useLifecycleCardHost,
   useRunReviewSlot,
   type RunReviewSlot,
@@ -424,6 +426,12 @@ export function AgenticRunPanel({
   // this panel is being drawn INSIDE a conversation transcript that mounts the
   // recommendation card itself — see the mount below for what that decides.
   const ambientLifecycleHost = useLifecycleCardHost();
+  // AND THE CREDENTIAL THAT HOST DECLARED, read at the same point and for the
+  // review slot's mount below: a host whose identity does not travel by cookie
+  // has to hand its own proof down to the card it contains, or the card asks
+  // the server with whatever cookie the browser happens to hold.
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const ambientLifecycleFrame = useLifecycleCardFrame();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
@@ -1607,30 +1615,34 @@ export function AgenticRunPanel({
   // is about ("once the agent is done and the output generated"); a parked
   // marked gate draws from its own ref, whatever the rest of the run is doing.
   //
-  // AND THE SLOT'S REVIEW IS WITHHELD ON THE SITE WIDGET, which is a containment
-  // rather than a rule about the widget. The card's host declaration here is
-  // `run_card`, a COOKIE-session host: the runtime refuses a broker credential
-  // on it, so a card mounted inside a widget frame resolves and decides with the
-  // frame's ambient cookie instead of the reader's own credential. That is a
-  // PRE-EXISTING property of the marked-gate mount at the base of this branch,
-  // and it is left exactly as it was; what this change must not do is carry the
-  // COMPLETED-run review down the same wrong wall for the first time. The widget
-  // keeps the terminal rendering it has today, and this branch's own evidence
-  // already records the widget's run panel as blocked pending that work.
-  const widgetHostedPanel = ambientLifecycleHost === "site_widget";
+  // AND IT DRAWS ON EVERY HOST, INCLUDING THE ONE INSIDE A THIRD-PARTY PAGE
+  // (cinatra#3051). The slot's review used to be withheld when the ambient host
+  // was the site widget, and the withholding was a CONTAINMENT rather than a
+  // rule: the mount below declared `run_card`, a COOKIE-session host, so a card
+  // drawn inside a widget frame would have resolved and decided with the frame's
+  // ambient cookie instead of the reader's own proof. Withholding it made a
+  // second rule true by accident — the injected delivery is suppressed for a
+  // turn that draws the run card, on the ground that the run card shows the
+  // gate — so on that one host NOTHING drew the review and a finished run read
+  // as an output that could not be loaded.
+  //
+  // THE CONTAINMENT IS ANSWERED WHERE IT CAME FROM, at the mount: the nested
+  // provider re-declares the AMBIENT host and hands down the credential that
+  // host declared, so the card that draws inside a widget frame is a
+  // `site_widget` card asking with the reader's own broker proof and
+  // `credentials: "omit"`. The suppression is therefore gone from both
+  // readings, and it is gone for the marked-gate path too, which never had it.
   const inPlaceReviewRef = blockedOnInputGate
     ? null
     : markedReviewGate
       ? reviewGateCardRef
-      : status === "completed" && !widgetHostedPanel
+      : status === "completed"
         ? reviewSlot.ref
         : null;
   const runIsWorking =
     inPlaceReviewRef === null &&
     !blockedOnInputGate &&
-    (status === "queued" ||
-      status === "running" ||
-      (reviewMayStillOpen && !widgetHostedPanel));
+    (status === "queued" || status === "running" || reviewMayStillOpen);
 
   // The recommendation card's ONE mount, lifted to a value so the slot's three
   // readings share it instead of each carrying a copy (the one-card rule is
@@ -1652,8 +1664,40 @@ export function AgenticRunPanel({
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
+  //
+  // WHICH HOST THE CARD IS MOUNTED ON (cinatra#3051). `run_card` everywhere the
+  // panel stands on its own, unchanged. Inside a host that proves its reader
+  // with a credential rather than a cookie — the site widget — the card
+  // re-declares THAT host and carries its proof down, because a `run_card`
+  // declaration there would make the runtime drop the credential and send the
+  // resolve and the decision on the frame's ambient cookie. A conversation host
+  // whose identity really does travel by cookie keeps `run_card`: it is the
+  // panel's own host and nothing about it needs to change.
+  //
+  // A `site_widget` READING ALWAYS CARRIES ITS PROOF. The runtime publishes the
+  // host only for a declaration it accepted, and it accepts a non-cookie host
+  // only with `credentials: "omit"` — so wherever this reads `site_widget` the
+  // credential beside it is the one that made that declaration well-formed.
+  //
+  // AND A DECLARATION IT REFUSED IS NOT A WIDGET HERE. A widget mount that
+  // dropped its `auth` publishes no host and no credential, which is exactly
+  // what the run page publishes, so this reads `run_card` for both. That is the
+  // honest reading rather than a guess — the panel cannot invent a distinction
+  // the runtime deliberately does not draw — and the refusal is contained where
+  // it can act: the wrapper that mounts this panel inside a conversation asks
+  // the same question with the three-state answer and, on a refusal, issues no
+  // request and mounts no panel at all.
+  const reviewCardOnWidget = ambientLifecycleHost === "site_widget";
   const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider
+      host={reviewCardOnWidget ? "site_widget" : "run_card"}
+      {...(reviewCardOnWidget && ambientLifecycleAuth
+        ? { auth: ambientLifecycleAuth }
+        : {})}
+      {...(reviewCardOnWidget && ambientLifecycleFrame
+        ? { frame: ambientLifecycleFrame }
+        : {})}
+    >
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",

@@ -331,6 +331,41 @@ describe("the mount the suppression leans on", () => {
     expect(src).toContain("useRunReviewSlot");
     expect(src).toContain("data-run-review-slot");
   });
+
+  // …AND IT DRAWS IT ON EVERY HOST (cinatra#3051).
+  //
+  // "The run card shows the gate" was true on three hosts and false on the
+  // fourth. The panel withheld the completed-run review whenever the ambient
+  // host was the site widget — a containment against mounting a card that would
+  // have resolved and decided with the frame's ambient cookie — and the
+  // suppression above, which asks only "does this turn draw the run card",
+  // agreed to stay silent on the same turn. Neither rule was wrong on its own;
+  // together they meant a run started inside a third-party application showed
+  // its review nowhere, and the reader was left with the run's terminal notice.
+  //
+  // SO THE PREMISE IS PINNED WHERE IT CAN BREAK. The slot's ref must not be
+  // conditional on WHICH host is in scope: the host travels DOWN to the card
+  // instead, so the card that draws inside a widget frame is a `site_widget`
+  // card asking with that host's own credential. Comments are stripped before
+  // the reading, so prose about the widget cannot satisfy or fail it.
+  it("does not decide the slot's ref by host — the host travels to the card", () => {
+    const src = read("packages/agents/src/agentic-run-panel.tsx");
+    const from = src.indexOf("const markedReviewGate");
+    const to = src.indexOf("const recommendationCardNode");
+    expect(from, "the panel's review-slot decision moved").toBeGreaterThan(-1);
+    expect(to, "the panel's card mounts moved").toBeGreaterThan(from);
+    const decision = src
+      .slice(from, to)
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    // The decision names no host. A run that has finished draws its review, and
+    // that is the whole of it.
+    expect(decision).not.toContain("site_widget");
+    expect(decision).not.toContain("chat_thread");
+    // And the mount hands the ambient host down rather than shadowing it.
+    expect(src).toContain('host={reviewCardOnWidget ? "site_widget" : "run_card"}');
+  });
 });
 
 describe("the review gate, in a turn that already draws the run card", () => {
