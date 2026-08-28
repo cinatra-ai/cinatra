@@ -163,7 +163,20 @@ function loadManifest(manifestPath = MANIFEST_PATH) {
  * catches is the case that actually happens — the file was renamed, or the test
  * was deleted.
  */
-export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = null, readPinnedImpl = null) {
+export function proofExists(
+  proof,
+  repoRoot = DEFAULT_REPO_ROOT,
+  readFileImpl = null,
+  readPinnedImpl = null,
+  virtualFilesystem = false,
+) {
+  // THE SAME RULE AS EVERY OTHER READER OVERRIDE: honoured only under the
+  // explicit flag. The positional signature is kept so an existing positional
+  // caller still type-checks, but passing a reader WITHOUT the flag no longer
+  // buys anything -- the overrides are dropped and the document is read from
+  // where it really lives. Production passes neither.
+  const readFile = virtualFilesystem === true ? readFileImpl : null;
+  const readPinned = virtualFilesystem === true ? readPinnedImpl : null;
   // A PINNED PROOF. Once a proof document leaves the working tree, the row cites
   // it as a historical permalink into this repository at a full 40-char commit.
   // The document is READ BACK FROM THAT COMMIT with `git cat-file`, and the
@@ -171,7 +184,7 @@ export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = 
   // tree -- same rule, different source. A blob that cannot be produced is
   // reported, never waved through.
   if (isHistoricalPermalink(proof.file)) {
-    const got = (readPinnedImpl ?? readPinnedArtifact)(proof.file, { repoRoot });
+    const got = (readPinned ?? readPinnedArtifact)(proof.file, { repoRoot });
     if (!got.ok) {
       return { ok: false, reason: `pinned proof unreachable: ${got.reason}` };
     }
@@ -190,7 +203,7 @@ export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = 
   const abs = resolve(repoRoot, proof.file);
   let source;
   try {
-    source = readFileImpl ? readFileImpl(proof.file) : readFileSync(abs, "utf8");
+    source = readFile ? readFile(proof.file) : readFileSync(abs, "utf8");
   } catch {
     return { ok: false, reason: `file not found: ${proof.file}` };
   }
@@ -217,6 +230,10 @@ export function auditManifest({
   manifest = loadManifest(),
   repoRoot = DEFAULT_REPO_ROOT,
   readFileImpl = null,
+  // TEST-ONLY, and the ONE name that unlocks every reader override in this
+  // module. Without it an injected reader is ignored and every cited proof is
+  // read from the tree or from git history, as it is in production.
+  virtualFilesystem = false,
 } = {}) {
   const violations = [];
   const rows = manifest.rows ?? [];
@@ -266,7 +283,7 @@ export function auditManifest({
         violations.push(`${where}: a ${p.kind} entry is missing file/testName`);
         continue;
       }
-      const found = proofExists(p, repoRoot, readFileImpl);
+      const found = proofExists(p, repoRoot, readFileImpl, null, virtualFilesystem);
       if (!found.ok) violations.push(`${where}: ${found.reason}`);
     }
 

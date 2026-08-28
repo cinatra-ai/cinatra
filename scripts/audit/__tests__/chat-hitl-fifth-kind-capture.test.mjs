@@ -24,18 +24,18 @@
 //      have no path to is a photograph, and a validator that let one be claimed
 //      would be inviting a staged picture.
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // A REAL capture root for the observer — `observeCapture` resolves its
 // destination before the shutter, so the two cases that drive it need a real
 // tree to write into rather than a fake repo root.
+// NOTHING PRE-CREATED — the recorder makes the run directory, and the capture
+// root, on the first capture. A suite that made them first would not notice
+// when that stopped working, which is precisely what happened.
 const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-fifth-"));
-beforeAll(() => {
-  mkdirSync(join(OBSERVE_ROOT, "test-results", "capture-fixture"), { recursive: true });
-});
 afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
 import { createHash } from "node:crypto";
 

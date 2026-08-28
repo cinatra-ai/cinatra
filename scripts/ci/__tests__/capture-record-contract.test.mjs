@@ -8,8 +8,10 @@
 // switched off.
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   linkSync,
   mkdtempSync,
   mkdirSync,
@@ -38,6 +40,9 @@ import {
   validateCaptureIndex,
   validateCaptureRecord,
   CAPTURE_OUTPUT_ROOT,
+  createCaptureTempFile,
+  prepareCaptureTarget,
+  recheckCaptureParent,
   resolveCaptureTarget,
   resolveLiveCapture,
   isHistoricalPermalink,
@@ -791,6 +796,10 @@ describe("readPinnedArtifact — reading a proof out of history", () => {
     });
     const withGit = (git) => ({
       repoRoot: "/repo",
+      // EXPLICIT: the pinned reader is gated by the same flag as the working
+      // tree, so a suite that brings its own git says so. Without it these
+      // cases would fall through to the real reader and attempt a real fetch.
+      virtualFilesystem: true,
       readPinned: (u, extra) => readPinnedArtifact(u, { ...extra, ...io(git.run) }),
     });
 
@@ -844,7 +853,11 @@ describe("readPinnedArtifact — reading a proof out of history", () => {
           at("b".repeat(40), "C2__review-card__chat_thread__decided"),
         ],
       },
-      { repoRoot: "/repo", readPinned: () => ({ ok: false, reason: "not read in this case" }) },
+      {
+        repoRoot: "/repo",
+        virtualFilesystem: true,
+        readPinned: () => ({ ok: false, reason: "not read in this case" }),
+      },
     );
     const dup = result.violations.filter((v) => v.code === "index/duplicate-screenshot-path");
     expect(dup).toHaveLength(1);
@@ -907,7 +920,7 @@ describe("a live screenshot must be written into the capture output root", () =>
           screenshot: `https://github.com/cinatra-ai/cinatra/blob/${"a".repeat(40)}/evidence/round/shot.png`,
           sha256: hash,
         }),
-        { repoRoot: "/repo", readPinned: () => ({ ok: true, bytes: BYTES }) },
+        { repoRoot: "/repo", virtualFilesystem: true, readPinned: () => ({ ok: true, bytes: BYTES }) },
       ),
     );
     expect(found).not.toContain("record/screenshot-outside-capture-root");
@@ -923,7 +936,7 @@ describe("a live screenshot must be written into the capture output root", () =>
           screenshot: `https://github.com/cinatra-ai/cinatra/blob/${"a".repeat(40)}/src/app/icon.png`,
           sha256: createHash("sha256").update(BYTES).digest("hex"),
         }),
-        { repoRoot: "/repo", readPinned: () => ({ ok: true, bytes: BYTES }) },
+        { repoRoot: "/repo", virtualFilesystem: true, readPinned: () => ({ ok: true, bytes: BYTES }) },
       ),
     );
     expect(found).toContain("record/pinned-screenshot-outside-proof-root");
@@ -1202,5 +1215,298 @@ describe("resolveCaptureTarget refuses a redirected write", () => {
   it("refuses a parent that does not exist, and one outside the root", () => {
     expect(resolveCaptureTarget("test-results/nope/x.png", { repoRoot: root }).code)
       .toBe("capture/parent-missing");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// CREATION IS PART OF THE CONTRACT. A run's FIRST capture names a directory
+// that does not exist yet, and in a fresh checkout the capture root does not
+// either — it is gitignored. Playwright used to create both on its way past;
+// resolving before the shutter took that away and broke every run's first
+// capture. These cases are the ones CI caught.
+// ---------------------------------------------------------------------------
+describe("prepareCaptureTarget creates what a run needs and refuses the rest", () => {
+  it("a FRESH root with no capture root at all succeeds, and creates it", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-fresh-"));
+    try {
+      expect(existsSync(join(root, "test-results"))).toBe(false);
+      const got = prepareCaptureTarget("test-results/x.png", { repoRoot: root });
+      expect(got.ok).toBe(true);
+      expect(existsSync(join(root, "test-results"))).toBe(true);
+      expect(got.absReal).toBe(join(realpathSync(join(root, "test-results")), "x.png"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the FIRST capture into a run directory that does not exist creates it", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-first-"));
+    try {
+      const rel = "test-results/chat-hitl-held-turn-captures/S9k-1__recommendation-hold__chat_thread__held.png";
+      expect(prepareCaptureTarget(rel, { repoRoot: root }).ok).toBe(true);
+      expect(existsSync(join(root, "test-results", "chat-hitl-held-turn-captures"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("nested run directories are created all the way down", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-deep-"));
+    try {
+      expect(prepareCaptureTarget("test-results/a/b/c/d.png", { repoRoot: root }).ok).toBe(true);
+      expect(existsSync(join(root, "test-results", "a", "b", "c"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a SYMLINKED ROOT is still refused — mkdir does not replace an existing entry", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-symroot-"));
+    try {
+      symlinkSync(".", join(root, "test-results"), "dir");
+      expect(prepareCaptureTarget("test-results/x.png", { repoRoot: root }).code)
+        .toBe("capture/root-is-symlink");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a PRE-EXISTING symlinked intermediate is still refused, and is not replaced", () => {
+    // `mkdir -p` is satisfied by an existing symlinked directory and creates
+    // nothing, so the re-resolution after it is the step that sees this.
+    const root = mkdtempSync(join(tmpdir(), "prep-symint-"));
+    try {
+      mkdirSync(join(root, "test-results"), { recursive: true });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      symlinkSync(join(root, "outside"), join(root, "test-results", "sneaky"), "dir");
+      expect(prepareCaptureTarget("test-results/sneaky/x.png", { repoRoot: root }).code)
+        .toBe("capture/parent-is-symlink");
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the CANONICAL validator never creates anything — it only judges", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-nowrite-"));
+    try {
+      validateCaptureRecord(honestChatPending({ screenshot: "test-results/a/b.png" }), {
+        repoRoot: root,
+      });
+      expect(existsSync(join(root, "test-results"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LAST-MOMENT RE-CHECK and the exclusive temp file. Node has no `openat`,
+// so a path resolved once and used later is a time-of-check/time-of-use gap.
+// It cannot be closed from here; it can be shrunk, and it must fail closed.
+// ---------------------------------------------------------------------------
+describe("the destination is re-verified at the last moment", () => {
+  it("passes while nothing moved", () => {
+    const root = mkdtempSync(join(tmpdir(), "recheck-ok-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/x.png", { repoRoot: root });
+      expect(recheckCaptureParent(t)).toBe(null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("FAILS CLOSED when the parent is swapped for a symlink mid-capture", () => {
+    const root = mkdtempSync(join(tmpdir(), "recheck-swap-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/x.png", { repoRoot: root });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      rmSync(join(root, "test-results", "c"), { recursive: true, force: true });
+      symlinkSync(join(root, "outside"), join(root, "test-results", "c"), "dir");
+      const got = recheckCaptureParent(t);
+      expect(got).not.toBe(null);
+      expect(got.code).toBe("capture/parent-replaced");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("FAILS CLOSED when the parent vanishes mid-capture", () => {
+    const root = mkdtempSync(join(tmpdir(), "recheck-gone-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/x.png", { repoRoot: root });
+      rmSync(join(root, "test-results", "c"), { recursive: true, force: true });
+      expect(recheckCaptureParent(t).code).toBe("capture/parent-vanished");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the temp file is UNGUESSABLE and created exclusively", () => {
+    const root = mkdtempSync(join(tmpdir(), "temp-excl-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/x.png", { repoRoot: root });
+      const a = createCaptureTempFile(t.parentReal);
+      const b = createCaptureTempFile(t.parentReal);
+      expect(a.ok && b.ok).toBe(true);
+      expect(a.path).not.toBe(b.path);
+      // 96 bits of randomness in the name, and nothing predictable in it.
+      expect(a.path).toMatch(/\.capture-[0-9a-f]{24}\.tmp$/);
+      expect(a.path).not.toContain(String(process.pid));
+      // ...and creating it again is refused rather than silently reused.
+      expect(createCaptureTempFile(t.parentReal, { open: () => { throw new Error("EEXIST"); } }).code)
+        .toBe("capture/temp-not-exclusive");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// REAL DISK MEANS REAL `fs`. Injected filesystem functions were still honoured
+// outside virtual mode, so a caller could fabricate the resolution or hand back
+// the RECORDED digest for bytes that are something else — the implicit bypass
+// one layer down from the flag that was supposed to end it.
+// ---------------------------------------------------------------------------
+describe("injected filesystem functions are ignored outside virtual mode", () => {
+  let root;
+  const REL = "test-results/c/s.png";
+  const CLAIMED = createHash("sha256").update("CLAIMED").digest("hex");
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "real-fs-only-"));
+    mkdirSync(join(root, "test-results", "c"), { recursive: true });
+    writeFileSync(join(root, REL), "WRONG-BYTES");
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const record = () => honestChatPending({ screenshot: REL, sha256: CLAIMED });
+
+  it("an injected hasher returning the RECORDED digest still fails on the real bytes", () => {
+    const found = codes(validateCaptureRecord(record(), { repoRoot: root, hashFile: () => CLAIMED }));
+    expect(found).toContain("record/sha256-mismatch");
+  });
+
+  it("injected lstat/realpath cannot fabricate the resolution", () => {
+    const found = codes(
+      validateCaptureRecord(record(), {
+        repoRoot: root,
+        hashFile: () => CLAIMED,
+        lstat: () => ({ isSymbolicLink: () => false, isFile: () => true, nlink: 1 }),
+        realpath: (p) => p,
+      }),
+    );
+    expect(found).toContain("record/sha256-mismatch");
+  });
+
+  it("an injected fileExists cannot vouch for a file that is not there", () => {
+    const found = codes(
+      validateCaptureRecord(honestChatPending({ screenshot: "test-results/c/gone.png" }), {
+        repoRoot: root,
+        fileExists: () => true,
+        hashFile: () => hashA,
+      }),
+    );
+    expect(found).toContain("record/screenshot-missing");
+  });
+
+  it("...and WITH the explicit flag the suite's filesystem is honoured, as designed", () => {
+    expect(
+      codes(
+        validateCaptureRecord(record(), {
+          repoRoot: root,
+          virtualFilesystem: true,
+          fileExists: () => true,
+          hashFile: () => CLAIMED,
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE PINNED READER IS GATED TOO. It reaches git history rather than the
+// working tree, but that is a different STORE, not a different kind of trust:
+// an injected reader can hand back bytes that hash to exactly the recorded
+// digest for a blob that is something else entirely.
+//
+// The permalink below points into a REAL temp git repository this suite makes,
+// so the reader runs `git cat-file` for real and nothing touches the network.
+// ---------------------------------------------------------------------------
+describe("an injected pinned reader is honoured only under the flag", () => {
+  let root;
+  let url;
+  const REAL_BYTES = Buffer.from("THE-REAL-BLOB");
+  const REAL_HASH = createHash("sha256").update(REAL_BYTES).digest("hex");
+  const FORGED_BYTES = Buffer.from("FORGED-BYTES");
+  const FORGED_HASH = createHash("sha256").update(FORGED_BYTES).digest("hex");
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "pinned-gate-"));
+    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.invalid");
+    git("config", "user.name", "t");
+    // This throwaway repository is a FIXTURE, not the product tree: a
+    // machine-wide hooks path (the very hygiene hooks this branch is about)
+    // would otherwise refuse the proof-shaped fixture commit below.
+    git("config", "core.hooksPath", join(root, ".no-hooks"));
+    mkdirSync(join(root, "evidence", "round"), { recursive: true });
+    writeFileSync(join(root, "evidence", "round", "shot.png"), REAL_BYTES);
+    // `-f`: a machine-wide ignore rule for proof directories is exactly the
+    // hygiene this branch installs, and it would otherwise leave the fixture
+    // commit empty.
+    git("add", "-f", "evidence/round/shot.png");
+    git("commit", "-qm", "the real blob");
+    const sha = git("rev-parse", "HEAD").trim();
+    url = `https://github.com/cinatra-ai/cinatra/blob/${sha}/evidence/round/shot.png`;
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  /** A record that CLAIMS the forged digest, with a reader that vouches for it. */
+  const forged = () => honestChatPending({ screenshot: url, sha256: FORGED_HASH });
+  const vouchingReader = () => ({ ok: true, bytes: FORGED_BYTES });
+
+  it("WITHOUT the flag the injected reader is ignored and the forgery is caught", () => {
+    const found = codes(
+      validateCaptureRecord(forged(), { repoRoot: root, readPinned: vouchingReader }),
+    );
+    // The real blob was read from history and hashes to something else.
+    expect(found).toContain("record/sha256-mismatch");
+    expect(found).not.toContain("capture/pinned-object-unreachable");
+  });
+
+  it("...and an injected `run` cannot fake the git call either", () => {
+    const found = codes(
+      validateCaptureRecord(forged(), {
+        repoRoot: root,
+        run: () => ({ status: 0, stdout: FORGED_BYTES, stderr: Buffer.alloc(0) }),
+      }),
+    );
+    expect(found).toContain("record/sha256-mismatch");
+  });
+
+  it("an HONEST record still passes through the real reader", () => {
+    expect(
+      validateCaptureRecord(honestChatPending({ screenshot: url, sha256: REAL_HASH }), {
+        repoRoot: root,
+      }),
+    ).toEqual([]);
+  });
+
+  it("WITH the flag the suite's reader is honoured, as designed", () => {
+    expect(
+      codes(
+        validateCaptureRecord(forged(), {
+          repoRoot: root,
+          virtualFilesystem: true,
+          readPinned: vouchingReader,
+        }),
+      ),
+    ).toEqual([]);
   });
 });

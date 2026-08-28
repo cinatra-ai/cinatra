@@ -21,10 +21,11 @@
 // ruled hosts, and a deliberate ABSENT assertion (that is how a placeholder is
 // proven to be a placeholder).
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,7 +68,15 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
 
 const PNG = "test-results/capture-fixture/shot.png";
+const FIXTURE_BYTES = Buffer.from("fixture-bytes");
 const HASH = createHash("sha256").update("fixture-bytes").digest("hex");
+
+// A REAL capture tree for the observer cases. `observeCapture` prepares and
+// resolves its destination on real disk and writes atomically, so the suite
+// gives it a real root — and pre-creates NOTHING, because creating the run
+// directory on the first capture is exactly the behaviour that regressed.
+const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-index-"));
+afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
 const hashOf = (rel) => {
   if (rel !== PNG) throw new Error(`no such file: ${rel}`);
   return HASH;
@@ -562,12 +571,14 @@ function fakePage({
     screenshot: async (abs) => {
       log.push("page.screenshot");
       page.written.push(abs);
+      // A REAL SHUTTER LEAVES A FILE: the recorder renames it into place and
+      // then hashes it back off disk.
+      writeFileSync(abs, FIXTURE_BYTES);
     },
   };
   return page;
 }
 
-const OBSERVER_READ = () => Buffer.from("fixture-bytes");
 
 describe("the recorder OBSERVES rather than taking dictation", () => {
   it("reads the final URL and every required anchor off the page itself", async () => {
@@ -588,8 +599,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       state: "pending",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
       now: () => "2026-08-16T09:00:00.000Z",
     });
     expect(record.finalUrl).toBe("http://localhost:3000/chat?thread=t-9");
@@ -626,8 +636,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       declaredHost: "site_widget",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
 
     // The order IS the claim: count the outer frame, enter it, read its URL,
@@ -652,8 +661,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       declaredHost: "site_widget",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
     expect(record.assertions.every((a) => a.count === 0)).toBe(true);
     // …and the record it produced is REFUSED, rather than silently thin.
@@ -670,10 +678,13 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       state: "pending",
       screenshot: PNG,
       build: "production",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
-    expect(page.written).toEqual([`/anywhere/${PNG}`]);
+    // The shutter fires at the resolved temp name inside the resolved parent,
+    // and the file is renamed into place — so what it was handed is a path
+    // under the real capture root, not the record's spelling.
+    expect(page.written).toHaveLength(1);
+    expect(page.written[0].startsWith(join(OBSERVE_ROOT, "test-results"))).toBe(true);
     expect(page.log.indexOf("page.screenshot")).toBeGreaterThan(page.log.indexOf("page.url"));
     // Nothing was observed, so nothing is claimed — and the record fails.
     expect(record.assertions.every((a) => a.count === 0)).toBe(true);
@@ -917,8 +928,7 @@ describe("the three bypasses an adversarial round found", () => {
       declaredState: "decided",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
     // The host declaration and the settled marker were counted zero INSIDE the
     // card, so the record is refused however the page looked.
@@ -952,8 +962,7 @@ describe("the three bypasses an adversarial round found", () => {
         state: "pending",
         screenshot: PNG,
         build: "development",
-        repoRoot: "/anywhere",
-        readImpl: OBSERVER_READ,
+        repoRoot: OBSERVE_ROOT,
       }),
     ).rejects.toThrow(/is not stable/);
   });
@@ -1243,7 +1252,7 @@ function fakeBrowserPage({ url, tree }) {
     locator: (selector) => fakeLocator(tree[selector] ?? []),
     $$: async (selector) => (tree[selector] ?? []).map(fakeElementHandle),
     $: async () => null,
-    screenshot: async () => {},
+    screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES),
   };
 }
 
@@ -1253,7 +1262,7 @@ function fakeBrowserPage({ url, tree }) {
  * creating an evidence file to prove it.
  */
 function drivenPage(page) {
-  return { ...playwrightPage(page), screenshot: async () => {} };
+  return { ...playwrightPage(page), screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES) };
 }
 
 const CARD_ROOT = '[data-lifecycle-card="recommendation_hold"]';
@@ -1328,7 +1337,7 @@ function firstMatchAttachedOnlyPage(page) {
       return { count: descendantsOnly, countVisible: descendantsOnly };
     },
     frame: async () => null,
-    screenshot: async () => {},
+    screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES),
   };
 }
 
@@ -1339,8 +1348,7 @@ const OBSERVE_ARGS = {
   state: "pending",
   screenshot: PNG,
   build: "development",
-  repoRoot: "/anywhere",
-  readImpl: OBSERVER_READ,
+  repoRoot: OBSERVE_ROOT,
   now: () => "2026-08-19T09:00:00.000Z",
 };
 
@@ -1706,8 +1714,7 @@ function reviewArgs(state) {
     state,
     screenshot: PNG,
     build: "development",
-    repoRoot: "/anywhere",
-    readImpl: OBSERVER_READ,
+    repoRoot: OBSERVE_ROOT,
     now: () => "2026-08-20T09:00:00.000Z",
   };
 }
@@ -1738,16 +1745,19 @@ function runCardArgs(cell, state) {
     state,
     screenshot: PNG,
     build: "development",
-    repoRoot: "/anywhere",
-    readImpl: OBSERVER_READ,
+    repoRoot: OBSERVE_ROOT,
     now: () => "2026-08-20T09:00:00.000Z",
   };
 }
 
 /** Judge one record with the ratified CI half, on its own terms. */
 function canonicalViolations(record) {
+  // GENUINELY VIRTUAL: these records are hand-built to exercise the vocabulary
+  // and were never written anywhere, so the filesystem is supplied — and,
+  // since the seam is an explicit option rather than an inference, said so.
   return validateCanonicalRecord(record, {
     repoRoot: "/anywhere",
+    virtualFilesystem: true,
     fileExists: (abs) => abs === `/anywhere/${PNG}`,
     hashFile: () => HASH,
   });

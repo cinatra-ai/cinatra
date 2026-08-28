@@ -25,7 +25,7 @@
 //   * a walk MERGES: it replaces what it rewrote, retires what it replaced, and
 //     leaves every other record where it stood.
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
   mkdirSync,
@@ -154,15 +154,16 @@ const RUN_DECIDED = {
 // existing target — so a suite that drives it needs a real tree to write into.
 // The fake page's "shutter" just drops the fixture bytes at the path it is
 // handed, which is what a real one does at the point this suite cares about.
+// NOTHING IS PRE-CREATED. Not the run directories and not `test-results/`
+// itself — the recorder creates what a run needs, and a suite that made them
+// first would not notice when it stopped. That is exactly the regression this
+// harness now covers.
 const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-root-"));
-beforeAll(() => {
-  mkdirSync(join(OBSERVE_ROOT, "test-results", "2788-s9d-rework", "captures"), { recursive: true });
-  mkdirSync(join(OBSERVE_ROOT, "test-results", "capture-fixture"), { recursive: true });
-});
 afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
 
-const observe = (cell, page) =>
-  observeWalkCell({ page, cell, repoRoot: OBSERVE_ROOT, readImpl: READ, now: NOW });
+// NO INJECTED READER: the stub shutter writes the fixture bytes, and the
+// recorder hashes them back off real disk — which is what a real walk does.
+const observe = (cell, page) => observeWalkCell({ page, cell, repoRoot: OBSERVE_ROOT, now: NOW });
 
 describe("the walk plan is judged before the browser opens", () => {
   it("accepts the committed S9d plan and reads its ten cells in walk order", () => {
@@ -596,7 +597,6 @@ describe("the observer refuses a redirected write before the shutter", () => {
       }),
       cell: { ...CHAT_PENDING, screenshot: rel },
       repoRoot: root,
-      readImpl: READ,
       now: NOW,
     });
 
@@ -649,6 +649,61 @@ describe("the observer refuses a redirected write before the shutter", () => {
       expect(readFileSync(join(root, "test-results", "c", "ok.png"))).toEqual(BYTES);
       const left = readdirSync(join(root, "test-results", "c"));
       expect(left).toEqual(["ok.png"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE MID-CAPTURE SWAP. The destination is resolved, then real DOM work runs,
+// then the shutter fires and the file is renamed. An ancestor swapped for a
+// symlink in that window redirects both. Node has no `openat`, so the gap
+// cannot be closed — it is re-checked immediately before each step and fails
+// closed. The stub shutter below performs the swap at exactly that moment.
+// ---------------------------------------------------------------------------
+describe("a parent swapped DURING the capture fails closed", () => {
+  const cellFor = (rel) => ({ ...CHAT_PENDING, screenshot: rel });
+  const req = captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending");
+
+  it("REFUSES the rename when the shutter's own directory is swapped mid-capture", async () => {
+    const root = mkdtempSync(join(tmpdir(), "swap-mid-"));
+    try {
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      const page = pageAnswering(req, { url: "http://localhost:3000/chat/org/agent/t-1" });
+      // THE SWAP HAPPENS INSIDE THE SHUTTER — after the pre-shutter re-check
+      // and before the pre-rename one, which is the window being tested.
+      page.screenshot = async (abs) => {
+        writeFileSync(abs, BYTES);
+        const parent = join(root, "test-results", "run");
+        rmSync(parent, { recursive: true, force: true });
+        symlinkSync(join(root, "outside"), parent, "dir");
+      };
+      await expect(
+        observeWalkCell({ page, cell: cellFor("test-results/run/x.png"), repoRoot: root, now: NOW }),
+      ).rejects.toThrow(/mid-capture/);
+      // The directory the swap pointed at is untouched: nothing was renamed in.
+      expect(readdirSync(join(root, "outside"))).toEqual(["victim.png"]);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the honest run through the same path still lands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "swap-none-"));
+    try {
+      const page = pageAnswering(req, { url: "http://localhost:3000/chat/org/agent/t-1" });
+      const record = await observeWalkCell({
+        page,
+        cell: cellFor("test-results/run/x.png"),
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(record.screenshot).toBe("test-results/run/x.png");
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["x.png"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

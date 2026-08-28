@@ -105,8 +105,11 @@ import {
   isHistoricalPermalink,
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
+  createCaptureTempFile,
+  prepareCaptureTarget,
+  recheckCaptureParent,
   requiredAssertionsFor,
-  resolveCaptureTarget,
+  tempFileViolation,
   resolveLiveCapture,
   settledIsAbsence,
   sha256File,
@@ -684,7 +687,15 @@ export async function observeCapture({
   if (pathViolation) {
     throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
   }
-  const target = resolveCaptureTarget(screenshot, { repoRoot });
+  //    PREPARING, not merely resolving. A run's FIRST capture names a run
+  //    directory that does not exist yet, and in a fresh checkout the capture
+  //    root does not either -- it is gitignored. Playwright used to create both
+  //    silently on its way to the file; resolving before the shutter took that
+  //    away and broke the first capture of every run. `prepareCaptureTarget`
+  //    creates the root and the parent INSIDE the resolved root and then
+  //    re-resolves them, so what a run needs exists and every redirect is still
+  //    refused.
+  const target = prepareCaptureTarget(screenshot, { repoRoot });
   if (!target.ok) {
     throw new Error(`capture "${cell}" cannot be written: ${target.detail}`);
   }
@@ -816,16 +827,40 @@ export async function observeCapture({
   //    renamed into place. `rename` replaces the destination entry itself
   //    rather than writing through it, so an entry that appeared in the
   //    meantime is overwritten as a NAME and never followed as a link.
+  //    THE LAST-MOMENT RE-CHECK. Everything above — the frames, the counts, the
+  //    DOM walk — takes real time, and the destination was resolved before all
+  //    of it. Node has no `openat`, so a path resolved once and used later is a
+  //    time-of-check/time-of-use gap that cannot be closed from here; what can
+  //    be done is to shrink it and fail closed. The parent is re-verified
+  //    immediately before the shutter and again immediately before the rename,
+  //    and the temp file is created EXCLUSIVELY under an unguessable name so no
+  //    one can be holding it as a symlink when the shutter writes.
   const abs = target.absReal;
-  const tmp = join(target.parentReal, `.${basename(abs)}.tmp-${process.pid}-${Date.now()}`);
+  const beforeShutter = recheckCaptureParent(target);
+  if (beforeShutter) {
+    throw new Error(`capture "${cell}" cannot be written: ${beforeShutter.detail}`);
+  }
+  const temp = createCaptureTempFile(target.parentReal);
+  if (!temp.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${temp.detail}`);
+  }
+  const tmp = temp.path;
   try {
     await page.screenshot(tmp, { framing: framing ?? "page" });
+    const beforeRename = recheckCaptureParent(target);
+    if (beforeRename) {
+      throw new Error(`capture "${cell}" cannot be written: ${beforeRename.detail}`);
+    }
+    const tempViolation = tempFileViolation(tmp);
+    if (tempViolation) {
+      throw new Error(`capture "${cell}" cannot be written: ${tempViolation.detail}`);
+    }
     renameSync(tmp, abs);
   } catch (err) {
     try {
       rmSync(tmp, { force: true });
     } catch {
-      // the temp file may never have been created; the original error wins
+      // the temp file may already be gone; the original error wins
     }
     throw err;
   }
@@ -1220,7 +1255,13 @@ export function validateCaptureRecord(
     // PINNED: the picture is read back out of history at the commit the
     // permalink names, and the digest is re-derived from those bytes -- the
     // same binding a live record gets, off `git cat-file` instead of the tree.
-    const got = (hashPinnedOf ?? sha256Pinned)(record.screenshot, { repoRoot });
+    // GATED LIKE EVERY OTHER SEAM: an injected pinned reader is honoured only
+    // when the caller asked for a virtual filesystem. A real record is read
+    // back out of git history by the shipped reader.
+    const got = (virtualFilesystem && hashPinnedOf ? hashPinnedOf : sha256Pinned)(
+      record.screenshot,
+      { repoRoot },
+    );
     if (!got.ok) {
       v.push(`${where}: the pinned screenshot could not be read — ${got.reason}`);
     } else if (got.sha256 !== record.sha256) {
@@ -1936,6 +1977,8 @@ export async function observeWalkCell({
   repoRoot = process.cwd(),
   readImpl = readFileSync,
   now = () => new Date().toISOString(),
+  // TEST-ONLY, and named so it reads as one. A real walk never passes it.
+  virtualFilesystem = false,
 }) {
   const record = await observeCapture({
     page,
@@ -1951,14 +1994,17 @@ export async function observeWalkCell({
     readImpl,
     now,
   });
-  // THE VIRTUAL FILESYSTEM IS THE SUITE'S, NEVER THE RUN'S. A walk driven for
-  // real reads real bytes and takes the resolved-path check; a suite that
-  // supplied its own reader says so explicitly and gets its own bytes back.
-  const suiteSuppliedBytes = readImpl !== readFileSync;
+  // THE VIRTUAL FILESYSTEM IS AN EXPLICIT REQUEST, NEVER AN INFERENCE. This
+  // used to read `readImpl !== readFileSync` and treat any non-default reader
+  // as "the caller brought its own filesystem" -- so the implicit bypass simply
+  // moved up a layer, and any wrapped or instrumented reader silently skipped
+  // the final on-disk resolution. A walk driven for real ALWAYS validates its
+  // own output from disk; only a suite that says `virtualFilesystem: true` is
+  // answered from its own bytes.
   const violations = validateCaptureRecord(record, {
     repoRoot,
     tier: "audit",
-    ...(suiteSuppliedBytes
+    ...(virtualFilesystem
       ? { virtualFilesystem: true, hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl) }
       : {}),
   });

@@ -45,9 +45,17 @@
 // Zero runtime dependencies (node builtins only).
 // ---------------------------------------------------------------------------
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -811,35 +819,295 @@ export function resolveCaptureTarget(rel, io) {
   }
 
   const absReal = join(parentReal, base);
-  try {
-    const st = lstat(absReal);
-    if (st.isSymbolicLink()) {
-      return {
-        ok: false,
-        code: "capture/target-is-symlink",
-        detail: `"${rel}" already exists as a symlink — writing it would follow the link out of ` +
-          "the capture root",
-      };
-    }
-    if (!st.isFile()) {
-      return {
-        ok: false,
-        code: "capture/target-not-a-regular-file",
-        detail: `"${rel}" already exists and is not a regular file`,
-      };
-    }
-    if (st.nlink > 1) {
-      return {
-        ok: false,
-        code: "capture/target-hard-linked",
-        detail: `"${rel}" already exists with ${st.nlink} links — writing it would write through a ` +
-          "second name for the same bytes",
-      };
-    }
-  } catch {
-    // Nothing there yet: the ordinary case for a fresh capture.
-  }
+  const existing = existingTargetViolation(absReal, rel, lstat);
+  if (existing) return existing;
   return { ok: true, parentReal, absReal };
+}
+
+/**
+ * What an ALREADY-PRESENT destination disqualifies itself for. Shared by the
+ * pure resolver and the preparing one so the two can never drift.
+ * @returns {null | {ok: false, code: string, detail: string}}
+ */
+function existingTargetViolation(absReal, rel, lstat) {
+  let st;
+  try {
+    st = lstat(absReal);
+  } catch {
+    return null; // nothing there yet: the ordinary case for a fresh capture
+  }
+  if (st.isSymbolicLink()) {
+    return {
+      ok: false,
+      code: "capture/target-is-symlink",
+      detail: `"${rel}" already exists as a symlink — writing it would follow the link out of ` +
+        "the capture root",
+    };
+  }
+  if (!st.isFile()) {
+    return {
+      ok: false,
+      code: "capture/target-not-a-regular-file",
+      detail: `"${rel}" already exists and is not a regular file`,
+    };
+  }
+  if (st.nlink > 1) {
+    return {
+      ok: false,
+      code: "capture/target-hard-linked",
+      detail: `"${rel}" already exists with ${st.nlink} links — writing it would write through a ` +
+        "second name for the same bytes",
+    };
+  }
+  return null;
+}
+
+/**
+ * PREPARE a destination: create what a run legitimately needs, refuse the rest.
+ *
+ * `resolveCaptureTarget` above is PURE -- it answers "may this be written?" and
+ * touches nothing. That is the right shape for validation and the wrong shape
+ * for a shutter: a run's first capture names a directory that does not exist
+ * yet (the run directory is per-run, and the capture root itself is gitignored
+ * and absent in a fresh checkout). Playwright used to create both on the way
+ * past, silently, which is why nothing here had to. Resolving before the write
+ * took that away and broke the FIRST capture of every run.
+ *
+ * So creation is restored EXPLICITLY, and the containment guarantees are kept:
+ *
+ *   1. the capture root is created when missing. If it already exists it must
+ *      be a real directory -- a symlinked root is still refused, because mkdir
+ *      does not replace an existing entry;
+ *   2. the parent directories are created INSIDE THE RESOLVED ROOT: the path is
+ *      rebuilt as `realpath(root)` + the relative sub-path, so nothing is ever
+ *      created through a link even if one is sitting in the spelled path;
+ *   3. the parent is then RE-RESOLVED and must be a real directory beneath the
+ *      resolved root. A pre-existing symlinked intermediate survives step 2 --
+ *      `mkdir -p` is happy, the entry exists -- and is caught here, which is
+ *      why the re-resolution is not redundant;
+ *   4. an existing target is judged exactly as the pure resolver judges it.
+ *
+ * @returns {{ok: true, parentReal: string, absReal: string}
+ *          | {ok: false, code: string, detail: string}}
+ */
+export function prepareCaptureTarget(rel, io) {
+  const lstat = io.lstat ?? lstatSync;
+  const realpath = io.realpath ?? realpathSync;
+  const mkdir = io.mkdir ?? mkdirSync;
+  const root = CAPTURE_OUTPUT_ROOT.replace(/[/\\]+$/, "");
+  const rootAbs = join(io.repoRoot, root);
+
+  // 1. THE ROOT. Created when absent; never replaced when present.
+  try {
+    lstat(rootAbs);
+  } catch {
+    try {
+      mkdir(rootAbs, { recursive: true });
+    } catch (err) {
+      return {
+        ok: false,
+        code: "capture/root-missing",
+        detail: `${CAPTURE_OUTPUT_ROOT} could not be created: ${err.message}`,
+      };
+    }
+  }
+  let rootReal;
+  try {
+    if (lstat(rootAbs).isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "capture/root-is-symlink",
+        detail: `${CAPTURE_OUTPUT_ROOT} is a symlink — the capture root must be a real directory`,
+      };
+    }
+    rootReal = realpath(rootAbs);
+  } catch (err) {
+    return {
+      ok: false,
+      code: "capture/root-missing",
+      detail: `${CAPTURE_OUTPUT_ROOT} is not a usable directory: ${err.message}`,
+    };
+  }
+
+  // 2. THE PARENT, REBUILT FROM THE RESOLVED ROOT. The record's own spelling is
+  //    used only for the sub-path; the base is the resolved root, so a link in
+  //    the spelled prefix cannot be the thing `mkdir` walks through.
+  if (rel !== root && !rel.startsWith(`${root}/`)) {
+    return {
+      ok: false,
+      code: "capture/parent-outside-capture-root",
+      detail: `"${rel}" is not under ${CAPTURE_OUTPUT_ROOT}`,
+    };
+  }
+  const sub = rel.slice(root.length + 1);
+  const subDir = dirname(sub);
+  const parentInsideRoot = subDir === "." ? rootReal : join(rootReal, subDir);
+  try {
+    mkdir(parentInsideRoot, { recursive: true });
+  } catch (err) {
+    return {
+      ok: false,
+      code: "capture/parent-missing",
+      detail: `the directory holding "${rel}" could not be created: ${err.message}`,
+    };
+  }
+
+  // 3. RE-RESOLVE. `mkdir -p` is satisfied by an existing symlinked directory
+  //    and creates nothing; this is the step that sees it.
+  let parentReal;
+  try {
+    if (lstat(parentInsideRoot).isSymbolicLink()) {
+      return {
+        ok: false,
+        code: "capture/parent-is-symlink",
+        detail: `the directory holding "${rel}" is a symlink — a capture is written into a real ` +
+          "directory inside the capture root, never through a link",
+      };
+    }
+    parentReal = realpath(parentInsideRoot);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/parent-missing",
+      detail: `the directory holding "${rel}" does not exist`,
+    };
+  }
+  if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) {
+    return {
+      ok: false,
+      code: "capture/parent-outside-capture-root",
+      detail: `"${rel}" would be written into ${parentReal}, which is not beneath ${rootReal}`,
+    };
+  }
+
+  // 4. THE EXISTING TARGET, judged exactly as the pure resolver judges it.
+  const absReal = join(parentReal, basename(sub));
+  const existing = existingTargetViolation(absReal, rel, lstat);
+  if (existing) return existing;
+  return { ok: true, rootReal, parentReal, absReal };
+}
+
+/**
+ * RE-CHECK the destination directory at the last possible moment.
+ *
+ * Node has no `openat`, so a path resolved once and used later is a
+ * time-of-check/time-of-use gap: an ancestor swapped for a symlink between the
+ * resolution and the write redirects both the shutter and the rename, and the
+ * strings this module returned still look right. There is no way to close that
+ * gap completely from Node; what CAN be done is to shrink it and to fail
+ * closed, so this is called immediately before the shutter and again
+ * immediately before the rename.
+ *
+ * Re-resolving `parentReal` -- an ALREADY-RESOLVED absolute path -- walks its
+ * ancestors again, so a swapped ancestor makes the answer differ from the value
+ * that was verified, which is exactly the signal wanted.
+ *
+ * @returns {null | {ok: false, code: string, detail: string}} null when unchanged
+ */
+export function recheckCaptureParent({ rootReal, parentReal }) {
+  let st;
+  try {
+    st = lstatSync(parentReal);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/parent-vanished",
+      detail: `the directory holding the capture (${parentReal}) disappeared mid-capture`,
+    };
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    return {
+      ok: false,
+      code: "capture/parent-replaced",
+      detail: `the directory holding the capture (${parentReal}) was replaced mid-capture`,
+    };
+  }
+  let again;
+  try {
+    again = realpathSync(parentReal);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/parent-vanished",
+      detail: `the directory holding the capture (${parentReal}) could not be re-resolved`,
+    };
+  }
+  if (again !== parentReal) {
+    return {
+      ok: false,
+      code: "capture/parent-replaced",
+      detail: `the directory holding the capture now resolves to ${again}, not ${parentReal} — ` +
+        "an ancestor was swapped mid-capture",
+    };
+  }
+  if (again !== rootReal && !again.startsWith(rootReal + sep)) {
+    return {
+      ok: false,
+      code: "capture/parent-outside-capture-root",
+      detail: `${again} is no longer beneath ${rootReal}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * The temp file a capture is written to before it is renamed into place.
+ *
+ * UNGUESSABLE AND EXCLUSIVE. A predictable temp name is a name somebody else
+ * can create first -- as a symlink -- so the shutter writes through it. The
+ * name carries 96 bits of randomness and the file is created with `wx`, which
+ * fails if anything is already there, so this process is the one that made it.
+ *
+ * @returns {{ok: true, path: string} | {ok: false, code: string, detail: string}}
+ */
+export function createCaptureTempFile(parentReal, io = {}) {
+  const open = io.open ?? openSync;
+  const close = io.close ?? closeSync;
+  const random = io.randomBytes ?? randomBytes;
+  const path = join(parentReal, `.capture-${random(12).toString("hex")}.tmp`);
+  try {
+    close(open(path, "wx"));
+  } catch (err) {
+    return {
+      ok: false,
+      code: "capture/temp-not-exclusive",
+      detail: `the capture's temporary file could not be created exclusively: ${err.message}`,
+    };
+  }
+  return { ok: true, path };
+}
+
+/**
+ * The temp file must still be the plain file this process created, and nothing
+ * else, before it is renamed over the destination.
+ */
+export function tempFileViolation(tmpPath) {
+  let st;
+  try {
+    st = lstatSync(tmpPath);
+  } catch {
+    return {
+      ok: false,
+      code: "capture/temp-vanished",
+      detail: `the capture's temporary file disappeared before it could be put in place`,
+    };
+  }
+  if (st.isSymbolicLink() || !st.isFile()) {
+    return {
+      ok: false,
+      code: "capture/temp-replaced",
+      detail: `the capture's temporary file was replaced by something that is not a regular file`,
+    };
+  }
+  if (st.nlink !== 1) {
+    return {
+      ok: false,
+      code: "capture/temp-hard-linked",
+      detail: `the capture's temporary file gained ${st.nlink} links — the bytes are reachable ` +
+        "by another name, so renaming it would publish somebody else's file",
+    };
+  }
+  return null;
 }
 
 /** sha256 of a file, read from DISK -- never re-derived from the record. */
@@ -1011,13 +1279,27 @@ export function sha256Pinned(url, io = {}) {
  * @param {{repoRoot?: string, virtualFilesystem?: boolean, fileExists?: (p: string) => boolean,
  *          hashFile?: (p: string) => string,
  *          hashPinned?: (url: string, io: object) => object, readPinned?: Function, run?: Function}} [io]
+ *   Every injected function above is honoured ONLY under `virtualFilesystem`.
  * @returns {Array<{code: string, detail: string}>}
  */
 export function validateCaptureRecord(record, io = {}) {
   const repoRoot = io.repoRoot ?? process.cwd();
-  const fileExists = io.fileExists ?? existsSync;
-  const hashFile = io.hashFile ?? sha256File;
-  const hashPinned = io.hashPinned ?? sha256Pinned;
+  // REAL DISK MEANS REAL `fs`. Injected filesystem functions are honoured ONLY
+  // in virtual mode. Honouring them outside it let a caller fabricate the
+  // resolution (`lstat`/`realpath`) or return the RECORDED digest for bytes
+  // that are something else (`hashFile`) without ever asking for a virtual
+  // filesystem -- the same implicit bypass the `virtualFilesystem` flag was
+  // split out to end, one layer down. The flag is the only way in.
+  const virtual = io.virtualFilesystem === true;
+  const fileExists = virtual ? (io.fileExists ?? existsSync) : existsSync;
+  const hashFile = virtual ? (io.hashFile ?? sha256File) : sha256File;
+  // THE PINNED READER IS GATED THE SAME WAY. It reaches git history rather
+  // than the working tree, but that is a different STORE, not a different kind
+  // of trust: an injected `readPinned` can hand back bytes that hash to exactly
+  // the recorded digest for a blob that is something else entirely, which is
+  // the same forgery the working-tree seam allowed. One flag governs both, so
+  // there is no second door to remember.
+  const hashPinned = virtual ? (io.hashPinned ?? sha256Pinned) : sha256Pinned;
   const v = [];
   const push = (code, detail) => v.push({ code, detail });
 
@@ -1145,7 +1427,11 @@ export function validateCaptureRecord(record, io = {}) {
     } else if (!HEX64.test(String(record.sha256 ?? ""))) {
       push("record/sha256-malformed", `"${record.sha256}" is not a sha256 digest`);
     } else {
-      const got = hashPinned(shot, { repoRoot, readPinned: io.readPinned, run: io.run });
+      // On real disk the reader goes to git history through the real spawn:
+      // no injected `readPinned`, no injected `run`.
+      const got = virtual
+        ? hashPinned(shot, { repoRoot, readPinned: io.readPinned, run: io.run })
+        : hashPinned(shot, { repoRoot });
       if (!got.ok) {
         push("capture/pinned-object-unreachable", got.reason);
       } else if (got.sha256 !== record.sha256) {
@@ -1184,11 +1470,13 @@ export function validateCaptureRecord(record, io = {}) {
     // is passed by suites alone. Every real-disk caller passes `repoRoot` and
     // gets the resolved check below whether or not it also brings a hasher.
     const abs = join(repoRoot, shot);
-    const resolved = io.virtualFilesystem
+    const resolved = virtual
       ? fileExists(abs)
         ? { ok: true, realPath: abs }
         : { ok: false, code: "record/screenshot-missing", detail: `"${shot}" does not exist in the tree` }
-      : resolveLiveCapture(shot, { repoRoot, lstat: io.lstat, realpath: io.realpath });
+      // NO INJECTED `lstat`/`realpath` HERE. On real disk the resolution is the
+      // filesystem's own answer or it is not a resolution at all.
+      : resolveLiveCapture(shot, { repoRoot });
     if (!resolved.ok) {
       push(resolved.code, resolved.detail);
     } else if (!HEX64.test(String(record.sha256 ?? ""))) {
