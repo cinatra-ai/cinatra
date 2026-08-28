@@ -99,6 +99,8 @@
     "./cms-repaired-capture-port": "./src/cms-repaired-capture-port.ts",
     "./lease-expiry-finalizer": "./src/lease-expiry-finalizer.ts",
     "./run-window-conversation-store": "./src/run-window-conversation-store.ts",
+  "./markdown-render-core": "./src/markdown-render-core.ts",
+  "./run-window-markdown": "./src/run-window-markdown.ts",
     "./agent-builder-ids": "./src/agent-builder-ids.ts",
     "./hitl-gate-submit": "./src/hitl-gate-submit.ts",
     "./run-window-actions": "./src/run-window-actions.ts",

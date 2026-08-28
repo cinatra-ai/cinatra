@@ -6,6 +6,7 @@ import { PromptField, type PromptFieldHandle } from "@cinatra-ai/sdk-ui";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
 import type { RunWindowSurface } from "./run-window-conversation-store";
+import { renderRunWindowMarkdown } from "./run-window-markdown";
 
 /**
  * ONE WINDOW, FIVE READINGS — the sentence in the empty field, per surface
@@ -241,21 +242,47 @@ export function HitlConversationPanel({
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
           <div className="mb-3 rounded-panel border border-line bg-surface p-3 shadow-sm">
-            <div ref={convScrollRef} className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            <div
+              ref={convScrollRef}
+              data-run-window-scroll
+              className="flex max-h-52 flex-col gap-2 overflow-y-auto"
+            >
               {conversation.map((entry) => (
                 <div
                   key={entry.id}
                   className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <div
-                    className={`rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap ${
-                      entry.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-surface-muted text-foreground"
-                    }`}
-                  >
-                    {entry.content}
-                  </div>
+                  {entry.role === "user" ? (
+                    /*
+                     * THE PERSON'S OWN LINE STAYS THEIR OWN CHARACTERS. What
+                     * they typed is not markup and is never read as any: a
+                     * message that says `**not bold**` is shown with its
+                     * asterisks, because the window is quoting them back.
+                     */
+                    <div
+                      data-run-window-entry="person"
+                      className="rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap bg-primary text-primary-foreground"
+                    >
+                      {entry.content}
+                    </div>
+                  ) : (
+                    /*
+                     * THE ASSISTANT'S LINE IS DRAWN, NOT PRINTED (cinatra#2934).
+                     * It is the same assistant /chat draws, through the same
+                     * renderer — bold reads bold, a list reads as a list, a
+                     * pipe table reads as a table. The markup is the shared
+                     * core's, which escapes every value it writes and
+                     * scheme-allowlists every URL, so untrusted model text
+                     * cannot reach the DOM as live markup here either.
+                     */
+                    <div
+                      data-run-window-entry="assistant"
+                      className="rounded-control px-3 py-2 text-sm max-w-[80%] bg-surface-muted text-foreground [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                      dangerouslySetInnerHTML={{
+                        __html: renderRunWindowMarkdown(entry.content),
+                      }}
+                    />
+                  )}
                 </div>
               ))}
               {promptPending && (

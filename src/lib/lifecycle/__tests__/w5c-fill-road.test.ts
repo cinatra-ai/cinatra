@@ -91,6 +91,7 @@ import {
 } from "../lent-action-grant";
 import {
   BOUND_SCREEN_FILL_PRIMITIVE,
+  BOUND_SCREEN_FILL_TOOL_DESCRIPTION,
   BOUND_SCREEN_FILL_UNAVAILABLE,
   handleBoundScreenFill,
 } from "../bound-screen-fill-mcp";
@@ -816,5 +817,79 @@ describe("what the second convergence round found", () => {
     // The claim is the last thing asked, and the row is never written.
     expect(order).toEqual(["claim"]);
     expect(appended).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PLATFORM'S OWN SENTENCES ADDRESS THE PERSON (the graded picture leg, B).
+//
+// The platform's `message` is relayed into the window WORD FOR WORD
+// (cinatra#2996), so it is not a note to the model about a third party: it is
+// what the reader reads. The leg photographed "Placed in the fields on the
+// person's screen. Nothing was submitted — they press the button." on the
+// schedule and step-by-step screens, which tells the reader about someone else.
+//
+// Pinned as TEXT rather than as a shape, because the wording IS the defect.
+// ---------------------------------------------------------------------------
+describe("the fill's own sentences are written to the person", () => {
+  const THIRD_PERSON = /\bthe person\b|\bthey press\b|\bthey submit\b|\btheir screen\b/i;
+
+  it("the placed answer speaks to the person, not about them", async () => {
+    frame.store = {
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      lentActionGrant: mint("submit").grant,
+    };
+    const res = await handleBoundScreenFill(
+      { ref: REF, values: { subject: "Hello" } },
+      {
+        resolveActor: resolveActor as never,
+        record: (async (input: Parameters<typeof recordBoundScreenFill>[0]) =>
+          recordBoundScreenFill({
+            ...input,
+            deps: { resolve: resolveScreen as never, surface: "run-page" },
+          })) as never,
+      },
+    );
+    const { ok, message } = res.structuredContent as { ok: boolean; message: string };
+    expect(ok).toBe(true);
+    expect(message).toBe(
+      "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+    );
+    expect(message).not.toMatch(THIRD_PERSON);
+    // The text part is the same sentence — it is what gets relayed.
+    expect(JSON.parse(res.content[0].text).message).toBe(message);
+  });
+
+  it("the nothing-to-place answer speaks to the person too", async () => {
+    frame.store = {
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      lentActionGrant: mint("submit").grant,
+    };
+    const res = await handleBoundScreenFill(
+      { ref: REF, values: { notAFieldHere: "x" } },
+      {
+        resolveActor: resolveActor as never,
+        record: (async (input: Parameters<typeof recordBoundScreenFill>[0]) =>
+          recordBoundScreenFill({
+            ...input,
+            deps: { resolve: resolveScreen as never, surface: "run-page" },
+          })) as never,
+      },
+    );
+    const { ok, message } = res.structuredContent as { ok: boolean; message: string };
+    expect(ok).toBe(false);
+    expect(message).toBe(
+      "None of those are fields on this screen. Its own fields are listed here — tell me which of them you want set.",
+    );
+    expect(message).not.toMatch(THIRD_PERSON);
+  });
+
+  it("the tool DESCRIPTION still describes the person to the model — it is not relayed", () => {
+    // The distinction this arm keeps: a description is read by the model and
+    // talks ABOUT the person; a `message` is read by the person and talks TO
+    // them. Flattening the two would break the description's meaning.
+    expect(BOUND_SCREEN_FILL_TOOL_DESCRIPTION).toMatch(/in front of the person/);
   });
 });

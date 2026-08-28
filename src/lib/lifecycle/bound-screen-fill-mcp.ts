@@ -166,19 +166,24 @@ export async function handleBoundScreenFill(
     // NOT a refusal: the screen is there and the person may fill it — nothing
     // asked for was one of its fields. Saying which fields it HAS is what lets
     // the assistant "ask you about what it cannot work out, in the conversation".
+    //
+    // ADDRESSED TO THE PERSON, like every message on this road. The platform's
+    // own outcome is relayed into the window word for word (cinatra#2996), so a
+    // sentence written to the model — "ask the person…" — is a sentence the
+    // person reads about themselves in the third person. It is written to them.
     return say({
       ok: false,
       placed: [],
       fields: outcome.fields,
       message:
-        "None of those are fields on this screen. Its fields are listed here; ask the person about the ones you cannot work out.",
+        "None of those are fields on this screen. Its own fields are listed here — tell me which of them you want set.",
     });
   }
   return say({
     ok: true,
     placed: outcome.applied,
     message:
-      "Placed in the fields on the person's screen. Nothing was submitted — they press the button.",
+      "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
   });
 }
 

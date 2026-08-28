@@ -17,8 +17,9 @@
 // `x-object-text-property`), the closed set read that way is
 // `title / summary / outline` while the screen renders ONE control called
 // `idea`. Measured on the run page: the fill placed `{"title": "…"}`, the row
-// was written, the assistant reported "Placed in the fields on the person's
-// screen" — and the `Idea` box in front of the person stayed empty, because
+// was written, the assistant reported that the values had been placed in the
+// fields on the person's screen — and the `Idea` box in front of them stayed
+// empty, because
 // `title` names nothing the screen draws.
 //
 // SO THE SET IS WHAT IS DRAWN. `drawnScreenForm` puts the setup loop's single
@@ -242,7 +243,7 @@ function isIanaTimezone(value: string): boolean {
  * The date-time row is a local `YYYY-MM-DDTHH:mm` box, and an ask that spelled
  * the same moment with seconds or a space is the same moment; normalising it
  * here means the row records exactly the characters the box will show, which is
- * what makes "placed in the fields on the person's screen" true.
+ * what makes "Placed in the fields on your screen" true.
  */
 function normalizeForRow(row: Record<string, unknown> | null, value: unknown): unknown {
   if (row?.format === LOCAL_DATE_TIME_FORMAT && typeof value === "string") {

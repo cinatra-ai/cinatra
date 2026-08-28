@@ -173,9 +173,10 @@ export function scheduleFormRowNames(): readonly string[] {
  * as it is on any other screen.
  *
  * A run with NO trigger row yet gets `{}`, and that is deliberate rather than
- * lazy: which row the screen opens on is the browser's (and, once cinatra#2936
- * lands, the runner's own schedule decision through `scheduleScreenSelection`),
- * and a server that guessed it would be asserting a default it does not own. The
+ * lazy: which row the screen opens on is the browser's — and, since
+ * cinatra#2936, the runner's own schedule decision, mapped to a row by the card
+ * registry that states it. A server that guessed it would be asserting a
+ * default it does not own. The
  * cost of saying nothing is at worst one redundant fill, which the person can
  * see; the cost of guessing wrong is dropping a fill they asked for.
  */
