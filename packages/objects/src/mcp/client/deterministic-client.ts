@@ -7,6 +7,7 @@ import {
   type PrimitiveTransport,
 } from "@cinatra-ai/mcp-client";
 import { createObjectsPrimitiveHandlers } from "../handlers";
+import type { MemoryRecallResponse } from "../schemas";
 
 export type DeterministicObjectsClient = ReturnType<typeof createDeterministicObjectsClient>;
 
@@ -105,24 +106,15 @@ export function createDeterministicObjectsClient(input: {
       projectId?: string | null;
       limit?: number;
     }) =>
-      invoke<{
-        items: Array<{
-          id: string;
-          conceptPath: string | null;
-          title: string | null;
-          kind: string | null;
-          scope: {
-            ownerLevel: string;
-            ownerId: string | null;
-            visibility: string;
-            projectId: string | null;
-          };
-          excerpt: string;
-          excerptTruncated: boolean;
-        }>;
-        mode: "semantic" | "degraded-recent";
-        ordering: "semantic-rank" | "lexical-fallback";
-        meta?: { semanticSearch: string; fallback: string };
-      }>("memory_recall", inp),
+      // DERIVED from the response schema, never restated. A hand-written copy
+      // of this shape drifted the moment the handler grew a field: it still
+      // declared `meta` as `{ semanticSearch: string; fallback: string }` after
+      // `meta.responseCeiling` shipped, so a typed caller could not see the
+      // row-drop signal without a cast, and the two members it did declare were
+      // absent from the ceiling answer it typed. `MemoryRecallResponse` is the
+      // discriminated union the handler parses through, so narrowing on `mode`
+      // here gives a caller exactly the ordering and the `meta` its branch can
+      // actually carry.
+      invoke<MemoryRecallResponse>("memory_recall", inp),
   };
 }

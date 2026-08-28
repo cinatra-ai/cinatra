@@ -18,15 +18,22 @@ export const PROJECT_ID_MAX_BYTES = 200;
 
 /**
  * A caller-supplied `projectId`, validated the same way on every primitive that
- * accepts one.
+ * accepts one. All FOUR of them use it: `objects_save`, `objects_list`,
+ * `memory_recall` and `objects_update`.
  *
- * NON-BLANK is the load-bearing half. Each of these handlers normalizes with
- * `.trim()` and reads an empty result as "no project", so a blank id does not
- * refuse: it silently becomes an AMBIENT call. On a read that is a widening on
- * the field the sealed room is built out of. `.min(1)` alone does not close it
+ * NON-BLANK is the load-bearing half. The READ handlers normalize with
+ * `.trim()` and read an empty result as "no project", so a blank id does not
+ * refuse there: it silently becomes an AMBIENT call, which is a widening on the
+ * field the sealed room is built out of. `.min(1)` alone does not close it
  * (`" "`, `"\t"` and `"\n"` all pass it), so the refinement uses the SAME
- * `String.prototype.trim` the handlers use, which makes the schema and the
+ * `String.prototype.trim` those handlers use, which makes the schema and the
  * handler agree on every whitespace form JS recognizes, U+00A0 included.
+ *
+ * The WRITE handlers (`objects_save`, `objects_update`) deliberately do NOT
+ * trim, and this field is why they do not have to: a blank never reaches them,
+ * and a padded id is a different id, so trimming one would silently retarget a
+ * write rather than refuse it. What arrives is what the project gate is asked
+ * about.
  *
  * Callers add `.nullish()` themselves: omitted and explicit `null` stay the two
  * legitimate ambient states and are deliberately NOT narrowed here.
@@ -161,7 +168,16 @@ export const objectsUpdateSchema = z.object({
   // audit row. Passing the same value as the current project_id is a no-op.
   // Pass `null` to unset the project tag (move to "ambient"); the handler
   // still runs the source-side authz check.
-  projectId: z.string().nullable().optional(),
+  //
+  // Shared `projectIdField()`, the same one the other three primitives use.
+  // `null` and omission keep their meanings exactly (unset, and "do not move");
+  // what the refinement removes is the BLANK string, which is neither: it is a
+  // caller asking to move a row into a project whose id is whitespace. The
+  // handler compares `input.projectId ?? null` against the row's current
+  // `project_id`, so a blank would reach `assertProjectWritable` as a literal.
+  // The byte cap is the other half: an unbounded caller value otherwise reaches
+  // the project gate and a bound SQL parameter on this path too.
+  projectId: projectIdField().nullish(),
   // Optional `reason` annotation recorded on the resource_project_moves
   // audit row.
   reason: z.string().min(1).max(500).optional(),
@@ -352,8 +368,11 @@ export const memoryRecallSchema = z
 //   - every return is parsed through `memoryRecallResponseSchema`, so a path
 //     that gets past the type system still fails at runtime.
 //
-// `.strict()` on both objects: a recall answer is a fixed projection, and an
-// extra key riding out of it is the leak the projection exists to prevent.
+// The schema below is a DISCRIMINATED UNION on `mode`, so it asserts what this
+// passage claims: not merely that `mode` is present, but that the ordering and
+// the degradation metadata AGREE with it. `.strict()` on every object in it:
+// a recall answer is a fixed projection, and an extra key riding out of it is
+// the leak the projection exists to prevent.
 // ---------------------------------------------------------------------------
 
 /** One row of a `memory_recall` response — the FIXED, CAPPED projection. */
@@ -377,28 +396,81 @@ export const memoryRecallItemSchema = z
   .strict();
 
 /**
- * The whole response.
+ * The aggregate-ceiling report, legal on BOTH answers.
  *
- * `meta` reuses `objects_list`'s degradation vocabulary and carries one
- * addition, `responseCeiling`, which reports that the aggregate byte ceiling
- * dropped trailing rows. It is optional on BOTH paths: a plain ranked answer
- * still has no `meta` at all.
+ * It is ORTHOGONAL to degradation and the shape below keeps it that way: a
+ * response can be too large to send whether the semantic index answered or not,
+ * so binding it to one path would make the union lie in the other direction.
  */
-export const memoryRecallResponseSchema = z
-  .object({
-    items: z.array(memoryRecallItemSchema),
-    mode: z.enum(["semantic", "degraded-recent"]),
-    ordering: z.enum(["semantic-rank", "lexical-fallback"]),
-    meta: z
-      .object({
-        semanticSearch: z.enum(["unavailable", "no_ids_extracted"]).optional(),
-        fallback: z.literal("postgres_filter").optional(),
-        responseCeiling: z.literal("applied").optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+const responseCeilingReport = z.literal("applied");
+
+/**
+ * The whole response, as a DISCRIMINATED UNION on `mode`.
+ *
+ * Two independent enums would have guaranteed only that both keys are present
+ * with legal values, not that they AGREE. That admits `semantic` ordered by the
+ * lexical fallback, `degraded-recent` claiming semantic rank, and a `semantic`
+ * answer carrying `meta.semanticSearch: "unavailable"`. Those are three answers
+ * this handler cannot produce and exactly the soft dishonesty the primitive
+ * exists to prevent. `mode` is the discriminant, and each arm pins the ordering AND
+ * the `meta` vocabulary that belongs to its path:
+ *
+ *   - `semantic` is ranked by the index, so `ordering` can only be
+ *     `semantic-rank` and `meta`, when present, carries the ceiling report and
+ *     nothing else. A ranked answer that fits has no `meta` at all, so the arm
+ *     admits exactly two shapes and an empty `meta: {}` is not one of them.
+ *   - `degraded-recent` is a recent-rows listing, so `ordering` can only be
+ *     `lexical-fallback` and `meta` is REQUIRED and must say WHY it degraded.
+ *     A degradation that does not name its cause is the same silence one layer
+ *     down.
+ *
+ * `.strict()` on every object: a recall answer is a fixed projection, and an
+ * extra key riding out of it is the leak the projection exists to prevent.
+ */
+export const memoryRecallResponseSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      items: z.array(memoryRecallItemSchema),
+      mode: z.literal("semantic"),
+      ordering: z.literal("semantic-rank"),
+      // REQUIRED inside an optional `meta`, which is the whole vocabulary this
+      // path has: the ranked answer either carries no `meta` at all or carries
+      // the ceiling report. An empty `meta: {}` is a third shape the handler
+      // cannot produce (codex convergence round 2 on this change), so the arm
+      // refuses it rather than leaving a hole the next field can widen.
+      meta: z.object({ responseCeiling: responseCeilingReport }).strict().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      items: z.array(memoryRecallItemSchema),
+      mode: z.literal("degraded-recent"),
+      ordering: z.literal("lexical-fallback"),
+      meta: z
+        .object({
+          // `objects_list`'s degradation vocabulary, reused verbatim.
+          semanticSearch: z.enum(["unavailable", "no_ids_extracted"]),
+          fallback: z.literal("postgres_filter"),
+          // Optional HERE, because both shapes are reachable on this path: the
+          // degradation is always reported, the ceiling only when it fired.
+          responseCeiling: responseCeilingReport.optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 export type MemoryRecallItem = z.infer<typeof memoryRecallItemSchema>;
 export type MemoryRecallResponse = z.infer<typeof memoryRecallResponseSchema>;
+
+/** Distribute `Omit` across a union instead of collapsing it to common keys. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/**
+ * One recall answer MINUS its rows: everything the serialized envelope is made
+ * of. The response ceiling charges the envelope it is about to emit rather than
+ * a flat reservation, and this is the type it charges (see
+ * `applyMemoryRecallResponseCeiling`). Derived, so a new field cannot be
+ * charged for on one side and forgotten on the other.
+ */
+export type MemoryRecallEnvelope = DistributiveOmit<MemoryRecallResponse, "items">;

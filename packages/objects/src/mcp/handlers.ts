@@ -673,24 +673,30 @@ export const MEMORY_RECALL_ITEM_KIND_MAX_BYTES = schemas.MEMORY_RECALL_KIND_MAX_
 export const MEMORY_RECALL_RESPONSE_MAX_BYTES = 64 * 1024;
 
 /**
- * Bytes charged for everything around the items array: `{"items":[...]}` plus
- * `mode`, `ordering` and the widest `meta`. The real envelope is under 200
- * bytes; 256 is the rounded reservation, asserted by test rather than assumed.
- */
-const MEMORY_RECALL_RESPONSE_ENVELOPE_BYTES = 256;
-
-/**
  * Over-fetch factor for a recall whose result is narrowed AFTER ranking.
  *
- * Two filters narrow after the ranked fetch and neither can be pushed into it:
- * `kind` (matched against the row's `okfType` in JS) and the sealed-room project
- * seal (`AND project_id = $projectId`, applied in SQL to a candidate set the
- * lane search deliberately draws from project AND ambient lanes). Asking the
- * index for exactly `limit` candidates lets rows that are about to be discarded
- * consume the caller's whole budget — which under-returns a real hit and, worse,
- * can empty the recovery entirely and report a spurious `degraded-recent`. So
- * when such a filter is in play the fetch is widened and the result is sliced to
- * `limit` afterwards.
+ * THREE filters narrow after the ranked fetch and none can be pushed into it:
+ *
+ *   - the per-row `object.read` probe (`filterByAuthz`), which re-authorizes
+ *     every recovered row against the kernel in JS;
+ *   - `kind`, matched against the row's `okfType` in JS;
+ *   - the sealed-room project seal (`AND project_id = $projectId`, applied in
+ *     SQL to a candidate set the lane search deliberately draws from project
+ *     AND ambient lanes).
+ *
+ * Asking the index for exactly `limit` candidates lets rows that are about to be
+ * discarded consume the caller's whole budget, which under-returns a real hit
+ * and, worse, can empty the recovery entirely and report a spurious
+ * `degraded-recent`. So the fetch is widened and the result is sliced to `limit`
+ * afterwards.
+ *
+ * The widening is UNCONDITIONAL, and the probe is why. `kind` and the project
+ * seal are in play only when the caller asks for them; the probe runs on EVERY
+ * call, on BOTH paths. Widening only for the two optional filters left the
+ * ambient recall, the common case, on a budget of exactly `limit`, so every
+ * row the caller was not entitled to see cost it a row of its answer: a recall
+ * of 25 ranked ids with 15 unreadable answered 5 of a requested 10, labelled
+ * `semantic`, with nothing in the response to say why.
  *
  * This widens the CANDIDATE set, never the authorization: every extra candidate
  * still passes the same org scoping, the same type pin, the same project seal,
@@ -834,6 +840,29 @@ function rankRecallItemsLexically(
 }
 
 /**
+ * The serialized cost of one recall answer MINUS its rows, MEASURED.
+ *
+ * `JSON.stringify({ items: [], ...envelope })` is the response the handler is
+ * about to emit with the array emptied, so its byte length is the envelope plus
+ * `"items":[]`, and the full answer is exactly this number, plus each
+ * serialized item, plus one `,` per join. Nothing here is reserved or rounded.
+ *
+ * `ceilingApplied` widens it by the `responseCeiling` report, because a fit that
+ * ends in a drop emits a WIDER envelope than the one it was measured against.
+ */
+function memoryRecallEnvelopeBytes(
+  envelope: schemas.MemoryRecallEnvelope,
+  ceilingApplied: boolean,
+): number {
+  const meta = ceilingApplied
+    ? { ...(envelope.meta ?? {}), responseCeiling: "applied" as const }
+    : envelope.meta;
+  return new TextEncoder().encode(
+    JSON.stringify({ items: [], ...envelope, ...(meta ? { meta } : {}) }),
+  ).length;
+}
+
+/**
  * Apply the aggregate response ceiling.
  *
  * Rows are kept in order until the next one would cross
@@ -842,37 +871,62 @@ function rankRecallItemsLexically(
  * returns fewer rows than it recovered is the same soft dishonesty `mode` exists
  * to prevent, one layer down.
  *
- * The accounting is EXACT and the bound has no exceptions. Two things follow,
- * and both are deliberate:
+ * The accounting is EXACT and the bound has no exceptions. Three things follow,
+ * and all three are deliberate:
  *
- *   - the envelope, the array brackets and every `,` separator are charged, so
- *     the ceiling bounds the serialized response and not a smaller number that
+ *   - the envelope this call is ABOUT TO EMIT is measured, not reserved. A flat
+ *     reservation is wrong in whichever direction it rounds, and it rounded up:
+ *     256 bytes charged against a ranked no-meta envelope of 57 dropped a row
+ *     out of any response sitting in the last 201 bytes under the ceiling, and
+ *     then reported a `responseCeiling` that did not have to happen. A ceiling
+ *     that bounds a number 201 bytes larger than the response is the same kind
+ *     of untrue statement as the rest of this file is about, so the envelope is
+ *     built and measured per path;
+ *   - the array brackets and every `,` separator are charged too, so the
+ *     ceiling bounds the serialized response and not a smaller number that
  *     resembles it;
  *   - there is no "always keep the first row" escape. `id` and the `scope`
  *     fields are canonical database columns rather than capped projections, so
  *     a single row CAN in principle exceed the ceiling alone; keeping it anyway
  *     would make the bound advisory. A recall that drops every row still says
  *     so, which is the honest answer to "your one hit does not fit".
+ *
+ * The two-pass fit closes the circularity between the last two: whether the
+ * answer carries `meta.responseCeiling` depends on whether a row is dropped, and
+ * whether a row is dropped depends on the envelope. Pass one fits against the
+ * envelope with no report; if everything fits, that IS the emitted envelope and
+ * the answer is exact. If anything is dropped the emitted envelope is the wider
+ * reporting one, so pass two re-fits against it. Pass two can never turn the
+ * drop back off: it charges strictly more, so a set that did not fit the
+ * narrower envelope cannot fit the wider one.
  */
-function applyMemoryRecallResponseCeiling(items: MemoryRecallItem[]): {
-  items: MemoryRecallItem[];
-  ceilingApplied: boolean;
-} {
+function applyMemoryRecallResponseCeiling(
+  items: MemoryRecallItem[],
+  envelope: schemas.MemoryRecallEnvelope,
+): { items: MemoryRecallItem[]; ceilingApplied: boolean } {
   const encoder = new TextEncoder();
-  const kept: MemoryRecallItem[] = [];
-  // The envelope plus `[` and `]`.
-  let bytes = MEMORY_RECALL_RESPONSE_ENVELOPE_BYTES + 2;
-  for (const item of items) {
-    // The item, plus the `,` that joins it to the previous one.
-    const size =
-      encoder.encode(JSON.stringify(item)).length + (kept.length > 0 ? 1 : 0);
-    if (bytes + size > MEMORY_RECALL_RESPONSE_MAX_BYTES) {
-      return { items: kept, ceilingApplied: true };
+  const fit = (
+    envelopeBytes: number,
+  ): { kept: MemoryRecallItem[]; dropped: boolean } => {
+    const kept: MemoryRecallItem[] = [];
+    let bytes = envelopeBytes;
+    for (const item of items) {
+      // The item, plus the `,` that joins it to the previous one.
+      const size =
+        encoder.encode(JSON.stringify(item)).length + (kept.length > 0 ? 1 : 0);
+      if (bytes + size > MEMORY_RECALL_RESPONSE_MAX_BYTES) {
+        return { kept, dropped: true };
+      }
+      bytes += size;
+      kept.push(item);
     }
-    bytes += size;
-    kept.push(item);
-  }
-  return { items: kept, ceilingApplied: false };
+    return { kept, dropped: false };
+  };
+
+  const whole = fit(memoryRecallEnvelopeBytes(envelope, false));
+  if (!whole.dropped) return { items: whole.kept, ceilingApplied: false };
+  const reported = fit(memoryRecallEnvelopeBytes(envelope, true));
+  return { items: reported.kept, ceilingApplied: true };
 }
 
 type SaveOwnership = {
@@ -3043,13 +3097,16 @@ export function createObjectsPrimitiveHandlers() {
         projectId,
       });
 
-      // The ranked/recent fetch budget. Widened when a post-ranking filter
-      // (`kind`, or the project seal) will discard candidates; see
-      // MEMORY_RECALL_CANDIDATE_FETCH_FACTOR.
-      const candidateLimit =
-        kind !== null || projectId !== null
-          ? Math.min(limit * MEMORY_RECALL_CANDIDATE_FETCH_FACTOR, MEMORY_RECALL_CANDIDATE_FETCH_MAX)
-          : limit;
+      // The ranked/recent fetch budget, widened UNCONDITIONALLY. The per-row
+      // `object.read` probe above is a post-ranking filter on every call and on
+      // both paths, so there is no shape of this recall that cannot lose rows
+      // after the fetch; `kind` and the project seal only add to it. See
+      // MEMORY_RECALL_CANDIDATE_FETCH_FACTOR for what an ambient recall cost
+      // while this was conditional.
+      const candidateLimit = Math.min(
+        limit * MEMORY_RECALL_CANDIDATE_FETCH_FACTOR,
+        MEMORY_RECALL_CANDIDATE_FETCH_MAX,
+      );
 
       let objectIds: string[] | null = null;
       let unavailable = false;
@@ -3127,15 +3184,21 @@ export function createObjectsPrimitiveHandlers() {
         // an honest empty search result. Relabelling it degradation would be the
         // same dishonesty pointing the other way.
         const visible = await filterByAuthz(ordered);
+        // The ceiling charges the envelope THIS path emits, a ranked answer
+        // with no `meta` at all, rather than a reservation wide enough for the
+        // degraded one.
         const { items, ceilingApplied } = applyMemoryRecallResponseCeiling(
           visible
             .filter((r) => memoryRowMatchesKind(r, kind))
             .map(toMemoryRecallItem)
             .slice(0, limit),
+          { mode: "semantic", ordering: "semantic-rank" },
         );
         // Parsed, not just returned: `mode` is required by the schema AND by
         // the handler's declared return type, so neither a new path nor a
-        // reshaped one can drop it quietly.
+        // reshaped one can drop it quietly. The schema is a discriminated union
+        // on `mode`, so the ordering and the `meta` vocabulary below have to
+        // agree with it too.
         return schemas.memoryRecallResponseSchema.parse({
           items,
           mode: "semantic",
@@ -3163,19 +3226,27 @@ export function createObjectsPrimitiveHandlers() {
         scopeActor,
       );
       const recentVisible = await filterByAuthz(recent);
+      // The degradation metadata is built ONCE and charged before it is sent:
+      // this envelope is the widest the schema admits, and the ranked path's is
+      // the narrowest, so a single reservation could only be wrong for one of
+      // them.
+      const degradedMeta = {
+        semanticSearch: unavailable ? ("unavailable" as const) : ("no_ids_extracted" as const),
+        fallback: "postgres_filter" as const,
+      };
       const { items: recentItems, ceilingApplied } = applyMemoryRecallResponseCeiling(
         rankRecallItemsLexically(
           recentVisible.filter((r) => memoryRowMatchesKind(r, kind)).map(toMemoryRecallItem),
           query,
         ).slice(0, limit),
+        { mode: "degraded-recent", ordering: "lexical-fallback", meta: degradedMeta },
       );
       return schemas.memoryRecallResponseSchema.parse({
         items: recentItems,
         mode: "degraded-recent",
         ordering: "lexical-fallback",
         meta: {
-          semanticSearch: unavailable ? "unavailable" : "no_ids_extracted",
-          fallback: "postgres_filter",
+          ...degradedMeta,
           ...(ceilingApplied ? { responseCeiling: "applied" } : {}),
         },
       });

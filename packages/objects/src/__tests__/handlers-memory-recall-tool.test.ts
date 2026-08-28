@@ -101,6 +101,7 @@ import {
   memoryRecallSchema,
   objectsListSchema,
   objectsSaveSchema,
+  objectsUpdateSchema,
 } from "../mcp/schemas";
 
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
@@ -285,11 +286,13 @@ describe("memory_recall — scoped lanes and limit (AC1, doubles)", () => {
     expect(res.items.map((i) => i.id)).toEqual(["proj-1-row"]);
   });
 
-  // Crowding-out (codex convergence round 2, secondary). A project recall and a
-  // `kind` recall both narrow AFTER the ranked fetch, so asking the index for
-  // exactly `limit` nodes lets dropped candidates eat the caller's whole budget
-  // and turn a real hit into a spurious `degraded-recent`. Over-fetch, bounded.
-  it("over-fetches ranked candidates when a filter will narrow them AFTER ranking", async () => {
+  // Crowding-out (codex convergence round 2, secondary; widened in round 2 of
+  // review). THREE filters narrow AFTER the ranked fetch: the per-row
+  // `object.read` probe on every call, plus `kind` and the project seal when
+  // asked for. So asking the index for exactly `limit` nodes lets dropped
+  // candidates eat the caller's whole budget and turn a real hit into a
+  // spurious `degraded-recent`. Over-fetch, bounded.
+  it("over-fetches ranked candidates because filters narrow them AFTER ranking", async () => {
     await recall({ query: "q", limit: 10, kind: "decision" });
     expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(50);
 
@@ -315,18 +318,26 @@ describe("memory_recall — scoped lanes and limit (AC1, doubles)", () => {
     expect(filter.orgId).toBe(ORG);
   });
 
-  it("caps `max_nodes` and the returned item count at `limit`", async () => {
+  it("caps the returned item count at `limit`, and asks the index for the widened budget", async () => {
+    // `max_nodes` is the CANDIDATE budget, not the answer size: the post-ranking
+    // filters run on every call, so it is `limit * 5`. What the caller is
+    // handed is still exactly `limit`.
     semanticHit(["r1", "r2", "r3"]);
     mockList.mockReturnValue([memoryRow("r1"), memoryRow("r2"), memoryRow("r3")]);
     const res = (await recall({ query: "q", limit: 2 })) as RecallResponse;
 
-    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(2);
+    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(10);
     expect(res.items).toHaveLength(2);
   });
 
   it("defaults `limit` to 10 when the caller does not ask", async () => {
-    await recall({ query: "q" });
-    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(10);
+    semanticHit(Array.from({ length: 20 }, (_, i) => `r${i}`));
+    mockList.mockReturnValue(Array.from({ length: 20 }, (_, i) => memoryRow(`r${i}`)));
+    const res = (await recall({ query: "q" })) as RecallResponse;
+
+    expect(res.items).toHaveLength(10);
+    // The candidate budget widens off the same default.
+    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(50);
   });
 
   it("preserves the semantic rank order of the returned rows", async () => {
@@ -697,7 +708,7 @@ describe("memory_recall — the ranked read is bounded, not truncated (item 1)",
   it("stays bounded when one merged anchor names MORE rows than max_nodes asked for", async () => {
     // `resolveObjectIds` takes every row a merged anchor names, so the id list
     // is NOT already bounded by `max_nodes`. Without the slice the read would
-    // ask for 124 ids on a 10-candidate budget.
+    // ask for 121 ids on a 50-candidate budget.
     const many = Array.from({ length: 120 }, (_, i) => `m${i}`);
     mockSearch.mockResolvedValue({
       nodes: [
@@ -716,9 +727,11 @@ describe("memory_recall — the ranked read is bounded, not truncated (item 1)",
     const res = (await recall({ query: "q", limit: 10 })) as RecallResponse;
 
     const call = mockList.mock.calls[0]![0] as StoreFilter;
-    // No `kind` and no project seal, so candidateLimit === limit === 10.
-    expect(call.ids).toHaveLength(10);
-    expect(call.limit).toBe(10);
+    // The candidate budget is the widened one (`limit * 5`, round 2 item 2) and
+    // the slice holds it: 50 ids reach the read, not 121, and the read asks for
+    // exactly the ids that survived. The ANSWER is still `limit`.
+    expect(call.ids).toHaveLength(50);
+    expect(call.limit).toBe(50);
     expect(res.items.map((i) => i.id)).toEqual(many.slice(0, 10));
   });
 });
@@ -890,16 +903,25 @@ describe("memory_recall — the projection caps EVERY field (item 3)", () => {
     expect(res.meta?.responseCeiling).toBe("applied");
   });
 
-  it("reserves enough envelope for the widest response the schema allows", async () => {
-    // The reservation is asserted, not assumed: the widest envelope is the
-    // degraded one with a full `meta`.
+  it("charges the envelope it EMITS, not a reservation", async () => {
+    // Round 2, item 1. Nothing here asserts a constant: each path's answer is
+    // serialized with its rows removed, and that IS what the ceiling charges.
+    // The two envelopes differ, which is why one flat number could not be right
+    // for both.
+    semanticHit(["r1"]);
+    mockList.mockReturnValue([memoryRow("r1")]);
+    const ranked = (await recall({ query: "q" })) as RecallResponse;
+    const rankedEnvelope = utf8(JSON.stringify({ ...ranked, items: [] }));
+
     mockSearch.mockRejectedValue(new Error("down"));
     mockList.mockReturnValue([memoryRow("r1")]);
-    const res = (await recall({ query: "q" })) as RecallResponse;
-    const envelopeOnly = { ...res, items: [] as unknown[] };
-    expect(
-      utf8(JSON.stringify(envelopeOnly)) + "responseCeiling:applied".length,
-    ).toBeLessThanOrEqual(256);
+    const degraded = (await recall({ query: "q" })) as RecallResponse;
+    const degradedEnvelope = utf8(JSON.stringify({ ...degraded, items: [] }));
+
+    expect(rankedEnvelope).toBeLessThan(degradedEnvelope);
+    // Both are far under the 256-byte reservation this replaced; the ranked one
+    // by the 201 bytes that cost a caller a row.
+    expect(degradedEnvelope).toBeLessThan(256);
   });
 
   it("leaves `meta` absent on a ranked answer that fits", async () => {
@@ -1059,5 +1081,385 @@ describe("memory_recall — the per-row authz probe drops rows (item 6)", () => 
       off();
     }
     expect(events).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2, item 1: the ceiling charges the envelope it EMITS.
+//
+// FAIL-FIRST: every assertion below was captured RED against the flat
+// 256+2-byte reservation. The ranked no-meta envelope is 57 bytes, so the
+// reservation charged 201 bytes that were never in the response and dropped a
+// row out of the last 201 bytes under the ceiling. See the PR body for the runs.
+// ---------------------------------------------------------------------------
+
+/**
+ * A row whose projection is wide and whose cost is TUNABLE: `id` is a canonical
+ * column with no cap, so padding it moves the serialized item by exactly the
+ * pad length. Every other field sits at its cap.
+ */
+function sizedRow(id: string) {
+  return memoryRow(id, {
+    title: "T".repeat(300),
+    conceptId: "c".repeat(1200),
+    body: "b".repeat(600),
+  });
+}
+
+/** Serialize one recall of `ids` and report the byte size of the whole answer. */
+async function recallBytes(
+  ids: string[],
+  opts: { degraded?: boolean } = {},
+): Promise<{ res: RecallResponse; bytes: number }> {
+  const rows = ids.map(sizedRow);
+  if (opts.degraded) mockSearch.mockRejectedValue(new Error("down"));
+  else semanticHit(ids);
+  mockList.mockReturnValue(rows);
+  const res = (await recall({
+    query: "q",
+    limit: MEMORY_RECALL_MAX_LIMIT,
+  })) as RecallResponse;
+  return { res, bytes: utf8(JSON.stringify(res)) };
+}
+
+/**
+ * A FIXED-WIDTH row id. Every other projected field sits at its cap, so a
+ * constant id width is what makes the per-item cost constant. `r9` and `r10`
+ * would differ by a byte and quietly move the arithmetic below.
+ */
+const sizedId = (i: number) => `r${String(i).padStart(3, "0")}`;
+
+/**
+ * Measure the envelope and the per-item cost of THIS path by construction: a
+ * one-row answer is `envelope + item`, a two-row answer is
+ * `envelope + 2*item + 1` (the joining `,`). Nothing here assumes a constant.
+ */
+async function measurePath(opts: { degraded?: boolean } = {}) {
+  const one = (await recallBytes([sizedId(0)], opts)).bytes;
+  const two = (await recallBytes([sizedId(0), sizedId(1)], opts)).bytes;
+  const itemBytes = two - one - 1;
+  return { itemBytes, envelopeBytes: one - itemBytes };
+}
+
+/**
+ * Ids for an answer that serializes to EXACTLY `target` bytes on a path whose
+ * envelope and item cost were measured above. The last id absorbs the
+ * remainder, one ASCII byte per character.
+ */
+function idsSizedTo(target: number, m: { itemBytes: number; envelopeBytes: number }) {
+  const budget = target - m.envelopeBytes;
+  const count = Math.floor((budget + 1) / (m.itemBytes + 1));
+  const pad = budget - (count * m.itemBytes + (count - 1));
+  return Array.from({ length: count }, (_, i) =>
+    i === count - 1 ? `${sizedId(i)}${"p".repeat(pad)}` : sizedId(i),
+  );
+}
+
+describe("memory_recall: the ceiling charges the emitted envelope (round 2, item 1)", () => {
+  it("keeps every row of a response sitting in the last 201 bytes under the ceiling", async () => {
+    // The exact window the 258-byte reservation charged away. 8 bytes of
+    // headroom is the reviewer's own measurement.
+    const m = await measurePath();
+    const ids = idsSizedTo(MEMORY_RECALL_RESPONSE_MAX_BYTES - 8, m);
+
+    const { res, bytes } = await recallBytes(ids);
+
+    expect(bytes).toBe(MEMORY_RECALL_RESPONSE_MAX_BYTES - 8);
+    expect(MEMORY_RECALL_RESPONSE_MAX_BYTES - bytes).toBeLessThanOrEqual(201);
+    expect(res.items).toHaveLength(ids.length);
+    // Nothing was dropped, so nothing is reported.
+    expect(res.meta).toBeUndefined();
+  });
+
+  it("keeps every row of a response that lands EXACTLY on the ceiling", async () => {
+    const m = await measurePath();
+    const ids = idsSizedTo(MEMORY_RECALL_RESPONSE_MAX_BYTES, m);
+
+    const { res, bytes } = await recallBytes(ids);
+
+    expect(bytes).toBe(MEMORY_RECALL_RESPONSE_MAX_BYTES);
+    expect(res.items).toHaveLength(ids.length);
+    expect(res.meta).toBeUndefined();
+  });
+
+  it("drops at ONE byte over, and the answer it emits still fits", async () => {
+    const m = await measurePath();
+    // One byte past the ceiling: the last row cannot ride out.
+    const ids = idsSizedTo(MEMORY_RECALL_RESPONSE_MAX_BYTES + 1, m);
+
+    const { res, bytes } = await recallBytes(ids);
+
+    expect(res.items).toHaveLength(ids.length - 1);
+    expect(res.meta?.responseCeiling).toBe("applied");
+    // The re-charge is the point: `meta.responseCeiling` is 30 more bytes than
+    // the envelope the fit was measured against, and the EMITTED answer is what
+    // has to be under the ceiling.
+    expect(bytes).toBeLessThanOrEqual(MEMORY_RECALL_RESPONSE_MAX_BYTES);
+  });
+
+  it("charges the DEGRADED envelope on the degraded path, not the ranked one", async () => {
+    // The degraded envelope carries `meta.semanticSearch` + `meta.fallback` and
+    // is the widest one the schema admits. A single flat reservation is either
+    // too small for this path or too large for the ranked one; measured per
+    // path, both are exact.
+    const ranked = await measurePath();
+    const degraded = await measurePath({ degraded: true });
+    expect(degraded.envelopeBytes).toBeGreaterThan(ranked.envelopeBytes);
+
+    const ids = idsSizedTo(MEMORY_RECALL_RESPONSE_MAX_BYTES, degraded);
+    const { res, bytes } = await recallBytes(ids, { degraded: true });
+
+    expect(res.mode).toBe("degraded-recent");
+    expect(bytes).toBe(MEMORY_RECALL_RESPONSE_MAX_BYTES);
+    expect(res.items).toHaveLength(ids.length);
+    expect(res.meta?.responseCeiling).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2, item 2: the over-fetch widens for the per-row authz probe too.
+//
+// FAIL-FIRST: captured RED against `candidateLimit = limit` on an ambient
+// recall. `filterByAuthz` runs AFTER the read on BOTH paths, so every denied
+// row cost the caller a row of its budget: 25 ranked ids, 15 unreadable,
+// `limit: 10` answered 5.
+// ---------------------------------------------------------------------------
+
+describe("memory_recall: the authz probe is a post-ranking filter too (round 2, item 2)", () => {
+  it("fills `limit` on an AMBIENT recall when the probe denies rows", async () => {
+    // No `kind`, no `projectId`: the case the round-1 condition left narrow.
+    // 25 ranked ids, a denied row at every other rank, 10 readable in the corpus.
+    const ids = Array.from({ length: 25 }, (_, i) => `r${i}`);
+    const rows = ids.map((id, i) => (i % 2 === 1 ? foreignRow(id) : memoryRow(id)));
+    semanticHit(ids);
+    mockList.mockImplementation((filter: StoreFilter) => {
+      const pool = filter.ids ? rows.filter((r) => filter.ids!.includes(r.id)) : rows;
+      return pool.slice(0, filter.limit ?? 100);
+    });
+
+    const res = (await recall({ query: "q", limit: 10 })) as RecallResponse;
+
+    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(50);
+    expect(res.items).toHaveLength(10);
+    expect(res.mode).toBe("semantic");
+    expect(res.items.every((i) => !i.id.startsWith("theirs"))).toBe(true);
+  });
+
+  it("widens the budget on EVERY call, with or without a narrowing filter", async () => {
+    // The probe runs on every call, so the widening is unconditional. Same
+    // number on all four shapes.
+    for (const input of [
+      { query: "q", limit: 10 },
+      { query: "q", limit: 10, kind: "decision" },
+    ]) {
+      mockSearch.mockClear();
+      await recall(input);
+      expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(50);
+    }
+    mockSearch.mockClear();
+    await recall({ query: "q", limit: 10, projectId: "proj-1" }, ACTOR_WITH_PROJECT);
+    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(50);
+  });
+
+  it("fills `limit` on the DEGRADED path when the probe denies rows", async () => {
+    mockSearch.mockRejectedValue(new Error("down"));
+    const rows = Array.from({ length: 50 }, (_, i) =>
+      i % 2 === 1 ? foreignRow(`r${i}`) : memoryRow(`r${i}`),
+    );
+    mockList.mockImplementation((filter: StoreFilter) => rows.slice(0, filter.limit ?? 100));
+
+    const res = (await recall({ query: "q", limit: 10 })) as RecallResponse;
+
+    expect((mockList.mock.calls[0]![0] as StoreFilter).limit).toBe(50);
+    expect(res.items).toHaveLength(10);
+  });
+
+  it("stays bounded by the hard candidate ceiling", async () => {
+    await recall({ query: "q", limit: MEMORY_RECALL_MAX_LIMIT });
+    expect((mockSearch.mock.calls[0]![0] as { max_nodes: number }).max_nodes).toBe(
+      MEMORY_RECALL_CANDIDATE_FETCH_MAX,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2, item 4: the response schema binds `mode` to `ordering` and to the
+// `meta` vocabulary.
+//
+// FAIL-FIRST: captured RED against the two independent enums, which accepted
+// `semantic` / `lexical-fallback`, `degraded-recent` / `semantic-rank` and a
+// `semantic` answer carrying `meta.semanticSearch`.
+// ---------------------------------------------------------------------------
+
+describe("memory_recall: mode, ordering and meta agree (round 2, item 4)", () => {
+  const items: never[] = [];
+
+  it("REFUSES a semantic answer ordered by the lexical fallback", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "lexical-fallback",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("REFUSES a degraded answer claiming semantic rank", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "degraded-recent",
+        ordering: "semantic-rank",
+        meta: { semanticSearch: "unavailable", fallback: "postgres_filter" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("REFUSES a semantic answer carrying the degradation metadata", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+        meta: { semanticSearch: "unavailable" },
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+        meta: { fallback: "postgres_filter" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("REFUSES a degraded answer that does not say WHY it degraded", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+      }).success,
+    ).toBe(false);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: { fallback: "postgres_filter" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps `meta.responseCeiling` legal on BOTH paths; it is orthogonal to degradation", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+        meta: { responseCeiling: "applied" },
+      }).success,
+    ).toBe(true);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: {
+          semanticSearch: "no_ids_extracted",
+          fallback: "postgres_filter",
+          responseCeiling: "applied",
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("REFUSES an EMPTY meta on the ranked path", () => {
+    // Codex convergence round 2 on this change: `meta: {}` said nothing, and
+    // the handler never emits it. The ranked arm has exactly two shapes.
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+        meta: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts the two answers the handler actually produces, and no third", () => {
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+      }).success,
+    ).toBe(true);
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: { semanticSearch: "unavailable", fallback: "postgres_filter" },
+      }).success,
+    ).toBe(true);
+    // `.strict()` survives the union: an extra key is still a rejection.
+    expect(
+      memoryRecallResponseSchema.safeParse({
+        items,
+        mode: "semantic",
+        ordering: "semantic-rank",
+        cursor: "c",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2, item 5: `objects_update` is the fourth `projectId` surface.
+//
+// FAIL-FIRST: captured RED against `z.string().nullable().optional()`, which
+// accepted every blank form and a 1 MiB value.
+// ---------------------------------------------------------------------------
+
+describe("objects_update: projectId is non-blank and capped (round 2, item 5)", () => {
+  it("REFUSES a blank or whitespace-only projectId on the project MOVE field", () => {
+    for (const blank of ["", " ", "   ", "\t", "\n", " ", "　"]) {
+      expect(
+        objectsUpdateSchema.safeParse({ objectId: "o1", projectId: blank }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("REFUSES a projectId over the BYTE cap", () => {
+    expect(
+      objectsUpdateSchema.safeParse({
+        objectId: "o1",
+        projectId: "p".repeat(PROJECT_ID_MAX_BYTES + 1),
+      }).success,
+    ).toBe(false);
+    // Bytes, not code units.
+    expect(
+      objectsUpdateSchema.safeParse({
+        objectId: "o1",
+        projectId: "é".repeat(PROJECT_ID_MAX_BYTES),
+      }).success,
+    ).toBe(false);
+    expect(
+      objectsUpdateSchema.safeParse({
+        objectId: "o1",
+        projectId: "p".repeat(PROJECT_ID_MAX_BYTES),
+      }).success,
+    ).toBe(true);
+  });
+
+  it("still accepts null and omission; the UNSET move and the no-op are unchanged", () => {
+    // `null` is the move-to-ambient instruction and omission means "do not
+    // move". Neither is narrowed, and neither is what the refinement is about.
+    expect(
+      objectsUpdateSchema.safeParse({ objectId: "o1", projectId: null }).success,
+    ).toBe(true);
+    expect(objectsUpdateSchema.safeParse({ objectId: "o1" }).success).toBe(true);
   });
 });
