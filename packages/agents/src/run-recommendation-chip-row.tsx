@@ -1489,9 +1489,10 @@ export function RecommendationHoldCard({
     // wrapper too would have published the identity on TWO nested elements and
     // broken the "ONE root" the contract measures, so the wrapper is gone and
     // the row's own root carries everything, including the chat transcript's
-    // evidence marker. Both mounts (`chat_thread` here, `run_card` on the run
-    // panel) still get host-correct values by construction, and the run panel —
-    // which renders the row directly — now gets them too.
+    // evidence marker. Every mount still gets host-correct values by
+    // construction, whichever host declared the provider around it — the chat
+    // transcript, the run page's own rail step (`run_card`, cinatra#3047), or the
+    // review page's gate region.
     <RunRecommendationChipRow
       runId={runId}
       agentPackageName={

@@ -316,7 +316,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   after. Reading down the gate region is reading the run in order.
 
                   ONE RENDERER, NO FORK. This is the same `RecommendationHoldCard`
-                  the run panel and the widget mount — the card owns whether it
+                  the run page's rail step and the widget mount — the card owns whether it
                   draws, which state it is in, and when it re-reads — so it is
                   keyed by the run and nothing else, and it renders NOTHING when
                   the run never held or the reader may not see it. On this page

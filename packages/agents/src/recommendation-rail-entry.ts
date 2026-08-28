@@ -15,12 +15,20 @@
 // THE DEFECT THIS CLOSES. The entry's existence used to be `park !== null &&
 // the screen hosts the card`. That second half is the right question about the
 // step's SURFACE — a step must never open onto a card another module draws —
-// and the wrong question about the ENTRY. On the branch whose panel draws the
+// and the wrong question about the ENTRY. On the branch whose panel drew the
 // card (`agentic`), a held run that was DECIDED leaves `pending_input`, the
-// screen stops hosting the card, and the entry disappeared from the rail
+// screen stopped hosting the card, and the entry disappeared from the rail
 // altogether — taking the two-column frame with it, since the recommendation
 // was the run's only gate step. The settled history row the drawing requires
 // was then drawn nowhere.
+//
+// AND WHY THE SECOND HALF IS GONE ENTIRELY (cinatra#3047). The question "does
+// the screen host the card on this branch?" had an answer only while a SECOND
+// module could draw it: the run panel mounted its own copy on the `agentic`
+// branch, so the row moved between two placements as the run advanced. The
+// panel's mount is deleted; the screen/frame owns the row on every branch, so
+// the step's surface is always this screen's own mount and the entry reads off
+// the park alone.
 // ---------------------------------------------------------------------------
 
 /**
@@ -29,10 +37,9 @@
  * - `none`   — no entry at all.
  * - `live`   — the step the run is paused on; it opens the gate's own surface.
  * - `settled` — the resolved-gate history row: the completed circle in place of
- *   the numeral and the title unhighlighted. What it OPENS is the branch's
- *   answer, not this one's: where the screen hosts the card the settled row
- *   opens that read-only card; where the panel draws it the row has no surface
- *   of its own and the run detail stays put.
+ *   the numeral and the title unhighlighted. It opens the same read-only card
+ *   the live row opens, because one owner draws the row in one place
+ *   (cinatra#3047).
  */
 export type RecommendationRailEntry = "none" | "live" | "settled";
 
@@ -43,39 +50,34 @@ export type RecommendationRailEntry = "none" | "live" | "settled";
  *   run's own evidence that this question was ever asked; a run without one
  *   never held and has no step (its card draws no DOM at all).
  * - `held` — the park is still `parked`, i.e. the question is open.
- * - `hostsCard` — does the SCREEN mount the one `recommendation_hold` card, or
- *   does the run-detail panel mount it (`screenHostsRecommendationCard`)?
  *
- * A LIVE hold is a step only where the screen owns the surface it opens onto;
- * elsewhere the step would open onto nothing, so there is no entry. (That case
- * is unreachable in practice — a held run is `pending_input`, which is the
- * branch where no panel renders — and it is answered here rather than assumed.)
+ * A LIVE hold is the step the run is paused on, and it opens the screen's own
+ * mount of the card. A SETTLED hold is an entry too, because a history row needs
+ * no surface to justify its place — which is exactly what the old rule got
+ * wrong — and it opens the same mount's read-only summary.
  *
- * A SETTLED hold is an entry on EVERY branch, because a history row needs no
- * surface to justify its place — which is exactly what the old rule got wrong.
- * It does NOT follow that a settled row opens nothing: where the screen hosts
- * the card, the row still opens that card's read-only summary, unchanged. It is
- * on the PANEL-hosted branch that it opens nothing, and there the run detail
- * keeps what the panel draws — where the decided summary already is.
+ * THERE IS NO THIRD INPUT (cinatra#3047). A `hostsCard` parameter used to
+ * withhold the LIVE entry on the branch whose panel drew the card, because a
+ * step must never open onto a card another module draws. No other module draws
+ * it: the run page has ONE owner of this row on every branch, so the park is the
+ * whole reading.
  */
 export function recommendationRailEntry(params: {
   hasPark: boolean;
   held: boolean;
-  hostsCard: boolean;
 }): RecommendationRailEntry {
   if (!params.hasPark) return "none";
-  if (params.held) return params.hostsCard ? "live" : "none";
-  return "settled";
+  return params.held ? "live" : "settled";
 }
 
 /**
  * CAN THE ROW BE OPENED — on a page that has nothing to fall back to?
  *
- * The entry above answers whether the row EXISTS. That is the right question
- * for the run page, where a settled row deliberately opens nothing and the run
- * detail beside it stays put. It is not enough for the setup run page
- * (cinatra#2970), which composes no run detail at all: there a row that opens
- * nothing opens an EMPTY COLUMN, which the ruling on that issue forbids.
+ * The entry above answers whether the row EXISTS. That is enough for the run
+ * page, which composes a run detail the frame falls back to. It is not enough
+ * for the setup run page (cinatra#2970), which composes no run detail at all:
+ * there a row that opens onto a card drawing no DOM opens an EMPTY COLUMN,
+ * which the ruling on that issue forbids.
  *
  * `parkStatus` is the park's own row status, and the third value is why this
  * function exists. `parked` is a live hold and `released` is a decision a human

@@ -29,7 +29,6 @@ import {
   runDetailInitialStep,
   runDetailPanelKind,
   screenDrawsPageRail,
-  screenHostsRecommendationCard,
 } from "../instance-screens";
 
 const SCREEN_SRC = fs.readFileSync(
@@ -123,39 +122,32 @@ describe("runDetailInitialStep — which step the run surface opens on", () => {
  *
  * WHAT WAS WRONG. The entry's existence was tied to the one thing that gate
  * cannot answer: whether THIS SCREEN mounts the card. On the `agentic` branch
- * the panel mounts it, so the moment a held run was decided and left
+ * the panel mounted it, so the moment a held run was decided and left
  * `pending_input` the whole entry vanished — and with it the two-column frame,
  * since the recommendation was that run's only gate step.
+ *
+ * AND THE GATE ITSELF IS GONE (cinatra#3047). The panel mounts no card at all
+ * any more — the row has one owner and one place on the run page — so the park
+ * is the entry's whole reading and the predicate takes no third input.
  */
 describe("recommendationRailEntry — a decided gate stays on the rail as history", () => {
-  it("keeps the settled entry on the branch whose PANEL draws the card", () => {
-    // THE R6 DEFECT, in one line.
-    expect(recommendationRailEntry({ hasPark: true, held: false, hostsCard: false })).toBe(
-      "settled",
-    );
+  it("keeps the settled entry — the R6 defect, in one line", () => {
+    expect(recommendationRailEntry({ hasPark: true, held: false })).toBe("settled");
   });
 
-  it("keeps it on the branch the screen hosts too — that reading is unchanged", () => {
-    expect(recommendationRailEntry({ hasPark: true, held: false, hostsCard: true })).toBe(
-      "settled",
-    );
+  it("reads a LIVE hold as the step the run is paused on", () => {
+    expect(recommendationRailEntry({ hasPark: true, held: true })).toBe("live");
   });
 
-  it("a LIVE hold is a step only where the screen owns the surface it opens", () => {
-    expect(recommendationRailEntry({ hasPark: true, held: true, hostsCard: true })).toBe("live");
-    // Unchanged from the R5-proven state.
-    expect(recommendationRailEntry({ hasPark: true, held: true, hostsCard: false })).toBe("none");
-  });
-
-  it("a run that never held has no entry on any branch", () => {
-    expect(recommendationRailEntry({ hasPark: false, held: false, hostsCard: true })).toBe("none");
-    expect(recommendationRailEntry({ hasPark: false, held: false, hostsCard: false })).toBe("none");
-    expect(recommendationRailEntry({ hasPark: false, held: true, hostsCard: true })).toBe("none");
+  it("a run that never held has no entry", () => {
+    expect(recommendationRailEntry({ hasPark: false, held: false })).toBe("none");
+    expect(recommendationRailEntry({ hasPark: false, held: true })).toBe("none");
   });
 
   it("the decided leaf run — the whole ladder the run page walks, end to end", () => {
     // A decided run has been dispatched, so it is no longer `pending_input` and
-    // its panel is the one that draws the card.
+    // its run detail carries the agentic panel — beside which, not inside which,
+    // the settled row is drawn (cinatra#3047).
     const panel = runDetailPanelKind({
       runStatus: "running",
       templateType: "agent",
@@ -168,9 +160,7 @@ describe("recommendationRailEntry — a decided gate stays on the rail as histor
       hasTriggerRow: false,
     });
     expect(panel).toBe("agentic");
-    const hostsCard = screenHostsRecommendationCard(panel);
-    expect(hostsCard).toBe(false);
-    const entry = recommendationRailEntry({ hasPark: true, held: false, hostsCard });
+    const entry = recommendationRailEntry({ hasPark: true, held: false });
     expect(entry).toBe("settled");
     // …and the run detail still opens on the run's own reading, not on the gate.
     expect(
@@ -217,9 +207,10 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
   it("asks the entry predicate for the step rather than restating the branch inline", () => {
     expect(SCREEN_SRC).toContain("const recommendationEntry = recommendationRailEntry({");
     expect(SCREEN_SRC).toContain('const hasRecommendationStep = recommendationEntry !== "none";');
-    // The screen's own gate is still what answers the SURFACE question.
-    expect(SCREEN_SRC).toContain("screenHostsRecommendationCard(runDetailPanel)");
-    expect(SCREEN_SRC).toContain("hostsCard: hostsRecommendationCard,");
+    // …and it asks it with the PARK alone. A host gate in this call is a second
+    // owner of the row coming back (cinatra#3047).
+    expect(SCREEN_SRC).not.toContain("hostsCard");
+    expect(SCREEN_SRC).not.toContain("screenHostsRecommendationCard");
     // The row's reading comes from the SAME answer that decides the entry — a
     // second derivation beside it is how a row and its presence drift apart.
     expect(SCREEN_SRC).toContain('settled={recommendationEntry === "settled"}');
@@ -235,9 +226,9 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     // `instance-screens-setup-rail.test.ts`; a file-wide count here would either
     // fail on a screen it is not about, or quietly stop being about this one.
     expect(RUN_SCREEN_SRC.match(/<RecommendationHoldCard\b/g) ?? []).toHaveLength(1);
-    expect(RUN_SCREEN_SRC).toContain(
-      "const recommendationCardNode = hostsRecommendationCard ? (",
-    );
+    // UNCONDITIONAL (cinatra#3047): no branch of `runDetailPanelKind` withholds
+    // it, because no other module draws the row on this page any more.
+    expect(RUN_SCREEN_SRC).toContain("const recommendationCardNode = (");
     // The step's surface and the run detail both reference that ONE mount —
     // the surface takes it bare (`surface: recommendationCardNode`) and the
     // detail slot draws it as a child (`{recommendationCardNode}`).

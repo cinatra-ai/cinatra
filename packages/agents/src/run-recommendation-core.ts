@@ -4,6 +4,7 @@ import {
   SKIP_RECOMMENDATION_SOURCE,
   decidedSkillsFromEvidence,
   hasRunRecommendationSkip,
+  hasRunSelectedSkillRevisions,
   readRunRejectedRecommendations,
   readRunSelectedSkillRevisions,
   readRunRecommendationOfferedSet,
@@ -325,6 +326,55 @@ async function resolveSettledCandidates(input: {
  * Every denial answers `{ state: "none" }` — indistinguishable from a run that
  * was never held, which is the same posture the lifecycle resolve holds.
  */
+/**
+ * WAS THIS RUN'S RECOMMENDATION ANSWERED? — the RUN's own reading of the
+ * question the card resolves for a viewer (cinatra#3047).
+ *
+ * WHO ASKS, AND WHY IT IS NOT THE CARD. The run page draws no skill picker
+ * inside its run-progress panel for a run whose skills were decided on the card
+ * ("The agentic run progress card appears once the skills are decided; no skill
+ * inside it can be selected"). The panel used to answer that from a
+ * recommendation card of its own; that mount is deleted — the row has one owner
+ * and one place — so the screen answers it server-side, before the first paint,
+ * and hands the panel a boolean.
+ *
+ * WHY IT LIVES HERE, beside the resolver rather than in the screen. "Decided"
+ * has exactly one definition, and it is the one the ladder below applies to a
+ * terminal park: a selection set on file means CONFIRMED, a skip record means
+ * SKIPPED, and neither means the question was never answered. A screen that
+ * re-expressed that from the park's status alone would be a second definition —
+ * and a wrong one, because the park's status and the decision's evidence are not
+ * written atomically: a confirm or a skip that races the TTL sweeper leaves a
+ * `policy_unresolved` park with real evidence behind it, which the card reads as
+ * decided and a status-only test would call undecided, putting the forbidden
+ * picker back on the page.
+ *
+ * NOT ACTOR-SCOPED, deliberately, and it is not a viewer's answer: the decided
+ * reading is not viewer-filtered in the ladder below either, and the only caller
+ * has already cleared the run's own access door before it asks.
+ *
+ * FAILS TOWARD THE PICKER. An unreadable store answers "not decided", which
+ * leaves the panel exactly as it was before this rule existed — the same posture
+ * the rule has always taken for a read that gives up.
+ */
+export function recommendationDecidedForRun(input: {
+  runId: string;
+  /** The run's `recommendation_hold` park status, or null when it never held. */
+  parkStatus: string | null | undefined;
+}): boolean {
+  const { runId, parkStatus } = input;
+  if (!runId) return false;
+  // A live hold is the question still open, and no park at all is a run that was
+  // never asked. Only a TERMINAL park can carry a decision.
+  if (parkStatus == null || parkStatus === "parked") return false;
+  try {
+    if (hasRunSelectedSkillRevisions(runId)) return true;
+    return hasRunRecommendationSkip(runId);
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveRecommendationHoldStateForActor(input: {
   runId: string;
   who: RecommendationHoldActor;
@@ -343,6 +393,11 @@ export async function resolveRecommendationHoldStateForActor(input: {
   if (park.status !== "parked") {
     // DECIDED summary. Deliberately NOT viewer-filtered — see
     // `resolveDecidedSkillNames`.
+    //
+    // THIS LADDER IS THE DEFINITION OF "DECIDED" (cinatra#3047): a selection set
+    // means confirmed, a skip record means skipped, neither means nobody
+    // answered. `recommendationDecidedForRun` above is the same ladder as a
+    // boolean, for the run page's server-side read; change one and change both.
     const selected = readRunSelectedSkillRevisions(runId);
     let rejected: RunRejectedRecommendation[] = [];
     try {

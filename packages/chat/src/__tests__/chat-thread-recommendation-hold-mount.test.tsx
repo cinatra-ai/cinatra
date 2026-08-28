@@ -474,9 +474,12 @@ describe("the turn shows exactly one recommendation card", () => {
     expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
   });
 
-  it("leaves the panel's own copy alone where no chat host owns the card", async () => {
-    // The run page: no outer lifecycle host, so the panel keeps its copy. The
-    // rule is a function, so this is the same call the panel makes.
+  it("reads the ambient-host rule the panel still holds its HITL screen to", async () => {
+    // The recommendation card is no longer one of the panel's mounts at all
+    // (cinatra#3047) — the run page draws the row in one place, its own rail
+    // step. The RULE survives for the kind that still has two possible hosts in
+    // one turn (the HITL screen card), and it is the same function this
+    // transcript's mount is written against, so the values stay pinned here.
     expect(runCardOwnsLifecycleCopy(null)).toBe(true);
     expect(runCardOwnsLifecycleCopy("run_card")).toBe(true);
     expect(runCardOwnsLifecycleCopy("chat_thread")).toBe(false);

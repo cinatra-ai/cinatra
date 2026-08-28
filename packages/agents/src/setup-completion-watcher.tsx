@@ -93,6 +93,16 @@ type SetupCompletionWatcherProps = {
    *  mounts this watcher and threaded straight through to the panel, so the run
    *  page's FIRST paint of a run that already has a review draws that review. */
   initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  /**
+   * WAS THIS RUN'S SKILL SET DECIDED ON THE RECOMMENDATION CARD?
+   *
+   * Forwarded to the panel unchanged, exactly like `canRespondInWindow` and
+   * `initialReviewGate`: no fallback and no second read. The panel draws no
+   * recommendation card of its own any more (cinatra#3047) — the run page's rail
+   * step is the row's one place — so the screen that owns that step answers this
+   * for it, from the run's own park row.
+   */
+  recommendationDecided?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -116,6 +126,7 @@ export function SetupCompletionWatcher({
   templateId,
   initialHitlContext,
   initialReviewGate,
+  recommendationDecided,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -257,6 +268,7 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
+      recommendationDecided={recommendationDecided}
     />
   );
 }

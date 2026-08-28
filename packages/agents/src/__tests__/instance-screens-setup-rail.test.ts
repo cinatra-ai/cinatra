@@ -248,9 +248,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
       "const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;",
     );
     expect(TRIGGER_SCREEN).toContain("const recommendationEntry = recommendationRailEntry({");
-    // This screen IS the host on the setup surface: it draws no run-detail
-    // panel, so there is no other module that could mount the card.
-    expect(TRIGGER_SCREEN).toContain("hostsCard: true,");
+    // …with the PARK alone. The predicate lost its host input when the run
+    // page's row lost its second owner (cinatra#3047), and this screen has only
+    // ever been the one host on the setup surface: it draws no run-detail panel,
+    // so there is no other module that could mount the card.
+    expect(TRIGGER_SCREEN).not.toContain("hostsCard");
 
     // THE REVIEW STEP: the same reader the run page's panel uses (cinatra#2997),
     // and the pure step from its two facts to the three readings.

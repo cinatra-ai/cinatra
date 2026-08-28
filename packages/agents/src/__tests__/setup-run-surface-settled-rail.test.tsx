@@ -92,8 +92,6 @@ function setupSteps(opts: RunFixture = {}): SetupRailStep[] {
   const entry = recommendationRailEntry({
     hasPark: park != null,
     held: park?.status === "parked",
-    // The setup surface draws no run-detail panel, so this screen is the host.
-    hostsCard: true,
   });
   const opens = recommendationRailStepOpens({ entry, parkStatus: park?.status });
   const reading = runReviewStepReading(opts.slot ?? null);

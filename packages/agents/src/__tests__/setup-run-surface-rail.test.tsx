@@ -265,8 +265,6 @@ async function setupSteps(opts: RunFixture = {}): Promise<SetupRailStep[]> {
   const entry = recommendationRailEntry({
     hasPark: park != null,
     held: park?.status === "parked",
-    // The setup surface draws no run-detail panel, so this screen is the host.
-    hostsCard: true,
   });
   const opens = recommendationRailStepOpens({ entry, parkStatus: park?.status });
   const reading = runReviewStepReading(opts.slot ?? null);
@@ -537,16 +535,12 @@ describe("recommendationRailStepOpens — a terminal park is not a decided one",
 
   it("is the ENTRY question's companion, not a replacement for it", () => {
     // The entry says whether the row EXISTS — a settled entry keeps its place on
-    // the rail even where it opens nothing, because the run page has a run
-    // detail behind it. This says whether it can be OPENED where there is
-    // nothing behind it.
-    expect(recommendationRailEntry({ hasPark: false, held: false, hostsCard: true })).toBe(
-      "none",
-    );
-    expect(recommendationRailEntry({ hasPark: true, held: true, hostsCard: true })).toBe("live");
-    expect(recommendationRailEntry({ hasPark: true, held: false, hostsCard: true })).toBe(
-      "settled",
-    );
+    // the rail even where the card it opens draws no DOM, because the run page
+    // has a run detail behind it. This says whether it can be OPENED where there
+    // is nothing behind it.
+    expect(recommendationRailEntry({ hasPark: false, held: false })).toBe("none");
+    expect(recommendationRailEntry({ hasPark: true, held: true })).toBe("live");
+    expect(recommendationRailEntry({ hasPark: true, held: false })).toBe("settled");
   });
 });
 

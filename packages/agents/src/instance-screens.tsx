@@ -28,6 +28,10 @@ import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
+// WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
+// that owns the answer — the same ladder the settled card is drawn from — and
+// passed DOWN to the run panel, which draws no recommendation card of its own.
+import { recommendationDecidedForRun } from "./run-recommendation-core";
 import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
 // The step from the run's review slot to what the review step draws
@@ -301,16 +305,18 @@ export function finishedRunNoticeCopy(input: {
 }
 
 // ---------------------------------------------------------------------------
-// WHICH run panel the run-detail body mounts — and therefore which surface owns
-// the `run_card` lifecycle host (cinatra#2573, epic #2564 D-1).
+// WHICH run panel the run-detail body mounts (cinatra#2573, epic #2564 D-1).
 //
 // The branch itself is not new; it is lifted out of the JSX because a SECOND
-// reader now depends on it. `AgenticRunPanel` (reached through
-// `SetupCompletionWatcher`) declares `LifecycleCardSurfaceProvider host="run_card"`
-// and mounts `RecommendationHoldCard` itself, so the screen must NOT mount a
-// second one on that branch — a duplicate decided summary is exactly the
-// four-renderer defect this slice retires. Keeping the branch inline in two
-// places is how the two would drift back apart.
+// reader depends on it: `runDetailPanelKind` is the picker that makes the two
+// `run_card` review-gate adapters — this screen's agentic panel and its stepper
+// panel — mutually exclusive, which is the property the one-card gate cites.
+//
+// IT NO LONGER DECIDES WHO DRAWS THE SKILLS ROW (cinatra#3047). It used to: the
+// `agentic` branch's panel mounted `RecommendationHoldCard` itself, so the
+// screen stood down there and the row moved between two placements as the run
+// advanced. The panel's mount is deleted and this screen owns the row on every
+// branch, so there is no second host to select between.
 // ---------------------------------------------------------------------------
 
 /** The four shapes the run-detail right column can take. */
@@ -321,8 +327,8 @@ export type RunDetailPanelKind = "none" | "trigger" | "stepper" | "agentic";
  *
  * `"none"` is the PENDING_INPUT case: neither panel renders, because there is no
  * execution to show yet. That is the case the recommendation hold lives in — a
- * held run IS `pending_input` — which is why the screen has to host the card
- * itself rather than leaving it to a panel that is not on the page.
+ * held run IS `pending_input` — so the run detail on that branch is the gate's
+ * own step and nothing else.
  *
  * `"trigger"` is the PENDING_TRIGGER case (cinatra#2952). `pending_trigger`
  * MEANS "setup is finished and the trigger step is open, awaiting the user's
@@ -368,20 +374,6 @@ export function runDetailPanelKind(params: {
     (templateType === "orchestrator" || templateType === "flow" || stepperStepCount > 0) &&
     sourceType !== "external";
   return stepper ? "stepper" : "agentic";
-}
-
-/**
- * Does the run-detail SCREEN mount the one `recommendation_hold` card itself?
- *
- * TRUE unless the panel below already declares `run_card` and draws it. There is
- * no third answer: every branch draws the card exactly once, either here or in
- * the panel, so the interaction has ONE renderer on this surface at all times.
- *
- * The `trigger` branch (cinatra#2952) mounts no run panel at all, so the screen
- * keeps the card there, exactly as it does on `none` and `stepper`.
- */
-export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolean {
-  return panel !== "agentic";
 }
 
 /**
@@ -1051,8 +1043,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
   const recommendationHeld = recommendationPark?.status === "parked";
 
-  // WHICH panel the right column mounts — and therefore whether the card is
-  // hosted by this screen or by the panel. See `runDetailPanelKind`.
+  // WHICH panel the right column mounts. See `runDetailPanelKind`.
   const runDetailPanel = runDetailPanelKind({
     runStatus: run?.status ?? null,
     templateType: template.type,
@@ -1063,28 +1054,39 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     hasTriggerRow: trigger !== null,
   });
 
-  // Does the SCREEN own the recommendation card on this branch? On the
-  // `agentic` branch the panel inside the run detail mounts the card itself
-  // (`screenHostsRecommendationCard`), and a step opening onto a card another
-  // module draws would be a second mount of the one renderer.
-  const hostsRecommendationCard = screenHostsRecommendationCard(runDetailPanel);
-
-  // IS THERE AN ENTRY, AND HOW DOES IT READ? That is not the same question as
-  // "who draws the card" (cinatra#2790, S9f — R6). The ratified run-surface
-  // drawing: "A resolved gate stays on the rail as read-only history — its entry
-  // keeps its place and records how it was settled." Tying the ENTRY to the host
-  // gate made a decided run lose it on this branch — a decided run has been
-  // dispatched, so it is no longer `pending_input`, the panel takes the card
-  // over, and the row vanished from the rail with the whole frame behind it. A
-  // history row does not need a surface of its own to justify its place, so the
-  // settled entry survives every branch — on THIS one by opening nothing, and on
-  // the branch this screen hosts by opening the same read-only card as before.
+  // IS THERE AN ENTRY, AND HOW DOES IT READ? The ratified run-surface drawing:
+  // "A resolved gate stays on the rail as read-only history — its entry keeps
+  // its place and records how it was settled." The run's own park row is the
+  // whole reading (cinatra#2790, S9f — R6; cinatra#3047): a live hold is the
+  // step the run is paused on, a decided one is the history row, and both open
+  // the ONE card this screen mounts.
   const recommendationEntry = recommendationRailEntry({
     hasPark: recommendationPark !== null,
     held: recommendationHeld,
-    hostsCard: hostsRecommendationCard,
   });
   const hasRecommendationStep = recommendationEntry !== "none";
+  // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
+  // skill picker inside itself for a run whose skills were decided on the card
+  // ("The agentic run progress card appears once the skills are decided; no
+  // skill inside it can be selected"). The panel used to read this off a
+  // recommendation card of its own; that mount is gone (cinatra#3047), so the
+  // host that draws the card answers for it — here, from the run's own row.
+  //
+  // ASKED OF THE CARD'S OWN MODULE, not derived here. "Decided" is defined by
+  // one ladder — a selection set on file, or a skip record, behind a terminal
+  // park — and that ladder lives beside the resolver that draws the settled
+  // reading (`recommendationDecidedForRun`). A screen that read the park's
+  // STATUS alone would be a second definition and a wrong one: the status and
+  // the evidence are not written atomically, so a confirm or skip that races the
+  // TTL sweeper leaves a `policy_unresolved` park with a real decision behind it
+  // — decided to the card, undecided to a status test, and the forbidden picker
+  // back on the page.
+  const recommendationDecided = run
+    ? recommendationDecidedForRun({
+        runId: run.id,
+        parkStatus: recommendationPark?.status ?? null,
+      })
+    : false;
 
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
@@ -1154,12 +1156,15 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
-              // THE ONE `recommendation_hold` MOUNT THIS SCREEN MAKES. It is
-              // used in two mutually exclusive slots — the rail step's surface
-              // above, and the run detail below — so the interaction still has
-              // exactly one renderer on this host at any moment. See the comment
-              // on the detail slot for why this screen is a host at all.
-              const recommendationCardNode = hostsRecommendationCard ? (
+              // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047).
+              // It is used in two mutually exclusive slots — the rail step's
+              // surface above, and the run detail below — so the interaction has
+              // exactly one renderer on this host at any moment. No branch of
+              // `runDetailPanelKind` withholds it: the run-progress panel used to
+              // mount a second copy on the `agentic` branch, which is what moved
+              // the row between two placements as the run advanced, and that
+              // mount is deleted.
+              const recommendationCardNode = (
                 <LifecycleCardSurfaceProvider host="run_card">
                   <RecommendationHoldCard
                     runId={run.id}
@@ -1167,7 +1172,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     wireRef={null}
                   />
                 </LifecycleCardSurfaceProvider>
-              ) : null;
+              );
               // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
               // them: the recommendation at the trigger position (plan (A) §6.2
               // — "the top entry on the step rail, ahead of the work steps it
@@ -1191,13 +1196,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   // (§V — "the row is the whole card"), and a wrapper would be a
                   // new anchor on a surface whose closed set is ratified.
                   //
-                  // It is NULL on the branch whose panel draws the card —
-                  // there `recommendationCardNode` is null because this screen
-                  // mounts no card at all — so that step opens nothing, the run
-                  // detail stays as this screen composed it, and the decided
-                  // summary the row stands for is the one already in that panel
-                  // (`RunSurfaceRailStep.surface`). On every other branch this
-                  // IS the surface, settled or live alike.
+                  // AND ON EVERY BRANCH (cinatra#3047), settled or live alike:
+                  // this step used to open onto NOTHING where the run-progress
+                  // panel drew a copy of the row inside itself, which is how one
+                  // row came to have two placements. There is one owner now, so
+                  // the step always opens the row it names.
                   surface: recommendationCardNode,
                 });
               }
@@ -1259,14 +1262,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   work; a decided hold draws the read-only summary; an unheld run
                   draws nothing at all.
 
-                  THIS SCREEN IS A HOST because a HELD run is `pending_input`, and
-                  the panel that carries the card below (`AgenticRunPanel`, via
+                  THIS SCREEN IS THE HOST, on every branch (cinatra#3047). It has
+                  to be one at all because a HELD run is `pending_input` and the
+                  run panel below (`AgenticRunPanel`, via
                   `SetupCompletionWatcher`) renders only for
-                  `status !== "pending_input"`. Without this mount the hold would
-                  be invisible on the very page the human is asked to decide it
-                  on. On the branch where that panel DOES render it declares
-                  `run_card` and draws the card itself, so this mount stands down
-                  — see `screenHostsRecommendationCard`.
+                  `status !== "pending_input"` — without this mount the hold
+                  would be invisible on the very page the human is asked to
+                  decide it on. It is the ONLY host because the drawing fixes one
+                  placement for the row: the panel's own mount, which drew it
+                  inside the run-progress box at the HITL, working and review
+                  moments, is deleted.
 
                   `wireRef` is NULL: this server-rendered mount has no run stream
                   of its own. It costs nothing here — the card resolves on mount,
@@ -1413,6 +1418,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     initialStreamedText={run.streamedText ?? ""}
                     initialHitlContext={initialHitlContext}
                     initialReviewGate={initialReviewGate}
+                    // WHAT THE PANEL NEEDS FROM THE SKILLS ROW, now that it
+                    // draws none (cinatra#3047): whether the question was
+                    // answered, so no pressable skill list appears inside it for
+                    // a run whose skills were already decided. Read above, from
+                    // the run's own park row, before the first paint.
+                    recommendationDecided={recommendationDecided}
                   />
                 )
               )}
@@ -1915,10 +1926,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationEntry = recommendationRailEntry({
     hasPark: recommendationPark !== null,
     held: recommendationPark?.status === "parked",
-    // THIS screen hosts the card here. The setup surface draws no run-detail
-    // panel at all — the run has not run — so there is no other module that
-    // could mount it, and the step's surface is this screen's own mount.
-    hostsCard: true,
   });
   // AND CAN IT BE OPENED? A terminal park is not the same as a DECIDED one: the
   // TTL sweeper's fail-closed `policy_unresolved` leaves a park behind that

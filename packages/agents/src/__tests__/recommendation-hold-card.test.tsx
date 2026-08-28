@@ -1055,9 +1055,20 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     expect(panel).not.toMatch(/setInterval\s*\(\s*fetchState/);
     expect(panel).not.toMatch(/getRunRecommendationHoldStateAction/);
     expect(panel).not.toMatch(/<RunRecommendationChipRow/);
-    // The one mount that remains is the card, on the declared host.
-    expect(panel).toMatch(/<RecommendationHoldCard/);
+    // The host declaration stays, for the two kinds this panel still draws.
     expect(panel).toMatch(/host="run_card"/);
+  });
+
+  it("the run panel has no CARD mount either — one owner, one place", () => {
+    // cinatra#3047. The poll went first and the card that replaced it went
+    // after: this panel's copy was the run page's SECOND placement of the row —
+    // beside the rail at the schedule moment, inside this panel at the HITL,
+    // working and review moments — so the row now has one owner, the run page's
+    // own rail step, and the panel mounts nothing for this kind.
+    const panel = read("agentic-run-panel.tsx");
+    expect(panel).not.toMatch(/<RecommendationHoldCard/);
+    expect(panel).not.toContain("panelMountsRecommendationCard");
+    expect(panel).not.toContain("recommendationCardNode");
   });
 
   it("the stepper's dev-preview row has no interval and no direct chip-row mount", () => {
@@ -1086,22 +1097,14 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     expect(instanceScreens).not.toMatch(/hasRunRecommendationSkip/);
     expect(instanceScreens).not.toMatch(/setInterval/);
     // The one mount that remains is the card, under its own declared host — and
-    // it is GATED, so the branch whose panel already declares `run_card` does not
-    // draw the row twice (`screenHostsRecommendationCard`, pinned in
-    // `instance-screens-recommendation-host.test.ts`).
+    // since cinatra#3047 it is UNGATED, because it is the only one on this page:
+    // the run panel's own copy is deleted, so there is no branch on which this
+    // screen must stand down.
     expect(instanceScreens).toMatch(/<RecommendationHoldCard/);
     expect(instanceScreens).toMatch(/host="run_card"/);
-    // The gate is NAMED once since cinatra#2790 (S9f) because a second reader
-    // depends on it: it decides the rail step's SURFACE — a step whose surface
-    // another module draws would be a second mount, so on that branch the step
-    // is handed none. It does NOT decide whether the entry EXISTS: a settled
-    // entry keeps its place on every branch, because a history row needs no
-    // surface to justify it (`recommendationRailEntry`).
+    expect(instanceScreens).not.toMatch(/screenHostsRecommendationCard/);
     expect(instanceScreens).toMatch(
-      /const hostsRecommendationCard = screenHostsRecommendationCard\(runDetailPanel\);/,
-    );
-    expect(instanceScreens).toMatch(
-      /hostsRecommendationCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
+      /const recommendationCardNode = \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
     );
     // The park is still read, and never to DRAW the interaction. Two uses, one
     // per screen, and the import above them:
