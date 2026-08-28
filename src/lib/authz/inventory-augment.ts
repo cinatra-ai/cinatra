@@ -368,6 +368,15 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   media_feed_youtube_list:  { resourceType: "connector_instance", action: "execute", status: "enforced" },
 
   // ───── metric_cost ─────
+  // cinatra#1381 (epic #1373) — the memory promotion REQUEST tool. It opens a
+  // pending approval and writes nothing to the memory row; the widen happens
+  // only at the approvals decide (`approvals_decide` / the inline
+  // /notifications action -> the admin-gated PromotionBackend decide). Member-
+  // level write on the memory OBJECT: object::update (effect write) —
+  // requesting is not applying. The read gate the tool actually runs is
+  // `object.read` against the row, inside the shared request service.
+  memory_promote_request:     { resourceType: "object", action: "update", status: "enforced" },
+
   metric_cost_budget_get:     { resourceType: "metric_cost", action: "read", status: "enforced" },
   metric_cost_by_agent:       { resourceType: "metric_cost", action: "read", status: "enforced" },
   metric_cost_by_provider:    { resourceType: "metric_cost", action: "read", status: "enforced" },

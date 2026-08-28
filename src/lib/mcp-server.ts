@@ -25,6 +25,7 @@ import { sessionAuthorityFromResolvedRole } from "./org-write/authority";
 import { mintRunWriteAuthorityForMcp } from "./org-write/run-authority-mint";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
+import { createMemoryPromotionModule } from "@/lib/memory/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
@@ -116,6 +117,12 @@ const preConnectorPlatformModules = [
   createArtifactsModule(),
   createContextModule(),
   createObjectsModule(),
+  // cinatra#1381 — `memory_promote_request`, the REQUEST half of memory row
+  // promotion. Objects-adjacent by design: it names a memory row and opens a
+  // pending approval over it. The DECISION half is not here — approve/reject
+  // rides the already-registered `approvals_*` tools over the shared promotion
+  // source, so this module adds exactly one tool and no decide primitive.
+  createMemoryPromotionModule(),
   createProjectsModule(),
   createBlogContentModule(),
   // cinatra#2723 — `connector_inventory_list`, the platform's own read-only

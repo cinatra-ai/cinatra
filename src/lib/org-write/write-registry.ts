@@ -712,6 +712,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/restore-engine.ts",
       "src/lib/object-history/merge-proposals.ts",
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
       "src/lib/object-history/index.ts",
       // cinatra#2683 (epic #2564 S8f) — the in-process lifecycle SEED path's
       // change-set fixture. A DESIGN EVENT, so state it rather than let it pass
@@ -748,6 +756,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   {
@@ -763,6 +779,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   {
@@ -782,6 +806,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   // — restore engine's OWN batched multi-event write (cinatra#1939 wave 3
