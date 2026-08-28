@@ -31,9 +31,57 @@ const rail = async (page) => page.evaluate(() =>
     .filter((t) => /^\d+(Schedule|Review|Step)/.test(t)));
 const rationale = async (page) => page.evaluate(() => document.querySelector("#review-rationale")?.value ?? null);
 
-const { browser, page } = await openAs(process.env.OWNER_EMAIL, process.env.OWNER_PW);
+// ONE RUN PER THEME, AND THE THEME IS CHOSEN BEFORE THE TURN, IN THE CONTEXT
+// THAT SENDS IT. A request for changes resolves the gate, so its turn cannot be
+// sent twice on one run; the frame is therefore taken IN PLACE, in the context
+// that typed, on a run of its own per theme.
+const THEME = process.env.THEME ?? "light";
+record.theme = THEME;
+const { browser, page } = await openAs(process.env.OWNER_EMAIL, process.env.OWNER_PW, { theme: THEME });
 await page.goto(process.env.REVIEW_PATH, { waitUntil: "domcontentloaded" });
 await page.waitForTimeout(35_000);
+
+/**
+ * WHERE THE DECISION BAR IS AND WHERE THE WINDOW IS, in the page's own layout.
+ *
+ * The graded leg measured the window's panel drawn OVER the bar. This reads the
+ * two boxes and asks the document itself what is at the bar's centre — the same
+ * three numbers, taken the same way, so the before and the after are comparable.
+ */
+const geometry = async (pg) => pg.evaluate(() => {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  const decide = buttons.filter((b) => /^(Approve|Reject|Comment)$/.test((b.textContent || "").trim()));
+  if (decide.length === 0) return { ok: false, reason: "no decision bar on this page" };
+  let bar = decide[0].parentElement;
+  for (let i = 0; i < 6 && bar; i += 1) {
+    if (decide.every((b) => bar.contains(b))) break;
+    bar = bar.parentElement;
+  }
+  const win = document.querySelector("[data-run-window-placement]")
+    ?? document.querySelector('[data-conformance-id="review-prompt-window"]');
+  if (!bar || !win) return { ok: false, reason: "bar or window not found" };
+  const b = bar.getBoundingClientRect();
+  const w = win.getBoundingClientRect();
+  const vOverlap = Math.max(0, Math.min(b.bottom, w.bottom) - Math.max(b.top, w.top));
+  const hOverlap = Math.max(0, Math.min(b.right, w.right) - Math.max(b.left, w.left));
+  const cx = Math.round(b.left + b.width / 2);
+  const cy = Math.round(b.top + b.height / 2);
+  const hit = document.elementFromPoint(cx, cy);
+  return {
+    ok: true,
+    bar: { top: Math.round(b.top), bottom: Math.round(b.bottom), height: Math.round(b.height), left: Math.round(b.left), right: Math.round(b.right) },
+    window: { top: Math.round(w.top), bottom: Math.round(w.bottom), height: Math.round(w.height), left: Math.round(w.left), right: Math.round(w.right) },
+    verticalOverlapPx: Math.round(vOverlap),
+    horizontalOverlapPx: Math.round(hOverlap),
+    barCentre: { x: cx, y: cy },
+    barCentreResolvesInsideTheBar: Boolean(hit && bar.contains(hit)),
+    barCentreResolvesInsideTheWindow: Boolean(hit && win.contains(hit)),
+    windowPlacement: win.getAttribute("data-run-window-placement"),
+    windowFollowsTheBarInDocumentOrder: Boolean(
+      bar.compareDocumentPosition(win) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ),
+  };
+});
 
 async function reading(name, message, capture) {
   const before = {
@@ -59,9 +107,13 @@ async function reading(name, message, capture) {
     run: await runRow(c, RUN_ID), decisionBar: await decisionBar(page), rail: await rail(page),
     rationale: await rationale(page),
   };
-  const shots = capture ? await shoot(page, capture) : [];
+  // THE PANEL IS OPENED FIRST, so the frame is of the window as the person
+  // left it, and the geometry is read on the SAME page in the same instant.
+  const geo = await geometry(page);
+  stamp(`--- ${name}: geometry`, geo);
+  const shots = capture ? await shoot(page, capture, { inPlace: true, themes: [THEME] }) : [];
   const r = {
-    name, message, before, after,
+    name, message, before, after, geometry: geo, theme: THEME,
     bubbles: (await readWindow(page)).bubbles,
     turnAttempts: sent.attempts,
     decisionButtonPressedByTheDriver: false,

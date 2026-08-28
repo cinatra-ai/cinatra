@@ -1,0 +1,72 @@
+[
+  {
+    "width": 1440,
+    "ok": true,
+    "bar": [
+      741,
+      793
+    ],
+    "window": [
+      980,
+      1070
+    ],
+    "verticalOverlapPx": 0,
+    "barCentreResolvesInsideTheBar": true
+  },
+  {
+    "width": 1180,
+    "ok": true,
+    "bar": [
+      741,
+      793
+    ],
+    "window": [
+      980,
+      1070
+    ],
+    "verticalOverlapPx": 0,
+    "barCentreResolvesInsideTheBar": true
+  },
+  {
+    "width": 1024,
+    "ok": true,
+    "bar": [
+      741,
+      793
+    ],
+    "window": [
+      980,
+      1070
+    ],
+    "verticalOverlapPx": 0,
+    "barCentreResolvesInsideTheBar": true
+  },
+  {
+    "width": 820,
+    "ok": true,
+    "bar": [
+      777,
+      829
+    ],
+    "window": [
+      980,
+      1070
+    ],
+    "verticalOverlapPx": 0,
+    "barCentreResolvesInsideTheBar": true
+  },
+  {
+    "width": 600,
+    "ok": true,
+    "bar": [
+      763,
+      815
+    ],
+    "window": [
+      980,
+      1070
+    ],
+    "verticalOverlapPx": 0,
+    "barCentreResolvesInsideTheBar": true
+  }
+]

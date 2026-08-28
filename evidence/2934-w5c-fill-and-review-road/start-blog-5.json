@@ -1,11 +1,11 @@
 {
   "agentPath": "/agents/cinatra-ai/blog-draft-writer-agent/new",
-  "runId": "c30af4c4-faa5-4d81-b07c-80643e47fea5",
-  "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/c30af4c4-faa5-4d81-b07c-80643e47fea5",
+  "runId": "8820dcfc-778c-4920-91fd-d0a823937d7c",
+  "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/8820dcfc-778c-4920-91fd-d0a823937d7c",
   "run": {
-    "id": "c30af4c4-faa5-4d81-b07c-80643e47fea5",
+    "id": "8820dcfc-778c-4920-91fd-d0a823937d7c",
     "status": "pending_approval",
-    "created_at": "2026-08-28T12:01:21.104Z",
+    "created_at": "2026-08-28T12:05:49.240Z",
     "started_at": null,
     "completed_at": null,
     "lifecycle_moment": "hitl",
@@ -14,9 +14,9 @@
   },
   "gates": [
     {
-      "review_task_id": "setup-c30af4c4-faa5-4d81-b07c-80643e47fea5",
+      "review_task_id": "setup-8820dcfc-778c-4920-91fd-d0a823937d7c",
       "field_name": "idea",
-      "created_at": "2026-08-28T12:01:26.469Z",
+      "created_at": "2026-08-28T12:05:52.605Z",
       "schema": "{\"type\": \"object\", \"title\": \"idea\", \"required\": [\"title\"], \"properties\": {\"title\": {\"type\": \"string\"}, \"outline\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"summary\": {\"type\": \"string\"}}, \"x-multiline\": true, \"x-placeholder\": \"What should this post be about?\", \"x-object-text-property\": \"title\"}",
       "vals": "{}"
     }

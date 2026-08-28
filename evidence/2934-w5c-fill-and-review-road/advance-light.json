@@ -1,0 +1,57 @@
+{
+  "runId": "8820dcfc-778c-4920-91fd-d0a823937d7c",
+  "presses": [
+    {
+      "at": "2026-08-28T12:48:58.086Z",
+      "round": 0,
+      "label": "Continue"
+    },
+    {
+      "at": "2026-08-28T12:49:52.621Z",
+      "round": 1,
+      "label": "Continue"
+    }
+  ],
+  "states": [
+    {
+      "at": "2026-08-28T12:48:54.713Z",
+      "round": 0,
+      "status": "pending_trigger",
+      "gates": 0
+    },
+    {
+      "at": "2026-08-28T12:49:52.541Z",
+      "round": 1,
+      "status": "pending_approval",
+      "gates": 0
+    },
+    {
+      "at": "2026-08-28T12:50:46.769Z",
+      "round": 2,
+      "status": "completed",
+      "gates": 1
+    }
+  ],
+  "reviewGate": {
+    "id": "401dadab-9119-4b8a-b0c4-75c140749b3b",
+    "review_task_id": "lifecycle-review:e10cbc8b01633563689cd3a8d6ac3119d07df08922cad251a9029264789a1d77",
+    "status": "pending"
+  },
+  "finalRun": {
+    "id": "8820dcfc-778c-4920-91fd-d0a823937d7c",
+    "status": "completed",
+    "created_at": "2026-08-28T12:05:49.240Z",
+    "started_at": null,
+    "completed_at": "2026-08-28T12:50:29.673Z",
+    "lifecycle_moment": null,
+    "template_id": "d0b932cb-2322-4bb1-ab35-19d4a66b78de",
+    "run_by": "1966be4f-0399-4e10-a777-bf1c73305eb8"
+  },
+  "finalGates": [
+    {
+      "id": "401dadab-9119-4b8a-b0c4-75c140749b3b",
+      "review_task_id": "lifecycle-review:e10cbc8b01633563689cd3a8d6ac3119d07df08922cad251a9029264789a1d77",
+      "status": "pending"
+    }
+  ]
+}

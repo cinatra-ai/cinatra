@@ -1,0 +1,111 @@
+{
+  "theme": "dark",
+  "runId": "0fe6dd7a-9c04-4f49-ab18-1481780e4b46",
+  "path": "/agents/cinatra-ai/blog-draft-writer-agent/0fe6dd7a-9c04-4f49-ab18-1481780e4b46",
+  "readings": [
+    {
+      "name": "submit-on-ask",
+      "theme": "dark",
+      "message": "set the idea to \"Why cadence beats bursts for blog reach\" and send it",
+      "attached": null,
+      "fieldsBefore": {
+        "field-idea": ""
+      },
+      "fieldsChanged": [
+        {
+          "field": "scheduledAt",
+          "from": null,
+          "to": ""
+        }
+      ],
+      "statusBefore": "pending_approval",
+      "statusAfter": "pending_trigger",
+      "runMessagesBefore": 0,
+      "runMessagesAfter": 3,
+      "newWindowRows": [
+        {
+          "sequence": 1,
+          "role": "user",
+          "content": "set the idea to \"Why cadence beats bursts for blog reach\" and send it",
+          "cj": "{\"messageType\":\"window\",\"role\":\"user\",\"surface\":\"run-page\",\"text\":\"set the idea to \\\"Why cadence beats bursts for blog reach\\\" and send it\",\"messageId\":\"run-window:0fe6dd7a-9c04-4f49-ab18-1481780e4b46:1787918931911:gc06cspc\"}",
+          "created_at": "2026-08-28T12:08:52.037Z"
+        },
+        {
+          "sequence": 2,
+          "role": "assistant",
+          "content": "",
+          "cj": "{\"messageType\":\"window\",\"role\":\"assistant\",\"surface\":\"run-page\",\"text\":\"\",\"fill\":{\"ref\":\"7hTyJF2jjVsbmdZnZVbsgTWgvbA8CkQdsCKOdso8VdSthKfwziAXWYzxPjq9L2pHnwF2Oq4BQIbnnnSImnfKOpPZeimNcsk5k8p6LCUBGDScIAVAz5a-NdllxFb8vzF6MFQOv_Be3YAgWMG3r3Esj0sK0e4_AT7LGQ\",\"values\":{\"idea\":{\"title\":\"Why cadence beats bursts for blog reach\"}}},\"messageId\":\"run-window:0fe6dd7a-9c04-4f49-ab18-1481780e4b46:1787918931911:gc06cspc\"}",
+          "created_at": "2026-08-28T12:09:10.980Z"
+        },
+        {
+          "sequence": 3,
+          "role": "assistant",
+          "content": "Submitted.",
+          "cj": "{\"messageType\":\"window\",\"role\":\"assistant\",\"surface\":\"run-page\",\"text\":\"Submitted.\",\"replyToSequence\":1,\"messageId\":\"run-window:0fe6dd7a-9c04-4f49-ab18-1481780e4b46:1787918931911:gc06cspc\"}",
+          "created_at": "2026-08-28T12:09:14.973Z"
+        }
+      ],
+      "turnAttempts": [
+        {
+          "attempt": 1,
+          "toolboxMissing": false,
+          "platformCouldNotAnswer": false,
+          "publicOrigin": {
+            "checked": true,
+            "ok": true,
+            "tries": 1,
+            "ms": 1438
+          }
+        }
+      ],
+      "lastTurnServedWithoutToolbox": false,
+      "screenButtonPressedByTheAssistantDriver": false,
+      "frame": {
+        "file": "diag__submit-on-ask__dark.png",
+        "accountFooter": "RORita Ownerowner@example.com",
+        "footerSettled": true,
+        "themeAtShutter": {
+          "root": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+          "dark": true
+        },
+        "fieldsJustBeforeTheShutter": {
+          "scheduledAt": ""
+        },
+        "fieldsJustAfterTheShutter": {
+          "scheduledAt": ""
+        },
+        "domAgreedAcrossTheShutter": true,
+        "windowPlaceholder": null,
+        "bubbles": [
+          {
+            "text": "set the idea to \"Why cadence beats bursts for blog reach\" and send it",
+            "side": "person",
+            "drawn": null
+          },
+          {
+            "text": "Submitted.",
+            "side": "assistant",
+            "drawn": {
+              "strong": 0,
+              "tables": 0,
+              "listRows": 0,
+              "rawAsterisks": 0,
+              "rawPipes": 0
+            }
+          }
+        ]
+      },
+      "afterReload": null
+    }
+  ],
+  "finalRun": {
+    "id": "0fe6dd7a-9c04-4f49-ab18-1481780e4b46",
+    "status": "pending_trigger",
+    "created_at": "2026-08-28T12:05:09.034Z",
+    "started_at": null,
+    "completed_at": null,
+    "lifecycle_moment": "schedule",
+    "template_id": "d0b932cb-2322-4bb1-ab35-19d4a66b78de",
+    "run_by": "1966be4f-0399-4e10-a777-bf1c73305eb8"
+  }
+}

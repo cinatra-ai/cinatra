@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "bar": {
+    "top": 741,
+    "bottom": 793,
+    "height": 52,
+    "left": 394,
+    "right": 1423
+  },
+  "window": {
+    "top": 564,
+    "bottom": 900,
+    "height": 336,
+    "left": 256,
+    "right": 1440
+  },
+  "verticalOverlapPx": 52,
+  "horizontalOverlapPx": 1029,
+  "barCentre": {
+    "x": 908,
+    "y": 767
+  },
+  "barCentreResolvesInsideTheBar": false,
+  "barCentreResolvesInsideTheWindow": true,
+  "windowPlacement": "floating",
+  "windowFollowsTheBarInDocumentOrder": true
+}

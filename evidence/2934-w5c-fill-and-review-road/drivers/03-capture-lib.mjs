@@ -164,9 +164,9 @@ export async function setTheme(page, theme) {
  * lives in the browser's own storage, so a fresh context would have nothing to
  * photograph. That reading toggles in place and records what its footer drew.
  */
-export async function shoot(page, name, { inPlace = false } = {}) {
+export async function shoot(page, name, { inPlace = false, themes } = {}) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  if (inPlace) return shootInPlace(page, name);
+  if (inPlace) return shootInPlace(page, name, themes);
   const url = page.url();
   const files = [];
   for (const theme of ["light", "dark"]) {
@@ -214,9 +214,12 @@ export async function openPanel(page) {
 
 /** The pair taken on the page as it stands, for a reading whose state is in the
  *  browser rather than in the run. */
-async function shootInPlace(page, name) {
+// THEMES, NAMED BY THE CALLER WHERE IT MATTERS. A cell whose turn cannot be
+// sent twice runs ONE RUN PER THEME and its context was themed BEFORE the turn,
+// so it asks for that one theme rather than toggling through the other.
+async function shootInPlace(page, name, themes) {
   const files = [];
-  for (const theme of ["light", "dark"]) {
+  for (const theme of themes ?? ["light", "dark"]) {
     await setTheme(page, theme);
     await page.waitForTimeout(1200);
     await openPanel(page);
@@ -230,7 +233,7 @@ async function shootInPlace(page, name) {
       inPlace: true,
     });
   }
-  await setTheme(page, "light");
+  if (!themes) await setTheme(page, "light");
   return files;
 }
 
