@@ -34,21 +34,24 @@ vi.mock("../run-window-actions", () => ({
 // draft, clear on submit — is its own test's subject. Here it only has to carry
 // the person's words to the panel, so it stands in as the button that sends
 // them, exactly as the panel's own test does.
-vi.mock("@cinatra-ai/sdk-ui", () => ({
-  PromptField: React.forwardRef<unknown, { onSubmit: (s: string) => Promise<void> }>(
-    (props, _ref) =>
-      React.createElement(
-        "button",
-        {
-          type: "button",
-          "data-testid": "prompt-field",
-          onClick: () => void props.onSubmit('make the idea "A weekly publishing rhythm"'),
-        },
-        "PromptField",
-      ),
-  ),
-  LoadingSpinner: () => null,
-}));
+vi.mock("@cinatra-ai/sdk-ui", () => {
+  const PromptFieldStandIn = React.forwardRef<
+    unknown,
+    { onSubmit: (s: string) => Promise<void> }
+  >((props) =>
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        "data-testid": "prompt-field",
+        onClick: () => void props.onSubmit('make the idea "A weekly publishing rhythm"'),
+      },
+      "PromptField",
+    ),
+  );
+  PromptFieldStandIn.displayName = "PromptFieldStandIn";
+  return { PromptField: PromptFieldStandIn, LoadingSpinner: () => null };
+});
 
 import { HitlConversationPanel } from "../hitl-conversation-panel";
 import { useRunWindowConversation } from "../use-run-window-conversation";
@@ -64,6 +67,11 @@ function ScreenWithAWindow() {
   return (
     <div>
       <label htmlFor="idea">Idea</label>
+      {/* The plainest control the platform has, on purpose: the assertion is
+          about the VALUE the turn placed, so nothing about a wrapper's own
+          behaviour may stand between the fill and what is read back. The
+          design-system rule is about product surfaces, and this is a harness. */}
+      {/* eslint-disable-next-line no-restricted-syntax */}
       <input id="idea" value={idea} onChange={(e) => setIdea(e.target.value)} />
       <HitlConversationPanel
         surface="run-page"
