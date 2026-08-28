@@ -73,7 +73,7 @@ const describeDb = HAS_DB ? describe : describe.skip;
  * red an ordinary unit run on a machine with no Postgres. But the dedicated
  * script exists for exactly one purpose, and a run whose only failure mode is
  * "skipped" reports success by doing nothing — a vacuous green over a seam
- * whose whole point is that it is provable. `vitest.integration-2882.config.ts`
+ * whose whole point is that it is provable. `vitest/integration/2882.config.ts`
  * sets the flag below, so `pnpm test:async-notification-seam` with no database
  * exits non-zero with a message naming the variable it wants. Set
  * `X2882_ALLOW_SKIP=1` to opt back into skipping (a deliberate no-DB smoke of

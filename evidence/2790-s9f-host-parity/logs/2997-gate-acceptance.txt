@@ -1,1 +1,0 @@
-[chat-hitl-acceptance] manifest honest — 16 rows (11 MAPPED, 4 BUILT, 1 MISSING); every named proof exists in the tree. Capture index host-anchored — 83 record(s). Anchor contract ratified at the manifest's design pin.

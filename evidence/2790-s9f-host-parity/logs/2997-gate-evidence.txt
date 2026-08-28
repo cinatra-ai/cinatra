@@ -1,2 +1,0 @@
-[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
-  no findings.
