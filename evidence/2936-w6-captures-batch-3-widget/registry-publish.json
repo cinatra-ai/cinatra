@@ -1,0 +1,48 @@
+{
+  "registry": "http://127.0.0.1:4873/",
+  "published": [
+    "@cinatra-ai/blog-draft-writer-agent@0.1.4",
+    "@cinatra-ai/context-selection-agent@0.1.1",
+    "@cinatra-ai/blog-post-artifact@0.1.4"
+  ],
+  "readback": [
+    {
+      "packageName": "@cinatra-ai/blog-draft-writer-agent",
+      "httpStatus": 200,
+      "latest": "0.1.4",
+      "versions": [
+        "0.1.4"
+      ],
+      "cinatraKind": "agent",
+      "produces": [
+        {
+          "extension": "@cinatra-ai/blog-post-artifact"
+        }
+      ],
+      "shasum": "b22237efe773d4aaf10b91e12cd409ddcf315fb2"
+    },
+    {
+      "packageName": "@cinatra-ai/context-selection-agent",
+      "httpStatus": 200,
+      "latest": "0.1.1",
+      "versions": [
+        "0.1.1"
+      ],
+      "cinatraKind": "agent",
+      "produces": null,
+      "shasum": "5c163bf8d81976b76ce33b3f07d38235c1d6d825"
+    },
+    {
+      "packageName": "@cinatra-ai/blog-post-artifact",
+      "httpStatus": 200,
+      "latest": "0.1.4",
+      "versions": [
+        "0.1.4"
+      ],
+      "cinatraKind": "artifact",
+      "produces": null,
+      "shasum": "6ea1d5ef18fc9cac716d110915861216a8c873a7"
+    }
+  ],
+  "at": "2026-08-28T04:13:29.018Z"
+}

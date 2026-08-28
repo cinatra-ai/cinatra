@@ -1,0 +1,253 @@
+{
+  "phases": [
+    "run1",
+    "reload"
+  ],
+  "startedAt": "2026-08-28T08:12:34.299Z",
+  "threadId": "w6b3-northwind-quarterly",
+  "cookieJar": [
+    {
+      "name": "better-auth.session_token",
+      "domain": "localhost",
+      "sameSite": "Lax",
+      "httpOnly": true
+    }
+  ],
+  "run1": {
+    "promptAt": "2026-08-28T08:12:45.756Z",
+    "row": {
+      "id": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+      "status": "pending_input",
+      "human_present": true,
+      "template_id": "7a77c62f-7223-4089-812a-f1a467bda225",
+      "source_type": "agent_builder",
+      "created_at": "2026-08-28T08:12:56.635Z"
+    },
+    "park": [
+      {
+        "id": "8200e378-91a0-4166-813c-a7315d417ada",
+        "checkpoint": "recommendation",
+        "status": "parked",
+        "created_at": "2026-08-28T08:12:57.635Z"
+      }
+    ],
+    "firstCard": {
+      "cards": [
+        {
+          "kind": "recommendation_hold",
+          "host": "site_widget",
+          "state": "held"
+        }
+      ],
+      "conformance": [
+        "run-chip-row",
+        "chat-composer-primary"
+      ],
+      "actions": [
+        "confirm-skill -> confirmed",
+        "adjust-skill -> adjusted",
+        "skip-skill -> skipped"
+      ],
+      "slots": 0,
+      "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill Confirm Adjust Skip Blog Post Matcher Skill Confirm Adjust Skip Blog Writing Skill Confirm Adjust Skip Brand Voice Matcher Skill Confirm Adjust Skip Type a message... Command Palette Search for a command to run..."
+    },
+    "chipsHeld": [
+      {
+        "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+        "mark": "undecided",
+        "text": "Blog Idea Authoring SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "text": "Blog Writing SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "themeToDark": {
+      "want": "dark",
+      "pressed": true,
+      "appBefore": {
+        "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "stored": null,
+        "osPrefersDark": false
+      },
+      "appAfter": {
+        "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "stored": "dark",
+        "osPrefersDark": false
+      },
+      "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "followed": true
+    },
+    "themeToLight": {
+      "want": "light",
+      "pressed": true,
+      "appBefore": {
+        "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "stored": "dark",
+        "osPrefersDark": false
+      },
+      "appAfter": {
+        "cls": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "stored": "cinatra",
+        "osPrefersDark": false
+      },
+      "frameClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "followed": true
+    },
+    "settledInPlace": true,
+    "chipsSettled": [
+      {
+        "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+        "mark": "confirmed",
+        "text": "Blog Idea Authoring SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "skipped",
+        "text": "Blog Writing SkillSkipped",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "confirmed",
+        "text": "Brand Voice Matcher SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "hitl": {
+      "appearedAfterSeconds": 1,
+      "cards": {
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "site_widget",
+            "state": "decided"
+          },
+          {
+            "kind": "agent_hitl_screen",
+            "host": "site_widget",
+            "state": "asking"
+          }
+        ],
+        "conformance": [
+          "run-chip-row",
+          "agent-hitl-screen-card",
+          "hitl-screen-fields",
+          "chat-composer-primary"
+        ],
+        "actions": [
+          "submit-hitl-screen"
+        ],
+        "slots": 0,
+        "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED IDEA (OPTIONAL) Continue Agentic Run Progress Awaiting input No messages yet. Type a message... Command Palette Search for a command to run..."
+      }
+    },
+    "afterSetup": [
+      {
+        "id": "01b55935-2a9c-47ce-85cc-b677eef9df56",
+        "status": "pending_trigger",
+        "lifecycle_moment": "schedule",
+        "lifecycle_card_kind": "trigger_schedule_proposal"
+      }
+    ]
+  },
+  "refusedCell": {
+    "cell": "S1__hitl-card__site_widget__asking__light",
+    "declaredHost": "site_widget",
+    "kind": "agent_hitl_screen",
+    "state": "pending",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2936-w6-captures-batch-3-widget/cells/S1__hitl-card__site_widget__asking__light.png",
+    "requires": "SECTION IX of the ratified drawing at the contract's pin, verbatim: 'Four hosts, one card set. The chat thread drawn throughout this page, the embedded site widget, the run card, and the page gate region. Every card appears on every host, and it is the same card wherever it appears: the same regions, the same states, the same data on screen, and the same actions its reader is authorized to take. Only the frame changes.' With the READER MATRIX, verbatim: 'May view and act | Card - actions live' under SITE WIDGET. THIS CELL IS DRIVEN TO RECORD A REFUSAL. `scripts/ci/lib/capture-record-contract.mjs` declares `agent_hitl_screen` capturable on `chat_thread` and `run_card` only, with the reason that 'a widget conversation cannot start a run that reaches `pending_approval`'. A run started by the widget's own named-agent start DOES reach it on this head, and the widget draws the card. The recorder's own words are reported in README.md."
+  },
+  "refusals": [
+    {
+      "cell": "S1__hitl-card__site_widget__asking__light",
+      "message": "walk cell \"S1__hitl-card__site_widget__asking__light\" produced a record the index would refuse:\n  record \"S1__hitl-card__site_widget__asking__light\": \"agent_hitl_screen\" is recorded as composition-only on \"site_widget\" — a card travels from the run's own turn, and a widget conversation cannot start a run that reaches `pending_approval`: `agent_run` is not in the delegated widget allowlist (packages/mcp-server/src/delegated-widget-tool-policy.ts), and the content-editor launch claims no present human and runs queued -> running -> completed without ever parking (src/lib/host-content-editor-dispatch.ts). The mount is real and is proven by the card suite's widget arms and the real-store submit tier; it is the PICTURE that has no reachable subject."
+    }
+  ],
+  "reload": {
+    "before": {
+      "cards": [
+        {
+          "kind": "recommendation_hold",
+          "host": "site_widget",
+          "state": "decided"
+        }
+      ],
+      "conformance": [
+        "run-chip-row",
+        "chat-composer-primary"
+      ],
+      "actions": [],
+      "slots": 0,
+      "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress Awaiting input No messages yet. Type a message... Command Palette Search for a command to run..."
+    },
+    "after": {
+      "cards": [
+        {
+          "kind": "recommendation_hold",
+          "host": "site_widget",
+          "state": "decided"
+        }
+      ],
+      "conformance": [
+        "run-chip-row",
+        "chat-composer-primary"
+      ],
+      "actions": [],
+      "slots": 0,
+      "text": "You Me Please start the agent @cinatra-ai/blog-draft-writer-agent for me. Cinatra Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 01b55935-2a9c-47ce-85cc-b677eef9df56, status: pending_input). The run paused for a decision on the recommended skills. Blog Idea Authoring Skill CONFIRMED Blog Post Matcher Skill ADJUSTED Blog Writing Skill SKIPPED Brand Voice Matcher Skill CONFIRMED Agentic Run Progress pending trigger No messages yet. Type a message... Command Palette Search for a command to run..."
+    },
+    "storedParts": [
+      {
+        "n": 0
+      }
+    ],
+    "scheduleParts": [
+      {
+        "n": 0
+      }
+    ]
+  },
+  "finishedAt": "2026-08-28T08:14:40.521Z"
+}
