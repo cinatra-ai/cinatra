@@ -19,7 +19,10 @@ import * as path from "node:path";
 //   SUPABASE_DB_URL='<your scratch-database DSN>' pnpm test:lent-action-grant
 // The suite self-skips without one, so any OTHER config that picks it up keeps
 // the ordinary skip. Mirrors the #2928 tier's shape and its reasoning.
-const root = __dirname;
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and every path below has to climb back out of it — the paths
+// themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
 
 /** The throwaway schema this tier builds and drops. Fixed, not computed: the
  *  store reads SUPABASE_SCHEMA per call, but a fixed name keeps the drop

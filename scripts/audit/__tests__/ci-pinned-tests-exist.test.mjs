@@ -2170,6 +2170,7 @@ describe("direction 3 — round-8 fail-open closures", () => {
 function tierFixture({ workflow = "", scripts = {}, configs = [], exceptions, trigger = "on: [pull_request, push]\n" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ci-tier-"));
   mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(root, "vitest", "integration"), { recursive: true });
   const withRunner = workflow.includes("runs-on:")
     ? workflow
     : workflow.replace(/\n(\s*)steps:/g, "\n$1runs-on: ubuntu-latest\n$1steps:");
@@ -2184,23 +2185,23 @@ function tierFixture({ workflow = "", scripts = {}, configs = [], exceptions, tr
 }
 
 /** One tier, one script, one workflow body — the shape most cases only vary in. */
-function enforced(workflowBody, { script = "test:x", body = "vitest run --config vitest.integration-1.config.ts" } = {}) {
+function enforced(workflowBody, { script = "test:x", body = "vitest run --config vitest/integration/1.config.ts" } = {}) {
   const fx = tierFixture({
     workflow: workflowBody,
     scripts: { [script]: body },
-    configs: ["vitest.integration-1.config.ts"],
+    configs: ["vitest/integration/1.config.ts"],
   });
-  return rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir });
+  return rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir });
 }
 
 const STEP = (run) => `jobs:\n  j:\n    steps:\n      - run: ${run}\n`;
 
 describe("direction 4 — the tier config vocabulary", () => {
   it("recognises the root tier naming convention and nothing else", () => {
-    for (const ok of ["vitest.integration-2882.config.ts", "vitest.integration-2936.config.ts", "vitest.integration-a.b-c.config.ts"]) {
+    for (const ok of ["vitest/integration/2882.config.ts", "vitest/integration/2936.config.ts", "vitest/integration/a.b-c.config.ts"]) {
       expect(ROOT_TIER_CONFIG_RE.test(ok), ok).toBe(true);
     }
-    for (const no of ["vitest.config.ts", "vitest.integration.config.ts", "packages/x/vitest.integration-1.config.ts", "vitest.integration-1.config.mts"]) {
+    for (const no of ["vitest.config.ts", "vitest.integration.config.ts", "packages/x/vitest/integration/1.config.ts", "vitest/integration/1.config.mts"]) {
       expect(ROOT_TIER_CONFIG_RE.test(no), no).toBe(false);
     }
   });
@@ -2227,9 +2228,9 @@ describe("direction 4 — the tier config vocabulary", () => {
   });
 
   it("lists the tier configs that exist on disk", () => {
-    const fx = tierFixture({ configs: ["vitest.integration-1.config.ts", "vitest.integration-2.config.ts"] });
+    const fx = tierFixture({ configs: ["vitest/integration/1.config.ts", "vitest/integration/2.config.ts"] });
     writeFileSync(join(fx.root, "vitest.config.ts"), "export default {};\n");
-    expect(rootTierConfigs(fx.root)).toEqual(["vitest.integration-1.config.ts", "vitest.integration-2.config.ts"]);
+    expect(rootTierConfigs(fx.root)).toEqual(["vitest/integration/1.config.ts", "vitest/integration/2.config.ts"]);
     expect(rootPackageScripts(fx.root)).toEqual({});
   });
 });
@@ -2260,7 +2261,7 @@ describe("direction 4 — a package script body that can carry a failure", () =>
 });
 
 describe("direction 4 — which scripts reach a tier", () => {
-  const CONFIG = "vitest.integration-1.config.ts";
+  const CONFIG = "vitest/integration/1.config.ts";
   const reach = (scripts) => {
     const fx = tierFixture({ scripts, configs: [CONFIG] });
     return [...scriptsReachingTier(fx.root, CONFIG)].sort();
@@ -2306,7 +2307,7 @@ describe("direction 4 — what a workflow has to say to be credited", () => {
   });
 
   it("credits a direct wholesale `vitest run --config <tier>`", () => {
-    expect(enforced(STEP("pnpm exec vitest run --config vitest.integration-1.config.ts --no-coverage"))).toBe(true);
+    expect(enforced(STEP("pnpm exec vitest run --config vitest/integration/1.config.ts --no-coverage"))).toBe(true);
   });
 
   it("refuses a direct run that names a DIFFERENT config, or names none", () => {
@@ -2315,11 +2316,11 @@ describe("direction 4 — what a workflow has to say to be credited", () => {
   });
 
   it("refuses a direct DECOY: the config named beside the run, not passed to it", () => {
-    expect(enforced(STEP("X=--config=vitest.integration-1.config.ts pnpm exec vitest run"))).toBe(false);
+    expect(enforced(STEP("X=--config=vitest/integration/1.config.ts pnpm exec vitest run"))).toBe(false);
   });
 
   it("refuses a narrowed direct run", () => {
-    expect(enforced(STEP("pnpm exec vitest run --config vitest.integration-1.config.ts src/a.test.ts"))).toBe(false);
+    expect(enforced(STEP("pnpm exec vitest run --config vitest/integration/1.config.ts src/a.test.ts"))).toBe(false);
   });
 
   it("refuses a forwarded argument on the script call — a flag it cannot tell from a filter", () => {
@@ -2338,10 +2339,10 @@ describe("direction 4 — what a workflow has to say to be credited", () => {
     const fx = tierFixture({
       workflow: STEP("pnpm test:x"),
       trigger: "on: workflow_dispatch\n",
-      scripts: { "test:x": "vitest run --config vitest.integration-1.config.ts" },
-      configs: ["vitest.integration-1.config.ts"],
+      scripts: { "test:x": "vitest run --config vitest/integration/1.config.ts" },
+      configs: ["vitest/integration/1.config.ts"],
     });
-    expect(rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
+    expect(rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
   });
 
   it("refuses a run that happens somewhere other than the repository root", () => {
@@ -2352,16 +2353,16 @@ describe("direction 4 — what a workflow has to say to be credited", () => {
   it("credits the tier through an aggregate script named in the workflow", () => {
     const fx = tierFixture({
       workflow: STEP("pnpm test:all"),
-      scripts: { "test:x": "vitest run --config vitest.integration-1.config.ts", "test:all": "pnpm test:x" },
-      configs: ["vitest.integration-1.config.ts"],
+      scripts: { "test:x": "vitest run --config vitest/integration/1.config.ts", "test:all": "pnpm test:x" },
+      configs: ["vitest/integration/1.config.ts"],
     });
-    expect(rootTierIsEnforced("vitest.integration-1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(true);
+    expect(rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(true);
   });
 });
 
 describe("direction 4 — the ledger", () => {
   const ok = {
-    config: "vitest.integration-1.config.ts",
+    config: "vitest/integration/1.config.ts",
     slice: "https://github.com/cinatra-ai/cinatra/issues/1",
     reason: "no workflow runs this tier and wiring it belongs to its own slice",
   };
@@ -2390,7 +2391,7 @@ describe("direction 4 — the ledger", () => {
 });
 
 describe("direction 4 — the verdict", () => {
-  const CONFIG = "vitest.integration-1.config.ts";
+  const CONFIG = "vitest/integration/1.config.ts";
   const base = {
     scripts: { "test:x": `vitest run --config ${CONFIG}` },
     configs: [CONFIG],
@@ -2426,7 +2427,7 @@ describe("direction 4 — the verdict", () => {
     const wired = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [redundant] }));
     expect(wired.redundantExceptions).toEqual([redundant]);
 
-    const stale = { config: "vitest.integration-9.config.ts", slice: "https://github.com/cinatra-ai/cinatra/issues/9", reason: "names a config file that no longer exists at all" };
+    const stale = { config: "vitest/integration/9.config.ts", slice: "https://github.com/cinatra-ai/cinatra/issues/9", reason: "names a config file that no longer exists at all" };
     const gone = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [stale] }));
     expect(gone.staleExceptions).toEqual([stale]);
   });
@@ -2444,18 +2445,18 @@ describe("direction 4 — the LIVE repo", () => {
   it("this plan's four proof tiers are wired (cinatra#2936)", () => {
     const enforcedConfigs = new Set(auditRootIntegrationTiers().enforced.map((e) => e.config));
     for (const config of [
-      "vitest.integration-2928.config.ts",
-      "vitest.integration-2932.config.ts",
-      "vitest.integration-2935.config.ts",
+      "vitest/integration/2928.config.ts",
+      "vitest/integration/2932.config.ts",
+      "vitest/integration/2935.config.ts",
       // W5b (cinatra#2933). It landed after the other three were wired, so it
       // spent the interval as a ledger row rather than as a step — which is the
       // two lawful states working, not an exception to them. Named here for the
       // same reason as its three siblings: this list is what makes a silent
       // un-wiring of THIS plan's proof cost a red.
-      "vitest.integration-2933.config.ts",
+      "vitest/integration/2933.config.ts",
       // The negative control: the one tier that was already wired. A green
       // above cannot mean "this direction credits everything".
-      "vitest.integration-2882.config.ts",
+      "vitest/integration/2882.config.ts",
     ]) {
       expect(enforcedConfigs.has(config), `${config} is run by no workflow`).toBe(true);
     }
@@ -2477,10 +2478,10 @@ describe("direction 4 — the LIVE repo", () => {
     // catch, which is the false-green direction, so the ledger is read directly.
     const recorded = new Set(readRootTierExceptions().map((e) => e.config));
     for (const config of [
-      "vitest.integration-2928.config.ts",
-      "vitest.integration-2932.config.ts",
-      "vitest.integration-2933.config.ts",
-      "vitest.integration-2935.config.ts",
+      "vitest/integration/2928.config.ts",
+      "vitest/integration/2932.config.ts",
+      "vitest/integration/2933.config.ts",
+      "vitest/integration/2935.config.ts",
     ]) {
       expect(recorded.has(config), `${config} is wired AND recorded as unwired`).toBe(false);
     }
@@ -2706,7 +2707,7 @@ describe("direction 5 — the shared aggregate walk keeps direction 4's behaviou
   it("credits direction 4's aggregate chain exactly as before the refusal hook", () => {
     // The hook defaults to refusing nothing, so direction 4 reads the same
     // scripts the same way. Asserted here because the walk is now shared.
-    const CONFIG = "vitest.integration-1.config.ts";
+    const CONFIG = "vitest/integration/1.config.ts";
     const fx = tierFixture({
       workflow: STEP("pnpm test:all"),
       scripts: { "test:x": `vitest run --config ${CONFIG}`, "test:all": "PATH=./fake-bin pnpm test:x" },

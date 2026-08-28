@@ -261,6 +261,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact row-scope promotion-request store (cinatra#1437, epic #1424): the pending requests to WIDEN one artifact row's visibility through the shared approvals surface — create (partial-unique one-pending guard), the Inbox list/count reads, and the CAS-guarded decide/supersede/compensate transitions (business decisions returned as VALUES via rowCount, never a throw). Request-time store mirroring the agent_creation_request store idiom and artifact-claim-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
   },
+  "src/lib/objects/memory-promotion-request-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Memory row-promotion request store (cinatra#1381, epic #1373): the pending requests to WIDEN one memory concept row's ownership/visibility tuple through the shared approvals surface — create (the one-pending generated-column UNIQUE guard), the inbox/mine list + count reads, the CAS reject and supersede transitions (business decisions returned as VALUES via rowCount, never a throw), the re-exported team-containment read, and the advisory audience-visible duplicate count. The APPROVE claim is deliberately NOT executed here: it is BUILT here as a statement and co-committed with the canonical writer's widen inside one org-write-guarded transaction, which is why this store has no compensation path. Request-time store mirroring the artifact-promotion-request-store idiom (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
   "src/lib/objects/artifact-uninstall-operations.ts": {
     class: "migratable-background-setup",
     justification:

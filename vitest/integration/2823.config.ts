@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-import chatConfig from "./packages/chat/vitest.config";
+import chatConfig from "../../packages/chat/vitest.config";
 
 // cinatra#2823 (epic #2784 S9j) — DEDICATED config for the DURABLE
 // STREAM → STORE → RELOAD contract tier.
@@ -43,7 +43,7 @@ import chatConfig from "./packages/chat/vitest.config";
 const testDbUrl = process.env.CINATRA_TEST_DB_URL;
 if (!testDbUrl) {
   throw new Error(
-    "vitest.integration-2823.config.ts: CINATRA_TEST_DB_URL is required — this tier drives a REAL Postgres " +
+    "vitest/integration/2823.config.ts: CINATRA_TEST_DB_URL is required — this tier drives a REAL Postgres " +
       "through the real assistant thread store and must never report green without one. " +
       "Set it to a scratch database, e.g. postgresql://postgres:postgres@127.0.0.1:5432/postgres.",
   );

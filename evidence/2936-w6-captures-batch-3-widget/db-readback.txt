@@ -1,0 +1,58 @@
+== runs ==
+aa833e39-2f7a-4b45-99a9-e41077c216e0|pending_approval|t|agent_builder|hitl|agent_hitl_screen|setup-aa833e39-2f7a-4b45-99a9-e41077c216e0|2026-08-28 05:09:14.829838+00
+ad2f89b3-c913-4c43-8020-1cdab93ac623|pending_trigger|t|agent_builder|schedule|trigger_schedule_proposal||2026-08-28 05:16:50.445523+00
+8482b663-682a-4457-b5d7-845152286465|pending_input|t|agent_builder|recommendation|recommendation_hold|df31c477-7b0e-42ec-962a-19bebc93b3af|2026-08-28 05:36:14.729789+00
+a6f8f81d-3fca-4a18-8e61-705f8b974035|pending_approval|t|agent_builder|hitl|agent_hitl_screen|setup-a6f8f81d-3fca-4a18-8e61-705f8b974035|2026-08-28 05:41:18.69566+00
+917b946b-03b2-4345-aa63-d4b7804166f5|pending_trigger|t|agent_builder|schedule|trigger_schedule_proposal||2026-08-28 06:02:48.225217+00
+096e5a56-d42b-46fc-9dd4-8e3da018998b|completed|t|agent_builder||||2026-08-28 06:14:50.922984+00
+01b55935-2a9c-47ce-85cc-b677eef9df56|pending_trigger|t|agent_builder|schedule|trigger_schedule_proposal||2026-08-28 08:12:56.635069+00
+
+== parks ==
+8482b663-682a-4457-b5d7-845152286465|recommendation|parked|2026-08-28 05:36:15.490341+00|
+a6f8f81d-3fca-4a18-8e61-705f8b974035|recommendation|released|2026-08-28 05:41:19.510353+00|2026-08-28 05:42:23.179931+00
+917b946b-03b2-4345-aa63-d4b7804166f5|recommendation|released|2026-08-28 06:02:49.059795+00|2026-08-28 06:03:29.122588+00
+096e5a56-d42b-46fc-9dd4-8e3da018998b|recommendation|released|2026-08-28 06:14:51.738796+00|2026-08-28 06:15:32.542272+00
+01b55935-2a9c-47ce-85cc-b677eef9df56|recommendation|released|2026-08-28 08:12:57.635129+00|2026-08-28 08:13:39.566228+00
+
+== selected skills ==
+01b55935-2a9c-47ce-85cc-b677eef9df56|@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring|recommended_confirmed
+01b55935-2a9c-47ce-85cc-b677eef9df56|@cinatra-ai/blog-post-matcher-skill:blog-post-matcher|user_adjusted
+01b55935-2a9c-47ce-85cc-b677eef9df56|@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher|recommended_confirmed
+096e5a56-d42b-46fc-9dd4-8e3da018998b|@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring|recommended_confirmed
+096e5a56-d42b-46fc-9dd4-8e3da018998b|@cinatra-ai/blog-post-matcher-skill:blog-post-matcher|user_adjusted
+096e5a56-d42b-46fc-9dd4-8e3da018998b|@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher|recommended_confirmed
+917b946b-03b2-4345-aa63-d4b7804166f5|@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring|recommended_confirmed
+917b946b-03b2-4345-aa63-d4b7804166f5|@cinatra-ai/blog-post-matcher-skill:blog-post-matcher|user_adjusted
+917b946b-03b2-4345-aa63-d4b7804166f5|@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher|recommended_confirmed
+a6f8f81d-3fca-4a18-8e61-705f8b974035|@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring|recommended_confirmed
+a6f8f81d-3fca-4a18-8e61-705f8b974035|@cinatra-ai/blog-post-matcher-skill:blog-post-matcher|user_adjusted
+a6f8f81d-3fca-4a18-8e61-705f8b974035|@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher|recommended_confirmed
+
+== skips ==
+
+== offered ==
+ERROR:  column "offered_skill_ids" does not exist
+LINE 1: select run_id, left(regexp_replace(coalesce(offered_skill_id...
+                                                    ^
+
+== review gates ==
+53781825-e912-4aaa-8275-4337f90efe85|096e5a56-d42b-46fc-9dd4-8e3da018998b|pending||2026-08-28 06:39:00.345608+00|
+
+== hitl gates ==
+aa833e39-2f7a-4b45-99a9-e41077c216e0|setup-aa833e39-2f7a-4b45-99a9-e41077c216e0|idea|@cinatra-ai/agent-builder:schema-field-fallback
+ad2f89b3-c913-4c43-8020-1cdab93ac623|setup-ad2f89b3-c913-4c43-8020-1cdab93ac623|idea|@cinatra-ai/agent-builder:schema-field-fallback
+a6f8f81d-3fca-4a18-8e61-705f8b974035|setup-a6f8f81d-3fca-4a18-8e61-705f8b974035|idea|@cinatra-ai/agent-builder:schema-field-fallback
+917b946b-03b2-4345-aa63-d4b7804166f5|setup-917b946b-03b2-4345-aa63-d4b7804166f5|idea|@cinatra-ai/agent-builder:schema-field-fallback
+096e5a56-d42b-46fc-9dd4-8e3da018998b|setup-096e5a56-d42b-46fc-9dd4-8e3da018998b|idea|@cinatra-ai/agent-builder:schema-field-fallback
+096e5a56-d42b-46fc-9dd4-8e3da018998b|wayflow-032a6a29-ec08-412e-a224-657355c2ac88||@cinatra-ai/context-selection-agent:context-selector
+01b55935-2a9c-47ce-85cc-b677eef9df56|setup-01b55935-2a9c-47ce-85cc-b677eef9df56|idea|@cinatra-ai/agent-builder:schema-field-fallback
+
+== triggers ==
+1
+== verification records ==
+0
+== stored card parts ==
+1
+== connect sites ==
+bf2ebfa9-ce10-4101-a644-c8fa420fed11|wordpress|http://localhost:5591|37bbaea6-dcf8-4836-b056-4e4a746eba7e|1|
+dfb62adf-ad46-44f4-afef-bb9b50743e98|wordpress|http://127.0.0.1:5591|37bbaea6-dcf8-4836-b056-4e4a746eba7e|1|

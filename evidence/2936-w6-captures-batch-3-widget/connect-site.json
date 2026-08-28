@@ -1,0 +1,72 @@
+{
+  "steps": [
+    {
+      "at": "2026-08-28T04:51:23.702Z",
+      "m": "signed in: 200"
+    },
+    {
+      "at": "2026-08-28T04:51:28.502Z",
+      "m": "the consent screen rendered: \"Connect with Cinatra\"",
+      "screenText": "INTELLIGENCE Chat Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts Analytics TOOLS Skills Connectors DO Dana Okafor dana.okafor@example.com Toggle Sidebar Connect Connect with Cinatra Toggle theme 1 Connect with Cinatra Connect WordPress to this Cinatra instance Only approve if you just clicked Connect on your own site. Approving sends this site a credential for this Cinatra instance. Site (CMS) origin http://127.0.0.1:5591 Widget origin http://127.0.0.1:5591 Platform WordPress Approve Deny Command Palette Search for a command to run..."
+    },
+    {
+      "at": "2026-08-28T04:51:28.505Z",
+      "m": "the screen's own Approve control: 1"
+    },
+    {
+      "at": "2026-08-28T04:51:34.566Z",
+      "m": "after Approve the browser is on http://127.0.0.1:5591/wp-admin/admin-post.php"
+    },
+    {
+      "at": "2026-08-28T04:51:34.567Z",
+      "m": "the site's own backend received the redirect",
+      "callbackKeys": [
+        "action",
+        "code",
+        "state"
+      ],
+      "stateEchoed": true,
+      "codePresent": true
+    },
+    {
+      "at": "2026-08-28T04:51:34.789Z",
+      "m": "the shipped token endpoint answered 200",
+      "tokenStatus": 200,
+      "bodyKeys": [
+        "url",
+        "siteId",
+        "cinatraInstanceId",
+        "credential",
+        "credentialVersion",
+        "webhookSecret",
+        "contractVersion",
+        "capabilities"
+      ],
+      "credentialShape": "cnx_… (84 chars)",
+      "siteId": "dfb62adf-ad46-44f4-afef-bb9b50743e98"
+    },
+    {
+      "at": "2026-08-28T04:51:34.801Z",
+      "m": "connect_sites rows: 2",
+      "sites": [
+        {
+          "site_id": "bf2ebfa9-ce10-4101-a644-c8fa420fed11",
+          "client": "wordpress",
+          "widget_origin": "http://localhost:5591",
+          "org_id": "37bbaea6-dcf8-4836-b056-4e4a746eba7e",
+          "credential_version": 1,
+          "revoked_at": null
+        },
+        {
+          "site_id": "dfb62adf-ad46-44f4-afef-bb9b50743e98",
+          "client": "wordpress",
+          "widget_origin": "http://127.0.0.1:5591",
+          "org_id": "37bbaea6-dcf8-4836-b056-4e4a746eba7e",
+          "credential_version": 1,
+          "revoked_at": null
+        }
+      ]
+    }
+  ],
+  "ok": false
+}
