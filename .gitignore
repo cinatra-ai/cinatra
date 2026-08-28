@@ -138,3 +138,11 @@ Desktop.ini
 # Env files and secrets
 *.key
 .codex-verdicts/
+
+# --- development artifacts never live in the checkout ---
+# Enforced for the org by scripts/ci/product-tree-hygiene.mjs (gates.yml), which
+# fails any PR that TRACKS one of these. Most of the ruled set is already ignored
+# above and is deliberately not repeated here: .claude/, .planning/, /data/,
+# /dev/, /extensions/, test-results/, __pycache__/, next-env.d.ts, and
+# .env.local / .env.*.local (covered by the `.env*` glob).
+.pytest_cache/
