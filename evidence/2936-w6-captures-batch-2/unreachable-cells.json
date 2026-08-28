@@ -1,0 +1,299 @@
+{
+  "surfaces": [
+    {
+      "label": "run-one-page",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+      "read": {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+        "notFoundPanel": false,
+        "conversationLists": 0,
+        "hosts": [
+          "run_card",
+          "run_card"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "run_card",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "run_card",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": [
+          "review"
+        ]
+      }
+    },
+    {
+      "label": "run-one-review-page",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1/review/lifecycle-review%3A73aee18a3265252fd9e0173b451271734068f86239062b8e4414c6a95c09f289",
+      "read": {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1/review/lifecycle-review%3A73aee18a3265252fd9e0173b451271734068f86239062b8e4414c6a95c09f289",
+        "notFoundPanel": false,
+        "conversationLists": 0,
+        "hosts": [
+          "page_gate_region",
+          "page_gate_region"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "page_gate_region",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "page_gate_region",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": []
+      }
+    },
+    {
+      "label": "run-one-thread",
+      "url": "/chat/cinatra-ai/cinatra-assistant/08793bde-008c-42a7-bfd5-f1cb44afdf7c",
+      "read": {
+        "path": "/chat/cinatra-ai/cinatra-assistant/08793bde-008c-42a7-bfd5-f1cb44afdf7c",
+        "notFoundPanel": false,
+        "conversationLists": 1,
+        "hosts": [
+          "chat_thread",
+          "run_card"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "chat_thread",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "run_card",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": [
+          "review"
+        ]
+      }
+    },
+    {
+      "label": "run-two-page",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
+      "read": {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
+        "notFoundPanel": false,
+        "conversationLists": 0,
+        "hosts": [
+          "run_card",
+          "run_card"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "run_card",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "run_card",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": [
+          "review"
+        ]
+      }
+    },
+    {
+      "label": "run-two-review-page",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80/review/lifecycle-review%3A5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+      "read": {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80/review/lifecycle-review%3A5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+        "notFoundPanel": false,
+        "conversationLists": 0,
+        "hosts": [
+          "page_gate_region",
+          "page_gate_region"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "page_gate_region",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "page_gate_region",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": []
+      }
+    },
+    {
+      "label": "run-two-thread",
+      "url": "/chat/cinatra-ai/cinatra-assistant/9b2418eb-372e-487c-afa9-cc3436cbb050",
+      "read": {
+        "path": "/chat/cinatra-ai/cinatra-assistant/9b2418eb-372e-487c-afa9-cc3436cbb050",
+        "notFoundPanel": false,
+        "conversationLists": 1,
+        "hosts": [
+          "chat_thread",
+          "run_card"
+        ],
+        "cards": [
+          {
+            "kind": "recommendation_hold",
+            "host": "chat_thread",
+            "state": "decided"
+          },
+          {
+            "kind": "artifact_review_gate",
+            "host": "run_card",
+            "state": "settled"
+          }
+        ],
+        "verificationCards": 0,
+        "holdCards": 1,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": [
+          "review"
+        ]
+      }
+    },
+    {
+      "label": "repair-run-page",
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/lifecycle-repair-run%3A531ca79f-e572-4c6c-b95d-7060c229b3e8",
+      "read": {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/lifecycle-repair-run%3A531ca79f-e572-4c6c-b95d-7060c229b3e8",
+        "notFoundPanel": true,
+        "conversationLists": 0,
+        "hosts": [],
+        "cards": [],
+        "verificationCards": 0,
+        "holdCards": 0,
+        "holdPending": 0,
+        "placeholders": 0,
+        "slots": []
+      }
+    }
+  ],
+  "runs": [
+    {
+      "id": "67303323-8b3a-48f8-9d3a-1742d4ea4f43",
+      "status": "pending_approval",
+      "source_type": "agent_builder",
+      "human_present": true,
+      "parent_run_id": null,
+      "created_at": "2026-08-28T00:10:38.394Z"
+    },
+    {
+      "id": "82f8b3ed-1d49-489b-8f74-96674488e4b7",
+      "status": "failed",
+      "source_type": "agent_builder",
+      "human_present": true,
+      "parent_run_id": null,
+      "created_at": "2026-08-28T00:13:13.747Z"
+    },
+    {
+      "id": "cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+      "status": "completed",
+      "source_type": "agent_builder",
+      "human_present": true,
+      "parent_run_id": null,
+      "created_at": "2026-08-28T00:17:31.088Z"
+    },
+    {
+      "id": "lifecycle-repair-run:531ca79f-e572-4c6c-b95d-7060c229b3e8",
+      "status": "pending_approval",
+      "source_type": "lifecycle_repair",
+      "human_present": null,
+      "parent_run_id": "cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+      "created_at": "2026-08-28T00:43:51.729Z"
+    },
+    {
+      "id": "c00920ac-4631-460a-946d-9821c3df7f80",
+      "status": "completed",
+      "source_type": "agent_builder",
+      "human_present": true,
+      "parent_run_id": null,
+      "created_at": "2026-08-28T01:13:39.362Z"
+    }
+  ],
+  "skillRevisionsByRun": [
+    {
+      "run_id": "cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+      "n": "4"
+    },
+    {
+      "run_id": "c00920ac-4631-460a-946d-9821c3df7f80",
+      "n": "4"
+    },
+    {
+      "run_id": "67303323-8b3a-48f8-9d3a-1742d4ea4f43",
+      "n": "4"
+    },
+    {
+      "run_id": "82f8b3ed-1d49-489b-8f74-96674488e4b7",
+      "n": "4"
+    }
+  ],
+  "reviewGates": [
+    {
+      "run_id": "cda1cd00-7091-47e0-bd66-5e43fb2e5fb1",
+      "review_task_id": "lifecycle-review:73aee18a3265252fd9e0173b451271734068f86239062b8e4414c6a95c09f289",
+      "status": "resolved",
+      "disposition": "changes_requested",
+      "created_at": "2026-08-28T00:19:54.398Z",
+      "resolved_at": "2026-08-28T00:43:01.066Z"
+    },
+    {
+      "run_id": "c00920ac-4631-460a-946d-9821c3df7f80",
+      "review_task_id": "lifecycle-review:5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+      "status": "resolved",
+      "disposition": "approve",
+      "created_at": "2026-08-28T01:15:45.755Z",
+      "resolved_at": "2026-08-28T01:17:24.527Z"
+    }
+  ],
+  "verificationRecordCount": 0,
+  "lifecycleRepairs": [
+    {
+      "id": "531ca79f-e572-4c6c-b95d-7060c229b3e8",
+      "status": "dispatched",
+      "route": "producer_repair",
+      "successor_gate_id": null,
+      "attempt": 1,
+      "created_at": "2026-08-28T00:43:01.066Z",
+      "updated_at": "2026-08-28T00:43:51.788Z"
+    }
+  ],
+  "at": "2026-08-28T01:25:50.306Z"
+}

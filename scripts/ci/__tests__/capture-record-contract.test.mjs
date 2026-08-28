@@ -559,6 +559,27 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
     // The census, not merely the count: a vocabulary that started admitting
     // something new would move a cell from one bucket to another without
     // changing the total, and this is where that shows.
+    //
+    // MOVED 2026-08-28 by cinatra#2936 W6 part 2b batch 2 — FOUR records of ONE
+    // approved artifact review, driven on the real surface (the run package
+    // published to the instance's own registry first, which is what the batch-1
+    // run died without). `evidence/2936-w6-captures-batch-2/` carries the run
+    // ids, the DB timeline and the grading.
+    //
+    //   artifact_review_gate | page_gate_region | pending   5 -> 6
+    //     the dark sibling of the review page with the gate still open.
+    //   artifact_review_gate | run_card | decided           0 -> 3
+    //     the settled card after Approve was pressed on the run page's OWN
+    //     decision bar: light and dark on the run page, and the DARK sibling of
+    //     the same card as the CONVERSATION draws it. That third one is on a
+    //     /chat path and declares `run_card` on purpose — the settled review the
+    //     conversation draws is the inline run card, which `HOST_URL_CLASS`
+    //     already admits on two classes for exactly this reason. The
+    //     `chat_thread`-declared sibling was DRIVEN and the shipped recorder
+    //     REFUSED it ("host \"chat_thread\" requires
+    //     [data-lifecycle-card-host=\"chat_thread\"] PRESENT (root-scoped); the
+    //     record observed 0"), so that cell stays where it was rather than being
+    //     answered by a picture of a differently-hosted card.
     const index = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
     const census = {};
     for (const r of index.records) {
@@ -572,7 +593,8 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "artifact_review_gate | chat_thread | decided": 3,
       "artifact_review_gate | chat_thread | pending": 10,
       "artifact_review_gate | page_gate_region | decided": 4,
-      "artifact_review_gate | page_gate_region | pending": 5,
+      "artifact_review_gate | page_gate_region | pending": 6,
+      "artifact_review_gate | run_card | decided": 3,
       "artifact_review_gate | run_card | pending": 4,
       "artifact_review_gate | site_widget | pending": 5,
       "recommendation_hold | chat_thread | decided": 4,
@@ -588,6 +610,6 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(93);
+    expect(index.records.length).toBe(97);
   });
 });

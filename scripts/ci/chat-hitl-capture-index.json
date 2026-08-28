@@ -10446,6 +10446,281 @@
         "scriptedProviderSwitch": "UNSET in the lane env, in every driver and in the app server process chain"
       },
       "note": null
+    },
+    {
+      "cell": "B4__review-card__page_gate_region__pending__dark",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cda1cd00-7091-47e0-bd66-5e43fb2e5fb1/review/lifecycle-review%3A73aee18a3265252fd9e0173b451271734068f86239062b8e4414c6a95c09f289",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B4__review-card__page_gate_region__pending__dark.png",
+      "sha256": "6935ef172ed83b9f2babafc88e689f397b081968735814d97a796cd308a036bd",
+      "capturedAt": "2026-08-28T00:24:38.614Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
+    },
+    {
+      "cell": "B3__review-card__run_card__decided__conversation__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2418eb-372e-487c-afa9-cc3436cbb050",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B3__review-card__run_card__decided__conversation__dark.png",
+      "sha256": "360dda2e5aa2a10de9cbf2570a5eca34df57e4081dd134a736a7c441406e5afa",
+      "capturedAt": "2026-08-28T01:21:06.628Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
+    },
+    {
+      "cell": "B2__review-card__run_card__decided__light",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__light.png",
+      "sha256": "ca1ab0ad847769202ed4bfca3e93003500e92a85bd2318082879f73aefa99073",
+      "capturedAt": "2026-08-28T01:21:44.278Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
+    },
+    {
+      "cell": "B2__review-card__run_card__decided__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/c00920ac-4631-460a-946d-9821c3df7f80",
+      "build": "development",
+      "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__dark.png",
+      "sha256": "d480bd567a34116986ac31139989217d486b0edae5e66f1a5e4f18a15cdc9d0a",
+      "capturedAt": "2026-08-28T01:21:57.665Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
     }
   ]
 }
