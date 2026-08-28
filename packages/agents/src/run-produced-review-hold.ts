@@ -626,6 +626,57 @@ export async function holdRunForProducedReview(
   }
 }
 
+/** The run's own recorded step results, for a park whose caller carries none.
+ *  Unreadable ⇒ an empty base: the park still has to happen, and losing a
+ *  step record is strictly better than not recording the hold at all. */
+async function readStoredStepResults(runId: string, orgId: string): Promise<unknown[]> {
+  try {
+    const [row] = await db
+      .select({ stepResults: agentRuns.stepResults })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)))
+      .limit(1);
+    return parseStepResults(row?.stepResults);
+  } catch (err) {
+    console.warn(
+      `[produced-review-hold] run=${runId} could not read its step results for the park:`,
+      err,
+    );
+    return [];
+  }
+}
+
+/** How many times the park WRITE itself is attempted, and how long between. The
+ *  park is the only durable record of a fail-closed hold, so a transient write
+ *  fault must not be what turns the hold into nothing — three attempts over
+ *  ~400ms converge a blip inside the job that owns the run. A fault that
+ *  survives them is the database being unavailable, which no amount of local
+ *  retrying fixes, so the caller is told and the attempt fails. */
+const PARK_WRITE_ATTEMPTS = 3;
+const PARK_WRITE_BACKOFF_MS = [100, 300];
+
+async function withParkWriteRetry<T>(runId: string, write: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < PARK_WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      return await write();
+    } catch (err) {
+      // A stale CAS is a DECISION, not a fault: another writer moved the row and
+      // retrying would only lose to it again.
+      if (err instanceof RunTransitionError) throw err;
+      lastErr = err;
+      const backoff = PARK_WRITE_BACKOFF_MS[attempt];
+      if (backoff === undefined) break;
+      console.warn(
+        `[produced-review-hold] run=${runId} park write attempt ${attempt + 1} failed — retrying in ${backoff}ms:`,
+        err instanceof Error ? err.message : err,
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+  throw lastErr;
+}
+
 /** Write the park: the run enters the status it waits on a gate in, carrying the
  *  terminal transition the executor is withholding. */
 async function parkRun(
@@ -634,23 +685,34 @@ async function parkRun(
   reason: Exclude<Extract<HoldRunOutcome, { held: true }>["reason"], "hold-unpersisted">,
 ): Promise<HoldRunOutcome> {
   const { runId, orgId, fromStatus } = input;
-  const parkedStepResults = attachWithheldTerminal(input.stepResults, input.withheld);
+  // A park WRITES `step_results`, so an empty payload would erase whatever the
+  // run had already recorded. The failure edges carry no payload of their own
+  // (their immediate transitions omit `stepResults` entirely and so preserve the
+  // column), which is exactly the case that must not lose a mid-run step record
+  // on its way through the park. So an empty payload parks on top of the row's
+  // OWN results; `releaseHeldRun` strips the marker back off and writes them
+  // again, leaving the run byte-identical to the immediate path.
+  const base =
+    input.stepResults.length > 0 ? input.stepResults : await readStoredStepResults(runId, orgId);
+  const parkedStepResults = attachWithheldTerminal(base, input.withheld);
   try {
     // Already parked (a template-declared gate resumed into this production):
     // there is no status edge to take, only the withheld write to record. The
     // update is ORG-SCOPED and PREDICATED on the row still being parked, so it can
     // never stamp a marker onto a row a concurrent stop or release has moved on.
     if (fromStatus === PARKED_STATUS) {
-      await db
-        .update(agentRuns)
-        .set({ stepResults: JSON.stringify(parkedStepResults) })
-        .where(
-          and(
-            eq(agentRuns.id, runId),
-            eq(agentRuns.orgId, orgId),
-            eq(agentRuns.status, PARKED_STATUS),
+      await withParkWriteRetry(runId, () =>
+        db
+          .update(agentRuns)
+          .set({ stepResults: JSON.stringify(parkedStepResults) })
+          .where(
+            and(
+              eq(agentRuns.id, runId),
+              eq(agentRuns.orgId, orgId),
+              eq(agentRuns.status, PARKED_STATUS),
+            ),
           ),
-        );
+      );
       console.log(
         `[produced-review-hold] run=${runId} stays parked on its produced output's review (${reason})`,
       );
@@ -658,12 +720,14 @@ async function parkRun(
     }
 
     let stale = false;
-    await transitionRunStatus(
-      runId,
-      fromStatus,
-      PARKED_STATUS,
-      { stepResults: parkedStepResults },
-      authority,
+    await withParkWriteRetry(runId, () =>
+      transitionRunStatus(
+        runId,
+        fromStatus,
+        PARKED_STATUS,
+        { stepResults: parkedStepResults },
+        authority,
+      ),
     ).catch((err) => {
       // A concurrent stop/cancel already moved the row. The executor's own
       // terminal CAS would be just as stale, so it must still not write one.

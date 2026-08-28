@@ -997,6 +997,60 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       });
     });
 
+    it("a park with NO payload of its own preserves the run's recorded step results", async () => {
+      // The failure edges (dispatch, human gate, task failure) carry no payload:
+      // their immediate transitions omit `stepResults` entirely and so preserve
+      // the column. A park WRITES that column, so it must park on top of what the
+      // row already holds — otherwise the same run loses a mid-run step record
+      // just because it went through the park.
+      const runId = `run-${randomUUID()}`;
+      await seedRun(runId);
+      const recorded = [{ kind: "wayflow_response", output: "the draft so far" }];
+      await pool(
+        `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET step_results = $2 WHERE id = $1`,
+        [runId, JSON.stringify(recorded)],
+      );
+      const ev = await produceFor(runId, "document", { originKind: "user_provided" });
+
+      const parked = await hold.holdRunForProducedReview(
+        {
+          runId,
+          orgId: ORG,
+          fromStatus: "running",
+          stepResults: [],
+          withheld: { status: "failed", error: "the flow failed" },
+          drain: async () => {
+            throw new Error("orchestration unavailable");
+          },
+        },
+        AUTHORITY,
+      );
+      expect(parked).toEqual({ held: true, reason: "awaiting-orchestration" });
+
+      // Parked: the row still carries what it had, plus the marker.
+      const held = await readRun(runId);
+      expect(held?.status).toBe("pending_approval");
+      expect(hold.readWithheldTerminal(held?.stepResults)).toEqual({
+        status: "failed",
+        error: "the flow failed",
+      });
+      expect((held?.stepResults as Array<Record<string, unknown>>)[0]?.output).toBe(
+        "the draft so far",
+      );
+
+      // Released: byte-identical to what the immediate failure edge would leave.
+      await orch.sweepReviewOrchestration();
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "failed",
+      });
+      const done = await readRun(runId);
+      expect(done?.status).toBe("failed");
+      expect(done?.error).toBe("the flow failed");
+      expect(done?.stepResults).toEqual(recorded);
+      expect(ev.producerRunId).toBe(runId);
+    });
+
     it("a park with NO production behind it at all is released, not stranded", async () => {
       // The fail-closed park taken on an unreadable probe has exactly this shape:
       // the marker is there, and there may be no produced row anywhere. Requiring

@@ -66,6 +66,7 @@ vi.mock("../db", () => ({
 vi.mock("../run-transition", () => ({ transitionRunStatus: shared.transition }));
 
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
+import { RunTransitionError } from "../run-status";
 import {
   holdRunForProducedReview,
   isUnpersistedHold,
@@ -167,18 +168,70 @@ describe("cinatra#3007 — an unanswerable question parks the run", () => {
 });
 
 describe("cinatra#3007 — the one hold that persists nothing", () => {
-  it("a PARK WRITE that fails returns the unpersisted outcome, not a plain hold", async () => {
+  it("a PARK WRITE that keeps failing returns the unpersisted outcome, after retrying", async () => {
     shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
     // The event is still pending, so the run genuinely holds...
     shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
-    // ...and the park write is the thing that fails.
+    // ...and the park write is the thing that fails, every time.
     shared.transition.mockRejectedValue(new Error("the park write failed"));
 
     const outcome = await holdRunForProducedReview(input(), AUTHORITY);
 
     expect(outcome).toEqual({ held: true, reason: UNPERSISTED_HOLD_REASON });
     expect(isUnpersistedHold(outcome)).toBe(true);
+    // The park is the ONLY durable record of a fail-closed hold, so a transient
+    // write fault must not be what turns the hold into nothing.
+    expect(shared.transition).toHaveBeenCalledTimes(3);
+  });
+
+  it("a TRANSIENT park-write fault converges inside the same attempt", async () => {
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.transition
+      .mockRejectedValueOnce(new Error("write blip"))
+      .mockResolvedValueOnce(undefined);
+
+    const outcome = await holdRunForProducedReview(input(), AUTHORITY);
+
+    expect(outcome).toEqual({ held: true, reason: "awaiting-orchestration" });
+    expect(shared.transition).toHaveBeenCalledTimes(2);
+  });
+
+  it("a STALE compare-and-swap is a decision, not a fault — it is never retried", async () => {
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.transition.mockRejectedValue(
+      new RunTransitionError({ code: "stale_from_status", runId: "run-3007", from: "running", to: "pending_approval" }),
+    );
+
+    const outcome = await holdRunForProducedReview(input(), AUTHORITY);
+
+    expect(outcome).toEqual({ held: true, reason: "stale-from-status" });
     expect(shared.transition).toHaveBeenCalledTimes(1);
+  });
+
+  it("a park with NO payload of its own keeps the run's recorded step results", async () => {
+    // The failure edges carry no payload; their immediate transitions omit
+    // `stepResults` and so preserve the column. The park WRITES that column, so
+    // it has to park on top of what the row already holds.
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.selectQueue.push(() => [{ eventId: "ev-1" }]);
+    shared.selectQueue.push(() => [
+      { stepResults: JSON.stringify([{ kind: "wayflow_response", output: "the draft" }]) },
+    ]);
+
+    await holdRunForProducedReview(
+      input({ stepResults: [], withheld: { status: "failed", error: "the flow failed" } }),
+      AUTHORITY,
+    );
+
+    const written = parkedPayload() as Array<Record<string, unknown>>;
+    expect(written).toHaveLength(1);
+    expect(written[0]?.output).toBe("the draft");
+    expect(readWithheldTerminal(written)).toEqual({
+      status: "failed",
+      error: "the flow failed",
+    });
   });
 
   it("every OTHER held outcome is persisted, so the job is genuinely done", async () => {

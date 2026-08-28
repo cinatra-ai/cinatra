@@ -144,6 +144,12 @@ export {
   // A denial fails the run; an unreadable check parks and retries.
   ScopeRecheckUnavailableError,
   SCOPE_RECHECK_UNAVAILABLE_DELAY_MS,
+  // cinatra#3007 — the UNRECORDABLE-hold park sentinel and its cap, caught by
+  // the same dispatcher branch. The run already did its work; the re-delivered
+  // leg records the hold (or performs the terminal write it was withholding),
+  // and at the cap the job fails without ever landing the run terminal.
+  ProducedReviewHoldUnpersistedError,
+  MAX_PRODUCED_REVIEW_HOLD_PARKS,
   // The ONE run→immutable-snapshot pin classifier (cinatra#1040 S5/S7). The
   // `/api/llm-bridge` execution-environment seam resolves a run's pinned
   // recipe through THIS function so there is exactly one definition of "this

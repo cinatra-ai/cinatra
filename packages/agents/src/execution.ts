@@ -790,15 +790,40 @@ type WithheldTerminalWrite = {
  * the defect this fix exists to remove. A thrown attempt is retried, and is
  * visible in job telemetry while it is not.
  */
+export const PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS = 15 * 1000;
+
+/**
+ * How many times a run may re-deliver on an unrecordable hold before the attempt
+ * fails for good. BOUNDED for the same reason the scope-recheck park is: a write
+ * fault is either a blip that clears in seconds, or permanent — and a permanent
+ * one must surface as a failed job with an operator signal rather than a run that
+ * re-delays forever. The run is NEVER landed terminal at the cap: a terminal
+ * write over an unproven review is the defect itself.
+ */
+export const MAX_PRODUCED_REVIEW_HOLD_PARKS = 5;
+
 export class ProducedReviewHoldUnpersistedError extends Error {
   readonly runId: string;
-  constructor(runId: string) {
+  readonly delayMs: number;
+  /** The terminal write still owed, carried so the re-delivered attempt can
+   *  record the park (or perform the write) without re-executing the run. The
+   *  derivation capture is deliberately NOT carried — it is an enrichment, and a
+   *  job payload is the wrong place for a run's whole output. */
+  readonly withheld: { status: "completed" | "failed"; error?: string };
+  constructor(args: {
+    runId: string;
+    withheld: { status: "completed" | "failed"; error?: string };
+    delayMs?: number;
+  }) {
+    const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
     super(
-      `run ${runId}: the produced-output review hold could not be recorded — ` +
-        `the run keeps its non-terminal status and this attempt fails so it is retried`,
+      `run ${args.runId}: the produced-output review hold could not be recorded — ` +
+        `the run keeps its non-terminal status and this attempt is re-delivered in ${delayMs}ms`,
     );
     this.name = "ProducedReviewHoldUnpersistedError";
-    this.runId = runId;
+    this.runId = args.runId;
+    this.delayMs = delayMs;
+    this.withheld = args.withheld;
   }
 }
 
@@ -840,19 +865,113 @@ async function producedReviewHoldsRun(args: {
       args.authority,
     );
   } catch (err) {
+    // The seam is total by contract, so reaching here means the seam ITSELF is
+    // broken — which records NOTHING. That is the same state as a failed park:
+    // the run keeps its non-terminal status, and the attempt must not report
+    // success over a hold nothing can see. So it takes the same exit.
     console.error(
-      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write (fail-closed):`,
+      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write, attempt re-delivered (fail-closed):`,
       err,
     );
-    return true;
+    throw new ProducedReviewHoldUnpersistedError({ runId, withheld: recoveryWithheld(args.withheld) });
   }
   if (!outcome.held) return false;
   // The one held outcome with nothing durable behind it (the park write itself
   // failed). The literal is read rather than imported for the no-static-edge
   // reason above; the hold module exports it as `UNPERSISTED_HOLD_REASON` and its
   // own suite pins the two together.
-  if (outcome.reason === "hold-unpersisted") throw new ProducedReviewHoldUnpersistedError(runId);
+  if (outcome.reason === "hold-unpersisted") {
+    throw new ProducedReviewHoldUnpersistedError({
+      runId,
+      withheld: recoveryWithheld(args.withheld),
+    });
+  }
   return true;
+}
+
+/** The withheld write reduced to what a re-delivered attempt can carry. */
+function recoveryWithheld(
+  withheld: WithheldTerminalWrite,
+): { status: "completed" | "failed"; error?: string } {
+  return {
+    status: withheld.status,
+    ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+  };
+}
+
+/**
+ * The re-delivered attempt for a run whose hold could not be recorded
+ * (cinatra#3007). It re-executes NOTHING: the run already did its work and is
+ * sitting non-terminal because the previous attempt could not write down that it
+ * still owed a review. This asks the question again and finishes it — a park if
+ * something holds the run, the withheld terminal write if nothing does.
+ *
+ * Throws `ProducedReviewHoldUnpersistedError` again while the write still fails,
+ * so the worker re-delivers up to its own cap. The run is never landed terminal
+ * on an unproven review.
+ */
+export async function recoverProducedReviewHold(args: {
+  runId: string;
+  run: { orgId: string; status: AgentRunStatus };
+  withheld: { status: "completed" | "failed"; error?: string };
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  const { runId, run, withheld, authority } = args;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: run.status,
+      // Empty: the park keeps the row's OWN step results (see `parkRun`), which
+      // is what the previous attempt's payload has become.
+      stepResults: [],
+      withheld,
+      authority,
+      where: "hold recovery",
+    })
+  ) {
+    console.log(`[produced-review-hold] run=${runId} recovery recorded the hold`);
+    return;
+  }
+  // Nothing holds the run, so the terminal write the previous attempt never made
+  // is owed now.
+  if (withheld.status === "failed") {
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: withheld.error ?? "the run ended without recording its result",
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+  } else {
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_FINISHED",
+        threadId: runId,
+        runId,
+        status: "completed",
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+  }
+  await transitionRunStatus(
+    runId,
+    run.status,
+    withheld.status,
+    {
+      ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+      ...(withheld.status === "completed" ? { completedAt: new Date() } : {}),
+    },
+    authority,
+  ).catch((e) => {
+    if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+    throw e;
+  });
+  console.log(
+    `[produced-review-hold] run=${runId} recovery performed the withheld ${withheld.status} write`,
+  );
 }
 
 /**
@@ -2379,6 +2498,10 @@ export async function runAgentBuilderExecutionJob(
     // Marks this leg as "the user just submitted the setup form", which is the
     // one leg that owes the trigger step before it may dispatch.
     resumedFromSetup?: boolean;
+    // cinatra#3007: set ONLY by the worker's unrecordable-hold re-delivery. Its
+    // presence makes this leg a hold recovery rather than a dispatch.
+    producedReviewHold?: { status: "completed" | "failed"; error?: string };
+    producedReviewHoldPark?: number;
   },
   jobId: string,
 ): Promise<void> {
@@ -2421,6 +2544,9 @@ async function runAgentBuilderExecutionJobInner(
     scopeRecheckPark?: number;
     // cinatra#2523 — see the outer signature.
     resumedFromSetup?: boolean;
+    // cinatra#3007 — see the outer signature.
+    producedReviewHold?: { status: "completed" | "failed"; error?: string };
+    producedReviewHoldPark?: number;
   },
   jobId: string,
 ): Promise<void> {
@@ -2447,6 +2573,27 @@ async function runAgentBuilderExecutionJobInner(
   // this worker drives — dispatch (run.execute) and terminal finalize
   // (run.complete) — including handleWayflowTaskState below.
   const executionAuthority = mintAgentRunExecutionAuthority(run.orgId);
+  // cinatra#3007 — a RE-DELIVERY that exists only to record a hold the previous
+  // attempt could not write. It dispatches nothing: the run already ran, and it
+  // is sitting non-terminal because that attempt could not write down that it
+  // still owed a produced-output review. Placed before the not-queued skip
+  // because the run this leg is for is precisely NOT queued.
+  const holdRecovery = data.producedReviewHold;
+  if (holdRecovery) {
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      console.log(
+        `[produced-review-hold] run ${runId} already ${run.status} — recovery leg has nothing to do`,
+      );
+      return;
+    }
+    await recoverProducedReviewHold({
+      runId,
+      run: { orgId: run.orgId, status: run.status as AgentRunStatus },
+      withheld: holdRecovery,
+      authority: executionAuthority,
+    });
+    return;
+  }
   if (run.status !== "queued") {
     // Federated children parked by WaitingForHumanError may retry
     // after resume transitions them to a terminal state. If the child reached
@@ -3358,6 +3505,12 @@ async function runAgentBuilderExecutionJobInner(
         streamCompletedCleanly: externalStreamCompletedCleanly,
       });
     } catch (err) {
+      // cinatra#3007 — an unrecordable hold is a decision this catch must not
+      // overrule: `finalizeExternalA2ARun` threw it precisely because no terminal
+      // status may be written for this run yet. Re-throwing keeps the attempt
+      // re-deliverable instead of converting it into the `failed` write the hold
+      // exists to prevent. (Same discrimination as the WayFlow dispatch catch.)
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       // Stream error OR an unexpected transition error from the finalize path.
       // Apply the same discrimination on the failed-branch transition.
       const failure = err instanceof Error ? err.message : String(err);
