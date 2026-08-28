@@ -3,7 +3,7 @@
  * published agent_template even when the author's proposed package scope does
  * NOT match the instance vendor namespace.
  *
- * This is the regression the live UAT on PR #2602 caught (evidence/2597, check
+ * This is the regression the live UAT on PR #2602 caught (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2597, check
  * 4): `agent_source_write_files` rewrites `package.json#name` UNCONDITIONALLY
  * to `@<instance-vendor>/<packageSlug>`, `agent_source_publish` reads the
  * canonical name back off that same package.json, and the agent_templates row

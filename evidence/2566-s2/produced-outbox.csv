@@ -1,2 +1,0 @@
-event_id,org_id,artifact_id,emitter,producer_run_id,origin_kind,destination_class,continuation_mode,continuation_address,status,created_at
-8daa0a1f846f6612f3f850b31628f4794a7ca37dc7b998765e109bd38a01f3e8,01032279-2991-4488-888a-fe87b9b7729d,51109e8d-1f20-4a2c-9010-61f8d64b567f,createSemanticArtifact,,user_provided,none,async_effects_gated,,processed,2026-08-09 22:29:22.000942+00

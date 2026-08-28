@@ -3323,17 +3323,19 @@ jobs:
             test-results
           retention-days: 7
 
-      # The run's OWN capture records and screenshots, from the run-scratch path the
-      # merged flow mints into (`evidence/2824-s9k/.run/`, gitignored) — never the
-      # committed reference set beside it, which is frozen and refreshed only
-      # deliberately. They are PROVISIONAL: S9g alone adopts and canonicalizes AC-15
-      # records; this job produces runtime evidence and hands it over.
+      # The run's OWN capture records and screenshots, from the run-scratch path
+      # under `test-results/` — the gitignored directory Playwright already owns
+      # for per-run output. Captures are RUN OUTPUT, not product: the tree never
+      # carries evidence, so a run leaves the checkout clean and the artifact
+      # upload is the only place these records live. They are PROVISIONAL: S9g
+      # alone adopts and canonicalizes AC-15 records; this job produces runtime
+      # evidence and hands it over.
       - name: Upload provisional dev-runtime capture evidence
         if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chat-hitl-held-turn-provisional-captures
-          path: evidence/2824-s9k/.run
+          path: test-results/chat-hitl-held-turn-captures
           retention-days: 7
           if-no-files-found: warn
           include-hidden-files: true
