@@ -1,0 +1,80 @@
+{
+  "runId": "c00920ac-4631-460a-946d-9821c3df7f80",
+  "before": {
+    "host": "run_card",
+    "state": "pending",
+    "bars": 1,
+    "outcome": 0
+  },
+  "after": {
+    "host": "run_card",
+    "state": "settled",
+    "bars": 0,
+    "settled": 1,
+    "outcome": [
+      "approved"
+    ],
+    "text": "Review requestedExpandApproved by Alex RiveraThe gate is resolved and the run has been released to continue."
+  },
+  "gate": {
+    "id": "1144c135-dba2-4fbc-a070-f0a32163ea73",
+    "review_task_id": "lifecycle-review:5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+    "status": "resolved",
+    "disposition": "approve",
+    "resolved_by": "f50e2d81-376b-4972-bfd5-fa4bc39062d9",
+    "resolved_at": "2026-08-28T01:17:24.527Z"
+  },
+  "timeline": [
+    {
+      "at": "2026-08-28T01:16:44.315Z",
+      "what": "the run page draws the gate in its own review slot",
+      "detail": {
+        "card": {
+          "host": "run_card",
+          "state": "pending",
+          "bars": 1,
+          "outcome": 0
+        },
+        "gate": {
+          "id": "1144c135-dba2-4fbc-a070-f0a32163ea73",
+          "review_task_id": "lifecycle-review:5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+          "status": "pending",
+          "disposition": null,
+          "resolved_by": null,
+          "resolved_at": null
+        }
+      }
+    },
+    {
+      "at": "2026-08-28T01:16:44.449Z",
+      "what": "Approve was pressed on the run page's own decision bar",
+      "detail": {}
+    },
+    {
+      "at": "2026-08-28T01:17:26.541Z",
+      "what": "THE GATE RESOLVED",
+      "detail": {
+        "id": "1144c135-dba2-4fbc-a070-f0a32163ea73",
+        "review_task_id": "lifecycle-review:5e518830710f1fa4384b9df4e83f817f4e648eeffb825823f1e396b9f0bcabea",
+        "status": "resolved",
+        "disposition": "approve",
+        "resolved_by": "f50e2d81-376b-4972-bfd5-fa4bc39062d9",
+        "resolved_at": "2026-08-28T01:17:24.527Z"
+      }
+    },
+    {
+      "at": "2026-08-28T01:17:39.354Z",
+      "what": "the settled card on the run page",
+      "detail": {
+        "host": "run_card",
+        "state": "settled",
+        "bars": 0,
+        "settled": 1,
+        "outcome": [
+          "approved"
+        ],
+        "text": "Review requestedExpandApproved by Alex RiveraThe gate is resolved and the run has been released to continue."
+      }
+    }
+  ]
+}

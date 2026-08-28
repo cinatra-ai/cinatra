@@ -49,6 +49,12 @@ import {
   rootTierIsEnforced,
   readRootTierExceptions,
   auditRootIntegrationTiers,
+  bareNodeScriptRun,
+  auditGateIsEnforced,
+  auditSection6Gates,
+  SECTION_6_GATES,
+  COMMAND_PREFIX_WORDS,
+  segmentHasCommandPrefix,
   ROOT_TIER_EXCEPTIONS_FILE,
   ROOT_TIER_CONFIG_RE,
   isNonUnitTierFile,
@@ -2494,5 +2500,282 @@ describe("direction 4 — the LIVE repo", () => {
       expect(onDisk.has(e.config), `${e.config} is not a root tier config on disk`).toBe(true);
       expect(rootTierIsEnforced(e.config), `${e.config} IS run — delete its ledger entry`).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DIRECTION 5 — plan (B) §6's own named gates (cinatra#2936).
+//
+// The failure this direction exists to prevent is the one that let the one-card
+// gate sit unrun through five waves: a FALSE POSITIVE, crediting a gate as run
+// when no step runs it. So most cases below assert a REFUSAL, at the adversarial
+// bar directions 3 and 4 set.
+// ---------------------------------------------------------------------------
+
+const GATE = "scripts/audit/x-gate.mjs";
+
+/** A fixture whose root carries an audit gate script, plus workflows/scripts. */
+function gateFixture({ workflow = "", scripts = {}, trigger = "on: [pull_request, push]\n", gate = GATE } = {}) {
+  const fx = tierFixture({ workflow, scripts, trigger });
+  mkdirSync(join(fx.root, "scripts", "audit"), { recursive: true });
+  writeFileSync(join(fx.root, gate), "// fixture gate\n");
+  return fx;
+}
+
+/** Is the fixture gate credited by this workflow body? */
+const gateRun = (workflowBody, scripts = {}) => {
+  const fx = gateFixture({ workflow: workflowBody, scripts });
+  return auditGateIsEnforced(GATE, { repoRoot: fx.root, workflowDir: fx.workflowDir });
+};
+
+describe("direction 5 — a BARE `node <path>` run", () => {
+  it("reads the script a segment runs, in the spellings a step really uses", () => {
+    expect(bareNodeScriptRun(`node ${GATE}`)).toBe(GATE);
+    expect(bareNodeScriptRun(`node ./${GATE}`)).toBe(GATE);
+    expect(bareNodeScriptRun(`  node ${GATE}  `)).toBe(GATE);
+    expect(bareNodeScriptRun(`node "${GATE}"`)).toBe(GATE);
+  });
+
+  it("refuses a MODE flag — the weaker question is not the done-check", () => {
+    // `--audit` asks "no NEW false claim" and `--complete` a different question
+    // again. A step that ran only one of those would hold nothing, so the gate
+    // must be run with no argument at all to be credited.
+    expect(bareNodeScriptRun(`node ${GATE} --audit`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} --complete`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} extra`)).toBeNull();
+  });
+
+  it("refuses everything that is not one node process running that file", () => {
+    for (const seg of [
+      `node --test ${GATE}`, // a test-runner invocation, direction 2's business
+      `node ${GATE} > out`, // the target is a file the shell writes
+      `node ${GATE} | tee out`, // the exit status is tee's
+      `pnpm gate:x`, // resolved through the script table, not here
+      `nice -n 10 node ${GATE}`, // a wrapper this reader does not model
+      `node --version`, // prints and exits 0
+      `node`,
+      `# node ${GATE}`,
+      ``,
+    ]) {
+      expect(bareNodeScriptRun(seg), seg).toBeNull();
+    }
+  });
+
+  it("reads a prefix off the head word alone, and an unprefixed command as unprefixed", () => {
+    expect(segmentHasCommandPrefix(`node ${GATE}`)).toBe(false);
+    expect(segmentHasCommandPrefix("pnpm gate:x")).toBe(false);
+    expect(segmentHasCommandPrefix("")).toBe(false);
+    expect(segmentHasCommandPrefix(`CI=1 node ${GATE}`)).toBe(true);
+    expect(segmentHasCommandPrefix("cross-env X=1 pnpm gate:x")).toBe(true);
+  });
+
+  it("refuses an ENVIRONMENT PREFIX, because the prefix decides which node runs", () => {
+    // THE FAIL-OPEN THIS SHAPE EXISTS TO CLOSE. A prefix can point `node` at a
+    // different binary or start the real one already neutered, and neither is
+    // distinguishable from a harmless `CI=1` without modelling the shell's own
+    // lookup. So every prefix is refused, harmless ones included — the cost is a
+    // step written bare, and the alternative is a gate credited for a process
+    // that never read it.
+    for (const seg of [
+      `PATH=./fake-bin node ${GATE}`, // a `node` that can exit 0 having read nothing
+      `NODE_OPTIONS=--require=./exit-zero.cjs node ${GATE}`, // the real node, short-circuited
+      `NODE_PATH=./fake node ${GATE}`,
+      `CI=1 node ${GATE}`, // harmless, and refused all the same
+      `command node ${GATE}`,
+      `eval node ${GATE}`,
+      `nohup node ${GATE}`,
+    ]) {
+      expect(bareNodeScriptRun(seg), seg).toBeNull();
+    }
+  });
+
+  it("counts RAW shell words, so an empty quoted argument is still an argument", () => {
+    // `node <gate> ''` is three words and passes one. Dropping the empty token
+    // before counting would read it as the bare two-word form.
+    expect(bareNodeScriptRun(`node ${GATE} ''`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} ""`)).toBeNull();
+    expect(bareNodeScriptRun(`node ''`)).toBeNull();
+  });
+
+  it("…and the same refusal holds through a workflow step and a root script", () => {
+    // Not only the parser: the two doors a gate can actually be credited
+    // through both close on it.
+    expect(gateRun(STEP(`PATH=./fake-bin node ${GATE}`))).toBe(false);
+    expect(gateRun(STEP("pnpm gate:x"), { "gate:x": `NODE_OPTIONS=--require=./x.cjs node ${GATE}` })).toBe(false);
+  });
+
+  it("refuses a prefix on the PACKAGE-SCRIPT door, where the two-word rule cannot reach", () => {
+    // `invokesRootSuite` steps OVER an environment assignment, so without an
+    // explicit refusal a fake `pnpm` — or a preload that exits 0 while starting
+    // the real one — would be credited for a gate it never ran.
+    const scripts = { "gate:x": `node ${GATE}` };
+    expect(gateRun(STEP("pnpm gate:x"), scripts)).toBe(true); // the control
+    expect(gateRun(STEP("PATH=./fake-bin pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("env NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("command pnpm gate:x"), scripts)).toBe(false);
+    // The ENVIRONMENT-ALTERING LAUNCHERS this file already steps over. Each one
+    // can put a preload in front of the package manager, or point it at a
+    // different binary, and still look like a bare invocation.
+    expect(gateRun(STEP("cross-env NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("dotenv -e .env -- pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("env pnpm gate:x"), scripts)).toBe(false);
+    // …and the plain wrappers, refused with them rather than modelled.
+    expect(gateRun(STEP("nice -n 10 pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("timeout 600 pnpm gate:x"), scripts)).toBe(false);
+  });
+
+  it("derives the wrapper list from this file's own launcher set, so it cannot fall behind it", () => {
+    // The round that found `cross-env` missing found it because the list was
+    // written out by hand. It is derived now: every launcher word this file
+    // steps over, except the package managers that ARE the invocation.
+    for (const w of ["env", "cross-env", "dotenv", "nice", "time", "timeout", "command", "exec"]) {
+      expect(COMMAND_PREFIX_WORDS.has(w), `${w} must be refused as a prefix`).toBe(true);
+    }
+    for (const w of ["pnpm", "pnpx", "npm", "yarn", "corepack"]) {
+      expect(COMMAND_PREFIX_WORDS.has(w), `${w} is the invocation, not a prefix`).toBe(false);
+    }
+  });
+
+  it("…and the prefix cannot hide one aggregate script further up", () => {
+    const inner = { "gate:x": `node ${GATE}` };
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "pnpm gate:x" })).toBe(true); // the control
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "PATH=./fake-bin pnpm gate:x" })).toBe(false);
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: `PATH=./fake-bin node ${GATE}` })).toBe(false);
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "cross-env X=1 pnpm gate:x" })).toBe(false);
+  });
+});
+
+describe("direction 5 — what a workflow has to say to run an audit gate", () => {
+  it("credits a bare step at the repository root", () => {
+    expect(gateRun(STEP(`node ${GATE}`))).toBe(true);
+  });
+
+  it("credits the gate through a root package script, and transitively", () => {
+    expect(gateRun(STEP("pnpm gate:x"), { "gate:x": `node ${GATE}` })).toBe(true);
+    expect(gateRun(STEP("pnpm run gate:x"), { "gate:x": `node ${GATE}` })).toBe(true);
+    expect(gateRun(STEP("pnpm gates"), { "gate:x": `node ${GATE}`, gates: "pnpm gate:x" })).toBe(true);
+  });
+
+  it("refuses a script whose chain cannot carry the gate's failure", () => {
+    for (const body of [`node ${GATE} || true`, `node ${GATE}; echo done`, `node ${GATE} & wait`, "true"]) {
+      expect(gateRun(STEP("pnpm gate:x"), { "gate:x": body }), body).toBe(false);
+    }
+  });
+
+  it("refuses a forwarded argument on the script call", () => {
+    // `pnpm gate:x --audit` reaches the gate in a mode this direction does not
+    // credit, and the walk cannot tell a mode flag from a harmless one.
+    expect(gateRun(STEP("pnpm gate:x --audit"), { "gate:x": `node ${GATE}` })).toBe(false);
+  });
+
+  it("refuses a step that cannot turn the check RED", () => {
+    expect(gateRun(`jobs:\n  j:\n    steps:\n      - run: node ${GATE}\n        continue-on-error: true\n`)).toBe(false);
+    expect(gateRun(`jobs:\n  j:\n    if: false\n    steps:\n      - run: node ${GATE}\n`)).toBe(false);
+    expect(gateRun(STEP(`node ${GATE} || true`))).toBe(false);
+    expect(gateRun(STEP(`node ${GATE} | tee out`))).toBe(false);
+  });
+
+  it("refuses a step whose SHELL is not known to carry a failure", () => {
+    // THE MUTATION cinatra#3021 CALLED LOAD-BEARING, held here. A `runs-on:` that is an
+    // expression can resolve to anything, so an omitted `shell:` cannot be read
+    // as `bash -e` and the step is refused; the explicit line is what makes it
+    // countable.
+    const expr = (extra) =>
+      `jobs:\n  j:\n    runs-on: \${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}\n    steps:\n      - run: node ${GATE}\n${extra}`;
+    expect(gateRun(expr(""))).toBe(false);
+    expect(gateRun(expr("        shell: bash\n"))).toBe(true);
+  });
+
+  it("refuses a run that happens somewhere other than the repository root", () => {
+    expect(gateRun(`jobs:\n  j:\n    steps:\n      - run: node ${GATE}\n        working-directory: packages/x\n`)).toBe(false);
+    expect(gateRun(STEP(`cd packages/x && node ${GATE}`))).toBe(false);
+  });
+
+  it("refuses a workflow that never fires on a change", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`), trigger: "on: workflow_dispatch\n" });
+    expect(auditGateIsEnforced(GATE, { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
+  });
+
+  it("refuses a step that runs a DIFFERENT gate", () => {
+    expect(gateRun(STEP("node scripts/audit/other-gate.mjs"))).toBe(false);
+  });
+});
+
+describe("direction 5 — the shared aggregate walk keeps direction 4's behaviour", () => {
+  it("credits direction 4's aggregate chain exactly as before the refusal hook", () => {
+    // The hook defaults to refusing nothing, so direction 4 reads the same
+    // scripts the same way. Asserted here because the walk is now shared.
+    const CONFIG = "vitest.integration-1.config.ts";
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:all"),
+      scripts: { "test:x": `vitest run --config ${CONFIG}`, "test:all": "PATH=./fake-bin pnpm test:x" },
+      configs: [CONFIG],
+    });
+    expect([...scriptsReachingTier(fx.root, CONFIG)].sort()).toEqual(["test:all", "test:x"]);
+  });
+});
+
+describe("direction 5 — the verdict", () => {
+  const oneCard = { clause: "the one-card gate", artifact: GATE, kind: "audit-gate" };
+
+  it("splits the clause's gates into run and not-run", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`) });
+    const v = auditSection6Gates(fx.root, fx.workflowDir, { gates: [oneCard] });
+    expect(v.unwired).toEqual([]);
+    expect(v.enforced.map((g) => g.clause)).toEqual(["the one-card gate"]);
+
+    const bare = tierFixture({ workflow: STEP(`node ${GATE}`) });
+    const gone = auditSection6Gates(bare.root, bare.workflowDir, { gates: [oneCard] });
+    expect(gone.enforced).toEqual([]);
+    expect(gone.unwired[0].why).toMatch(/not on disk/);
+  });
+
+  it("reports a gate no step runs, and names the clause it belongs to", () => {
+    const fx = gateFixture({ workflow: STEP("pnpm lint") });
+    const v = auditSection6Gates(fx.root, fx.workflowDir, { gates: [oneCard] });
+    expect(v.enforced).toEqual([]);
+    expect(v.unwired).toHaveLength(1);
+    expect(v.unwired[0].clause).toBe("the one-card gate");
+    expect(v.unwired[0].artifact).toBe(GATE);
+  });
+
+  it("refuses a kind it does not model rather than passing it", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`) });
+    expect(() =>
+      auditSection6Gates(fx.root, fx.workflowDir, { gates: [{ ...oneCard, kind: "vibes" }] }),
+    ).toThrow(/unknown kind/);
+  });
+});
+
+describe("direction 5 — the LIVE repo", () => {
+  it("governs exactly the three gates the plan's Conformance clause names", () => {
+    // The clause is: "The lifecycle-screens epic's own gates — the one-card
+    // gate, the host-parity ratchet, the held-turn card contract — stay green
+    // through every wave." Three, written out, so a silent fourth cannot be
+    // slipped in and the three cannot be quietly reduced to two.
+    expect(SECTION_6_GATES.map((g) => g.clause)).toEqual([
+      "the one-card gate",
+      "the host-parity ratchet",
+      "the held-turn card contract",
+    ]);
+    for (const g of SECTION_6_GATES) {
+      expect(existsSync(join(REPO_ROOT, g.artifact)), `${g.artifact} is not on disk`).toBe(true);
+    }
+  });
+
+  it("every gate the clause names is executed by a CI runner", () => {
+    expect(auditSection6Gates().unwired).toEqual([]);
+  });
+
+  it("the ONE-CARD GATE is run by a workflow step (cinatra#3014 made it green; this keeps it watched)", () => {
+    // NAMED, so deleting its step reds a case whose title says which gate went
+    // dark — the same reason direction 4 names this plan's four tiers one by
+    // one rather than asserting a count.
+    expect(auditGateIsEnforced("scripts/audit/chat-hitl-one-card-gate.mjs")).toBe(true);
+  });
+
+  it("…and a gate no step runs is NOT credited, so the green above is not vacuous", () => {
+    expect(auditGateIsEnforced("scripts/audit/__no-such-gate__.mjs")).toBe(false);
   });
 });

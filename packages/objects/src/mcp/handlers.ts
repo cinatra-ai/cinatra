@@ -613,6 +613,322 @@ function buildObjectResourceCheck(row: ObjectRecord): ResourceForAccessCheck {
   };
 }
 
+// ---------------------------------------------------------------------------
+// memory_recall projection helpers (cinatra#1380, epic #1373)
+// ---------------------------------------------------------------------------
+//
+// The recall row is a FIXED, CAPPED projection of a memory concept row — never
+// the envelope. That is a size decision AND a leak decision: the excerpt is the
+// only free-text field that rides out, so it is the one that gets a hard byte
+// ceiling. Everything here is pure and runs on rows that have ALREADY passed
+// the org scoping, the actor-scoped ownership filter and the per-row
+// `object.read` probe; none of it is an authorization decision, and none of it
+// reaches SQL or the semantic index.
+
+/**
+ * Hard cap on one recall excerpt, in UTF-8 BYTES.
+ *
+ * The envelope permits a 64 KiB body. A recall hands a model up to
+ * `MEMORY_RECALL_MAX_LIMIT` rows at once, so an uncapped excerpt would let one
+ * call return 3 MiB of memory text into a context window — and would make the
+ * "capped projection" claim decorative in exactly the way cinatra#1379 AC3 caps
+ * the PROJECTED episode. 512 bytes is a lede, which is what a recall row is
+ * for: the caller reads `objects_get` for the full concept.
+ */
+export const MEMORY_RECALL_EXCERPT_MAX_BYTES = 512;
+
+/**
+ * Hard caps on the OTHER projected free-text fields, in UTF-8 BYTES.
+ *
+ * The excerpt cap above is only half a bound. `title`, `kind` and `conceptPath`
+ * ride out of the same projection and an author controls all three, so an
+ * uncapped projection lets the payload the excerpt cap refuses move one key
+ * over: a 32 KiB frontmatter title is admissible at ingest and rode out intact.
+ * The ingest ceilings these inherit are the serialized-frontmatter cap (title),
+ * nothing at all (`okfType`) and 1024 bytes (`conceptId`) — none of them a
+ * recall-sized bound. Each field here is a LABEL, not a document: a caller that
+ * wants the row reads `objects_get`.
+ *
+ * `kind` reuses the FILTER cap, so what a caller may ask for and what it may be
+ * told cannot drift apart.
+ */
+export const MEMORY_RECALL_TITLE_MAX_BYTES = 256;
+export const MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES = 1024;
+export const MEMORY_RECALL_ITEM_KIND_MAX_BYTES = schemas.MEMORY_RECALL_KIND_MAX_BYTES;
+
+/**
+ * Aggregate ceiling on ONE SERIALIZED recall response, in UTF-8 BYTES.
+ *
+ * Per-field caps bound a ROW; nothing bounds the sum, and `MEMORY_RECALL_MAX_LIMIT`
+ * multiplies whatever a row costs. This is the backstop that makes the next
+ * field added to the projection inherit a bound instead of needing one written
+ * for it. 64 KiB sits above every recall the caps above can produce at the
+ * default limit and well inside a context window.
+ *
+ * It bounds the WHOLE response, not the sum of the rows: the accounting below
+ * charges the array brackets, every separator and the fixed envelope, because a
+ * ceiling that measures something smaller than what it claims to measure is the
+ * same kind of untrue statement as the rest of this file is about.
+ */
+export const MEMORY_RECALL_RESPONSE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Over-fetch factor for a recall whose result is narrowed AFTER ranking.
+ *
+ * THREE filters narrow after the ranked fetch and none can be pushed into it:
+ *
+ *   - the per-row `object.read` probe (`filterByAuthz`), which re-authorizes
+ *     every recovered row against the kernel in JS;
+ *   - `kind`, matched against the row's `okfType` in JS;
+ *   - the sealed-room project seal (`AND project_id = $projectId`, applied in
+ *     SQL to a candidate set the lane search deliberately draws from project
+ *     AND ambient lanes).
+ *
+ * Asking the index for exactly `limit` candidates lets rows that are about to be
+ * discarded consume the caller's whole budget, which under-returns a real hit
+ * and, worse, can empty the recovery entirely and report a spurious
+ * `degraded-recent`. So the fetch is widened and the result is sliced to `limit`
+ * afterwards.
+ *
+ * The widening is UNCONDITIONAL, and the probe is why. `kind` and the project
+ * seal are in play only when the caller asks for them; the probe runs on EVERY
+ * call, on BOTH paths. Widening only for the two optional filters left the
+ * ambient recall, the common case, on a budget of exactly `limit`, so every
+ * row the caller was not entitled to see cost it a row of its answer: a recall
+ * of 25 ranked ids with 15 unreadable answered 5 of a requested 10, labelled
+ * `semantic`, with nothing in the response to say why.
+ *
+ * This widens the CANDIDATE set, never the authorization: every extra candidate
+ * still passes the same org scoping, the same type pin, the same project seal,
+ * the same actor-scoped ownership SQL filter and the same per-row `object.read`
+ * probe.
+ */
+const MEMORY_RECALL_CANDIDATE_FETCH_FACTOR = 5;
+
+/** Absolute ceiling on a recall fetch, whatever the factor above computes. */
+export const MEMORY_RECALL_CANDIDATE_FETCH_MAX = 250;
+
+/**
+ * Truncate to a UTF-8 BYTE budget without splitting a code point.
+ *
+ * Byte-exact by construction: it walks code points (the string iterator) and
+ * stops before the first one that would cross the budget, so the result is
+ * always <= `maxBytes` and is always valid UTF-8. Slicing the encoded bytes and
+ * decoding back would be simpler and wrong — a split sequence decodes to U+FFFD,
+ * which can be LONGER than the bytes it replaced.
+ */
+function truncateToUtf8Bytes(
+  value: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).length <= maxBytes) return { text: value, truncated: false };
+  let bytes = 0;
+  let out = "";
+  for (const ch of value) {
+    const size = encoder.encode(ch).length;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += ch;
+  }
+  return { text: out, truncated: true };
+}
+
+/**
+ * One row of a `memory_recall` response.
+ *
+ * Derived from `memoryRecallResponseSchema` rather than declared beside it:
+ * the shape the handler builds and the shape the response is parsed against are
+ * then the same object by construction, not by two authors agreeing.
+ */
+type MemoryRecallItem = schemas.MemoryRecallItem;
+
+function memoryRowData(row: ObjectRecord): Record<string, unknown> {
+  return (row.data as Record<string, unknown> | null) ?? {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * `kind` is the OKF frontmatter type (`okfType`), matched in JS against rows
+ * already fetched and already authorized.
+ *
+ * It deliberately never becomes the SQL `type` (which stays pinned to
+ * `MEMORY_CONCEPT_TYPE_ID`) and never reaches the semantic index, so there is
+ * no smuggling path: the worst a hostile `kind` can do is match nothing.
+ * Comparison is exact and case-sensitive, like `okfType` itself.
+ */
+function memoryRowMatchesKind(row: ObjectRecord, kind: string | null): boolean {
+  if (kind === null) return true;
+  return readString(memoryRowData(row).okfType) === kind;
+}
+
+/** Cap a nullable projected label to a UTF-8 byte budget. */
+function capProjectedString(value: string | null, maxBytes: number): string | null {
+  return value === null ? null : truncateToUtf8Bytes(value, maxBytes).text;
+}
+
+/** Canonical row -> the capped recall projection. */
+function toMemoryRecallItem(row: ObjectRecord): MemoryRecallItem {
+  const data = memoryRowData(row);
+  const frontmatter =
+    typeof data.frontmatter === "object" && data.frontmatter !== null
+      ? (data.frontmatter as Record<string, unknown>)
+      : {};
+  const body = typeof data.bodyMarkdown === "string" ? data.bodyMarkdown : "";
+  const { text, truncated } = truncateToUtf8Bytes(body, MEMORY_RECALL_EXCERPT_MAX_BYTES);
+  return {
+    id: row.id,
+    // Every free-text field is capped, not just the excerpt — see the constants
+    // above. `excerptTruncated` stays specific to the excerpt: it tells a caller
+    // that the LEDE is short of the body, which is the only one of these a
+    // caller would go and fetch the rest of.
+    conceptPath: capProjectedString(
+      readString(data.conceptId),
+      MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES,
+    ),
+    title: capProjectedString(readString(frontmatter.title), MEMORY_RECALL_TITLE_MAX_BYTES),
+    kind: capProjectedString(readString(data.okfType), MEMORY_RECALL_ITEM_KIND_MAX_BYTES),
+    // The scope SUMMARY, not a widening: the row has already passed
+    // `object.read`, and `objects_list` on the same row returns strictly more
+    // (the whole envelope plus the actor block). It is here because a recall
+    // consumer has to be able to say whose memory it is reading.
+    scope: {
+      ownerLevel: normalizeOwnerLevel(row.ownerLevel),
+      ownerId: row.ownerId,
+      visibility: normalizeObjectVisibility(row.visibility),
+      projectId: row.projectId,
+    },
+    excerpt: text,
+    excerptTruncated: truncated,
+  };
+}
+
+/**
+ * Lexical re-ordering of the DEGRADED candidate set (the issue's optional
+ * client-side ranking).
+ *
+ * It is a token-overlap sort over the projected fields only — no index, no
+ * corpus statistics, nothing that could be mistaken for retrieval. It does NOT
+ * change what the candidate set IS (recent rows in the caller's lanes, chosen
+ * without the query), which is why the response keeps `mode: "degraded-recent"`
+ * and states `ordering: "lexical-fallback"` beside it. Stable: rows that score
+ * equally keep the recency order the store returned them in.
+ */
+function rankRecallItemsLexically(
+  items: MemoryRecallItem[],
+  query: string,
+): MemoryRecallItem[] {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 1);
+  if (terms.length === 0) return items;
+  const scored = items.map((item, index) => {
+    const haystack = [item.conceptPath, item.title, item.kind, item.excerpt]
+      .filter((v): v is string => typeof v === "string")
+      .join(" ")
+      .toLowerCase();
+    let score = 0;
+    for (const term of terms) if (haystack.includes(term)) score += 1;
+    return { item, index, score };
+  });
+  scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
+  return scored.map((s) => s.item);
+}
+
+/**
+ * The serialized cost of one recall answer MINUS its rows, MEASURED.
+ *
+ * `JSON.stringify({ items: [], ...envelope })` is the response the handler is
+ * about to emit with the array emptied, so its byte length is the envelope plus
+ * `"items":[]`, and the full answer is exactly this number, plus each
+ * serialized item, plus one `,` per join. Nothing here is reserved or rounded.
+ *
+ * `ceilingApplied` widens it by the `responseCeiling` report, because a fit that
+ * ends in a drop emits a WIDER envelope than the one it was measured against.
+ */
+function memoryRecallEnvelopeBytes(
+  envelope: schemas.MemoryRecallEnvelope,
+  ceilingApplied: boolean,
+): number {
+  const meta = ceilingApplied
+    ? { ...(envelope.meta ?? {}), responseCeiling: "applied" as const }
+    : envelope.meta;
+  return new TextEncoder().encode(
+    JSON.stringify({ items: [], ...envelope, ...(meta ? { meta } : {}) }),
+  ).length;
+}
+
+/**
+ * Apply the aggregate response ceiling.
+ *
+ * Rows are kept in order until the next one would cross
+ * `MEMORY_RECALL_RESPONSE_MAX_BYTES`, and the drop is REPORTED
+ * (`meta.responseCeiling: "applied"`) rather than silent: a recall that quietly
+ * returns fewer rows than it recovered is the same soft dishonesty `mode` exists
+ * to prevent, one layer down.
+ *
+ * The accounting is EXACT and the bound has no exceptions. Three things follow,
+ * and all three are deliberate:
+ *
+ *   - the envelope this call is ABOUT TO EMIT is measured, not reserved. A flat
+ *     reservation is wrong in whichever direction it rounds, and it rounded up:
+ *     256 bytes charged against a ranked no-meta envelope of 57 dropped a row
+ *     out of any response sitting in the last 201 bytes under the ceiling, and
+ *     then reported a `responseCeiling` that did not have to happen. A ceiling
+ *     that bounds a number 201 bytes larger than the response is the same kind
+ *     of untrue statement as the rest of this file is about, so the envelope is
+ *     built and measured per path;
+ *   - the array brackets and every `,` separator are charged too, so the
+ *     ceiling bounds the serialized response and not a smaller number that
+ *     resembles it;
+ *   - there is no "always keep the first row" escape. `id` and the `scope`
+ *     fields are canonical database columns rather than capped projections, so
+ *     a single row CAN in principle exceed the ceiling alone; keeping it anyway
+ *     would make the bound advisory. A recall that drops every row still says
+ *     so, which is the honest answer to "your one hit does not fit".
+ *
+ * The two-pass fit closes the circularity between the last two: whether the
+ * answer carries `meta.responseCeiling` depends on whether a row is dropped, and
+ * whether a row is dropped depends on the envelope. Pass one fits against the
+ * envelope with no report; if everything fits, that IS the emitted envelope and
+ * the answer is exact. If anything is dropped the emitted envelope is the wider
+ * reporting one, so pass two re-fits against it. Pass two can never turn the
+ * drop back off: it charges strictly more, so a set that did not fit the
+ * narrower envelope cannot fit the wider one.
+ */
+function applyMemoryRecallResponseCeiling(
+  items: MemoryRecallItem[],
+  envelope: schemas.MemoryRecallEnvelope,
+): { items: MemoryRecallItem[]; ceilingApplied: boolean } {
+  const encoder = new TextEncoder();
+  const fit = (
+    envelopeBytes: number,
+  ): { kept: MemoryRecallItem[]; dropped: boolean } => {
+    const kept: MemoryRecallItem[] = [];
+    let bytes = envelopeBytes;
+    for (const item of items) {
+      // The item, plus the `,` that joins it to the previous one.
+      const size =
+        encoder.encode(JSON.stringify(item)).length + (kept.length > 0 ? 1 : 0);
+      if (bytes + size > MEMORY_RECALL_RESPONSE_MAX_BYTES) {
+        return { kept, dropped: true };
+      }
+      bytes += size;
+      kept.push(item);
+    }
+    return { kept, dropped: false };
+  };
+
+  const whole = fit(memoryRecallEnvelopeBytes(envelope, false));
+  if (!whole.dropped) return { items: whole.kept, ceilingApplied: false };
+  const reported = fit(memoryRecallEnvelopeBytes(envelope, true));
+  return { items: reported.kept, ceilingApplied: true };
+}
+
 type SaveOwnership = {
   ownerLevel: "user" | "team" | "organization" | "workspace";
   ownerId: string;
@@ -2657,6 +2973,320 @@ export function createObjectsPrimitiveHandlers() {
       const visible = await filterByAuthz(ordered);
       const items = applyCategoryFilter(visible.map(mapRowToObject));
       return { items, nextCursor: null };
+    },
+
+
+    // -----------------------------------------------------------------
+    // memory_recall (cinatra#1380, epic #1373) — the SHARED-memory recall
+    // surface, and the epic's HONESTY INVARIANT made structural.
+    //
+    // WHAT IT IS. A read pinned to `@cinatra-ai/memory:concept` that searches
+    // the caller's SERVER-DERIVED entitled lanes (cinatra#1379), re-fetches the
+    // canonical Postgres rows, and returns a CAPPED recall projection —
+    // concept path, title, kind, a scope summary and a bounded body excerpt —
+    // never the envelope. The data-layer authorization is unchanged: the same
+    // org scoping, the same actor-scoped ownership filter, the same per-row
+    // `object.read` probe `objects_list` runs.
+    //
+    // WHY IT IS ITS OWN PRIMITIVE rather than a flag on `objects_list`. Two
+    // reasons, and both are about what the CALLER is told:
+    //
+    //   1. `mode` IS THE POINT. `objects_list` answers a degraded query with a
+    //      body that looks exactly like a ranked one plus an OPTIONAL `meta`
+    //      key a caller may not read. For a recall surface that is not good
+    //      enough: an agent that treats recent-rows-in-my-lanes as
+    //      "the memory system's best answer to my question" will confidently
+    //      state something the corpus never said. So `mode` is REQUIRED on
+    //      every response, it is one of exactly two values, and
+    //      `degraded-recent` is returned for BOTH degradation classes —
+    //      the index being unavailable AND a response whose ranked nodes named
+    //      no row we hold (`no_ids_extracted`). The second one is degradation,
+    //      not an empty search result: it says the hits were genuinely other
+    //      nodes, not that the corpus has no answer.
+    //   2. THE ANSWER IS SMALLER. A recall feeds a context window. The row
+    //      projection is capped and fixed, so a 64 KiB body cannot ride out
+    //      through a surface whose job is to hand a model a few paragraphs.
+    //
+    // `meta` reuses `objects_list`'s EXISTING degradation vocabulary verbatim
+    // (`semanticSearch: "unavailable" | "no_ids_extracted"` +
+    // `fallback: "postgres_filter"`) rather than inventing a parallel channel —
+    // the issue's grounding note. `mode` is the load-bearing addition on top.
+    //
+    // `ordering` is stated separately from `mode` on purpose. On the degraded
+    // path the CANDIDATE SET is recent rows (not query-selected), and a lexical
+    // pass reorders that small set by token overlap. Sorting it while still
+    // calling the response "recent" would be the same soft dishonesty in
+    // miniature, so the response names both facts: what the candidates are
+    // (`mode`) and how they were ordered (`ordering`).
+    // -----------------------------------------------------------------
+    "memory_recall": async (
+      request: PrimitiveInvocationRequest<unknown>,
+    ): Promise<schemas.MemoryRecallResponse> => {
+      // STRICT parse (schemas.memoryRecallSchema). This is where a forged
+      // `group_ids` / `groupIds` / `lanes` / `orgId` dies: lanes are derived
+      // below from the AUTHENTICATED actor and there is no input surface for
+      // them, so an unknown top-level key is a rejection rather than an ignored
+      // stray. Every author-controlled field is capped here too.
+      const input = schemas.memoryRecallSchema.parse(request.input);
+      const actorExt = getActorExt(request.actor);
+      const orgId = actorExt.orgId;
+      // NO `A2A_DEV_BYPASS` relaxation here, and that is a DELIBERATE divergence
+      // from `objects_list` (codex convergence round 1, finding 1). The bypass
+      // relaxes two things at once on that primitive: the org guard, and — via
+      // `readScopeActor` — the actor-scoped ownership WHERE clause. On a surface
+      // pinned to the memory type both relaxations are the leak: an orgless call
+      // derives the `cinatra-default` lane (which names no tenant) and reads with
+      // `org_id = NULL`, and a scope-actor-less call drops the one SQL filter that
+      // separates one user's private concepts from another's — leaving nothing but
+      // the kernel probe between a caller and every memory row in the database.
+      // Memory is org-scoped by construction, so there is no legitimate orgless
+      // recall to preserve; the guard is unconditional.
+      if (!orgId) {
+        throw new Error(
+          "memory_recall requires an authenticated org context (actor.orgId is null)",
+        );
+      }
+
+      // Sealed-room read filter, identical to `objects_list`: a supplied
+      // projectId is NOT a grant — 404-hide when the actor has no read+ grant,
+      // and the non-bypassable `AND project_id = $projectId` runs inside
+      // `listObjectsByFilter` on BOTH the ranked and the degraded path.
+      //
+      // THE LANE/ROW ASYMMETRY, stated because it reads as a contradiction
+      // otherwise (codex convergence round 2). The lane set below is project
+      // PLUS ambient (cinatra#1379's derivation, shared verbatim with
+      // `objects_list`), but the canonical read is SEALED to the project: an
+      // ambient row is `project_id IS NULL` and the SQL seal drops it. So a
+      // project recall RETURNS PROJECT ROWS ONLY. The ambient lanes still earn
+      // their place — they are what the index ranks against — but they are
+      // relevance context, not results. Closing the gap the other way would mean
+      // teaching the store a "project OR ambient" read mode, which weakens the
+      // shipped non-bypassable intersection; cinatra#1380 says "data-layer
+      // authorization unchanged", so that ruling belongs to the epic, not here.
+      const projectId =
+        typeof input.projectId === "string" && input.projectId.trim().length > 0
+          ? input.projectId.trim()
+          : null;
+      if (projectId !== null) {
+        const actorForGate = request.actor as unknown as Parameters<
+          typeof assertProjectReadAccess
+        >[0];
+        assertProjectReadAccess(actorForGate, projectId);
+      }
+
+      // `kernelActorForRead` directly, NOT `readScopeActor`: the latter returns
+      // `undefined` (no ownership filter at all) for a sessionless caller under
+      // `A2A_DEV_BYPASS`, which is the second half of finding 1 above. Every
+      // memory read carries the ownership filter.
+      const scopeActor = kernelActorForRead(request.actor, orgId);
+      const limit = input.limit;
+      const query = input.query.trim();
+      const kind = input.kind?.trim() ?? null;
+
+      // Per-row authorization post-filter — the SAME boundary `objects_list`
+      // applies to Graphiti candidates, with the same loud-drop diagnostic for
+      // internal/system reads (cinatra#1948 (a)).
+      const filterByAuthz = async (rows: ObjectRecord[]): Promise<ObjectRecord[]> => {
+        const out: ObjectRecord[] = [];
+        for (const r of rows) {
+          try {
+            await enforceResourceAccess(
+              buildObjectResourceCheck(r),
+              request.actor,
+              "object.read",
+            );
+            out.push(r);
+          } catch (err) {
+            if (err instanceof AuthzError) continue;
+            throw err;
+          }
+        }
+        const droppedCount = rows.length - out.length;
+        if (droppedCount > 0 && isInternalSystemRead(request.actor)) {
+          recordInternalReadAuthzDrop({
+            primitive: "memory_recall",
+            droppedCount,
+            totalCount: rows.length,
+            droppedTypes: [MEMORY_CONCEPT_TYPE_ID],
+            actorType: (request.actor.actorType as string | null | undefined) ?? null,
+            source: (request.actor.source as string | null | undefined) ?? null,
+            orgId,
+          });
+        }
+        return out;
+      };
+
+      // Lane entitlement, SERVER-DERIVED (cinatra#1379): own user lane + a lane
+      // per real team membership + the ambient org lane, each also in its
+      // `-proj-<id>` form when the call carries a project (project recall =
+      // project + ambient). A lane the actor is not entitled to is never in the
+      // set. This is relevance scoping, NOT the authorization boundary — every
+      // candidate is still re-fetched and `object.read`-gated above.
+      let teamIds: string[] = [];
+      if (actorExt.userId && orgId) {
+        const teams = await readTeamsForUser(actorExt.userId, orgId);
+        teamIds = teams.map((t) => t.id);
+      }
+      const searchGroupIds = deriveEntitledLanes({
+        orgId,
+        userId: actorExt.userId,
+        teamIds,
+        projectId,
+      });
+
+      // The ranked/recent fetch budget, widened UNCONDITIONALLY. The per-row
+      // `object.read` probe above is a post-ranking filter on every call and on
+      // both paths, so there is no shape of this recall that cannot lose rows
+      // after the fetch; `kind` and the project seal only add to it. See
+      // MEMORY_RECALL_CANDIDATE_FETCH_FACTOR for what an ambient recall cost
+      // while this was conditional.
+      const candidateLimit = Math.min(
+        limit * MEMORY_RECALL_CANDIDATE_FETCH_FACTOR,
+        MEMORY_RECALL_CANDIDATE_FETCH_MAX,
+      );
+
+      let objectIds: string[] | null = null;
+      let unavailable = false;
+      try {
+        const res = await searchNodes({
+          query,
+          group_ids: searchGroupIds,
+          max_nodes: candidateLimit,
+        });
+        objectIds = resolveObjectIds(res.nodes, orgId);
+      } catch (err) {
+        console.warn(
+          "[memory_recall] searchNodes failed; degrading to a recent-rows listing:",
+          err,
+        );
+        unavailable = true;
+      }
+
+      // ---------------- SEMANTIC PATH (attempted first) ----------------
+      // Ranked ids -> canonical rows, rank re-imposed via a Map (never
+      // rows.find(): O(n^2) and wrong on duplicate ids). `projectId` is passed
+      // down so the SQL intersects the candidate set with the project boundary.
+      //
+      // ROW RECOVERY, NOT ID COUNT, is what decides the mode (codex convergence
+      // round 1, finding 2). `resolveObjectIds` still runs the DEMOTED incidental
+      // probes from before cinatra#2591, and those can lift a syntactically valid
+      // UUID off a node that names no row we hold. Deciding on
+      // `objectIds.length > 0` would then answer `mode: "semantic"` with an empty
+      // `items` — telling the caller "search ran and your memory has no answer"
+      // when the truth is "the ranked hits named nothing we could recover", which
+      // is exactly what `no_ids_extracted` means. So the ranked fetch runs first
+      // and the mode is decided on what it RECOVERED.
+      let ordered: ObjectRecord[] = [];
+      if (!unavailable && objectIds !== null && objectIds.length > 0) {
+        // BOUND THE CANDIDATE SET, THEN ASK FOR ALL OF IT. Two facts meet here
+        // and the read is wrong without both.
+        //
+        // `resolveObjectIds` can return MORE ids than `max_nodes` asked for — a
+        // merged anchor names several rows — so the id list is not already
+        // bounded by `candidateLimit`. And `listObjectsByFilter` suppresses
+        // `ORDER BY` whenever `ids` is set (the caller re-imposes rank) and
+        // falls back to `LIMIT 100` when no limit is passed. Pass no limit and
+        // beyond 100 candidates the database keeps an arbitrary 100 of them in
+        // no defined order: the top-ranked row can be the one it drops, while
+        // the response still answers `mode: "semantic"`, `ordering:
+        // "semantic-rank"`. That is this primitive's own failure arriving
+        // through the read.
+        //
+        // So: slice to `candidateLimit` first — a DETERMINISTIC drop of the
+        // LOWEST-ranked ids, which is the bound the over-fetch already promised
+        // — and then pass `limit: candidateIds.length`, which covers every id
+        // that survived it. Same rule the degraded read below states, now
+        // applied on the path that ranks.
+        const candidateIds = objectIds.slice(0, candidateLimit);
+        const rows = listObjectsByFilter(
+          {
+            orgId,
+            ids: candidateIds,
+            type: MEMORY_CONCEPT_TYPE_ID,
+            projectId,
+            limit: candidateIds.length,
+          },
+          scopeActor,
+        );
+        const byId = new Map<string, ObjectRecord>(rows.map((r) => [r.id, r]));
+        ordered = candidateIds
+          .map((id) => byId.get(id))
+          .filter((r): r is ObjectRecord => r != null);
+      }
+
+      if (!unavailable && ordered.length > 0) {
+        // A genuine ranked answer. Note that `kind` and the per-row `object.read`
+        // probe may still empty `items` from here, and that stays `semantic`:
+        // rows WERE recovered for this query and a filter removed them, which is
+        // an honest empty search result. Relabelling it degradation would be the
+        // same dishonesty pointing the other way.
+        const visible = await filterByAuthz(ordered);
+        // The ceiling charges the envelope THIS path emits, a ranked answer
+        // with no `meta` at all, rather than a reservation wide enough for the
+        // degraded one.
+        const { items, ceilingApplied } = applyMemoryRecallResponseCeiling(
+          visible
+            .filter((r) => memoryRowMatchesKind(r, kind))
+            .map(toMemoryRecallItem)
+            .slice(0, limit),
+          { mode: "semantic", ordering: "semantic-rank" },
+        );
+        // Parsed, not just returned: `mode` is required by the schema AND by
+        // the handler's declared return type, so neither a new path nor a
+        // reshaped one can drop it quietly. The schema is a discriminated union
+        // on `mode`, so the ordering and the `meta` vocabulary below have to
+        // agree with it too.
+        return schemas.memoryRecallResponseSchema.parse({
+          items,
+          mode: "semantic",
+          ordering: "semantic-rank",
+          ...(ceilingApplied ? { meta: { responseCeiling: "applied" } } : {}),
+        });
+      }
+
+      // ---------------- DEGRADED PATH ----------------
+      // Reached when the semantic index threw (`unavailable`) OR answered with
+      // ranked nodes that recovered no row we hold (`no_ids_extracted`, whether
+      // the id list was empty or every id in it was a ghost). BOTH are
+      // degradation. The read below is a plain recent-rows listing scoped to the
+      // caller's memory rows — the query is NOT applied to it, which is exactly
+      // why the response may not claim to be search.
+      const recent = listObjectsByFilter(
+        {
+          orgId,
+          type: MEMORY_CONCEPT_TYPE_ID,
+          // Same over-fetch rule as the ranked path: a post-fetch filter must
+          // not silently cost the caller rows. Bounded either way.
+          limit: candidateLimit,
+          projectId,
+        },
+        scopeActor,
+      );
+      const recentVisible = await filterByAuthz(recent);
+      // The degradation metadata is built ONCE and charged before it is sent:
+      // this envelope is the widest the schema admits, and the ranked path's is
+      // the narrowest, so a single reservation could only be wrong for one of
+      // them.
+      const degradedMeta = {
+        semanticSearch: unavailable ? ("unavailable" as const) : ("no_ids_extracted" as const),
+        fallback: "postgres_filter" as const,
+      };
+      const { items: recentItems, ceilingApplied } = applyMemoryRecallResponseCeiling(
+        rankRecallItemsLexically(
+          recentVisible.filter((r) => memoryRowMatchesKind(r, kind)).map(toMemoryRecallItem),
+          query,
+        ).slice(0, limit),
+        { mode: "degraded-recent", ordering: "lexical-fallback", meta: degradedMeta },
+      );
+      return schemas.memoryRecallResponseSchema.parse({
+        items: recentItems,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: {
+          ...degradedMeta,
+          ...(ceilingApplied ? { responseCeiling: "applied" } : {}),
+        },
+      });
     },
 
     "objects_get": async (request: PrimitiveInvocationRequest<unknown>) => {
