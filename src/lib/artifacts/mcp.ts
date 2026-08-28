@@ -2,8 +2,7 @@ import "server-only";
 import { z } from "zod";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
-import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context";
-import type { ActorContext } from "@/lib/authz/actor-context";
+import { resolveScope } from "@/lib/mcp-tool-scope";
 // Sealed-room read filter for artifacts.
 // `assertProjectReadAccess` is the 404-hidden authz gate; the actual
 // SQL `AND project_id = $projectId` clause is enforced in
@@ -183,53 +182,6 @@ const TOOL_META = {
     inputSchema: promoteRequestSchema,
   },
 } as const;
-
-function resolveScope(): {
-  orgId: string;
-  userId: string | null;
-  actor: ActorContext;
-} {
-  const ctx = mcpRequestContextStorage.getStore();
-  // a2a precedence (mirrors packages/agents/src/mcp/registry.ts).
-  const a2a = ctx?.a2aActorContext;
-  const userId = a2a?.userId ?? ctx?.userId ?? null;
-  // A2A precedence is fail-closed: when an A2A identity is present its
-  // org MUST come from the A2A context; we never fall back to the transport
-  // org because that would mix A2A identity with transport scope. Only a
-  // non-A2A call uses the transport org.
-  const orgId = (a2a ? a2a.orgId : ctx?.orgId) ?? null;
-  if (!orgId) {
-    throw new Error(
-      "artifacts MCP: no active organization (fail-closed — refusing an unscoped read/write" +
-        (a2a ? "; A2A context carries no orgId" : "") +
-        ")",
-    );
-  }
-  const platformRole = ctx?.platformRole;
-  const primitive = {
-    actorType: a2a ? "a2a" : platformRole ? "human" : "model",
-    source: a2a ? "a2a" : "agent",
-    ...(userId ? { userId } : {}),
-    ...(a2a?.tokenScopes ? { tokenScopes: a2a.tokenScopes } : {}),
-  } as Parameters<typeof buildActorContextFromPrimitive>[0];
-  const actor = buildActorContextFromPrimitive(primitive, orgId, {
-    platformRole,
-    // Transport-resolved org-membership role, carried natively on the MCP
-    // request context. NON-A2A ONLY: it was resolved for the transport
-    // identity (ctx.userId/ctx.orgId); the A2A branch's identity comes from
-    // a2aActorContext (potentially a different user/org).
-    orgRole: a2a ? undefined : ctx?.orgRole,
-    actorOrganizationId: orgId,
-    teamIds: a2a?.teamIds,
-    projectIds: a2a?.projectIds,
-    // Pass projectGrants through to buildActorContextFromPrimitive so
-    // the canonical axis (owned ∪ accessed, role-by-authority) reaches
-    // the kernel ActorContext. projectIds is kept for back-compat
-    // (binary shortcuts).
-    projectGrants: a2a?.projectGrants,
-  }) as unknown as ActorContext;
-  return { orgId, userId, actor };
-}
 
 function envelope(payload: unknown) {
   const resolved = payload === undefined ? null : payload;

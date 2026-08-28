@@ -275,52 +275,52 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 328
+      "line": 280
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 313
+      "line": 265
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 508
+      "line": 460
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 460
+      "line": 412
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 441
+      "line": 393
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 424
+      "line": 376
     },
     {
       "primitiveName": "artifact_promote_request",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 532
+      "line": 484
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 369
+      "line": 321
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 399
+      "line": 351
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 351
+      "line": 303
     },
     {
       "primitiveName": "artifact_review_gate_render",
@@ -355,17 +355,17 @@
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 274
+      "line": 226
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 246
+      "line": 198
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 286
+      "line": 238
     },
     {
       "primitiveName": "assistant_send",
@@ -861,6 +861,11 @@
       "primitiveName": "media_feed_youtube_list",
       "file": "extensions/cinatra-ai/media-feeds-connector/src/mcp/registry.ts",
       "line": 16
+    },
+    {
+      "primitiveName": "memory_promote_request",
+      "file": "src/lib/memory/mcp.ts",
+      "line": 51
     },
     {
       "primitiveName": "memory_recall",
