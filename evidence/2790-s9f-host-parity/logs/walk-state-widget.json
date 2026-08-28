@@ -1,6 +1,0 @@
-{
-  "$comment": "The widget round of cinatra#2790 S9f, re-driven at the dispatch-fix head. TWO held runs were seeded and parked through maybeHoldRunForRecommendation on this lane and each was driven to a LIVE in-place settle; widget2RunId is the one every committed widget cell was shot on. widgetRunId was the first pass, named so nothing here looks like a single lucky pass. logs/walk-state.json holds the review-page round, whose ids the R1-R3 cells were shot on.",
-  "widgetRunId": "a9ce8339-675d-4533-8d85-56c6ceaaf16d",
-  "widget2RunId": "9c4879ee-55bd-4879-86fc-1e1e5b23805e",
-  "templateId": "6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b"
-}

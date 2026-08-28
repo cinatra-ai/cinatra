@@ -34,7 +34,7 @@
  *
  * RUNNER (real DB required — the suite self-skips without one):
  *   SUPABASE_DB_URL=postgres://…@127.0.0.1:5634/postgres SUPABASE_SCHEMA=lane_2691x \
- *     pnpm exec vitest run --config vitest.integration-2691.config.ts
+ *     pnpm exec vitest run --config vitest/integration/2691.config.ts
  * The schema is CREATED in beforeAll and DROPPED in afterAll.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -65,7 +65,7 @@ const HAS_REAL_DB =
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
 /**
- * Set by `vitest.integration-2691.config.ts` and by nothing else. A suite
+ * Set by `vitest/integration/2691.config.ts` and by nothing else. A suite
  * whose only failure mode is "skipped" reports success by doing nothing —
  * this flag turns a missing database from a silent skip into a hard,
  * self-describing failure.

@@ -136,7 +136,7 @@ export function computeSkillContentHash(
  * ## Why 31,457,280 (= 30 × 1024 × 1024)
  *
  * The S7 live conformance run (check **C10**,
- * `evidence/2094-s7-acceptance/live-results.json`) uploaded a rooted canonical
+ * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-results.json`) uploaded a rooted canonical
  * zip of **30,000,505 archive bytes / 30,000,169 uncompressed** to the real
  * `POST /v1/skills` and the API **ACCEPTED it with HTTP 200**, minting a skill
  * that the run then reclaimed. That refutes the decimal reading outright: the
@@ -151,7 +151,7 @@ export function computeSkillContentHash(
  *   - **Measured (live):** the server's true threshold is strictly greater than
  *     the largest artifact it accepted — 30,000,513 archive bytes / 30,000,189
  *     uncompressed in the S7 post-fix re-verification (check R10,
- *     `evidence/2094-s7-acceptance/live-reverify-results.json`). That is a LOWER
+ *     `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-reverify-results.json`). That is a LOWER
  *     bound and nothing more. An evidence-only constant under this module's `>=`
  *     semantics would therefore be 30,000,514.
  *   - **Inferred (docs policy):** 30 MiB = 31,457,280 is the binary-MB reading of

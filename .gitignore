@@ -94,11 +94,11 @@ tests/e2e/**/.auth/*
 !tests/e2e/**/.auth/.gitignore
 # WP/Drupal UAT seed IDs (regenerated each run)
 tests/e2e/wp-drupal-uat/.uat/
-# chat-hitl S9k run-minted captures (cinatra#2824). The committed set beside it is
-# the FROZEN reference; a run mints here so a passing run leaves the tree clean.
-# It sits under evidence/ because the S9h recorder refuses a screenshot path
-# outside evidence/ — see RUN_EVIDENCE_DIR in tests/e2e/chat-hitl-held-turn/.
-evidence/2824-s9k/.run/
+
+# --- Proof artifacts (captures, run records, PR proof bundles) ---
+# Never committed: they are posted on the PR and cited by permalink.
+evidence/
+pr-evidence/
 
 # Internal planning notes (local only)
 .planning/
@@ -139,17 +139,15 @@ Desktop.ini
 *.key
 .codex-verdicts/
 
-# --- development artifacts never live in the checkout ---
-# Enforced for the org by scripts/ci/product-tree-hygiene.mjs (gates.yml), which
-# fails any PR that TRACKS one of these. Most of the ruled set is already ignored
-# above and is deliberately not repeated here: .claude/, .planning/, /data/,
-# /dev/, /extensions/, test-results/, __pycache__/, next-env.d.ts, and
-# .env.local / .env.*.local (covered by the `.env*` glob).
+# proof artifacts never live in the checkout (evidence/ and pr-evidence/ are
+# ignored by the branch that removes the tracked evidence/ tree)
+verification/
+docs/internals/proofs/
+
+# --- development artifacts never live in the checkout (tree-hygiene gate rules) ---
+# Enforced for the org by scripts/ci/product-tree-hygiene.mjs (gates.yml).
+evidence/2824-s9k/.run/
 .pytest_cache/
-# Proof dumps under their several folder names. An org-wide sweep found the same
-# artifacts accreting per issue under each of these; a proof is recorded on the
-# PR, never committed. (evidence/ and pr-evidence/ are added by the sibling
-# change that removes the tracked ones.)
 /verification/
 proofs/
 proof/
