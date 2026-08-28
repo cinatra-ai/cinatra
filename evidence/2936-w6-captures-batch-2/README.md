@@ -20,6 +20,18 @@ Run one `cda1cd00-7091-47e0-bd66-5e43fb2e5fb1`; run two `c00920ac-4631-460a-946d
 Every number is read back in `RUN-READBACK.md`; the order of events is in `TIMELINE.md`; every
 anchor count is in `capture-records.md`.
 
+**One picture in this batch was wrong and has been re-shot.** The file filed as the dark sibling
+of the run-progress placeholder was a LIGHT capture, and the P1 verdict below said "PASS, light
+and dark" over it. The cause was the round's own driver emulating the OPERATING SYSTEM's colour
+scheme, which this app does not read; it is named in full under **P1**, both files are measured
+there, and the picture was **re-shot from a fresh real run** with the palette switched on the
+app's own control. That re-shoot stood the lane up again from nothing on the same head — its own
+throwaway database, its own registry publish, its own provider setup through the app's own step —
+because the round's lane was dropped when it ended, so its runs are **run three** and **run
+four** and its readbacks are their own (`reshoot-dark-placeholder.json`,
+`drivers/09-reshoot-the-dark-placeholder.mjs`). Nothing else in this batch was re-shot, and the
+index, the census and the anchor digest are untouched.
+
 ## What this batch found
 
 **1 — The review reaches the conversation, but not on the host the drawing names.** Cards §IX:
@@ -214,26 +226,52 @@ carries no link to the run page. No Open the run page link is drawn beneath it."
 app-artifact-review §I verbatim: *"While the run works, the detail carries a placeholder … It is
 replaced, in place, when the output is generated."*
 
-**Shows** — on the run page, both themes, while the run worked:
+**Shows** — on the run page, in both palettes, while the run worked:
 `[data-run-review-slot]` = **`working`**, `[data-conformance-id="review-gate-placeholder"]` **1**,
 `[data-lifecycle-card="artifact_review_gate"]` **0**. Then, on the SAME element with no press and
 no navigation of the reader's: `[data-run-review-slot]` = **`review`**,
 `review-gate-placeholder` **0**, `artifact_review_gate` **1**. The two readings are 18 339 ms
-apart on run one (36 polled samples) and 7 781 ms apart on run two (27 samples). The placeholder
-draws the frame and the spinner and nothing else — no status word, no result, no control, and no
-link to the run page.
+apart on run one (36 polled samples), 7 781 ms apart on run two (27 samples), and **6 545 ms
+apart on run four**, the run the dark picture was re-shot from. The placeholder draws the frame
+and the spinner and nothing else — no status word, no result, no control, and no link to the run
+page.
 
-**Verdict — PASS**, light and dark, and the SWAP is proven rather than asserted: one element, two
-readings, timestamped either side.
+**THE DARK PICTURE WAS RE-SHOT, AND WHY.** The file this round first filed as the dark sibling
+was a LIGHT frame, and the "PASS, light and dark" this section carried was untrue for it. Both
+files are measured here rather than described: mean luminance over the whole frame,
+**238.5 / 255** for the light picture and — for the file that claimed to be its dark sibling —
+**238.1 / 255**, against **16.6 / 255** for this batch's B2 dark. The cause is in the driver, not
+in the product: `drivers/03-chat-run-to-review.mjs` opened its second context with Playwright's
+`colorScheme: "dark"`, which emulates the OPERATING SYSTEM's `prefers-color-scheme` and nothing
+else. This app does not read that — `src/app/providers.tsx` mounts next-themes as
+`attribute="class" defaultTheme="cinatra" themes={["cinatra","dark"]}`, so the palette is a class
+on `<html>` chosen by the app's OWN control (`src/components/theme-switch.tsx`, the header's
+"Toggle theme" button) and an unset preference resolves to `cinatra`, the light palette, whatever
+the OS says. So the emulation could never have darkened the page.
+
+`drivers/09-reshoot-the-dark-placeholder.mjs` re-shot it from a fresh real run on the same
+surface, with the palette switched **on the app's own control** before the run started (the
+window is 6.5–21 s wide on this head — too short to switch inside it), and reads the theme back
+three times: before the press `{"dark":false,"stored":null,"osPrefersDark":false}`, after the
+press `{"dark":true,"stored":"dark","osPrefersDark":false}`, and again on the run page itself
+while the placeholder was on screen (`"dark":true`). **The OS preference is `false` throughout** —
+the darkness in the new picture comes from the app's control and from nothing else. The new file
+measures **11.7 / 255**, and it carries no development pill.
+
+**Verdict — PASS in both palettes**, and the SWAP is proven rather than asserted: one element,
+two readings, timestamped either side.
 
 These two pictures are **page controls, not index records**: the run-progress placeholder is not
 one of the five lifecycle-card kinds, carries none of their roots, and the capture contract has
-no vocabulary for it — exactly as batch 1's S1/S2 were page controls.
+no vocabulary for it — exactly as batch 1's S1/S2 were page controls. Neither appears in
+`capture-records.md`, which holds only what the shipped recorder wrote, and neither is in
+`scripts/ci/chat-hitl-capture-index.json`: the index, the census and the anchor digest are
+untouched by this re-shoot.
 
-| picture | sha256 |
-| --- | --- |
-| `cells/P1__run-progress-placeholder__run_card__light.png` | `fd588f6955c134ccadac5a88846802310f77621efc80ceed76caeaa0380d632c` |
-| `cells/P1__run-progress-placeholder__run_card__dark.png` | `50bcc1149543cd3fe22cf96599fe9c10622bcfdc7b84cff77e81212a26ae4ae6` |
+| picture | sha256 | mean luminance |
+| --- | --- | --- |
+| `cells/P1__run-progress-placeholder__run_card__light.png` | `fd588f6955c134ccadac5a88846802310f77621efc80ceed76caeaa0380d632c` | 238.5 / 255 |
+| `cells/P1__run-progress-placeholder__run_card__dark.png` | `2948f69bf1a618208c87730a621f7fbb5b84d16495b196808f2c25517098c247` | 11.7 / 255 |
 
 The four INDEX records' digests are in `capture-records.md`, written there by the recorder.
 
@@ -344,6 +382,14 @@ node $W --walk $P --out $O --merge --steps review-runpage-decided-light,review-r
 node $W --walk $P --out $O --merge --steps review-chat-decided-runcard-dark
 node evidence/2936-w6-captures-batch-2/drivers/07-measure-the-unreachable-cells.mjs
 RECORDS_IN=$O node evidence/2936-w6-captures-batch-2/drivers/08-register-records.mjs
+
+#   THE DARK SIBLING OF THE PLACEHOLDER — one fresh real run, with the palette
+#   switched on the app's OWN control before the run starts (see P1):
+WALK_CELL_PATH=evidence/2936-w6-captures-batch-2/cells/P1__run-progress-placeholder__run_card__dark.png \
+  OUT_JSON=evidence/2936-w6-captures-batch-2/reshoot-dark-placeholder.json \
+  SERVER_LOG=<the dev server's own log> WALK_SENTENCE=<the person's own words> \
+  node evidence/2936-w6-captures-batch-2/drivers/09-reshoot-the-dark-placeholder.mjs
+
 node scripts/audit/chat-hitl-acceptance-gate.mjs && node scripts/ci/chat-hitl-evidence-gate.mjs
 node scripts/audit/chat-hitl-one-card-gate.mjs && node scripts/audit/file-size-ratchet.mjs
 ```

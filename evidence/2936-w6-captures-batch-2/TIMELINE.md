@@ -35,3 +35,26 @@ All times UTC, from the drivers' own stamps and the rows they selected.
 | 01:17:24 | the gate resolved `approve`, `resolved_by` the lane account; the card re-read itself as `settled` with `[data-review-outcome="approved"]` and zero decision bars |
 | 01:20 | **B2** (light and dark) and **B3** photographed |
 | 01:25 | the unreachable cells were DRIVEN and counted on seven surfaces rather than assumed |
+
+## The re-shoot of the dark placeholder — a fresh lane on the same head
+
+The round's lane database was dropped when the round ended, so nothing above could be resumed.
+The lane below was stood up again from nothing: its own throwaway database, its own registry
+publish, its own provider setup through the app's own step, its own runs. Only ONE file changed
+as a result — `cells/P1__run-progress-placeholder__run_card__dark.png`.
+
+| at | what |
+| --- | --- |
+| 02:31 | the lane's dev registry and agent-runtime containers came up; the runtime answered `{"status":"ok","agents":29,"failed":0}` with `last_reload_at` **null** |
+| 02:33 | the lane account and organization were provisioned; the account was made an administrator (disclosed lane write) |
+| 02:34 | the instance namespace was set through the app's own `/setup/name` step |
+| 02:36 | the model provider was configured through the app's own `/setup/model` step, inside the operator's secret-manager wrapper; the app sealed the connection itself |
+| 02:37 | the public origin was set through the app's own `/configuration/development?tab=tunnel` and read back by the app; the account joined the template organization (disclosed lane write) |
+| 02:39 | the app was restarted; the boot repair minted the canonical `installed_extension` rows on the SECOND boot — all three packages read back `active` on the first poll |
+| 02:42 | the registry publish, with the same readback as the round's: three packages, HTTP 200, the version, the manifest kind and produces block, and the registry's own tarball shasums |
+| 02:44 | the four organization-owned skill assignments were written through the shipped `upsertCustomSkillAssignment` and read back through the shipped reader |
+| 02:51:02 | **the theme, BEFORE anything**: `{"dark":false,"stored":null,"osPrefersDark":false}` — the app resolves an unset preference to its light palette whatever the OS says |
+| 02:51:05 | **the app's own theme control was pressed** (the header's "Toggle theme" button): `{"dark":true,"stored":"dark","osPrefersDark":false}`. The OS preference is untouched and stays `false` for the rest of the lane |
+| 02:52–02:54 | **RUN THREE** `d6b5e171-a878-4792-828e-97d3a6ef7787` — the placeholder read `working` at 02:54:07.874Z and was photographed; the gate landed 02:54:29.107Z, **window 21 233 ms**. The frame is DISCARDED as a picture and kept as a record: the page was still scrolled where pressing the mid-run gate's Continue had left it |
+| 02:58–03:01 | **RUN FOUR** `10fe3e1b-57bb-4c54-b10d-fb1b90a80f10` — the same driver with the reader's viewport put back at the top of the page, nothing pressed. The placeholder read `working` with one `review-gate-placeholder` and no gate at **03:00:57.574Z** and was photographed at **03:00:58.096Z**; the review gate was on file at **03:01:04.119Z** (row `created_at` 03:01:02.774Z) and the SAME element read `review` with one `artifact_review_gate` and no placeholder at **03:01:04.120Z**. **Window 6 545 ms, 28 polled samples**, `"dark":true` on every one of them |
+| 03:01 | the filed picture measures **11.7 / 255** mean luminance against the light sibling's 238.5, and carries no development pill |

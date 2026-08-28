@@ -1,0 +1,636 @@
+{
+  "what": "The dark sibling of the run-progress placeholder (P1), re-shot. The lane was stood up again from nothing on the same head — its own throwaway database, its own registry publish, its own provider setup through the app own step — because the round lane was dropped when the round ended.",
+  "registryPublish": {
+    "registry": "http://127.0.0.1:4873/",
+    "published": [
+      "@cinatra-ai/blog-draft-writer-agent@0.1.4",
+      "@cinatra-ai/context-selection-agent@0.1.1",
+      "@cinatra-ai/blog-post-artifact@0.1.4"
+    ],
+    "readback": [
+      {
+        "packageName": "@cinatra-ai/blog-draft-writer-agent",
+        "httpStatus": 200,
+        "latest": "0.1.4",
+        "versions": [
+          "0.1.4"
+        ],
+        "cinatraKind": "agent",
+        "produces": [
+          {
+            "extension": "@cinatra-ai/blog-post-artifact"
+          }
+        ],
+        "shasum": "b22237efe773d4aaf10b91e12cd409ddcf315fb2"
+      },
+      {
+        "packageName": "@cinatra-ai/context-selection-agent",
+        "httpStatus": 200,
+        "latest": "0.1.1",
+        "versions": [
+          "0.1.1"
+        ],
+        "cinatraKind": "agent",
+        "produces": null,
+        "shasum": "5c163bf8d81976b76ce33b3f07d38235c1d6d825"
+      },
+      {
+        "packageName": "@cinatra-ai/blog-post-artifact",
+        "httpStatus": 200,
+        "latest": "0.1.4",
+        "versions": [
+          "0.1.4"
+        ],
+        "cinatraKind": "artifact",
+        "produces": null,
+        "shasum": "6ea1d5ef18fc9cac716d110915861216a8c873a7"
+      }
+    ],
+    "at": "2026-08-28T02:43:25.330Z"
+  },
+  "runThree": {
+    "runId": "d6b5e171-a878-4792-828e-97d3a6ef7787",
+    "note": "DISCARDED as a picture, kept as a record: the frame was shot with the run page still scrolled where pressing the mid-run gate Continue had left it, so the package line and half the title sat behind the sticky header. The reading itself is good and is kept here.",
+    "theme": {
+      "before": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "dark": false,
+        "stored": null,
+        "osPrefersDark": false,
+        "bodyBackground": "rgb(241, 241, 237)"
+      },
+      "afterTheAppsOwnControl": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      },
+      "atTheEnd": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      }
+    },
+    "placeholderWindow": {
+      "firstWorkingReadingAt": "2026-08-28T02:54:07.874Z",
+      "reviewGateOnFileAt": "2026-08-28T02:54:29.107Z",
+      "reviewGateCreatedAt": "2026-08-28T02:54:28.180Z",
+      "measuredWindowMs": 21233,
+      "shot": {
+        "path": "evidence/2936-w6-captures-batch-2/cells/P1__run-progress-placeholder__run_card__dark.png",
+        "at": "2026-08-28T02:54:08.014Z",
+        "observed": {
+          "slot": "working",
+          "placeholder": 1,
+          "gate": 0,
+          "dark": true
+        }
+      },
+      "afterSwapReading": {
+        "at": "2026-08-28T02:54:35.122Z",
+        "slot": "review",
+        "placeholder": 0,
+        "gate": 1,
+        "dark": true
+      },
+      "samples": 41
+    },
+    "serverLogMarkers": {
+      "scriptedProviderLines": 0,
+      "llmBridgeRunSelect": 1,
+      "publicMcpCallbacks": 6,
+      "probeRefusalsBeforeTheMeasuredTurn": 1
+    },
+    "finalRun": {
+      "id": "d6b5e171-a878-4792-828e-97d3a6ef7787",
+      "status": "completed",
+      "lifecycle_moment": null,
+      "lifecycle_card_kind": null,
+      "lifecycle_card_ref": null,
+      "error": null
+    }
+  },
+  "runFour": {
+    "runId": "10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+    "note": "THE FILED PICTURE. Same driver, with the reader own viewport put back at the top of the page before the shot — nothing pressed.",
+    "threadUrl": "/chat/cinatra-ai/cinatra-assistant/72580bae-3ce1-467f-8f07-3bffcdd73a06",
+    "runPage": "/agents/cinatra-ai/blog-draft-writer-agent/10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+    "finalRun": {
+      "id": "10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+      "status": "completed",
+      "lifecycle_moment": null,
+      "lifecycle_card_kind": null,
+      "lifecycle_card_ref": null,
+      "error": null
+    },
+    "theme": {
+      "before": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "dark": false,
+        "stored": null,
+        "osPrefersDark": false,
+        "bodyBackground": "rgb(241, 241, 237)"
+      },
+      "afterTheAppsOwnControl": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      },
+      "atTheEnd": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      }
+    },
+    "hitlGates": [
+      {
+        "review_task_id": "setup-10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+        "field_name": "idea",
+        "x_renderer": "@cinatra-ai/agent-builder:schema-field-fallback",
+        "created_at": "2026-08-28T02:59:28.226Z"
+      },
+      {
+        "review_task_id": "wayflow-27173596-2a66-42f3-870a-8aa83e23de2d",
+        "field_name": null,
+        "x_renderer": "@cinatra-ai/context-selection-agent:context-selector",
+        "created_at": "2026-08-28T03:00:06.352Z"
+      }
+    ],
+    "reviewGates": [
+      {
+        "id": "1b983a34-848e-420c-91b1-b51593f781da",
+        "review_task_id": "lifecycle-review:7302f6071de31673d481360c1027ddae26feaa6d6695c7006bae76da28974c1e",
+        "status": "pending",
+        "created_at": "2026-08-28T03:01:02.774Z"
+      }
+    ],
+    "midrunAnsweredAt": "2026-08-28T03:00:22.914Z",
+    "placeholderWindow": {
+      "firstWorkingReadingAt": "2026-08-28T03:00:57.574Z",
+      "reviewGateOnFileAt": "2026-08-28T03:01:04.119Z",
+      "reviewGateCreatedAt": "2026-08-28T03:01:02.774Z",
+      "measuredWindowMs": 6545,
+      "shot": {
+        "path": "evidence/2936-w6-captures-batch-2/cells/P1__run-progress-placeholder__run_card__dark.png",
+        "at": "2026-08-28T03:00:58.096Z",
+        "observed": {
+          "slot": "working",
+          "placeholder": 1,
+          "gate": 0,
+          "dark": true
+        },
+        "scrolledToTop": true
+      },
+      "afterSwapReading": {
+        "at": "2026-08-28T03:01:04.120Z",
+        "slot": "review",
+        "placeholder": 0,
+        "gate": 1,
+        "dark": true
+      },
+      "samples": 28,
+      "log": [
+        {
+          "at": "2026-08-28T03:00:22.920Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:24.423Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:25.927Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:27.432Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:28.941Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:30.450Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:31.959Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:33.469Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:34.977Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:36.481Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:37.986Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:39.491Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:40.996Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:42.506Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:44.014Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:45.519Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:47.027Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:48.536Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:50.045Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:51.553Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:53.056Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:54.562Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:56.068Z",
+          "dark": {
+            "slot": null,
+            "placeholder": 0,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:57.574Z",
+          "dark": {
+            "slot": "working",
+            "placeholder": 1,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:00:59.602Z",
+          "dark": {
+            "slot": "working",
+            "placeholder": 1,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:01:01.108Z",
+          "dark": {
+            "slot": "working",
+            "placeholder": 1,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:01:02.615Z",
+          "dark": {
+            "slot": "working",
+            "placeholder": 1,
+            "gate": 0,
+            "dark": true
+          },
+          "reviewGates": 0
+        },
+        {
+          "at": "2026-08-28T03:01:04.119Z",
+          "dark": {
+            "slot": "review",
+            "placeholder": 0,
+            "gate": 1,
+            "dark": true
+          },
+          "reviewGates": 1
+        }
+      ]
+    },
+    "serverLogMarkers": {
+      "scriptedProviderLines": 0,
+      "llmBridgeRunSelect": 1,
+      "publicMcpCallbacks": 5,
+      "probeRefusalsBeforeTheMeasuredTurn": 0
+    },
+    "timeline": [
+      {
+        "at": "2026-08-28T02:58:21.426Z",
+        "what": "the development toolbar's own indicator control was used (disclosed environment action)",
+        "status": 204
+      },
+      {
+        "at": "2026-08-28T02:58:22.661Z",
+        "what": "the theme BEFORE the control was pressed",
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "dark": false,
+        "stored": null,
+        "osPrefersDark": false,
+        "bodyBackground": "rgb(241, 241, 237)"
+      },
+      {
+        "at": "2026-08-28T02:58:25.428Z",
+        "what": "the theme AFTER the app's own control was pressed",
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      },
+      {
+        "at": "2026-08-28T02:58:36.067Z",
+        "what": "a warm-up (probe) turn was answered with the platform's tools available",
+        "attempt": 0,
+        "refusalsSoFar": 0
+      },
+      {
+        "at": "2026-08-28T02:58:36.068Z",
+        "what": "ingress refusals before the measured turn",
+        "refusals": 0
+      },
+      {
+        "at": "2026-08-28T02:58:36.069Z",
+        "what": "the person asked for the run in their own words",
+        "sentence": "Please run the Blog Draft Writer Agent for me and show me the draft before anything is published."
+      },
+      {
+        "at": "2026-08-28T02:58:39.904Z",
+        "what": "the dispatch turn settled in the conversation",
+        "threadUrl": "/chat/cinatra-ai/cinatra-assistant/72580bae-3ce1-467f-8f07-3bffcdd73a06"
+      },
+      {
+        "at": "2026-08-28T02:58:59.947Z",
+        "what": "the app's own dispatch created the run",
+        "runId": "10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+        "status": "pending_input"
+      },
+      {
+        "at": "2026-08-28T02:59:14.267Z",
+        "what": "the hold drew one chip per assigned skill",
+        "chips": 4,
+        "skillIds": [
+          "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+          "@cinatra-ai/blog-writing-skill:blog-writing",
+          "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher"
+        ]
+      },
+      {
+        "at": "2026-08-28T02:59:40.431Z",
+        "what": "the row settled on the card's own affordances",
+        "state": "decided",
+        "confirm": 0
+      },
+      {
+        "at": "2026-08-28T02:59:40.433Z",
+        "what": "the run parked",
+        "status": "pending_approval",
+        "moment": "hitl",
+        "kind": "agent_hitl_screen"
+      },
+      {
+        "at": "2026-08-28T02:59:45.518Z",
+        "what": "the setup gate was answered through the card's own Continue"
+      },
+      {
+        "at": "2026-08-28T02:59:48.528Z",
+        "what": "the run reached the schedule moment",
+        "status": "pending_trigger",
+        "moment": "schedule",
+        "kind": "trigger_schedule_proposal",
+        "ref": null
+      },
+      {
+        "at": "2026-08-28T03:00:04.744Z",
+        "what": "the theme as the RUN PAGE reads it",
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "dark": true,
+        "stored": "dark",
+        "osPrefersDark": false,
+        "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+      },
+      {
+        "at": "2026-08-28T03:00:05.126Z",
+        "what": "the run page's own scheduling step armed the run",
+        "label": "Continue"
+      },
+      {
+        "at": "2026-08-28T03:00:09.152Z",
+        "what": "the mid-run gate opened",
+        "reviewTaskId": "wayflow-27173596-2a66-42f3-870a-8aa83e23de2d",
+        "renderer": "@cinatra-ai/context-selection-agent:context-selector"
+      },
+      {
+        "at": "2026-08-28T03:00:22.914Z",
+        "what": "the mid-run gate was answered through the card's own Continue"
+      },
+      {
+        "at": "2026-08-28T03:00:57.574Z",
+        "what": "THE SLOT IS DRAWING THE PLACEHOLDER, in the app's own dark palette",
+        "slot": "working",
+        "placeholder": 1,
+        "gate": 0,
+        "dark": true
+      },
+      {
+        "at": "2026-08-28T03:00:58.096Z",
+        "what": "the dark placeholder was photographed",
+        "path": "evidence/2936-w6-captures-batch-2/cells/P1__run-progress-placeholder__run_card__dark.png",
+        "observed": {
+          "slot": "working",
+          "placeholder": 1,
+          "gate": 0,
+          "dark": true
+        },
+        "scrolledToTop": true
+      },
+      {
+        "at": "2026-08-28T03:01:04.119Z",
+        "what": "THE ARTIFACT REVIEW GATE IS ON FILE",
+        "reviewTaskId": "lifecycle-review:7302f6071de31673d481360c1027ddae26feaa6d6695c7006bae76da28974c1e",
+        "status": "pending",
+        "createdAt": "2026-08-28T03:01:02.774Z"
+      },
+      {
+        "at": "2026-08-28T03:01:04.120Z",
+        "what": "the slot after the mint, on the same element, untouched",
+        "slot": "review",
+        "placeholder": 0,
+        "gate": 1,
+        "dark": true
+      }
+    ]
+  }
+}

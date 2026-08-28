@@ -167,3 +167,63 @@ committed pictures — which no fixture in this repository produces.
 `grep -rniE "insert into|SEEDED_|seedGate|seedTurn|update .* set status" drivers/` over this
 round's drivers is EMPTY. **No run, gate, park, record or review task was inserted, and no status
 was written by hand.**
+
+## The re-shoot of the dark placeholder — run four, read back out of its own rows
+
+`drivers/09-reshoot-the-dark-placeholder.mjs`, output in `reshoot-dark-placeholder.json`. A
+FRESH lane on the same head (the round's database was dropped when the round ended), with the
+same registry publish and the same provider setup through the app's own step. Two runs: run three
+`d6b5e171-a878-4792-828e-97d3a6ef7787`, whose frame is discarded as a picture and kept as a
+record, and run four, which is the filed one.
+
+```json
+{
+  "id": "10fe3e1b-57bb-4c54-b10d-fb1b90a80f10",
+  "status": "completed",
+  "error": null,
+  "thread": "/chat/cinatra-ai/cinatra-assistant/72580bae-3ce1-467f-8f07-3bffcdd73a06"
+}
+```
+
+| read | value |
+| --- | --- |
+| HITL gates on file | `setup-10fe3e1b-…` (field `idea`, 02:59:28.226Z) and `wayflow-27173596-…` (`@cinatra-ai/context-selection-agent:context-selector`, 03:00:06.352Z) |
+| the mid-run gate was answered at | 2026-08-28T03:00:22.914Z |
+| the slot first read `working` with a placeholder and no gate at | 2026-08-28T03:00:57.574Z |
+| the picture was taken at | 2026-08-28T03:00:58.096Z, reading `{"slot":"working","placeholder":1,"gate":0,"dark":true}` |
+| artifact review gate | `lifecycle-review:7302f6071de31673d481360c1027ddae26feaa6d6695c7006bae76da28974c1e`, created 03:01:02.774Z, on file at 03:01:04.119Z |
+| the SAME element after the mint | `{"slot":"review","placeholder":0,"gate":1,"dark":true}` at 03:01:04.120Z |
+| **the window** | **6 545 ms**, 28 polled samples, `"dark":true` on every one |
+
+### The palette, read back three times
+
+| when | reading |
+| --- | --- |
+| before the app's own control was pressed | `{"dark":false,"stored":null,"osPrefersDark":false}`, body `rgb(241, 241, 237)` |
+| after it was pressed | `{"dark":true,"stored":"dark","osPrefersDark":false}`, body `lab(1.76974 1.32743 -9.28855)` |
+| on the run page, while the placeholder was on screen | `"dark":true` on all 28 samples, `osPrefersDark` still `false` |
+
+**The OS preference is `false` throughout.** The darkness in the filed picture is the app's own
+palette, chosen on the app's own control — which is exactly what the first attempt did not do.
+
+### Provider evidence for the re-shoot
+
+| read | run three | run four |
+| --- | --- | --- |
+| `POST /api/mcp 200` callbacks from the provider's own servers over the public ingress | 5 | 5 |
+| `[llm-bridge-run-select]` lines the agent runtime produced | 1 | 1 |
+| scripted-provider lines in the server log | **0** | **0** |
+| `CINATRA_TEST_LLM_PROVIDER` in the driving environment | unset | unset |
+| ingress refusals on the cold probe before the measured turn | 1 (recorded, retried with the same words, answered) | 0 |
+
+The same limit stands: `cinatra.llm_usage` does not exist on a database built from this fixture,
+so there is no per-call token table to quote.
+
+### One disclosed environment action, and it is not a lane write
+
+The dev server's own dev-indicator control (`POST /__nextjs_disable_dev_indicator`, the endpoint
+the development toolbar's own hide affordance calls, answered `204`) was used so the frame carries
+no development "Rendering…" pill — which the review of this batch asked for. It is a preference of
+the DEVELOPMENT toolbar on the dev server; it renders nothing of the product, writes nothing to
+the app, and changes no product code. `grep -rniE "insert into|SEEDED_|seedGate|seedTurn|update .* set status"`
+over `drivers/09-reshoot-the-dark-placeholder.mjs` is empty, like the rest.
