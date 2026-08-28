@@ -1,0 +1,62 @@
+{
+  "note": "Every cell this round DROVE and could not reach, with the code fact and the measurement. No stand-ins.",
+  "at": "2026-08-28",
+  "cells": [
+    {
+      "cell": "artifact_review_gate x site_widget x pending / decided",
+      "driven": "one real widget-started run (096e5a56-d42b-46fc-9dd4-8e3da018998b) produced its artifact and its review gate went PENDING (53781825-e912-4aaa-8275-4337f90efe85, created 06:39:00.345Z)",
+      "measured": {
+        "reviewCardsOnTheLivePage": 0,
+        "polledSeconds": 900,
+        "reviewCardsAfterAReloadAndAFreshWidgetSignIn": 0,
+        "runReviewSlotElements": 0,
+        "reviewGatePlaceholders": 0
+      },
+      "codeFact": "packages/agents/src/agentic-run-panel.tsx:1620 `const widgetHostedPanel = ambientLifecycleHost === \"site_widget\";` gates BOTH readings of the review slot: `:1625` `status === \"completed\" && !widgetHostedPanel ? reviewSlot.ref : null` and `:1633` `(reviewMayStillOpen && !widgetHostedPanel)`. So on this host the panel neither draws the gate in place nor draws the placeholder. And the injected part is withheld for the same turn: src/lib/lifecycle/lifecycle-run-outbox.ts `injectionForTurn` returns null when `part.viewType === RUN_CARD_CARRIED_VIEW_TYPE && turnCarriesRunCardFor(content, entry.runId)` — one review card per gate per turn (cinatra#2997), on the ground that the run card already shows the gate. The two rules meet on `site_widget`: the injection is suppressed because the run card would show it, and the run card is told not to show it.",
+      "verdict": "UNREACHABLE on this head. Not a limit of this round's driving."
+    },
+    {
+      "cell": "the run-progress placeholder on site_widget (a page control, not an index record)",
+      "driven": "260 polled samples over the whole working window of the same run",
+      "measured": { "dataRunReviewSlotElements": 0, "reviewGatePlaceholders": 0, "samples": 260 },
+      "codeFact": "the placeholder has three mounts and all three are run_card surfaces (packages/agents/src/agentic-run-panel.tsx:1679, packages/agents/src/orchestrator-stepper-panel.tsx:2115, packages/agents/src/instance-screens.tsx:2152); on `site_widget` the first is closed by `widgetHostedPanel` above and the other two are not mounted in a widget column at all.",
+      "verdict": "UNREACHABLE on this head, and it is the same code fact as the cell above."
+    },
+    {
+      "cell": "trigger_schedule_proposal x site_widget x pending / decided (the HELD carrier)",
+      "driven": "two sentences typed into the widget's own composer on two fresh conversations: 'Run the agent @cinatra-ai/blog-draft-writer-agent every weekday at 9 in the morning.' and the same with 'Europe/Berlin time.' added, after the first was answered with a question about the timezone",
+      "measured": { "scheduleCards": 0, "answer": "Not available to you." },
+      "codeFact": "`Not available to you.` is `schedule_proposal_render`'s own fixed refusal, returned when `resolveProposer()` yields null (src/lib/lifecycle/schedule-proposal-mcp.ts). The primitive IS in the widget allowlist (packages/mcp-server/src/delegated-widget-tool-policy.ts lists `schedule_proposal_render`), and the other two conditions of `resolveProposer` — `ctx.userId` and `ctx.orgId` under a `public_site_widget` delegation — were satisfied by the SAME widget session minutes earlier, because `readFramePerson()` in src/lib/lifecycle/named-agent-start-mcp.ts:227-236 reads exactly that triple and admitted this session's run start. By elimination the failing condition is `delegated.lifecycleRead !== true` at schedule-proposal-mcp.ts:161-163.",
+      "verdict": "UNREACHABLE on this head, with the refusal measured in the widget's own conversation."
+    },
+    {
+      "cell": "the run-carried schedule card on site_widget",
+      "driven": "three runs reached lifecycle_moment=schedule from inside the widget",
+      "measured": { "runRows": "lifecycle_moment=schedule, lifecycle_card_kind=trigger_schedule_proposal, lifecycle_card_ref=null", "scheduleCardsInTheWidget": 0, "confirmControls": 0 },
+      "verdict": "OWED TO cinatra#3044, re-measured on `site_widget` and deliberately NOT re-attempted."
+    },
+    {
+      "cell": "verification_summary x site_widget x advisory",
+      "driven": "not driven to a subject",
+      "codeFact": "`coreDefault` fires the verification checkpoint on a remote apply or whenever `changes_requested` occurred (src/lib/lifecycle/lifecycle-policy.ts:280-283). This agent publishes nothing externally, so the only route is a change request — and a change request needs a review card to type it on, which this host does not draw. `cinatra.artifact_verification_records` = 0 rows.",
+      "verdict": "UNREACHABLE, blocked behind the review cell above and behind cinatra#2951 (the repair run parks on the agent's own setup field and its screen 404s)."
+    },
+    {
+      "cell": "the typed comment landing on the bound review, on site_widget (cards SECTION X)",
+      "driven": "two sentences typed into the widget's composer on the conversation whose run holds the pending gate",
+      "measured": {
+        "answerOne": "This message is not allowed to operate that control. Nothing was done.",
+        "answerTwo": "I can't both approve and reject the same review. Please choose approve or reject.",
+        "cardsBoundInTheWidget": 0
+      },
+      "verdict": "The LENT ACTION cannot be photographed settling a card this host does not draw. What IS measured is SECTION XI's first case, in the platform's own words, and SECTION X's one-press-per-message refusal."
+    },
+    {
+      "cell": "agent_hitl_screen x site_widget x asking",
+      "driven": "five real widget-started runs parked at the agent's own setup screen; the widget drew the card each time",
+      "measured": { "cardsDrawn": "[{\"kind\":\"agent_hitl_screen\",\"host\":\"site_widget\",\"state\":\"asking\"}]", "fieldsRegions": 1, "submits": 1 },
+      "codeFact": "the capture contract declares this kind composition-only on this host (scripts/ci/lib/capture-record-contract.mjs, CARD_KINDS.agent_hitl_screen.compositionOnly.site_widget), on the ground that a widget conversation cannot start a run that reaches `pending_approval`. cinatra#2996's `agent_named_start` gives the widget's own assistant exactly that, so the premise no longer holds on this head.",
+      "verdict": "REACHABLE AND DRAWN, and the recorder REFUSES it. Filed as a page control, never as a record; the refusals are in refusals.json."
+    }
+  ]
+}
