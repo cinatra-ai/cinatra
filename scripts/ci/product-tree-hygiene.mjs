@@ -12,8 +12,9 @@
 //
 // A pre-commit hook enforces this on ONE machine. This gate enforces it for the
 // org, on every pull request, mechanically — and it is the reason a stray
-// `evidence/`, `.planning/`, or `node_modules/` cannot re-enter the tree by way
-// of a rebase, a `git add -A`, or an agent working from a different profile.
+// proof directory, planning note, or dependency install cannot re-enter the
+// tree by way of a rebase, a `git add -A`, or an agent working from a different
+// profile. (The names themselves are the rule set below, not this prose.)
 //
 // TWO ANCHORING CLASSES, and the difference is load-bearing:
 //

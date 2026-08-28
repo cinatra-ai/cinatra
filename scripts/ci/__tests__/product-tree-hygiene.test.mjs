@@ -1,8 +1,11 @@
 // The product tree hygiene gate (owner ruling 2026-08-28).
 //
-// Dependency-free (`node --test` + `node:assert`), like the exec-compose
-// scoping gate: the gate itself must run without a `pnpm install`, and so must
-// its tests — it guards the tracked tree in a pure-node CI job.
+// Runs in the root Vitest suite (the gate of record) like its siblings in this
+// directory: `scripts/ci/__tests__/**` is in the root include, so a suite here
+// is executed wholesale by `pnpm test:root` and a failure reds a required
+// check. The GATE ITSELF stays dependency-free (node + git only) so the
+// pure-node `gates` job can run it without an install; only this suite needs
+// vitest.
 //
 // Two halves:
 //   - a CLEAN path list passes (the positive case that would otherwise rot
@@ -13,43 +16,31 @@
 //     a nested `evidence/` MUST be, because that asymmetry is the whole design
 //     and an allowlist is what we are refusing to have.
 
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+
+import { describe, expect, it } from "vitest";
 
 import { ANY_DEPTH_DIRS, ROOT_DIRS, RULES, findHits } from "../product-tree-hygiene.mjs";
 
 const GATE = fileURLToPath(new URL("../product-tree-hygiene.mjs", import.meta.url));
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 
-/** Run the gate in --stdin mode over `paths`; returns { status, stdout, stderr }. */
+/** Run the gate in --stdin mode over `paths`; returns the spawn result. */
 function runGate(paths, extraArgs = []) {
-  try {
-    const stdout = execFileSync("node", [GATE, "--stdin", ...extraArgs], {
-      cwd: REPO_ROOT,
-      input: `${paths.join("\n")}\n`,
-      encoding: "utf8",
-    });
-    return { status: 0, stdout, stderr: "" };
-  } catch (err) {
-    return {
-      status: err.status,
-      stdout: err.stdout ?? "",
-      stderr: err.stderr ?? "",
-    };
-  }
+  return spawnSync("node", [GATE, "--stdin", ...extraArgs], {
+    cwd: REPO_ROOT,
+    input: `${paths.join("\n")}\n`,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
 }
 
 /** The rule id that catches `path`, or undefined. */
-function ruleFor(path) {
-  return findHits([path])[0]?.rule;
+function ruleFor(p) {
+  return findHits([p])[0]?.rule;
 }
-
-// ---------------------------------------------------------------------------
-// A clean tree passes
-// ---------------------------------------------------------------------------
 
 const CLEAN = [
   "package.json",
@@ -63,14 +54,16 @@ const CLEAN = [
   "config/upgrade/upgrade-matrix.json",
 ];
 
-test("a clean tree passes", () => {
-  assert.deepEqual(findHits(CLEAN), []);
-});
+describe("a clean tree", () => {
+  it("produces no hits", () => {
+    expect(findHits(CLEAN)).toEqual([]);
+  });
 
-test("a clean tree exits 0 through the CLI", () => {
-  const { status, stdout } = runGate(CLEAN);
-  assert.equal(status, 0);
-  assert.match(stdout, /\[product-tree-hygiene\] OK/);
+  it("exits 0 through the CLI", () => {
+    const r = runGate(CLEAN);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/\[product-tree-hygiene\] OK/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -109,145 +102,150 @@ const EXAMPLES = [
   ["vitest.integration-2935.config.mjs", "root:vitest.integration-*.config.*"],
 ];
 
-for (const [path, rule] of EXAMPLES) {
-  test(`${rule} catches ${path}`, () => {
-    assert.equal(ruleFor(path), rule);
+describe("every rule catches its example", () => {
+  for (const [p, rule] of EXAMPLES) {
+    it(`${rule} catches ${p}`, () => {
+      expect(ruleFor(p)).toBe(rule);
+    });
+  }
+
+  it("every rule has at least one covering example", () => {
+    const covered = new Set(EXAMPLES.map(([, rule]) => rule));
+    expect(RULES.map((r) => r.rule).filter((r) => !covered.has(r))).toEqual([]);
   });
-}
 
-test("every rule has at least one covering example", () => {
-  const covered = new Set(EXAMPLES.map(([, rule]) => rule));
-  const uncovered = RULES.map((r) => r.rule).filter((r) => !covered.has(r));
-  assert.deepEqual(uncovered, [], "each rule must be exercised by an example");
-});
-
-test("a dirty tree exits 1 and names the rule beside each hit", () => {
-  const { status, stderr } = runGate([...CLEAN, "evidence/a.png", "node_modules/x/i.js"]);
-  assert.equal(status, 1);
-  assert.match(stderr, /\[product-tree-hygiene\] FAIL:/);
-  assert.match(stderr, /any-depth:evidence\/\tevidence\/a\.png/);
-  assert.match(stderr, /any-depth:node_modules\/\tnode_modules\/x\/i\.js/);
-  assert.match(stderr, /2 forbidden path\(s\)/);
+  it("a dirty tree exits 1 and names the rule beside each hit", () => {
+    const r = runGate([...CLEAN, "evidence/a.png", "node_modules/x/i.js"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/\[product-tree-hygiene\] FAIL:/);
+    expect(r.stderr).toMatch(/any-depth:evidence\/\tevidence\/a\.png/);
+    expect(r.stderr).toMatch(/any-depth:node_modules\/\tnode_modules\/x\/i\.js/);
+    expect(r.stderr).toMatch(/2 forbidden path\(s\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Anchoring — the asymmetry that replaces an allowlist
 // ---------------------------------------------------------------------------
 
-test("src/lib/data/x.ts is NOT caught — data/ is root-anchored", () => {
-  assert.equal(ruleFor("src/lib/data/x.ts"), undefined);
-});
+describe("anchoring", () => {
+  it("src/lib/data/x.ts is NOT caught — data/ is root-anchored", () => {
+    expect(ruleFor("src/lib/data/x.ts")).toBeUndefined();
+  });
 
-test("the real tracked nested data/ route segment is NOT caught", () => {
-  // The path that FORCED data/ to be root-anchored rather than any-depth.
-  assert.equal(
-    ruleFor("src/app/agents/[vendor]/[packageName]/[instanceId]/data/page.tsx"),
-    undefined,
-  );
-});
+  it("the real tracked nested data/ route segment is NOT caught", () => {
+    // The path that FORCED data/ to be root-anchored rather than any-depth.
+    expect(
+      ruleFor("src/app/agents/[vendor]/[packageName]/[instanceId]/data/page.tsx"),
+    ).toBeUndefined();
+  });
 
-test("the root data/ runtime clone target IS caught", () => {
-  assert.equal(ruleFor("data/postgres/PG_VERSION"), "root:data/");
-});
+  it("the root data/ runtime clone target IS caught", () => {
+    expect(ruleFor("data/postgres/PG_VERSION")).toBe("root:data/");
+  });
 
-test("packages/extensions/** is NOT caught — extensions/ is root-anchored", () => {
-  assert.equal(ruleFor("packages/extensions/src/index.ts"), undefined);
-  assert.equal(ruleFor("extensions/vendored/x.js"), "root:extensions/");
-});
+  it("packages/extensions/** is NOT caught — extensions/ is root-anchored", () => {
+    expect(ruleFor("packages/extensions/src/index.ts")).toBeUndefined();
+    expect(ruleFor("extensions/vendored/x.js")).toBe("root:extensions/");
+  });
 
-test("dev/ is root-anchored: a nested dev/ product path is NOT caught", () => {
-  assert.equal(ruleFor("packages/x/src/dev/harness.ts"), undefined);
-  assert.equal(ruleFor("scripts/dev/seed.mjs"), undefined);
-  assert.equal(ruleFor("dev/cinatra-docs/README.md"), "root:dev/");
-});
+  it("dev/ is root-anchored: a nested dev/ product path is NOT caught", () => {
+    expect(ruleFor("packages/x/src/dev/harness.ts")).toBeUndefined();
+    expect(ruleFor("scripts/dev/seed.mjs")).toBeUndefined();
+    expect(ruleFor("dev/cinatra-docs/README.md")).toBe("root:dev/");
+  });
 
-test("test-results/ is root-anchored", () => {
-  assert.equal(ruleFor("tests/e2e/test-results/keep.ts"), undefined);
-  assert.equal(ruleFor("test-results/trace.zip"), "root:test-results/");
-});
+  it("test-results/ is root-anchored", () => {
+    expect(ruleFor("tests/e2e/test-results/keep.ts")).toBeUndefined();
+    expect(ruleFor("test-results/trace.zip")).toBe("root:test-results/");
+  });
 
-test("packages/x/evidence/y.png IS caught — evidence/ is any-depth", () => {
-  assert.equal(ruleFor("packages/x/evidence/y.png"), "any-depth:evidence/");
-});
+  it("packages/x/evidence/y.png IS caught — evidence/ is any-depth", () => {
+    expect(ruleFor("packages/x/evidence/y.png")).toBe("any-depth:evidence/");
+  });
 
-test("pr-evidence/ does not satisfy the evidence/ rule, and vice versa", () => {
-  // Segment matching, not substring: each name owns its own rule so the report
-  // names the right one.
-  assert.equal(ruleFor("pr-evidence/x.png"), "any-depth:pr-evidence/");
-  assert.equal(ruleFor("evidence/x.png"), "any-depth:evidence/");
-});
+  it("pr-evidence/ does not satisfy the evidence/ rule, and vice versa", () => {
+    // Segment matching, not substring: each name owns its own rule so the
+    // report names the right one.
+    expect(ruleFor("pr-evidence/x.png")).toBe("any-depth:pr-evidence/");
+    expect(ruleFor("evidence/x.png")).toBe("any-depth:evidence/");
+  });
 
-test("a file merely NAMED like a forbidden directory is not caught", () => {
-  // The rules match a directory SEGMENT (trailing slash), so a product file
-  // that happens to carry the name is untouched.
-  assert.equal(ruleFor("docs/internals/contracts/evidence.md"), undefined);
-  assert.equal(ruleFor("src/lib/node_modules.ts"), undefined);
-  assert.equal(ruleFor("scripts/audit/test-results.mjs"), undefined);
-});
+  it("a file merely NAMED like a forbidden directory is not caught", () => {
+    // The rules match a directory SEGMENT (trailing slash), so a product file
+    // that happens to carry the name is untouched.
+    expect(ruleFor("docs/internals/contracts/evidence.md")).toBeUndefined();
+    expect(ruleFor("src/lib/node_modules.ts")).toBeUndefined();
+    expect(ruleFor("scripts/audit/test-results.mjs")).toBeUndefined();
+  });
 
-test("a root file rule does not fire on a nested namesake", () => {
-  assert.equal(ruleFor("packages/x/next-env.d.ts"), undefined);
-  assert.equal(ruleFor("packages/x/.env.local"), undefined);
-  assert.equal(ruleFor(".env.example"), undefined);
-  assert.equal(ruleFor(".env.local.example"), undefined);
-});
+  it("a root file rule does not fire on a nested namesake", () => {
+    expect(ruleFor("packages/x/next-env.d.ts")).toBeUndefined();
+    expect(ruleFor("packages/x/.env.local")).toBeUndefined();
+    expect(ruleFor(".env.example")).toBeUndefined();
+    expect(ruleFor(".env.local.example")).toBeUndefined();
+  });
 
-test("the CONSOLIDATED home vitest/integration/<NNNN>.config.ts is NOT caught", () => {
-  // Where the 12 root tiers move. The rule must not follow them there, or the
-  // consolidation lands red — `vitest/integration/...` has no
-  // `vitest.integration-` root segment, so the anchor already excludes it.
-  assert.equal(ruleFor("vitest/integration/2578.config.ts"), undefined);
-  assert.equal(ruleFor("vitest/integration/2935.config.ts"), undefined);
-  assert.equal(ruleFor("vitest/integration/README.md"), undefined);
-});
+  it("the CONSOLIDATED home vitest/integration/<NNNN>.config.ts is NOT caught", () => {
+    // Where the 12 root tiers move. The rule must not follow them there, or the
+    // consolidation lands red — `vitest/integration/...` has no
+    // `vitest.integration-` root segment, so the anchor already excludes it.
+    expect(ruleFor("vitest/integration/2578.config.ts")).toBeUndefined();
+    expect(ruleFor("vitest/integration/2935.config.ts")).toBeUndefined();
+    expect(ruleFor("vitest/integration/README.md")).toBeUndefined();
+  });
 
-test("a package-local vitest.integration-*.config.ts is NOT caught", () => {
-  assert.equal(ruleFor("packages/x/vitest.integration-1.config.ts"), undefined);
-  assert.equal(ruleFor("tests/vitest.integration-2578.config.ts"), undefined);
-});
+  it("a package-local vitest.integration-*.config.ts is NOT caught", () => {
+    expect(ruleFor("packages/x/vitest.integration-1.config.ts")).toBeUndefined();
+    expect(ruleFor("tests/vitest.integration-2578.config.ts")).toBeUndefined();
+  });
 
-test("the root tier rule is extension-bound and whole-name anchored", () => {
-  assert.equal(ruleFor("vitest.integration-2578.config.json"), undefined);
-  assert.equal(ruleFor("vitest.integration-2578.config.ts.bak"), undefined);
-  assert.equal(ruleFor("vitest.config.ts"), undefined);
-  assert.equal(ruleFor("vitest.integration.config.ts"), undefined);
+  it("the root tier rule is extension-bound and whole-name anchored", () => {
+    expect(ruleFor("vitest.integration-2578.config.json")).toBeUndefined();
+    expect(ruleFor("vitest.integration-2578.config.ts.bak")).toBeUndefined();
+    expect(ruleFor("vitest.config.ts")).toBeUndefined();
+    expect(ruleFor("vitest.integration.config.ts")).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
 // --json
 // ---------------------------------------------------------------------------
 
-test("--json prints {hits:[{path,rule}]} and still exits 1", () => {
-  const { status, stdout } = runGate([...CLEAN, "evidence/a.png"], ["--json"]);
-  assert.equal(status, 1);
-  assert.deepEqual(JSON.parse(stdout), {
-    hits: [{ path: "evidence/a.png", rule: "any-depth:evidence/" }],
+describe("--json", () => {
+  it("prints {hits:[{path,rule}]} and still exits 1", () => {
+    const r = runGate([...CLEAN, "evidence/a.png"], ["--json"]);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout)).toEqual({
+      hits: [{ path: "evidence/a.png", rule: "any-depth:evidence/" }],
+    });
   });
-});
 
-test("--json on a clean list is an empty hit list and exits 0", () => {
-  const { status, stdout } = runGate(CLEAN, ["--json"]);
-  assert.equal(status, 0);
-  assert.deepEqual(JSON.parse(stdout), { hits: [] });
+  it("on a clean list is an empty hit list and exits 0", () => {
+    const r = runGate(CLEAN, ["--json"]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ hits: [] });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // The rule set itself
 // ---------------------------------------------------------------------------
 
-test("no rule name appears in both anchoring classes", () => {
-  const overlap = ROOT_DIRS.filter((n) => ANY_DEPTH_DIRS.includes(n));
-  assert.deepEqual(overlap, [], "a name is either any-depth or root-anchored, never both");
-});
+describe("the rule set", () => {
+  it("has no name in both anchoring classes", () => {
+    expect(ROOT_DIRS.filter((n) => ANY_DEPTH_DIRS.includes(n))).toEqual([]);
+  });
 
-test("the gate reads the tracked tree by default, not the working tree", () => {
-  // `git ls-files` is the source: an UNTRACKED local node_modules/ must never
-  // be a finding, or every developer checkout fails the gate.
-  const tracked = execFileSync("git", ["ls-files", "-z", "--", "node_modules"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-  })
-    .split("\0")
-    .filter(Boolean);
-  assert.deepEqual(tracked, [], "node_modules is not tracked, so it is not a finding");
+  it("reads the tracked tree by default, not the working tree", () => {
+    // `git ls-files` is the source: an UNTRACKED local node_modules/ must never
+    // be a finding, or every developer checkout fails the gate.
+    const tracked = execFileSync("git", ["ls-files", "-z", "--", "node_modules"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean);
+    expect(tracked).toEqual([]);
+  });
 });
