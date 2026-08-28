@@ -848,11 +848,57 @@ export async function finalizeExternalA2ARun(args: {
         ]
       : undefined;
 
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      recordedOutcomes.length,
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, recordedOutcomes.length)
+      : null;
+
+  // cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
+  //
+  // The artifacts this run produced were written above, and each write spliced a
+  // durable produced-event row into its own transaction. Whether one of those
+  // outputs opens a review is decided by the orchestration core, which used to be
+  // reached only by a recurring drain — so the gate was minted seconds AFTER the
+  // terminal write below, onto a run that had already finished and has no legal
+  // edge back. The decided reading said the run had been released to continue
+  // when there was nothing left to release.
+  //
+  // So the decision is taken HERE, before either terminal edge: the run's own
+  // production is drained inline (the same one core, never a second copy of it),
+  // and if a review opens, the run parks in `pending_approval` carrying the
+  // terminal write it is withholding. `releaseHeldRun` performs that write when
+  // the decision lands. A run whose output opens no review is untouched and
+  // takes its terminal edge immediately, exactly as before.
+  //
+  // The seam is a dynamic import for the same reason the materializer above is:
+  // this path is inside the locked dev-perf routes' reachable graph.
+  try {
+    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+    const hold = await holdRunForProducedReview(
+      {
+        runId,
+        orgId: run.orgId,
+        fromStatus: "running",
+        stepResults: terminalStepResults ?? [],
+        withheld:
+          materializationError !== null
+            ? { status: "failed", error: materializationError }
+            : { status: "completed" },
+      },
+      authority,
     );
+    if (hold.held) return;
+  } catch (err) {
+    // Fail closed, exactly as on the WayFlow path above.
+    console.error(
+      `[produced-review-hold] run=${runId} (external-a2a) hold seam threw — no terminal write (fail-closed):`,
+      err,
+    );
+    return;
+  }
+
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,
@@ -1673,11 +1719,37 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         }),
-      failRun: (error) =>
-        transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+      failRun: async (error) => {
+        // cinatra#3007 — even here, `failed` is terminal. A run that wrote an
+        // artifact in an earlier node has produced output a review may be open
+        // on, and the invariant does not make an exception for an
+        // infrastructure failure: the run holds at that review and the decision
+        // releases it to the failure it was going to reach anyway.
+        try {
+          const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+          const hold = await holdRunForProducedReview(
+            {
+              runId,
+              orgId: run.orgId,
+              fromStatus,
+              stepResults: [],
+              withheld: { status: "failed", error },
+            },
+            authority,
+          );
+          if (hold.held) return;
+        } catch (err) {
+          console.error(
+            `[produced-review-hold] run=${runId} (human gate) hold seam threw — no terminal write (fail-closed):`,
+            err,
+          );
+          return;
+        }
+        await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        });
+      },
     });
     return;
   }
@@ -1685,6 +1757,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   if (taskState === "failed") {
     const firstFailPart = task.status?.message?.parts?.[0] as { text?: string } | undefined;
     const errMsg = firstFailPart?.text ?? "WayFlow task failed";
+    // cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
+    // mid-flow and then failed has produced output a review may be open on, so
+    // the same question is asked here, BEFORE the terminal announcement: a run
+    // that parks announces no end, because it has not reached one.
+    try {
+      const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+      const hold = await holdRunForProducedReview(
+        {
+          runId,
+          orgId: run.orgId,
+          fromStatus,
+          stepResults: [],
+          withheld: { status: "failed", error: errMsg },
+        },
+        authority,
+      );
+      if (hold.held) return;
+    } catch (err) {
+      console.error(
+        `[produced-review-hold] run=${runId} (wayflow failed) hold seam threw — no terminal write (fail-closed):`,
+        err,
+      );
+      return;
+    }
     await Promise.resolve(
       publishAgUiEvent(runId, {
         type: "RUN_ERROR",
@@ -1883,15 +1979,68 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     },
   ];
 
+  // The failure verdict is settled BEFORE the review hold below, because the hold
+  // has to carry whichever terminal write it is withholding — a failed run's just
+  // as much as a green one's.
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, artifactMaterializations.length)
+      : null;
+
+  // cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
+  //
+  // The artifacts this run produced were written above, and each write spliced a
+  // durable produced-event row into its own transaction. Whether one of those
+  // outputs opens a review is decided by the orchestration core, which used to be
+  // reached only by a recurring drain — so the gate was minted seconds AFTER the
+  // terminal write below, onto a run that had already finished and has no legal
+  // edge back. The decided reading said the run had been released to continue
+  // when there was nothing left to release.
+  //
+  // So the decision is taken HERE, before either terminal edge: the run's own
+  // production is drained inline (the same one core, never a second copy of it),
+  // and if a review opens, the run parks in `pending_approval` carrying the
+  // terminal write it is withholding. `releaseHeldRun` performs that write when
+  // the decision lands. A run whose output opens no review is untouched and
+  // takes its terminal edge immediately, exactly as before.
+  //
+  // The seam is a dynamic import for the same reason the materializer above is:
+  // this path is inside the locked dev-perf routes' reachable graph.
+  try {
+    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+    const hold = await holdRunForProducedReview(
+      {
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: terminalStepResults,
+        withheld:
+          materializationError !== null
+            ? { status: "failed", error: materializationError }
+            : { status: "completed", ...(derivationOutbox ? { derivationOutbox } : {}) },
+      },
+      authority,
+    );
+    if (hold.held) return;
+  } catch (err) {
+    // FAIL CLOSED. `holdRunForProducedReview` is total by contract, so reaching
+    // here means the seam ITSELF is broken — and a broken seam cannot prove this
+    // run owes no review. Writing a terminal status on that is precisely the
+    // defect (#3007), so the run keeps its non-terminal status and the
+    // lease-expiry finalizer reconciles it.
+    console.error(
+      `[produced-review-hold] run=${runId} hold seam threw — no terminal write (fail-closed):`,
+      err,
+    );
+    return;
+  }
+
   // cinatra#2486 — the surfaced-failure edge. Both `running->failed` and
   // `pending_approval->failed` are legal, matching the two terminal-success
   // edges below (the `fromStatus === "completed"` re-entry already returned
   // above, so no illegal `completed->failed` edge is reachable here).
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      artifactMaterializations.length,
-    );
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,

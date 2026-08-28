@@ -248,6 +248,16 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
       text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_org_idx
   ON "${q}"."artifact_produced_outbox" (org_id)`,
     },
+    {
+      // cinatra#3007 — the PRODUCING-RUN probe's index. A run's review moment now
+      // precedes its terminal status, so every terminating run asks whether it
+      // produced anything a review could be open on. For most runs the answer is
+      // NO, and proving absence without this index means reading the whole
+      // tenant's produced history on the completion hot path. Leading `org_id`
+      // keeps it a prefix match for the per-run predicate reads too.
+      text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_producer_run_idx
+  ON "${q}"."artifact_produced_outbox" (org_id, producer_run_id)`,
+    },
 
     // -----------------------------------------------------------------------
     // Continuation park (checkpointed mode).

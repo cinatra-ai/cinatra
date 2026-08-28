@@ -247,6 +247,31 @@ type LifecycleGateMaintenanceSummary = {
 type LifecycleReviewRunner = {
   orchestrate: () => Promise<LifecycleReviewOrchestrationSummary>;
   maintain: () => Promise<LifecycleGateMaintenanceSummary>;
+  /**
+   * cinatra#3007 — the EXECUTOR's half of the same slot: drain ONE run's
+   * production, and hold the per-production lock while doing it, so a run's
+   * review moment can be decided before its terminal status.
+   *
+   * It rides this slot for the SAME reason the two sweeps do — the boot phase is
+   * the only place allowed to reach the orchestration store, because the store's
+   * graph must not become reachable from the locked dev-perf routes (route-graph
+   * ratchet), and `packages/agents/src/execution.ts` sits squarely in them.
+   *
+   * OPTIONAL, and safe when absent: a run whose executor finds no drain here
+   * simply parks on its still-pending production and the recurring sweep
+   * finishes the orchestration. The ordering invariant holds either way; only
+   * the latency differs.
+   */
+  drainProducedProductionForRun?: (input: {
+    orgId: string;
+    runId: string;
+    limit?: number;
+  }) => Promise<void>;
+  withProducedProductionLock?: (
+    orgId: string,
+    producerRunId: string,
+    fn: () => Promise<void>,
+  ) => Promise<boolean>;
 };
 
 declare global {

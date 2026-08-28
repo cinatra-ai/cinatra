@@ -523,12 +523,24 @@ export function systemLoopPhases(): BootPhase[] {
         const { registerLifecycleReviewRunner } = await import(
           "@/lib/background-jobs-registry"
         );
-        const { sweepReviewOrchestration, sweepLifecycleGateMaintenance } = await import(
-          "@cinatra-ai/agents/lifecycle-review-orchestration"
-        );
+        const {
+          sweepReviewOrchestration,
+          sweepLifecycleGateMaintenance,
+          drainProducedProductionForRun,
+          withProducedProductionLock,
+        } = await import("@cinatra-ai/agents/lifecycle-review-orchestration");
         registerLifecycleReviewRunner({
           orchestrate: () => sweepReviewOrchestration(),
           maintain: () => sweepLifecycleGateMaintenance(),
+          // cinatra#3007 — the EXECUTOR's inline drain rides the same slot, for
+          // the same reason: the run that is about to write a terminal status
+          // has to decide its review moment through this store, and the store
+          // must stay unreachable from the locked dev-perf routes the executor
+          // sits in. Registered here, read from the slot there.
+          drainProducedProductionForRun: async (input) => {
+            await drainProducedProductionForRun(input);
+          },
+          withProducedProductionLock,
         });
         const {
           enqueueBackgroundJob,

@@ -789,6 +789,121 @@ function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationS
 export const MAX_BATCH_MEMBERSHIP = 1000;
 
 /**
+ * Drain ONE production — every pending produced event of a single
+ * `(orgId, producerRunId)` — into its review gates. The body the recurring sweep
+ * has always run per production, named so the EXECUTOR can run the same one
+ * inline for its own run before it writes a terminal status (cinatra#3007): the
+ * review decision a produced event opens is made in exactly one place, whoever
+ * drives it.
+ *
+ * MUST be called under `withProductionLock` for its `(orgId, runId)` — the
+ * membership seal is only exclusive while that lock is held.
+ */
+async function drainProductionForRun(
+  orgId: string,
+  runId: string,
+  cap: number,
+  summary: ReviewOrchestrationSweepSummary,
+): Promise<void> {
+  const pending = await fetchPendingByRun(orgId, runId, cap);
+  if (pending.length === 0) return; // raced to processed by a concurrent pass.
+  summary.scanned += pending.length;
+  // REPAIR-RUN claim first (cinatra#2047 OBS-2): a landed repair's successor
+  // is settled and an open repair's productions stay pending, so neither can
+  // reach the coalescing path and be double-gated by a batch partition gate.
+  const repair = await repairForRun(runId);
+  const open = await resolveOpenBatchEpoch(orgId, runId);
+  // PRE-FIX EPOCH QUARANTINE (Codex rounds 1–2). FAIL CLOSED on an open epoch
+  // only a pre-fix seal can have produced: touch nothing, leave every member
+  // pending (so an external effect stays HELD), and report it for ops. Same
+  // posture as the partition emit-conflict path below. Unreachable on
+  // `origin/main` — the slice is fenced OFF, so no epoch has ever been sealed
+  // outside a fence-on stack.
+  const quarantine = open ? repairEpochQuarantineReason(open, repair) : null;
+  if (quarantine) {
+    summary.failed += 1;
+    console.error(
+      `[lifecycle-review-orchestration] open batch epoch ${open!.id} for run=${runId} quarantined — ${quarantine} (a pre-fix seal). Production left pending for ops reconciliation.`,
+    );
+    return;
+  }
+  const { eligible, settle } = partitionRepairClaimedMembers(repair, pending, summary);
+  for (const row of settle) await markProducedEventProcessed(row.eventId);
+  if (eligible.length === 0) {
+    // Every pending member was claimed by a repair. A prior epoch may still be
+    // open and fully drained (a crash between the last mark and the close).
+    await closeOpenEpochIfDrained(orgId, runId);
+    return;
+  }
+  // Route through the DURABLE-epoch batch path when the production is a
+  // multi-artifact one OR an OPEN epoch already exists — a SOLE remaining
+  // frozen member (a crash left one unlinked) MUST resume via the frozen
+  // membership, never via the single-event path (which would emit an
+  // overlapping per-event gate instead of the frozen partition gate).
+  if (eligible.length > 1 || open) {
+    await orchestrateProducedBatch(eligible, summary);
+  } else {
+    tallyOutcome(await orchestrateProducedEvent(eligible[0]), summary);
+  }
+}
+
+/**
+ * Run `fn` under the SAME per-production advisory lock the sweep drains under
+ * (cinatra#3007). The executor uses it to make its own drain, its row-grounded
+ * read of the result, and the park it takes from that read ONE critical section:
+ * a concurrent sweep cannot mint this run's gate in between, so the executor can
+ * never read "no review" from rows another pass is still writing.
+ *
+ * Returns `false` when the lock is held elsewhere (`pg_try_advisory_lock`), which
+ * the caller must read as "this production is being orchestrated right now" — not
+ * as "there is nothing to wait for".
+ *
+ * Lock ORDER is one-directional and therefore deadlock-free: this production lock
+ * is only ever taken by review orchestration, which takes no org lock; the park's
+ * org-write guard takes the org lock while holding this one, never the reverse.
+ */
+export async function withProducedProductionLock(
+  orgId: string,
+  producerRunId: string,
+  fn: () => Promise<void>,
+): Promise<boolean> {
+  const result = await withProductionLock(orgId, producerRunId, async () => {
+    await fn();
+  });
+  return result !== PRODUCTION_CONTENDED;
+}
+
+/**
+ * Drain ONE run's production, now (cinatra#3007) — the sweep's per-production
+ * pass, called by the executor between materializing its artifacts and writing
+ * its terminal status, so the review moment is decided while the run can still
+ * stop at it.
+ *
+ * The CALLER must already hold `withProducedProductionLock` for this
+ * `(orgId, runId)`. Identical work to the sweep's pass — same membership seal,
+ * same single decision — only scoped to one run and bounded by `limit`. Returns
+ * the same summary; FENCED like every other drain here.
+ */
+export async function drainProducedProductionForRun(input: {
+  orgId: string;
+  runId: string;
+  limit?: number;
+}): Promise<ReviewOrchestrationSweepSummary> {
+  const summary: ReviewOrchestrationSweepSummary = {
+    scanned: 0,
+    gatesCreated: 0,
+    noGate: 0,
+    notClassifiable: 0,
+    failed: 0,
+    batchesCoalesced: 0,
+  };
+  if (!isLifecycleReviewOrchestrationActive()) return summary;
+  const cap = Math.max(1, Math.min(input.limit ?? MAX_BATCH_MEMBERSHIP, MAX_BATCH_MEMBERSHIP));
+  await drainProductionForRun(input.orgId, input.runId, cap, summary);
+  return summary;
+}
+
+/**
  * Drain a batch of PENDING produced events into review gates. FENCED: a no-op
  * when the S1 activation fence is off (defence-in-depth — the emitters already
  * write no event row, so the pending set is empty, but a manually-enqueued tick
@@ -845,48 +960,9 @@ export async function sweepReviewOrchestration(opts?: {
       // Snapshot + seal the production's COMPLETE membership under an exclusive
       // per-production lock, so a concurrent pass can never seal a divergent
       // membership of a still-growing production into overlapping gates.
-      await withProductionLock(key.orgId, runId, async () => {
-        const pending = await fetchPendingByRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP);
-        if (pending.length === 0) return; // raced to processed by a concurrent pass.
-        summary.scanned += pending.length;
-        // REPAIR-RUN claim first (cinatra#2047 OBS-2): a landed repair's successor
-        // is settled and an open repair's productions stay pending, so neither can
-        // reach the coalescing path and be double-gated by a batch partition gate.
-        const repair = await repairForRun(runId);
-        const open = await resolveOpenBatchEpoch(key.orgId, runId);
-        // PRE-FIX EPOCH QUARANTINE (Codex rounds 1–2). FAIL CLOSED on an open epoch
-        // only a pre-fix seal can have produced: touch nothing, leave every member
-        // pending (so an external effect stays HELD), and report it for ops. Same
-        // posture as the partition emit-conflict path below. Unreachable on
-        // `origin/main` — the slice is fenced OFF, so no epoch has ever been sealed
-        // outside a fence-on stack.
-        const quarantine = open ? repairEpochQuarantineReason(open, repair) : null;
-        if (quarantine) {
-          summary.failed += 1;
-          console.error(
-            `[lifecycle-review-orchestration] open batch epoch ${open!.id} for run=${runId} quarantined — ${quarantine} (a pre-fix seal). Production left pending for ops reconciliation.`,
-          );
-          return;
-        }
-        const { eligible, settle } = partitionRepairClaimedMembers(repair, pending, summary);
-        for (const row of settle) await markProducedEventProcessed(row.eventId);
-        if (eligible.length === 0) {
-          // Every pending member was claimed by a repair. A prior epoch may still be
-          // open and fully drained (a crash between the last mark and the close).
-          await closeOpenEpochIfDrained(key.orgId, runId);
-          return;
-        }
-        // Route through the DURABLE-epoch batch path when the production is a
-        // multi-artifact one OR an OPEN epoch already exists — a SOLE remaining
-        // frozen member (a crash left one unlinked) MUST resume via the frozen
-        // membership, never via the single-event path (which would emit an
-        // overlapping per-event gate instead of the frozen partition gate).
-        if (eligible.length > 1 || open) {
-          await orchestrateProducedBatch(eligible, summary);
-        } else {
-          tallyOutcome(await orchestrateProducedEvent(eligible[0]), summary);
-        }
-      });
+      await withProductionLock(key.orgId, runId, () =>
+        drainProductionForRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP, summary),
+      );
     } catch (err) {
       summary.failed += 1;
       console.error(
