@@ -456,6 +456,14 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   // code blocks + tracking-[0.1em] table headers — normalization decisions
   // tracked in cinatra#886 like the JSX sites above.
   "packages/chat/src/markdown-render.ts",
+  // cinatra#2934 moved the markup half of that renderer DOWN into the agents
+  // package so the per-run prompt window draws the same assistant prose /chat
+  // draws (chat depends on agents, so the import can only run that way). The
+  // tracking-[0.1em] table header came with it — SAME grandfathered site, new
+  // file, exactly as cinatra#918 above. Still tracked in cinatra#886; changing
+  // it here would silently restyle every /chat table, which is a design
+  // decision that belongs to that migration and not to this move.
+  "packages/agents/src/markdown-render-core.ts",
 ];
 
 // AND a path-zone glob with an extension glob. ESLint flat config treats a
