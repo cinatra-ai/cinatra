@@ -255,6 +255,82 @@ export function createCoreMarked(hooks: CoreMarkedHooks) {
 }
 
 /**
+ * A row of a simplified pipe table: text, a pipe, more text — and the text
+ * before the FIRST pipe is itself pipe-free and non-empty, which is what keeps
+ * a proper markdown row (`| a | b |`, whose first character is the pipe) out of
+ * this shape. Read off the line's own first pipe rather than matched, so the
+ * answer costs one scan of the line and cannot be made to cost more.
+ */
+function isSimplifiedTableRow(line: string): boolean {
+  const firstPipe = line.indexOf("|");
+  return firstPipe > 0 && firstPipe < line.length - 1;
+}
+
+/** The row's cells, blank ones dropped — the shape both sides below count on. */
+function simplifiedTableCells(line: string): string[] {
+  return line.split("|").map((cell) => cell.trim()).filter(Boolean);
+}
+
+/**
+ * A model writes a pipe table without the separator row markdown needs, and
+ * this puts the separator in so `marked`'s GFM parser sees a table.
+ *
+ * IT IS A SCAN, NOT A PATTERN, AND THAT IS THE POINT. This was a regular
+ * expression with a repetition nested inside a repetition — one row's `[^\n]+`
+ * could swallow the pipe another row's iteration wanted, so a run of
+ * table-looking lines could be split between the two in a great many ways, and
+ * a line the validation then rejected made the engine try them. On assistant
+ * prose that is a slow render; on adversarial text it is the whole render. The
+ * scan below reads every line exactly once and decides from the line itself, so
+ * the cost is the length of the text and nothing about its shape.
+ *
+ * The newline arithmetic is the pattern's, kept exactly: the newline BEFORE a
+ * converted block is re-emitted (so a block that opens the text gains one), and
+ * the newline AFTER its last row is swallowed. A block whose cells do not hold
+ * up — a header of one cell, a row shorter than the header — is left exactly as
+ * it was written, and the scan resumes after it rather than looking for a
+ * smaller table inside it.
+ */
+function insertPipeTableSeparators(text: string): string {
+  const lines = text.split("\n");
+  let out = "";
+  // Whether the line just emitted still owes its newline separator. It is false
+  // at the start of the text, and after a converted block, whose trailing
+  // newline the conversion swallowed.
+  let owesNewline = false;
+  let i = 0;
+  while (i < lines.length) {
+    const header = lines[i]!;
+    let last = i;
+    if (isSimplifiedTableRow(header)) {
+      while (last + 1 < lines.length && isSimplifiedTableRow(lines[last + 1]!)) last += 1;
+    }
+    if (last > i) {
+      const headerCells = simplifiedTableCells(header);
+      const bodyRows = lines.slice(i + 1, last + 1).map(simplifiedTableCells);
+      if (headerCells.length >= 2 && bodyRows.every((cells) => cells.length >= 2)) {
+        out += `\n| ${headerCells.join(" | ")} |`;
+        out += `\n| ${headerCells.map(() => "---").join(" | ")} |`;
+        for (const cells of bodyRows) out += `\n| ${cells.join(" | ")} |`;
+        owesNewline = false;
+        i = last + 1;
+        continue;
+      }
+      if (owesNewline) out += "\n";
+      out += lines.slice(i, last + 1).join("\n");
+      owesNewline = true;
+      i = last + 1;
+      continue;
+    }
+    if (owesNewline) out += "\n";
+    out += header;
+    owesNewline = true;
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * The shape fixes every surface wants before marked parses.
  *
  * These are model-output habits rather than markdown: a pipe table written
@@ -264,23 +340,9 @@ export function createCoreMarked(hooks: CoreMarkedHooks) {
  * on both.
  */
 export function normalizeCoreMarkdown(text: string): string {
-  let out = text;
-  // Convert simplified pipe tables (no separator line) to standard markdown format
-  // so that marked's GFM parser can handle them.
-  out = out.replace(
-    /(?:^|\n)([^\n|]+\|[^\n]+)\n((?:[^\n|]+\|[^\n]+\n?){1,})/g,
-    (match, headerRow: string, bodyRows: string) => {
-      const headerCells = headerRow.split("|").map((c: string) => c.trim()).filter(Boolean);
-      if (headerCells.length < 2) return match;
-      const bodyRowsArr = bodyRows.trim().split("\n").map((row: string) => row.split("|").map((c: string) => c.trim()).filter(Boolean));
-      if (bodyRowsArr.length === 0 || bodyRowsArr.some((r: string[]) => r.length < 2)) return match;
-      // Insert a separator line to make it a standard markdown table.
-      const sep = "| " + headerCells.map(() => "---").join(" | ") + " |";
-      const header = "| " + headerCells.join(" | ") + " |";
-      const rows = bodyRowsArr.map((cells: string[]) => "| " + cells.join(" | ") + " |").join("\n");
-      return `\n${header}\n${sep}\n${rows}`;
-    },
-  );
+  // Convert simplified pipe tables (no separator line) to standard markdown
+  // format so that marked's GFM parser can handle them.
+  let out = insertPipeTableSeparators(text);
 
   // Split inline "• " separated content onto separate lines so list parsing handles each item.
   out = out.replace(/([^\n]) • /g, "$1\n• ");
@@ -294,7 +356,17 @@ export function normalizeCoreMarkdown(text: string): string {
   return out;
 }
 
-/** marked leaves empty paragraphs behind wherever a placeholder was stripped. */
+/**
+ * marked leaves empty paragraphs behind wherever a placeholder was stripped.
+ *
+ * The attribute run excludes `<` as well as `>`. It reads like a detail and is
+ * the difference between a linear scan and a quadratic one: with `<` allowed,
+ * an opening `<p` that never finds its `>` keeps scanning through every `<p`
+ * after it, and a text of many of them costs the square of its length. No tag
+ * this is ever handed can carry a `<` in an attribute — the HTML is marked's
+ * own output, and every value written into it is escaped — so nothing that
+ * matched before stops matching.
+ */
 export function stripEmptyParagraphs(html: string): string {
-  return html.replace(/<p[^>]*>\s*<\/p>/g, "");
+  return html.replace(/<p[^<>]*>\s*<\/p>/g, "");
 }
