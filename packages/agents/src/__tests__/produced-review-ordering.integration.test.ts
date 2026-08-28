@@ -708,6 +708,67 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect((await readRun(runId))?.status).toBe("completed");
     });
 
+    it("TWO CHAINS racing one parked run keep the FIRST withheld terminal write", async () => {
+      // Two recovery chains can re-enter the hold for one run, each carrying its
+      // OWN terminal write. Before the park existed, the first terminal CAS won
+      // and the second was refused `stale_from_status`. The park must not turn
+      // that into last-writer-wins, or an approved run that COMPLETED, with its
+      // derivation capture, is released as the later chain's `failed`.
+      const runId = `run-${randomUUID()}`;
+      await seedRun(runId);
+      const ev = await produceFor(runId);
+      const taskId = autoReviewTaskId(ev.eventId);
+
+      expect(
+        await hold.holdRunForProducedReview(
+          {
+            runId,
+            orgId: ORG,
+            fromStatus: "running",
+            stepResults: terminalPayload("the completed draft"),
+            withheld: { status: "completed" },
+          },
+          AUTHORITY,
+        ),
+      ).toEqual({ held: true, reason: "gate-undecided" });
+      expect(hold.readWithheldTerminal((await readRun(runId))?.stepResults)).toEqual({
+        status: "completed",
+      });
+
+      // The SECOND chain arrives on the already-parked run with a DIFFERENT
+      // terminal write. It is held, exactly as before -- but it does not land.
+      expect(
+        await hold.holdRunForProducedReview(
+          {
+            runId,
+            orgId: ORG,
+            fromStatus: "pending_approval",
+            stepResults: terminalPayload("the later chain's draft"),
+            withheld: { status: "failed", error: "the later chain's verdict" },
+          },
+          AUTHORITY,
+        ),
+      ).toEqual({ held: true, reason: "gate-undecided" });
+
+      // FIRST WRITER WINS, read off the row.
+      expect(hold.readWithheldTerminal((await readRun(runId))?.stepResults)).toEqual({
+        status: "completed",
+      });
+      expect((await readRun(runId))?.status).toBe("pending_approval");
+
+      // ...and the decision performs the FIRST write, not the later one.
+      await decide(runId, taskId, "approve", ev);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "completed",
+      });
+      const after = await readRun(runId);
+      expect(after?.status).toBe("completed");
+      expect(after?.error).toBeNull();
+      expect(hold.readWithheldTerminal(after?.stepResults)).toBeNull();
+    });
+
+
     it("a run that produces NOTHING is untouched — no park, no extra read path", async () => {
       const runId = `run-${randomUUID()}`;
       await seedRun(runId);

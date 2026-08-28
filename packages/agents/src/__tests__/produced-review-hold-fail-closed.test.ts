@@ -28,6 +28,10 @@ const shared = vi.hoisted(() => ({
   selectQueue: [] as Array<() => unknown>,
   transition: vi.fn(async (..._args: unknown[]) => undefined as unknown),
   updates: [] as unknown[],
+  /** What the already-parked update reports it MATCHED. Empty = the row already
+   *  carried a withheld terminal write and the first-writer-wins predicate
+   *  refused this one. */
+  parkUpdateRows: [{ id: "run-3007" }] as Array<{ id: string }>,
 }));
 
 /** A drizzle-shaped query builder: awaitable, and `.limit()`-able, answering
@@ -54,9 +58,15 @@ vi.mock("../db", () => ({
     select: () => ({ from: () => ({ where: () => query() }) }),
     update: () => ({
       set: (payload: unknown) => ({
-        where: async () => {
-          shared.updates.push(payload);
-        },
+        where: () => ({
+          // The already-parked write is first-writer-wins, so it reads back the
+          // rows it actually matched; `parkUpdateRows` is what this double says
+          // the predicate matched.
+          returning: async () => {
+            shared.updates.push(payload);
+            return shared.parkUpdateRows;
+          },
+        }),
       }),
     }),
   },
@@ -105,6 +115,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   shared.selectQueue.length = 0;
   shared.updates.length = 0;
+  shared.parkUpdateRows = [{ id: "run-3007" }];
   shared.transition.mockReset();
   shared.transition.mockResolvedValue(undefined);
   process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
@@ -164,6 +175,25 @@ describe("cinatra#3007 — an unanswerable question parks the run", () => {
     expect(shared.updates).toHaveLength(1);
     const written = (shared.updates[0] as { stepResults: string }).stepResults;
     expect(written).toContain(WITHHELD_TERMINAL_KEY);
+  });
+
+  it("an already-parked run whose marker the predicate REFUSES is still held, and writes no terminal status", async () => {
+    // The row already carries another chain's withheld terminal write, so the
+    // first-writer-wins predicate matches nothing.
+    shared.parkUpdateRows = [];
+    shared.selectQueue.push(() => {
+      throw new Error("the produced-outbox probe is unreadable");
+    });
+
+    const outcome = await holdRunForProducedReview(
+      input({ fromStatus: "pending_approval", withheld: { status: "failed", error: "the later chain" } }),
+      AUTHORITY,
+    );
+
+    // Refused is NOT a fault: the run stays parked, still owes exactly one
+    // terminal write, and this attempt takes no status edge of its own.
+    expect(outcome).toEqual({ held: true, reason: "hold-check-failed" });
+    expect(shared.transition).not.toHaveBeenCalled();
   });
 });
 

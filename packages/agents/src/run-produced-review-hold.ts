@@ -700,8 +700,22 @@ async function parkRun(
     // there is no status edge to take, only the withheld write to record. The
     // update is ORG-SCOPED and PREDICATED on the row still being parked, so it can
     // never stamp a marker onto a row a concurrent stop or release has moved on.
+    //
+    // FIRST WRITER WINS on the marker itself. Two recovery chains can re-enter
+    // this branch for ONE run, each carrying its own withheld terminal write with
+    // a different status, error and derivation capture. An unpredicated `set`
+    // lands the LATER one, and that is a LOST UPDATE rather than an ordering
+    // choice: without the park, the first terminal CAS would have won and the
+    // second would have been refused `stale_from_status`, so a completed run with
+    // its derivation capture could never have been replaced by a later failure.
+    // The park must not weaken that. So the update also refuses a row that ALREADY
+    // carries a marker -- in the same JSONPATH shape the release drain selects on,
+    // so the two can never disagree about what a marker is -- and the earliest
+    // withheld write is the one the decision performs. Refusing is not an error:
+    // the run stays parked and still owes exactly one terminal write, which is
+    // what this function promises its caller.
     if (fromStatus === PARKED_STATUS) {
-      await withParkWriteRetry(runId, () =>
+      const written = await withParkWriteRetry(runId, () =>
         db
           .update(agentRuns)
           .set({ stepResults: JSON.stringify(parkedStepResults) })
@@ -710,11 +724,17 @@ async function parkRun(
               eq(agentRuns.id, runId),
               eq(agentRuns.orgId, orgId),
               eq(agentRuns.status, PARKED_STATUS),
+              sql`NOT (${agentRuns.stepResults} IS NOT NULL
+                  AND jsonb_path_exists(${agentRuns.stepResults}::jsonb, ${WITHHELD_TERMINAL_JSONPATH}::jsonpath))`,
             ),
-          ),
+          )
+          .returning({ id: agentRuns.id }),
       );
       console.log(
-        `[produced-review-hold] run=${runId} stays parked on its produced output's review (${reason})`,
+        written.length > 0
+          ? `[produced-review-hold] run=${runId} stays parked on its produced output's review (${reason})`
+          : `[produced-review-hold] run=${runId} stays parked (${reason}); it already carries a ` +
+              `withheld terminal write, which is KEPT -- first writer wins`,
       );
       return { held: true, reason };
     }
