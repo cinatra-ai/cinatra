@@ -501,13 +501,28 @@ function ProposalPhase({
   const confirm = async () => {
     setRefusal(null);
     setPending(true);
+    // TWO SUBJECTS, TWO ROADS, ONE CONTROL (cinatra#3044).
+    //
+    // A WAITING RUN takes ONE request carrying the rows. There is no token to
+    // re-mint and no run to create — the run already exists and is parked at its
+    // schedule step — so the press goes straight onto the run-trigger path with
+    // whatever the reader has in front of them. Asking for a re-propose first
+    // would ask it of a proposal that never existed, and the press would die on
+    // that leg; the server refuses the composite on this ref for the same
+    // reason. Edited or not is not a question here: the rows always travel, so
+    // the server never has to guess what the reader was looking at.
+    //
     // AN EDITED PROPOSAL IS RE-PROPOSED BEFORE IT IS CONFIRMED, in that order,
     // on the new ref — the same composite §2.2's typed "…and confirm" performs.
     // A proposal is single-use, so confirming the ORIGINAL ref would arm the
     // schedule the reader just corrected away from. This is what replaced the
     // Adjust button: the re-propose still happens, and the reader never has to
     // know it did.
-    const outcome = edited ? await onAdjustAndConfirm(draft) : await onDecide("confirm");
+    const outcome = body.runPending
+      ? await onDecide("confirm", draft)
+      : edited
+        ? await onAdjustAndConfirm(draft)
+        : await onDecide("confirm");
     setPending(false);
     if (outcome.kind === "not-permitted" || outcome.kind === "error") {
       setRefusal(outcome.message);

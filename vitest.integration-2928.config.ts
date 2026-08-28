@@ -47,6 +47,10 @@ export default defineConfig({
     fileParallelism: false,
     include: [
       "src/lib/__tests__/agent-run-lifecycle-moment.integration.test.ts",
+      // cinatra#3044 — the same tier, one leg further along: the moment the
+      // coordinator states now carries its card reference, and the host writer
+      // this config already boots puts the card in the run’s own turn.
+      "src/lib/__tests__/schedule-card-reaches-the-conversation.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

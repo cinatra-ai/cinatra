@@ -124,6 +124,11 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 
 /** What Confirm says when the stated schedule is no longer good. */
 export const PROPOSAL_REFUSALS = {
+  /** The reader may SEE this run and may not configure its schedule
+   *  (cinatra#3044). Their own standing, and nothing about the run, the
+   *  organization or a policy. */
+  notYoursToSchedule:
+    "Only the person who started this run can set its schedule.",
   invalid:
     "This schedule is no longer valid — it may have expired. Ask again and confirm the new card.",
   notRunnable:
@@ -712,6 +717,34 @@ export type ProposalResolution =
       canConfirm: boolean;
       restrictedReason: string | null;
     }
+  /**
+   * THE RUN EXISTS AND IS WAITING AT ITS SCHEDULE (cinatra#3044).
+   *
+   * A run a person started from a conversation finishes its setup and parks at
+   * `pending_trigger` owing one answer: "When should this run?". Nothing is
+   * armed — no trigger row, no install intent — so `settled` would be a lie and
+   * `absent` was one: the run is there, the person is waiting on it, and the
+   * card in their conversation is the surface that asks.
+   *
+   * IT CARRIES NO ROWS, deliberately. What the form opens on is the schedule
+   * moment's own default, turned into a row by the one mapping the tier-neutral
+   * card registry states — the mapping both surfaces that draw a schedule
+   * already read, and which the card body on the conversation side applies for
+   * this phase too. Answering rows from HERE would be a second statement of that
+   * decision, free to drift from the one, and this module is deliberately not a
+   * reader of it: §6's own arm holds the set of files that may so much as name
+   * the mapping to the four that state, own or apply it.
+   */
+  | {
+      phase: "run_pending";
+      runId: string;
+      agentName: string;
+      /** The floor, resolved against the reader — the same read the proposal
+       *  phase takes, for the same reason: an agent this instance would refuse
+       *  to run cannot be scheduled from this card either. */
+      canConfirm: boolean;
+      restrictedReason: string | null;
+    }
   | {
       phase: "settled";
       runId: string;
@@ -910,6 +943,19 @@ export async function resolveProposalForReader(
 }
 
 /**
+ * The status a run waits for its schedule CHOICE in (cinatra#3044).
+ *
+ * Narrower than `SCHEDULE_PARK_STATUSES` in the coordinator, and deliberately:
+ * that pair covers the whole schedule park, `armed` included, and an armed run
+ * has a trigger row — it is `settled` here, not pending. What this names is the
+ * one status in which the question is still open.
+ */
+const SCHEDULE_PENDING_STATUS = "pending_trigger";
+
+/** The moment a waiting run states while that question is open. */
+const SCHEDULE_MOMENT = "schedule";
+
+/**
  * Resolve a proposal card for a RUN, for one reader (cinatra#2788, S9d).
  *
  * The run-page / review-page identity. Those hosts hold no proposal token, so
@@ -963,10 +1009,30 @@ export async function resolveProposalForReader(
  *     kinds, so a kind added later is absent by default rather than drawn
  *     unnamed.
  *
- * There is NO proposal phase on this path, and that is structural rather than
- * an omission: Confirm CREATES the run, so a run exists only after a proposal
- * was confirmed. The pre-confirm phases live where the proposal does — in the
- * conversation that made it.
+ * THE PROPOSAL'S OWN PHASES ARE NOT ON THIS PATH, and that much is structural:
+ * a proposal is a token, `Confirm` CREATES the run from it, and the pre-confirm
+ * phases live where the token does — in the conversation that made it.
+ *
+ * THERE IS A PENDING PHASE ON THIS PATH, AND IT IS THE RUN'S OWN (cinatra#3044).
+ * This header used to say "there is NO proposal phase on this path" and stop
+ * there, on the reading that a run only ever exists after a proposal was
+ * confirmed. That is true of the token road and false of the RUN road, which
+ * this function is: a run started from a conversation finishes setup, parks at
+ * `pending_trigger` and waits at its schedule moment with nothing armed. It
+ * exists, it waits, and the conversation had no reading for it at all — so the
+ * card the run outbox writes into that turn resolved `absent` and drew nothing,
+ * which is the defect cinatra#3044 records. `run_pending` is that reading,
+ * stated openly rather than inferred: the run is waiting, the floor is the
+ * reader's own, and the rows the form opens on come from the schedule moment's
+ * one stated default.
+ *
+ * IT IS THE WAIT THAT IS DRAWN, NOT THE STATUS. The phase is answered only for a
+ * run that is BOTH parked at `pending_trigger` AND stating the `schedule`
+ * moment. The moment write is best-effort and status-pinned, so a run whose
+ * record lost its compare-and-set states no moment — and a card drawn from a
+ * reference whose moment the row does not state would be a card for a run that
+ * has moved on. No card is the right answer there, which is the same fail-closed
+ * rule the mint side takes.
  */
 export async function resolveProposalForRun(
   runId: string,
@@ -1018,8 +1084,49 @@ export async function resolveProposalForRun(
     intent?.triggerType ??
     null;
   // Neither a trigger row nor an install intent means there is nothing armed to
-  // draw the chrome of — the install never reached the outbox.
-  if (!triggerType) return { phase: "absent" };
+  // draw the chrome of. TWO RUNS REACH THAT, and only one of them is an absence:
+  // a run whose install never reached the outbox, and a run that is WAITING to
+  // be given a schedule at all (cinatra#3044) — see the header.
+  if (!triggerType) {
+    if (
+      run.status === SCHEDULE_PENDING_STATUS &&
+      run.lifecycleMoment === SCHEDULE_MOMENT
+    ) {
+      // The floor, read against the reader exactly as the proposal phase reads
+      // it: the card is drawn either way, and a reader the instance would refuse
+      // to run this agent for gets `restricted` with the reason on screen rather
+      // than a card that vanishes (§IV).
+      const notRunnable = await assertAgentPackageRunnable(
+        template.packageName,
+        template.packageName ?? template.name,
+        { packageVersion: template.packageVersion ?? null },
+      );
+      // …AND THE FLOOR IS THE ONE THE SERVER WILL HONOUR (a convergence
+      // finding). READ access on this path is the RUN's, which is wider than the
+      // arming path's on purpose: an organization administrator and a co-owner
+      // of a shared run may SEE the run, and the trigger service still requires
+      // the run's own owner or a platform administrator to configure it.
+      // Drawing a live Confirm for a reader that call is going to refuse would
+      // be an offer the server never meant — the same rule `canSave` states for
+      // the settled card, applied to this floor. They keep the DRAWN card and
+      // the reason, which is §IV's `restricted`, never an absence.
+      const mayArm =
+        run.runBy === actor.userId ||
+        access?.roles?.platformRole === "platform_admin";
+      return {
+        phase: "run_pending",
+        runId,
+        agentName: template.name ?? template.packageName ?? "this agent",
+        canConfirm: !notRunnable && mayArm,
+        restrictedReason: notRunnable
+          ? PROPOSAL_REFUSALS.notRunnable
+          : mayArm
+            ? null
+            : PROPOSAL_REFUSALS.notYoursToSchedule,
+      };
+    }
+    return { phase: "absent" };
+  }
   // A run that came from no proposal draws the card only for the two SCHEDULED
   // kinds — see the header. A confirmed proposal keeps drawing whatever it
   // settled into, `immediate` included: that card is the answer to a schedule
