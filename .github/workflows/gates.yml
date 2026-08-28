@@ -46,6 +46,16 @@ jobs:
         run: |
           node scripts/audit/repo-docs-tree-guard.mjs
 
+      # Nothing development-related lives in the checkout: no proofs, planning
+      # notes, agent scratch, installs, build output, or local runtime data in
+      # the TRACKED tree. Asserted against git ls-files; no allowlist. The gate
+      # is dependency-free so it runs here without an install; its unit suite
+      # (scripts/ci/__tests__/product-tree-hygiene.test.mjs) is vitest and rides
+      # the root include, so it runs in the root-suite job, not this one.
+      - name: Product Tree Hygiene Gate
+        run: |
+          node scripts/ci/product-tree-hygiene.mjs
+
       # No new source reference to the historical admin route prefix as a Cinatra
       # route. Touch-ratchet: computes the diff base, then scans.
       - name: Administration Route Banned

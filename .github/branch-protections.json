@@ -27,7 +27,18 @@
     "approval, and the mandatory post-merge verification on the real merged SHA",
     "catches semantic conflicts that an up-to-date requirement would have. If a",
     "GitHub merge queue is ever enabled, revisit this note and the setting",
-    "together."
+    "together.",
+    "The `gates` and `gates-pnpm` contexts are gates.yml, the consolidated",
+    "micro-gate runner: one job per dependency class, one STEP per source gate.",
+    "They are required as a WHOLE because there is no finer handle. The",
+    "product-tree hygiene guard, the docs-tree guard, the route bans and the",
+    "policy gates all live as steps inside those two jobs, so a red step is only",
+    "reachable as a red `gates` / `gates-pnpm` check. gates.yml runs on every",
+    "pull_request, merge_group and push to main, with no `paths:` filter and no",
+    "job-level `if:`, so both contexts always report and neither can hang a PR by",
+    "never running. Adding a context here does NOT change the live protection:",
+    "re-apply this file with the `gh api -X PUT` command at the top once this",
+    "merges, or the new requirement exists only on paper."
   ],
   "required_status_checks": {
     "strict": false,
@@ -45,7 +56,9 @@
       "secrets-required-gate / secrets-required-gate",
       "truthful-attribution-gate / truthful-attribution-gate",
       "proof",
-      "toast-banner-gate / toast-banner-gate"
+      "toast-banner-gate / toast-banner-gate",
+      "gates",
+      "gates-pnpm"
     ]
   },
   "enforce_admins": false,
