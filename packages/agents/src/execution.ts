@@ -811,6 +811,12 @@ export const MAX_PRODUCED_REVIEW_HOLD_PARKS = 5;
  * an unbounded run output, so an oversized payload is left behind and the
  * recovery lands the run with what its row already holds. Bounded loss on a rare
  * write fault, against an unbounded queue record on every one.
+ *
+ * Measured on the SERIALIZED record in UTF-8 bytes, the unit the queue stores it
+ * in — not in string length, which counts UTF-16 code units and undercounts a
+ * multibyte payload by up to two thirds. The reduced record is bounded on its
+ * own too: an error text that alone exceeds the cap is cut and marked, so what
+ * the re-delivery carries is under the cap on every branch.
  */
 export const PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES = 256_000;
 
@@ -906,8 +912,103 @@ async function producedReviewHoldsRun(args: {
   return true;
 }
 
+/**
+ * How many shrink passes the error-text cut may take before the recovery gives
+ * up on carrying any of it. Each pass subtracts the measured overage in code
+ * units and a dropped code unit is worth at least one serialized byte, so the
+ * cut converges in one or two; the bound only makes the function total.
+ *
+ * Deliberately conservative on multibyte text, where a code unit is worth two or
+ * three bytes and the first pass therefore cuts more than strictly needed: under
+ * the cap is the requirement, landing exactly on it is not.
+ */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES = 6;
+/** Slack for the marker the cut appends, so the usual case converges in one pass. */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM = 128;
+
+/**
+ * The size of the queue record this object becomes: its UTF-8 BYTES, which is
+ * the unit the record is stored and capped in. `JSON.stringify(x).length` counts
+ * UTF-16 code units instead, so a multibyte payload measures as little as a
+ * third of what it costs. `Infinity` when it cannot be serialized at all — then
+ * it cannot ride the queue at any size.
+ */
+function producedReviewRecoveryBytes(recovery: ProducedReviewRecovery): number {
+  try {
+    const serialized = JSON.stringify(recovery);
+    return serialized === undefined
+      ? Number.POSITIVE_INFINITY
+      : Buffer.byteLength(serialized, "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** `slice` cuts on code UNITS and can split a surrogate pair in half; drop the
+ *  orphan so the kept text stays well-formed. */
+function sliceWholeCharacters(text: string, keep: number): string {
+  if (keep <= 0) return "";
+  const cut = text.slice(0, keep);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/** Says the text was cut, and by how much — so a reader of the landed run never
+ *  mistakes a cut error for the whole one. */
+function markCutError(kept: string, ofLength: number): string {
+  return (
+    `${kept}\n[error text truncated to fit the recovery payload cap: ` +
+    `${ofLength - kept.length} of ${ofLength} characters dropped]`
+  );
+}
+
+/**
+ * What the oversized case carries, bounded on its OWN rather than by whatever
+ * the dropped payload happened to leave behind: the verdict, plus as much of the
+ * error text as fits under the cap. The verdict is what the re-delivered attempt
+ * needs to land the run, so the text is what gives way; the derivation capture
+ * and the step results go whole, because they are the unbounded parts and the
+ * run's row already holds them.
+ */
+function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
+  recovery: ProducedReviewRecovery;
+  bytes: number;
+} {
+  const verdictOnly: ProducedReviewRecovery = { withheld: { status: withheld.status } };
+  const error = withheld.error;
+  if (error === undefined) {
+    return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+  }
+  const withError: ProducedReviewRecovery = { withheld: { status: withheld.status, error } };
+  const withErrorBytes = producedReviewRecoveryBytes(withError);
+  if (withErrorBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: withError, bytes: withErrorBytes };
+  }
+  let keep = error.length;
+  let over = withErrorBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  for (let pass = 0; pass < PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES; pass++) {
+    keep = Math.max(0, keep - over - PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM);
+    const cut: ProducedReviewRecovery = {
+      withheld: {
+        status: withheld.status,
+        error: markCutError(sliceWholeCharacters(error, keep), error.length),
+      },
+    };
+    const cutBytes = producedReviewRecoveryBytes(cut);
+    if (cutBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+      return { recovery: cut, bytes: cutBytes };
+    }
+    if (keep === 0) break;
+    over = cutBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  }
+  // Not even the marker fits: the verdict alone still lands the run.
+  return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+}
+
 /** The terminal write reduced to what a re-delivered attempt can carry: the
- *  whole thing when it fits the cap, the verdict alone when it does not. */
+ *  whole thing when it fits the cap, else the verdict with its error text cut to
+ *  fit and marked. Measured in UTF-8 BYTES — the unit the queue record is stored
+ *  in — and under the cap on EVERY branch, the fallback included. */
 function buildProducedReviewRecovery(
   runId: string,
   withheld: WithheldTerminalWrite,
@@ -917,23 +1018,15 @@ function buildProducedReviewRecovery(
     withheld,
     ...(stepResults.length > 0 ? { stepResults: [...stepResults] } : {}),
   };
-  let size = Number.POSITIVE_INFINITY;
-  try {
-    size = JSON.stringify(full)?.length ?? Number.POSITIVE_INFINITY;
-  } catch {
-    // Not serializable ⇒ it cannot ride the queue at all.
-  }
+  const size = producedReviewRecoveryBytes(full);
   if (size <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) return full;
+  const bounded = boundedProducedReviewFallback(withheld);
   console.warn(
     `[produced-review-hold] run=${runId} terminal payload too large to carry on the re-delivery ` +
-      `(${size} bytes) — the recovery will land the run with the payload its row already holds`,
+      `(${size} bytes) — the recovery carries the verdict in ${bounded.bytes} bytes and lands the ` +
+      `run with the payload its row already holds`,
   );
-  return {
-    withheld: {
-      status: withheld.status,
-      ...(withheld.error !== undefined ? { error: withheld.error } : {}),
-    },
-  };
+  return bounded.recovery;
 }
 
 /**

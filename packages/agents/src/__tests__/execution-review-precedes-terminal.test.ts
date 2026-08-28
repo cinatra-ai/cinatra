@@ -814,3 +814,85 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
     expect(err.recovery.stepResults).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The carried payload is bounded in the unit the queue record is actually
+// stored in: UTF-8 BYTES. `JSON.stringify(x).length` counts UTF-16 code units,
+// so a multibyte error measures a third of what it costs — and the fallback
+// that drops the step results kept the whole error string, so nothing bounded
+// that either. Both are measured here on the object the sentinel really
+// carries, not on an intermediate.
+// ---------------------------------------------------------------------------
+describe("cinatra#3007 — the carried recovery is bounded in UTF-8 bytes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+    readBackSpy.mockResolvedValue(null);
+  });
+
+  /** What the queue record costs — not what its code-unit count suggests. */
+  function payloadBytes(recovery: unknown): number {
+    return Buffer.byteLength(JSON.stringify(recovery) ?? "", "utf8");
+  }
+
+  async function dispatchFailureRecovery(runError: string) {
+    const err = (await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError,
+      authority: TEST_AUTHORITY,
+    }).catch((e: unknown) => e)) as ProducedReviewHoldUnpersistedError;
+    expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+    return err.recovery;
+  }
+
+  it("an ASCII error past the cap is CUT and MARKED, and the verdict survives", async () => {
+    const error = "x".repeat(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES + 1);
+
+    const recovery = await dispatchFailureRecovery(error);
+
+    expect(payloadBytes(recovery)).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+    // The verdict is what the re-delivered attempt needs to finish the run, so
+    // only the text gives way — and it says how much of it went.
+    expect(recovery.withheld.status).toBe("failed");
+    expect(String(recovery.withheld.error)).toContain("error text truncated");
+    expect(String(recovery.withheld.error)).toContain(`of ${error.length} characters dropped`);
+    expect(recovery.stepResults).toBeUndefined();
+  });
+
+  it("a MULTIBYTE error under the cap in code units but OVER it in bytes is cut too", async () => {
+    // 100,000 code units — comfortably under the cap counted the wrong way — and
+    // 300,000 UTF-8 bytes, comfortably over it counted the way the queue counts.
+    const error = "€".repeat(100_000);
+    expect(error.length).toBeLessThan(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+    expect(Buffer.byteLength(error, "utf8")).toBeGreaterThan(
+      PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
+    );
+
+    const recovery = await dispatchFailureRecovery(error);
+
+    expect(payloadBytes(recovery)).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+    expect(recovery.withheld.status).toBe("failed");
+    expect(String(recovery.withheld.error)).toContain("error text truncated");
+  });
+
+  it("a payload UNDER the cap rides untouched, byte for byte", async () => {
+    materializeRunArtifactsSpy.mockResolvedValue([
+      { ok: true, outputId: "draft", nodeId: "end", extension: "@cinatra-ai/blog-post-artifact" },
+    ]);
+
+    const err = (await run().catch((e: unknown) => e)) as ProducedReviewHoldUnpersistedError;
+
+    expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+    const withheldWrite = holdInput() as { withheld: unknown; stepResults: unknown[] };
+    // Not "equivalent" — identical: the same JSON the executor was withholding,
+    // derivation capture and payload included.
+    expect(JSON.stringify(err.recovery)).toBe(
+      JSON.stringify({ withheld: withheldWrite.withheld, stepResults: withheldWrite.stepResults }),
+    );
+    expect(payloadBytes(err.recovery)).toBeLessThanOrEqual(
+      PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
+    );
+  });
+});
