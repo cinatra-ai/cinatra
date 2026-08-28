@@ -37,6 +37,51 @@ export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
   review: "Ask Cinatra about this review, or ask for changes to the work…",
 };
 
+/**
+ * WHERE THE WINDOW STANDS, per surface (design `458fb7ffce6c`,
+ * `app-artifact-review.html` §VI and §IX).
+ *
+ * §VI, in its own words: "BENEATH THE DECISION BAR the run detail carries a
+ * conversational prompt window" — the drawing shows the card with its decision
+ * bar and the window as two separately stacked examples, one after the other.
+ * A window that floats over the bar is therefore not a second reading of the
+ * drawing; it is a different drawing. On the review page the window sits in the
+ * document flow, after the card, and nothing overlaps.
+ *
+ * The four windows that sit UNDER A FORM the person is filling keep the floating
+ * reading they were drawn with: there the window follows the person down a long
+ * form so the field they are typing into and the box they are typing in stay on
+ * screen together (§IX, "the decision bar and prompt window stay reachable at
+ * the foot of the run detail at every width"). The review page has no form to
+ * follow — it has a decision bar the window may not cover.
+ *
+ * IT IS A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares WHICH
+ * READING it is and never a placement of its own, so no window can drift from
+ * the drawing on its own and a sixth surface cannot compile without a placement.
+ */
+export const RUN_WINDOW_PLACEMENTS: Record<RunWindowSurface, "floating" | "in-flow"> = {
+  "run-page": "floating",
+  "step-by-step": "floating",
+  schedule: "floating",
+  "armed-trigger": "floating",
+  /** §VI — beneath the decision bar, in the flow, never over it. */
+  review: "in-flow",
+};
+
+/**
+ * The send control's ACCESSIBLE NAME, per surface.
+ *
+ * It carries the window's own sentence rather than a name borrowed from another
+ * surface: a reader on a screen reader hears what this window does where it
+ * stands, which is the same thing the empty field says to everyone else. It is
+ * DERIVED from that sentence, so the two cannot drift and a sixth surface gets
+ * a name the moment it gets a sentence.
+ */
+export function runWindowSendLabel(surface: RunWindowSurface): string {
+  const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
+  return `Send — ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+}
+
 export type HitlConversationEntry = {
   id: number;
   role: "user" | "assistant";
@@ -109,6 +154,12 @@ export function HitlConversationPanel({
   // §X's one difference between the five readings, resolved here rather than at
   // any mount: the sentence in the empty field.
   const placeholder = RUN_WINDOW_PLACEHOLDERS[surface];
+  // §VI's own placement for this reading, resolved here rather than at any
+  // mount, exactly as the sentence is.
+  const placement = RUN_WINDOW_PLACEMENTS[surface];
+  const inFlow = placement === "in-flow";
+  // The window's own sentence, as the send control's accessible name.
+  const submitLabel = runWindowSendLabel(surface);
   const [convOpen, setConvOpen] = useState(false);
   const convContainerRef = useRef<HTMLDivElement>(null);
   const convScrollRef = useRef<HTMLDivElement>(null);
@@ -233,11 +284,24 @@ export function HitlConversationPanel({
   return createPortal(
     <div
       data-conv-open={convOpen}
-      className="sticky bottom-0 z-30 px-5 pb-4 pt-6"
-      style={{
-        background:
-          "linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 85%, transparent) 30%, var(--background) 55%)",
-      }}
+      data-run-window-placement={placement}
+      // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
+      // context. An element that is not taken out of flow and comes after the
+      // card in document order cannot draw over it at any width, which is the
+      // whole of §VI's "beneath the decision bar".
+      className={
+        inFlow ? "px-5 pb-4 pt-6" : "sticky bottom-0 z-30 px-5 pb-4 pt-6"
+      }
+      // The fade exists so a FLOATING window has content passing under it. A
+      // window standing in the flow has nothing behind it to fade.
+      style={
+        inFlow
+          ? undefined
+          : {
+              background:
+                "linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 85%, transparent) 30%, var(--background) 55%)",
+            }
+      }
     >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
@@ -303,7 +367,7 @@ export function HitlConversationPanel({
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}
-            submitAriaLabel="Apply AI suggestion"
+            submitAriaLabel={submitLabel}
             canSubmitEmpty={false}
             pending={promptPending}
             fieldClassName="border-line shadow-lg"
