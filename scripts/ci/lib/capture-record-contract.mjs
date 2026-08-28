@@ -56,7 +56,7 @@ import {
   readFileSync,
   realpathSync,
 } from "node:fs";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1167,14 +1167,41 @@ export function tempFileViolation(tmpPath) {
 }
 
 /**
- * The image format a capture path names, stated EXPLICITLY to the shutter.
+ * THE ONE MAPPING from a capture's file name to the image it is.
  *
- * Belt and braces with the temp file's extension: the extension keeps a writer
- * that only looks at names happy, and this keeps the format correct even if the
- * name ever stops carrying it.
+ * A closed set, not a default. The previous version answered "png" for anything
+ * that was not a JPEG, so `shot.webp` reached the shutter as a `.webp` temp file
+ * DECLARED as a PNG -- two derivations of the same fact (the suffix and the
+ * type) that could disagree, which is the shape of bug this whole area keeps
+ * producing. There is now one lookup, and both the temp suffix and the format
+ * passed to the shutter come out of it.
+ *
+ * The extension it returns is the CANONICAL spelling, so `shot.PNG` yields
+ * `.png` and the temp file is named consistently whatever the record spells.
  */
-export function captureImageType(path) {
-  return /\.jpe?g$/i.test(path) ? "jpeg" : "png";
+export const CAPTURE_IMAGE_FORMATS = Object.freeze({
+  ".png": "png",
+  ".jpg": "jpeg",
+  ".jpeg": "jpeg",
+});
+
+/**
+ * @returns {{ok: true, extension: string, type: string}
+ *          | {ok: false, code: string, detail: string}}
+ */
+export function captureImageFormat(path) {
+  const extension = extname(String(path ?? "")).toLowerCase();
+  const type = CAPTURE_IMAGE_FORMATS[extension];
+  if (!type) {
+    return {
+      ok: false,
+      code: "capture/unsupported-image-extension",
+      detail:
+        `"${path}" names ${extension ? `a "${extension}"` : "no"} image extension — a capture is ` +
+        `one of ${Object.keys(CAPTURE_IMAGE_FORMATS).join(", ")}`,
+    };
+  }
+  return { ok: true, extension, type };
 }
 
 /** sha256 of a file, read from DISK -- never re-derived from the record. */

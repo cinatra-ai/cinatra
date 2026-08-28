@@ -28,6 +28,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -607,10 +608,13 @@ describe("the observer refuses a redirected write before the shutter", () => {
   it("a SYMLINKED CAPTURE ROOT is refused, and nothing is written through it", async () => {
     const root = mkdtempSync(join(tmpdir(), "shutter-root-"));
     try {
-      writeFileSync(join(root, "victim.txt"), "OLD");
+      // A `.png` victim, so this case is judged on the ROOT rather than being
+      // turned away earlier for its extension — the rule under test is the
+      // symlinked root, and the file it would clobber has to be a plausible one.
+      writeFileSync(join(root, "victim.png"), "OLD");
       symlinkSync(".", join(root, "test-results"), "dir");
-      await expect(shot(root, "test-results/victim.txt")).rejects.toThrow(/capture root must be a real directory/);
-      expect(readFileSync(join(root, "victim.txt"), "utf8")).toBe("OLD");
+      await expect(shot(root, "test-results/victim.png")).rejects.toThrow(/capture root must be a real directory/);
+      expect(readFileSync(join(root, "victim.png"), "utf8")).toBe("OLD");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -745,6 +749,81 @@ describe("the temp file is still an image, by name and by declaration", () => {
       // ...and the file that survives is the real name, with nothing beside it.
       expect(readdirSync(join(root, "test-results", "run"))).toEqual(["shot.png"]);
       expect(readFileSync(join(root, "test-results", "run", "shot.png"))).toEqual(BYTES);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE EXTENSION IS CHECKED BEFORE ANY DIRECTORY IS MADE. A capture that is
+// never going to be taken should not leave a run directory behind.
+// ---------------------------------------------------------------------------
+describe("an unsupported image extension is refused before the run directory exists", () => {
+  const shootInto = (root, rel) =>
+    observeWalkCell({
+      page: pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      ),
+      cell: { ...CHAT_PENDING, screenshot: rel },
+      repoRoot: root,
+      now: NOW,
+    });
+
+  it("REFUSES .webp, and creates nothing on the way to refusing it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-webp-"));
+    try {
+      await expect(shootInto(root, "test-results/run/shot.webp")).rejects.toThrow(
+        /a capture is one of \.png, \.jpg, \.jpeg/,
+      );
+      // Not even the capture root: the format is judged before preparation.
+      expect(existsSync(join(root, "test-results"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ACCEPTS .PNG as a png, and names the temp file canonically", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-upper-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/SHOT.PNG" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shotOptions[0].type).toBe("png");
+      expect(basename(page.shots[0])).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.png$/);
+      // The DESTINATION keeps the name the record spells; only the temp file is
+      // canonicalised.
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["SHOT.PNG"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a .jpeg capture is declared jpeg and gets a .jpeg temp suffix", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-jpeg-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/shot.jpeg" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shotOptions[0].type).toBe("jpeg");
+      expect(basename(page.shots[0])).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.jpeg$/);
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["shot.jpeg"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

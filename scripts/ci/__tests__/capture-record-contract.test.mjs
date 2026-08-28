@@ -41,7 +41,7 @@ import {
   validateCaptureIndex,
   validateCaptureRecord,
   CAPTURE_OUTPUT_ROOT,
-  captureImageType,
+  captureImageFormat,
   createCaptureTempFile,
   prepareCaptureTarget,
   recheckCaptureParent,
@@ -1596,8 +1596,49 @@ describe("preparing a target creates nothing outside the capture root", () => {
       const temp = createCaptureTempFile(t.parentReal, { extension: ".png" });
       expect(temp.ok).toBe(true);
       expect(temp.path.endsWith(".png")).toBe(true);
-      expect(captureImageType(temp.path)).toBe("png");
-      expect(captureImageType("/x/y/shot.jpeg")).toBe("jpeg");
+      expect(captureImageFormat(temp.path).type).toBe("png");
+      expect(captureImageFormat("/x/y/shot.jpeg").type).toBe("jpeg");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// ONE MAPPING, A CLOSED SET. Answering "png" for everything that is not a JPEG
+// meant `shot.webp` reached the shutter as a `.webp` temp file DECLARED a PNG:
+// the suffix and the type were derived twice and could disagree.
+// ---------------------------------------------------------------------------
+describe("a capture's image format is looked up, not guessed", () => {
+  it("accepts the closed set, and returns the CANONICAL extension", () => {
+    expect(captureImageFormat("a/b/shot.png")).toEqual({ ok: true, extension: ".png", type: "png" });
+    expect(captureImageFormat("a/b/shot.jpg")).toEqual({ ok: true, extension: ".jpg", type: "jpeg" });
+    expect(captureImageFormat("a/b/shot.jpeg")).toEqual({ ok: true, extension: ".jpeg", type: "jpeg" });
+  });
+
+  it("is case-insensitive, and normalises what it hands back", () => {
+    // `.PNG` is a png — and the temp file it produces is spelled `.png`.
+    expect(captureImageFormat("a/b/shot.PNG")).toEqual({ ok: true, extension: ".png", type: "png" });
+    expect(captureImageFormat("a/b/shot.JPEG")).toEqual({ ok: true, extension: ".jpeg", type: "jpeg" });
+  });
+
+  it("REFUSES anything else rather than defaulting it to png", () => {
+    for (const name of ["shot.webp", "shot.gif", "shot.svg", "shot", "shot.png.txt"]) {
+      const got = captureImageFormat(name);
+      expect(got.ok, name).toBe(false);
+      expect(got.code, name).toBe("capture/unsupported-image-extension");
+    }
+  });
+
+  it("the temp suffix and the declared type come from the SAME lookup", () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-pair-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/shot.jpeg", { repoRoot: root });
+      const fmt = captureImageFormat("test-results/c/shot.jpeg");
+      const temp = createCaptureTempFile(t.parentReal, { extension: fmt.extension });
+      expect(temp.path.endsWith(".jpeg")).toBe(true);
+      expect(fmt.type).toBe("jpeg");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

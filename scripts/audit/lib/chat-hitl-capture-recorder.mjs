@@ -80,7 +80,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, rmSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
 
 // THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
 // ratified and on main; a second hand-written copy of the same hosts, kinds,
@@ -105,7 +105,7 @@ import {
   isHistoricalPermalink,
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
-  captureImageType,
+  captureImageFormat,
   createCaptureTempFile,
   prepareCaptureTarget,
   recheckCaptureParent,
@@ -688,6 +688,14 @@ export async function observeCapture({
   if (pathViolation) {
     throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
   }
+  //    THE FORMAT, BEFORE ANY DIRECTORY EXISTS. The shutter is an image writer
+  //    and the temp file has to name the same image the destination does, so an
+  //    extension outside the closed set is refused HERE -- ahead of the run
+  //    directory being created for a capture that was never going to be taken.
+  const imageFormat = captureImageFormat(screenshot);
+  if (!imageFormat.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${imageFormat.detail}`);
+  }
   //    PREPARING, not merely resolving. A run's FIRST capture names a run
   //    directory that does not exist yet, and in a fresh checkout the capture
   //    root does not either -- it is gitignored. Playwright used to create both
@@ -844,7 +852,7 @@ export async function observeCapture({
   // The temp file keeps the FINAL extension: the shutter is an image writer and
   // infers its format from the name, so an extensionless temp path made it
   // refuse outright. The rename target keeps its real name.
-  const temp = createCaptureTempFile(target.parentReal, { extension: extname(abs) });
+  const temp = createCaptureTempFile(target.parentReal, { extension: imageFormat.extension });
   if (!temp.ok) {
     throw new Error(`capture "${cell}" cannot be written: ${temp.detail}`);
   }
@@ -854,7 +862,7 @@ export async function observeCapture({
     // the name at all.
     await page.screenshot(tmp, {
       framing: framing ?? "page",
-      type: captureImageType(abs),
+      type: imageFormat.type,
     });
     const beforeRename = recheckCaptureParent(target);
     if (beforeRename) {
