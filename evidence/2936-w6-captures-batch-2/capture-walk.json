@@ -1,0 +1,480 @@
+{
+  "slice": "2936-w6-captures-batch-2 (epic #2926, issue #2936 W6 part 2b, batch 2)",
+  "note": [
+    "The review-moment cells of ONE REAL RUN of the blog-draft-writer agent, started",
+    "from the app's own chat with the real model provider and the real public MCP",
+    "toolbox, and driven only by pressing what the screens themselves draw. The run",
+    "package was published to the instance's own registry FIRST (drivers/01), which is",
+    "what batch 1's run died without.",
+    "",
+    "  export WALK_BASE=http://127.0.0.1:<port>",
+    "  export WALK_COOKIE=\"$(node evidence/2930-w3-hitl-card/drivers/06-mint-lane-cookie.mjs)\"",
+    "  export WALK_COOKIE_DOMAIN=127.0.0.1",
+    "  export WALK_THREAD_URL=/chat/<vendor>/<assistant>/<threadId>",
+    "  export WALK_RUN_PAGE=/agents/<vendor>/<slug>/<runId>",
+    "  export WALK_REVIEW_PAGE=/agents/<vendor>/<slug>/<runId>/review/<encoded reviewTaskId>"
+  ],
+  "contexts": {
+    "light": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "light",
+      "theme": "light"
+    },
+    "dark": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2,
+      "colorScheme": "dark",
+      "theme": "dark"
+    }
+  },
+  "retires": [],
+  "steps": [
+    {
+      "id": "review-page-pending-dark",
+      "context": "dark",
+      "why": "The review page's own gate region, with the run's artifact review still open and nothing decided.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_REVIEW_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B4__review-card__page_gate_region__pending__dark",
+          "declaredHost": "page_gate_region",
+          "kind": "artifact_review_gate",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B4__review-card__page_gate_region__pending__dark.png",
+          "requires": "SECTION IV of the ratified drawing at the contract's pin, verbatim: 'Four drawn states, and one that draws nothing.' 'A card is loading while the host prepares the target; restricted when the reader may see the gate but not decide it — the terminal affordances disabled, the reason shown; and no longer open when the gate was already settled or the run moved on, offering a refresh rather than letting a stale decision through.' 'Restricted is a card that renders: the reader sees the target and the disabled floor, with the reason on screen. Absent is no card DOM at all.' With SECTION II's floor, verbatim: 'The review card fills the assistant's turn: the target panel naming what is under review and pinning its exact revision, then the decision floor that governs it.' And app-artifact-review SECTION VI, verbatim: 'A single decision bar sits at the foot of the gate, governing every target under it. It offers exactly three affordances: Approve (primary), Reject (destructive), and Comment.' 'Approve and Reject are terminal — they resolve the gate and hand the run its outcome.' app-artifact-review SECTION I, verbatim: 'An agent run opens at its own canonical route under /agents. The surface is a two-column frame: a step rail down the left names the run's ordered steps, and the run detail on the right shows the selected step.' 'A resolved gate stays on the rail as read-only history — its entry keeps its place and records how it was settled (approved, rejected, changes requested), so the rail is the run's whole lifecycle at a glance, not just its live tip.' 'a gate step opens the gate's own surface in place — a pending review renders the review gate (SECTION III-SECTION VII) right here in the run detail, under the same rail, never as a standalone document.'"
+        }
+      ]
+    },
+    {
+      "id": "verification-chat-light",
+      "context": "light",
+      "why": "The conversation the run was started from, after a change request was typed into the review's own prompt window and the repair returned.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B6__verification-card__chat_thread__advisory__light",
+          "declaredHost": "chat_thread",
+          "kind": "verification_summary",
+          "state": "advisory",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B6__verification-card__chat_thread__advisory__light.png",
+          "requires": "SECTION VII of the ratified drawing at the contract's pin, verbatim: 'After a repair, the turn may carry a verification card: the Core analysis heading with its outcome pill, the scope sentence, the two revision pins, and the field-by-field before / after of exactly what was inspected. It carries no floor at all — it asks nothing, so it draws nothing to press. It closes with Advisory comments: a label over one panel per comment, each carrying its author kind in mono above the comment itself.' 'Three outcomes. Verified, Out-of-scope drift — a field changed that the review never covered, marked in place in the table — and Findings not met. The outcome pill is the only place the card carries state colour.'"
+        }
+      ]
+    },
+    {
+      "id": "verification-chat-dark",
+      "context": "dark",
+      "why": "The conversation the run was started from, after a change request was typed into the review's own prompt window and the repair returned.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B6__verification-card__chat_thread__advisory__dark",
+          "declaredHost": "chat_thread",
+          "kind": "verification_summary",
+          "state": "advisory",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B6__verification-card__chat_thread__advisory__dark.png",
+          "requires": "SECTION VII of the ratified drawing at the contract's pin, verbatim: 'After a repair, the turn may carry a verification card: the Core analysis heading with its outcome pill, the scope sentence, the two revision pins, and the field-by-field before / after of exactly what was inspected. It carries no floor at all — it asks nothing, so it draws nothing to press. It closes with Advisory comments: a label over one panel per comment, each carrying its author kind in mono above the comment itself.' 'Three outcomes. Verified, Out-of-scope drift — a field changed that the review never covered, marked in place in the table — and Findings not met. The outcome pill is the only place the card carries state colour.'"
+        }
+      ]
+    },
+    {
+      "id": "verification-runpage-dark",
+      "context": "dark",
+      "why": "The run page's own detail, after the repair returned, carrying the same advisory reading.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B7__verification-card__run_card__advisory__dark",
+          "declaredHost": "run_card",
+          "kind": "verification_summary",
+          "state": "advisory",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B7__verification-card__run_card__advisory__dark.png",
+          "requires": "SECTION VII of the ratified drawing at the contract's pin, verbatim: 'After a repair, the turn may carry a verification card: the Core analysis heading with its outcome pill, the scope sentence, the two revision pins, and the field-by-field before / after of exactly what was inspected. It carries no floor at all — it asks nothing, so it draws nothing to press. It closes with Advisory comments: a label over one panel per comment, each carrying its author kind in mono above the comment itself.' 'Three outcomes. Verified, Out-of-scope drift — a field changed that the review never covered, marked in place in the table — and Findings not met. The outcome pill is the only place the card carries state colour.'"
+        }
+      ]
+    },
+    {
+      "id": "verification-reviewpage-dark",
+      "context": "dark",
+      "why": "The review page's own gate region, after the repair returned, carrying the same advisory reading.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_VERIFICATION_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"verification_summary\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B7__verification-card__page_gate_region__advisory__dark",
+          "declaredHost": "page_gate_region",
+          "kind": "verification_summary",
+          "state": "advisory",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B7__verification-card__page_gate_region__advisory__dark.png",
+          "requires": "SECTION VII of the ratified drawing at the contract's pin, verbatim: 'After a repair, the turn may carry a verification card: the Core analysis heading with its outcome pill, the scope sentence, the two revision pins, and the field-by-field before / after of exactly what was inspected. It carries no floor at all — it asks nothing, so it draws nothing to press. It closes with Advisory comments: a label over one panel per comment, each carrying its author kind in mono above the comment itself.' 'Three outcomes. Verified, Out-of-scope drift — a field changed that the review never covered, marked in place in the table — and Findings not met. The outcome pill is the only place the card carries state colour.'"
+        }
+      ]
+    },
+    {
+      "id": "review-runpage-decided-light",
+      "context": "light",
+      "why": "The run page's own run detail, after Approve was pressed on the page's own decision bar: the settled card in the same slot, under the same rail.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B2__review-card__run_card__decided__light",
+          "declaredHost": "run_card",
+          "kind": "artifact_review_gate",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__light.png",
+          "requires": "SECTION IV of the ratified drawing at the contract's pin, verbatim: 'Four drawn states, and one that draws nothing.' 'A card is loading while the host prepares the target; restricted when the reader may see the gate but not decide it — the terminal affordances disabled, the reason shown; and no longer open when the gate was already settled or the run moved on, offering a refresh rather than letting a stale decision through.' 'Restricted is a card that renders: the reader sees the target and the disabled floor, with the reason on screen. Absent is no card DOM at all.' With SECTION II's floor, verbatim: 'The review card fills the assistant's turn: the target panel naming what is under review and pinning its exact revision, then the decision floor that governs it.' And app-artifact-review SECTION VI, verbatim: 'A single decision bar sits at the foot of the gate, governing every target under it. It offers exactly three affordances: Approve (primary), Reject (destructive), and Comment.' 'Approve and Reject are terminal — they resolve the gate and hand the run its outcome.' app-artifact-review SECTION I, verbatim: 'An agent run opens at its own canonical route under /agents. The surface is a two-column frame: a step rail down the left names the run's ordered steps, and the run detail on the right shows the selected step.' 'A resolved gate stays on the rail as read-only history — its entry keeps its place and records how it was settled (approved, rejected, changes requested), so the rail is the run's whole lifecycle at a glance, not just its live tip.' 'a gate step opens the gate's own surface in place — a pending review renders the review gate (SECTION III-SECTION VII) right here in the run detail, under the same rail, never as a standalone document.'"
+        }
+      ]
+    },
+    {
+      "id": "review-runpage-decided-dark",
+      "context": "dark",
+      "why": "The run page's own run detail, after Approve was pressed on the page's own decision bar: the settled card in the same slot, under the same rail.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_RUN_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B2__review-card__run_card__decided__dark",
+          "declaredHost": "run_card",
+          "kind": "artifact_review_gate",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B2__review-card__run_card__decided__dark.png",
+          "requires": "SECTION IV of the ratified drawing at the contract's pin, verbatim: 'Four drawn states, and one that draws nothing.' 'A card is loading while the host prepares the target; restricted when the reader may see the gate but not decide it — the terminal affordances disabled, the reason shown; and no longer open when the gate was already settled or the run moved on, offering a refresh rather than letting a stale decision through.' 'Restricted is a card that renders: the reader sees the target and the disabled floor, with the reason on screen. Absent is no card DOM at all.' With SECTION II's floor, verbatim: 'The review card fills the assistant's turn: the target panel naming what is under review and pinning its exact revision, then the decision floor that governs it.' And app-artifact-review SECTION VI, verbatim: 'A single decision bar sits at the foot of the gate, governing every target under it. It offers exactly three affordances: Approve (primary), Reject (destructive), and Comment.' 'Approve and Reject are terminal — they resolve the gate and hand the run its outcome.' app-artifact-review SECTION I, verbatim: 'An agent run opens at its own canonical route under /agents. The surface is a two-column frame: a step rail down the left names the run's ordered steps, and the run detail on the right shows the selected step.' 'A resolved gate stays on the rail as read-only history — its entry keeps its place and records how it was settled (approved, rejected, changes requested), so the rail is the run's whole lifecycle at a glance, not just its live tip.' 'a gate step opens the gate's own surface in place — a pending review renders the review gate (SECTION III-SECTION VII) right here in the run detail, under the same rail, never as a standalone document.'"
+        }
+      ]
+    },
+    {
+      "id": "review-chat-decided-dark",
+      "context": "dark",
+      "why": "The conversation the run was started from, after the decision: the same settled card, in the assistant's turn.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B3__review-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "artifact_review_gate",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B3__review-card__chat_thread__decided__dark.png",
+          "requires": "SECTION IV of the ratified drawing at the contract's pin, verbatim: 'Four drawn states, and one that draws nothing.' 'A card is loading while the host prepares the target; restricted when the reader may see the gate but not decide it — the terminal affordances disabled, the reason shown; and no longer open when the gate was already settled or the run moved on, offering a refresh rather than letting a stale decision through.' 'Restricted is a card that renders: the reader sees the target and the disabled floor, with the reason on screen. Absent is no card DOM at all.' With SECTION II's floor, verbatim: 'The review card fills the assistant's turn: the target panel naming what is under review and pinning its exact revision, then the decision floor that governs it.' And app-artifact-review SECTION VI, verbatim: 'A single decision bar sits at the foot of the gate, governing every target under it. It offers exactly three affordances: Approve (primary), Reject (destructive), and Comment.' 'Approve and Reject are terminal — they resolve the gate and hand the run its outcome.'"
+        }
+      ]
+    },
+    {
+      "id": "hold-reviewpage-pending-light",
+      "context": "light",
+      "why": "The review page opened while the run's skills hold is STILL HELD — the hold the page mounts above the gate.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_HOLD_REVIEW_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B5__recommendation-card__page_gate_region__pending__light",
+          "declaredHost": "page_gate_region",
+          "kind": "recommendation_hold",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B5__recommendation-card__page_gate_region__pending__light.png",
+          "requires": "SECTION V of the ratified drawing at the contract's pin, verbatim: 'Where the assistant proposes the skills it means to use, the turn carries a chip-row: one chip per skill, each carrying its own Confirm, Adjust and Skip, so the reader shapes the run one skill at a time before it runs.' and 'The row is the whole card. There is no heading plate above it and no row-level submit beneath it — nothing states the question a second time, and nothing decides every skill at once.'"
+        }
+      ]
+    },
+    {
+      "id": "hold-reviewpage-pending-dark",
+      "context": "dark",
+      "why": "The review page opened while the run's skills hold is STILL HELD — the hold the page mounts above the gate.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_HOLD_REVIEW_PAGE}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 9000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B5__recommendation-card__page_gate_region__pending__dark",
+          "declaredHost": "page_gate_region",
+          "kind": "recommendation_hold",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B5__recommendation-card__page_gate_region__pending__dark.png",
+          "requires": "SECTION V of the ratified drawing at the contract's pin, verbatim: 'Where the assistant proposes the skills it means to use, the turn carries a chip-row: one chip per skill, each carrying its own Confirm, Adjust and Skip, so the reader shapes the run one skill at a time before it runs.' and 'The row is the whole card. There is no heading plate above it and no row-level submit beneath it — nothing states the question a second time, and nothing decides every skill at once.'"
+        }
+      ]
+    },
+    {
+      "id": "review-chat-decided-runcard-dark",
+      "context": "dark",
+      "why": "The conversation the run was started from, after Approve: the settled review the conversation actually draws — the inline run card, on a /chat path.",
+      "actions": [
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD_URL}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 12000
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "block": "center"
+        },
+        {
+          "action": "waitForTimeout",
+          "ms": 2500
+        }
+      ],
+      "cells": [
+        {
+          "cell": "B3__review-card__run_card__decided__conversation__dark",
+          "declaredHost": "run_card",
+          "kind": "artifact_review_gate",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2936-w6-captures-batch-2/cells/B3__review-card__run_card__decided__conversation__dark.png",
+          "requires": "SECTION IX of the ratified drawing at the contract's pin, verbatim: 'Every card appears on every host, and it is the same card wherever it appears: the same regions, the same states, the same data on screen, and the same actions its reader is authorized to take. Only the frame changes — the thread, the widget's panel, the run card's detail column, the gate region of the review page.' with SECTION IV's settled reading and SECTION II's floor, verbatim: 'The review card fills the assistant's turn: the target panel naming what is under review and pinning its exact revision, then the decision floor that governs it.' THIS CELL IS THE HONEST RECORD OF WHAT THE CONVERSATION DRAWS: the shipped recorder REFUSED 'B3__review-card__chat_thread__decided__dark' because the settled review in this conversation declares host 'run_card', not 'chat_thread' — the conversation's own inline run card. The refusal is reported in README.md; this record photographs the card that IS there."
+        }
+      ]
+    }
+  ]
+}

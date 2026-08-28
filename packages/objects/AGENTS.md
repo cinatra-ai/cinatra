@@ -10,12 +10,13 @@ Provides the `objects_*` MCP primitives that let agents store and retrieve typed
 
 Write path: every write lands in Postgres via an atomic CTE that also creates a `graphiti_projection_outbox` row. A BullMQ repair job (`GRAPHITI_PROJECTION_REPAIR`, 30s interval) projects pending rows to Graphiti asynchronously.
 
-Read path: `objects_get` and `objects_list` (no query) read from Postgres exclusively. `objects_list` with a `query` calls Graphiti `search_nodes` for ranked IDs, then fetches canonical rows from Postgres (authorization boundary).
+Read path: `objects_get` and `objects_list` (no query) read from Postgres exclusively. `objects_list` with a `query` calls Graphiti `search_nodes` for ranked IDs, then fetches canonical rows from Postgres (authorization boundary). `memory_recall` (cinatra#1380) is the third read primitive and takes the same ranked-IDs-then-Postgres route, pinned to the `@cinatra-ai/memory:concept` type, over server-derived lanes. It returns a capped projection plus a required `mode` (`semantic` or `degraded-recent`) that states whether the answer was actually ranked. The response schema is a discriminated union on `mode`, so the `ordering` and the degradation metadata cannot disagree with it. The whole serialized answer is bounded at 64 KiB: trailing rows are dropped to hold the bound and the drop is reported as `meta.responseCeiling`.
 
 ```
 Write: objects_save → upsertObjectAndEnqueue (PG + outbox CTE) → repair worker → addEpisode
 Read:  objects_get / objects_list (no query) → Postgres only
        objects_list (with query) → Graphiti (IDs only) → Postgres (canonical rows)
+       memory_recall → Graphiti (IDs only, entitled lanes) → Postgres (canonical rows) → capped projection + mode
 ```
 
 ## Key files
@@ -26,9 +27,9 @@ Read:  objects_get / objects_list (no query) → Postgres only
 | `src/lib/drizzle-store.ts` | Inline DDL migrations: projection columns + `graphiti_projection_outbox` table |
 | `src/lib/background-jobs.ts` | `GRAPHITI_PROJECTION_REPAIR` job + 30s self-reschedule |
 | `src/graphiti-projector.ts` | Outbox worker: `projectObjectToGraphiti`, `processProjectionOutbox` |
-| `src/graphiti-client.ts` | Low-level MCP calls to Graphiti (used only by projector). |
+| `src/graphiti-client.ts` | Low-level MCP calls to Graphiti. `addEpisode` / `deleteEpisode` are the projector's; `searchNodes` is also called directly by the ranked read paths in `src/mcp/handlers.ts` (`objects_list` with a query, and `memory_recall`). |
 | `src/graphiti-types.ts` | Zod schemas for Graphiti tool inputs/outputs. |
-| `src/mcp/handlers.ts` | `objects_save`, `objects_get`, `objects_list`, `objects_update`, `objects_delete`, `objects_classify`, `objects_types_list` |
+| `src/mcp/handlers.ts` | `objects_save`, `objects_get`, `objects_list`, `objects_update`, `objects_delete`, `objects_classify`, `objects_types_list`, `memory_recall` |
 | `src/classifier.ts` | LLM-based object type classification. |
 | `src/identity.ts` | Derives stable identity hash from object data. |
 | `src/registry.ts` | Static object type registry. |

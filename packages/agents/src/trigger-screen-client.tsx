@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, type DefaultValues } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowRight } from "lucide-react";
@@ -25,8 +25,16 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+// THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
+// `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
+// `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
+// the row this form opens on. The form used to hold a second copy of that
+// decision in its own `defaultValues`.
+import { scheduleScreenSelection } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import type { ProposedSchedule } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import {
   buildCron,
+  DEFAULT_RECURRING_CONFIG,
   parseCronToRecurring,
   WEEKDAY_LABELS,
   MONTH_LABELS,
@@ -111,6 +119,50 @@ function durationCopy(d: DurationEstimate | null): string {
   return `${min}–${max}.`;
 }
 
+/**
+ * THE FORM'S INITIAL VALUES, FROM THE ROW THE RUNNER'S DECISION NAMED
+ * (cinatra#2936).
+ *
+ * `scheduleScreenSelection` says which row the schedule screen opens on; this
+ * turns that row into the fields this particular form holds it in. It decides
+ * nothing: an immediate row is the immediate row because the decision said so,
+ * and a stated schedule is filled into the same rows the person would have
+ * picked — which is what the held schedule's card already does with the schedule
+ * its reader stated.
+ *
+ * NO SELECTION IS A REFUSAL, NOT A ROW. The decision answers "none" for a run
+ * nobody is present for, and the screen is not offered for such a run at all; a
+ * mount that reached one anyway opens with NO row chosen rather than with an
+ * invented one, and its submit cannot validate.
+ *
+ * Exported so the mapping can be read without a DOM.
+ */
+export function scheduleFormDefaults(
+  selection: ProposedSchedule | null,
+  browserTimezone: string,
+): DefaultValues<FormValues> {
+  const values: Record<string, string> =
+    selection === null
+      ? { timezone: browserTimezone }
+      : selection.kind === "scheduled"
+        ? {
+            triggerType: "scheduled",
+            scheduledAt: selection.runAt,
+            timezone: selection.timezone || browserTimezone,
+          }
+        : selection.kind === "recurring"
+          ? {
+              triggerType: "recurring",
+              cronExpression: buildCron({
+                ...DEFAULT_RECURRING_CONFIG,
+                ...selection.selection,
+              }),
+              timezone: selection.timezone || browserTimezone,
+            }
+          : { triggerType: "immediate", timezone: browserTimezone };
+  return values as DefaultValues<FormValues>;
+}
+
 // -----------------------------------------------------------------------------
 // Component
 // -----------------------------------------------------------------------------
@@ -129,6 +181,21 @@ export type TriggerScreenClientProps = {
    * has no run to ask.
    */
   canRespondInWindow?: boolean;
+  /**
+   * Is a person present for the run this schedule belongs to (cinatra#2936)?
+   * One of the two inputs the runner's schedule default takes, read off the RUN
+   * ROW by the screen that mounts this form. Absent ⇒ present, the same reading
+   * `canRespondInWindow` above takes for a screen with no run to ask.
+   */
+  humanPresent?: boolean;
+  /**
+   * A schedule the person already stated, when the surface knows one — the
+   * decision's other input. The conversation's held schedule is the carrier that
+   * knows one and its own card fills it into these same rows; the run page's
+   * scheduling step is reached only by a run with no trigger row, so it has none
+   * to pass.
+   */
+  statedSchedule?: ProposedSchedule | null;
   durationEstimate?: DurationEstimate | null;
   inputParams?: unknown;
   requiredFields?: unknown;
@@ -221,20 +288,29 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     }
   }, []);
 
-  // Recurring UI state (drives cron generation)
-  const [recurring, setRecurring] = useState<RecurringConfig>({
-    frequency: "weekly",
-    interval: 1,
-    weekdays: [],
-    dayOfMonth: 1,
-    monthlyMode: "date",
-    nthWeek: 1,
-    monthlyWeekday: 0,
-    quarterAnchor: "start",
-    yearlyMonth: 1,
-    hour: 9,
-    minute: 0,
-  });
+  // THE ROW THIS FORM OPENS ON (cinatra#2936). Not a default of this form's:
+  // the two inputs go to the runner's own decision and the answer comes back as
+  // the row to preselect. For the ordinary case — a person present who stated
+  // nothing — that answer is the immediate row, which is what this screen has
+  // always shown.
+  const initialSelection = useMemo(
+    () =>
+      scheduleScreenSelection({
+        humanPresent: props.humanPresent ?? true,
+        statedSchedule: props.statedSchedule ?? null,
+      }),
+    [props.humanPresent, props.statedSchedule],
+  );
+
+  // Recurring UI state (drives cron generation). Seeded from the selection when
+  // the person stated a recurring schedule, so the row they see IS the schedule
+  // they stated; otherwise the vocabulary's own default selections, which this
+  // component used to repeat inline.
+  const [recurring, setRecurring] = useState<RecurringConfig>(
+    initialSelection !== null && initialSelection.kind === "recurring"
+      ? { ...DEFAULT_RECURRING_CONFIG, ...initialSelection.selection }
+      : DEFAULT_RECURRING_CONFIG,
+  );
 
   const {
     register,
@@ -244,7 +320,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { triggerType: "immediate", timezone: browserTz },
+    defaultValues: scheduleFormDefaults(initialSelection, browserTz),
   });
 
   const triggerType = watch("triggerType");

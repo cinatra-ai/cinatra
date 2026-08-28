@@ -387,6 +387,21 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   objects_save:          { resourceType: "object", action: "create", status: "enforced" },
   objects_types_list:    { resourceType: "object", action: "list",   status: "enforced" },
   objects_update:        { resourceType: "object", action: "update", status: "enforced" },
+  // cinatra#1380 (epic #1373) — `memory_recall` is an object LIST read, pinned
+  // to `@cinatra-ai/memory:concept`. It is classified here for the same reason
+  // every other read is: `enforceMcpBoundary` BLOCKS an unclassified primitive,
+  // so this record is what makes the tool reachable at all — and it binds the
+  // recall to the same coarse `object/list` boundary `objects_list` answers to,
+  // on top of the handler's own org guard, sealed-room gate, actor-scoped SQL
+  // ownership filter and per-row `object.read` probe.
+  //
+  // Deliberately NOT added to the delegated-chat admission table
+  // (`CORE_EXACT` in packages/mcp-server/src/capability-plan.ts): admitting a
+  // name there is a security decision that WIDENS the injection-hardened chat
+  // perimeter, cinatra#1380 does not ask for it, and the perimeter has a
+  // non-widening gate that says so. The tool is reachable over the
+  // authenticated MCP transport and by authorized direct callers.
+  memory_recall:         { resourceType: "object", action: "list",   status: "enforced" },
 
   // ───── object history / data-safety ─────
   // status:"unenforced" — these defer to per-handler authz (org guard +
