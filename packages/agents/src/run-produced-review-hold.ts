@@ -19,14 +19,22 @@ import "server-only";
 //
 //   resolveProducedReviewHold — the ROW-GROUNDED question, asked of the store and
 //     of nothing else: does this run have a produced event still awaiting
-//     orchestration, or one linked to a gate nobody has decided? It is the SAME
-//     question before the terminal write and after a decision, so park and
-//     release can never disagree about what holds a run.
+//     orchestration, one linked to a gate nobody has decided, or one whose
+//     linkage names no gate this organization owns? It is the SAME question
+//     before the terminal write and after a decision, so park and release can
+//     never disagree about what holds a run — and every answer it cannot reach
+//     resolves toward HELD, because the linkage carries no foreign key and an
+//     unresolvable one is an incoherent state, not an absence of review.
 //
 //   holdRunForProducedReview — the executor's call, made after materialization
 //     and BEFORE either terminal transition. It drains this run's produced events
-//     inline (bounded), asks the question, and — when the answer is yes — parks
-//     the run in `pending_approval` carrying the terminal write it is withholding.
+//     inline (bounded), asks the question, and — when the answer is yes, OR when
+//     it cannot be answered at all — parks the run in `pending_approval` carrying
+//     the terminal write it is withholding. The park is what makes a fail-closed
+//     hold RECOVERABLE: a hold that lived only in a return value left a `running`
+//     row no later pass could see. The one hold that can persist nothing is a
+//     park write that itself fails, and the caller turns that into a retryable
+//     job failure rather than a successful completion.
 //
 //   releaseHeldRun — the decision's call. The withheld terminal write is
 //     performed, with whichever terminal status the decision implies.
@@ -47,7 +55,7 @@ import "server-only";
 // released by the resume delivery it has always used.
 // ---------------------------------------------------------------------------
 
-import { and, eq, inArray, like, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import { db } from "./db";
@@ -198,7 +206,13 @@ export type ProducedReviewHold =
    *  still UNKNOWN. Unknown is not "no": the run holds. */
   | { held: true; reason: "awaiting-orchestration"; eventIds: string[] }
   /** A gate this run's output opened is undecided. */
-  | { held: true; reason: "gate-undecided"; gateIds: string[] };
+  | { held: true; reason: "gate-undecided"; gateIds: string[] }
+  /** A produced event names a gate that this org has no row for — the gate is
+   *  gone, or it belongs to another organization. The linkage is REAL (the
+   *  producing tx wrote it) and there is deliberately no foreign key from the
+   *  outbox to the gate, so an absent row is an INCOHERENT state, not evidence
+   *  that no review was opened. Unknown is not "no": the run holds. */
+  | { held: true; reason: "gate-unresolvable"; gateIds: string[] };
 
 /** What the decisions on this run's produced-output gates add up to. */
 export type ProducedReviewDecision =
@@ -211,11 +225,30 @@ interface LinkedGateRow {
   disposition: string | null;
 }
 
-/** Every gate this run's PRODUCED output opened, joined through the produced
- *  event's own linkage (`continuation_address`) — never by run id alone, which
- *  would also sweep up a template-declared gate that has nothing to do with what
- *  the run produced. */
-async function readLinkedGates(orgId: string, runId: string): Promise<LinkedGateRow[]> {
+/** What this run's produced events point at, and what of it actually resolved. */
+interface ProducedLinkage {
+  /** Every distinct non-null `continuation_address` this run's events carry. */
+  linkedGateIds: string[];
+  /** The gate rows that exist IN THIS ORG for those ids. */
+  gates: LinkedGateRow[];
+  /** The ids with no such row: a vanished gate, or one owned by another org. */
+  unresolvedGateIds: string[];
+}
+
+/**
+ * Every gate this run's PRODUCED output opened, joined through the produced
+ * event's own linkage (`continuation_address`) — never by run id alone, which
+ * would also sweep up a template-declared gate that has nothing to do with what
+ * the run produced.
+ *
+ * The linkage is returned WHOLE, including the ids that resolved to nothing.
+ * Dropping them silently is what let a vanished or cross-organization gate read
+ * as "this run opened no review": the outbox has no foreign key to the gate
+ * table (the two are written by different transactions, deliberately), so an id
+ * that names no same-org row is an unresolved linkage and the caller must fail
+ * closed on it.
+ */
+async function readProducedLinkage(orgId: string, runId: string): Promise<ProducedLinkage> {
   const linked = await db
     .select({ gateId: artifactProducedOutbox.continuationAddress })
     .from(artifactProducedOutbox)
@@ -226,17 +259,27 @@ async function readLinkedGates(orgId: string, runId: string): Promise<LinkedGate
         sql`${artifactProducedOutbox.continuationAddress} IS NOT NULL`,
       ),
     );
-  const gateIds = [...new Set(linked.map((r) => r.gateId).filter((id): id is string => !!id))];
-  if (gateIds.length === 0) return [];
-  const rows = await db
+  const linkedGateIds = [
+    ...new Set(linked.map((r) => r.gateId).filter((id): id is string => !!id)),
+  ];
+  if (linkedGateIds.length === 0) return { linkedGateIds, gates: [], unresolvedGateIds: [] };
+  const gates = await db
     .select({
       gateId: artifactReviewGates.id,
       status: artifactReviewGates.status,
       disposition: artifactReviewGates.disposition,
     })
     .from(artifactReviewGates)
-    .where(and(eq(artifactReviewGates.orgId, orgId), inArray(artifactReviewGates.id, gateIds)));
-  return rows;
+    // ORG-SCOPED on purpose: a gate id that resolves only in ANOTHER org is not
+    // this org's review, and reading it as one would let a foreign row decide
+    // this run's terminal status.
+    .where(and(eq(artifactReviewGates.orgId, orgId), inArray(artifactReviewGates.id, linkedGateIds)));
+  const found = new Set(gates.map((g) => g.gateId));
+  return {
+    linkedGateIds,
+    gates,
+    unresolvedGateIds: linkedGateIds.filter((id) => !found.has(id)),
+  };
 }
 
 /** The produced events of this run that no orchestration pass has settled yet. */
@@ -267,9 +310,12 @@ export async function resolveProducedReviewHold(
   if (pending.length > 0) {
     return { held: true, reason: "awaiting-orchestration", eventIds: pending };
   }
-  const gates = await readLinkedGates(orgId, runId);
-  if (gates.length === 0) return { held: false, reason: "no-review" };
-  const undecided = gates.filter((g) => g.status !== "resolved").map((g) => g.gateId);
+  const linkage = await readProducedLinkage(orgId, runId);
+  if (linkage.unresolvedGateIds.length > 0) {
+    return { held: true, reason: "gate-unresolvable", gateIds: linkage.unresolvedGateIds };
+  }
+  if (linkage.gates.length === 0) return { held: false, reason: "no-review" };
+  const undecided = linkage.gates.filter((g) => g.status !== "resolved").map((g) => g.gateId);
   if (undecided.length > 0) return { held: true, reason: "gate-undecided", gateIds: undecided };
   return { held: false, reason: "no-review" };
 }
@@ -285,8 +331,65 @@ export async function resolveProducedReviewDecision(
 ): Promise<ProducedReviewDecision> {
   const hold = await resolveProducedReviewHold(orgId, runId);
   if (hold.held) return { decided: false, hold };
-  const gates = await readLinkedGates(orgId, runId);
-  return { decided: true, rejected: gates.some((g) => g.disposition === "reject") };
+  const linkage = await readProducedLinkage(orgId, runId);
+  return { decided: true, rejected: linkage.gates.some((g) => g.disposition === "reject") };
+}
+
+/**
+ * Does this run still owe a produced-output review? The lease-expiry finalizer's
+ * question (cinatra#3007), asked on ITS OWN transaction so the answer is the one
+ * its fenced snapshot sees.
+ *
+ * TOTAL and fail-closed: an unreadable answer is `true`, because a finalizer that
+ * cannot prove a run owes no review must not terminalize it. `db` is the default
+ * so an ordinary caller needs no executor.
+ */
+export async function hasUnresolvedProducedReview(
+  orgId: string,
+  runId: string,
+  executor: Pick<typeof db, "select"> = db,
+): Promise<boolean> {
+  try {
+    const pending = await executor
+      .select({ eventId: artifactProducedOutbox.eventId })
+      .from(artifactProducedOutbox)
+      .where(
+        and(
+          eq(artifactProducedOutbox.orgId, orgId),
+          eq(artifactProducedOutbox.producerRunId, runId),
+          eq(artifactProducedOutbox.status, "pending"),
+        ),
+      )
+      .limit(1);
+    if (pending.length > 0) return true;
+    const linked = await executor
+      .select({ gateId: artifactProducedOutbox.continuationAddress })
+      .from(artifactProducedOutbox)
+      .where(
+        and(
+          eq(artifactProducedOutbox.orgId, orgId),
+          eq(artifactProducedOutbox.producerRunId, runId),
+          sql`${artifactProducedOutbox.continuationAddress} IS NOT NULL`,
+        ),
+      );
+    const gateIds = [...new Set(linked.map((r) => r.gateId).filter((id): id is string => !!id))];
+    if (gateIds.length === 0) return false;
+    const gates = await executor
+      .select({ gateId: artifactReviewGates.id, status: artifactReviewGates.status })
+      .from(artifactReviewGates)
+      .where(
+        and(eq(artifactReviewGates.orgId, orgId), inArray(artifactReviewGates.id, gateIds)),
+      );
+    // A vanished / cross-org gate counts as unresolved, exactly as above.
+    if (gates.length !== gateIds.length) return true;
+    return gates.some((g) => g.status !== "resolved");
+  } catch (err) {
+    console.error(
+      `[produced-review-hold] run=${runId} unresolved-production probe failed — treated as HELD (fail-closed):`,
+      err,
+    );
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,18 +464,36 @@ export interface HoldRunInput {
 
 export type HoldRunOutcome =
   /** The run is parked, or cannot be proven free to finish; either way the caller
-   *  must NOT write a terminal status. */
+   *  must NOT write a terminal status. A held outcome other than
+   *  `hold-unpersisted` has a DURABLE record behind it — the park row, or a row
+   *  another writer moved on — so a later pass converges on its own. */
   | {
       held: true;
       reason:
         | "awaiting-orchestration"
         | "gate-undecided"
+        | "gate-unresolvable"
         | "orchestration-contended"
         | "stale-from-status"
         | "hold-check-failed";
     }
+  /** NOTHING durable records that this run still owes a review: the park write
+   *  itself failed. The caller must neither write a terminal status NOR report
+   *  success — it throws, so the job is a retryable failure instead of a silent
+   *  completion that leaves a `running` row nothing will ever converge. */
+  | { held: true; reason: "hold-unpersisted" }
   /** Nothing holds the run; the caller writes its terminal status as before. */
   | { held: false; reason: "no-produced-output" | "no-review" | "review-inactive" };
+
+/** The one held outcome with no durable record behind it (see above). Exported
+ *  as a value so the executor's seam can recognise it without re-stating the
+ *  string, and so a test can assert on the same constant the seam reads. */
+export const UNPERSISTED_HOLD_REASON = "hold-unpersisted" as const;
+
+/** True when the hold could not be recorded anywhere — the caller must throw. */
+export function isUnpersistedHold(outcome: HoldRunOutcome): boolean {
+  return outcome.held && outcome.reason === UNPERSISTED_HOLD_REASON;
+}
 
 /**
  * Park the run on its produced output's review, if one opens.
@@ -384,10 +505,17 @@ export type HoldRunOutcome =
  * FAIL-CLOSED, which is the whole point. Every answer this cannot reach honestly
  * resolves toward the run NOT reporting success: a drain that fails leaves the
  * events pending, and pending is a hold; a read that fails cannot prove there is
- * no review, so it holds; a park that fails still returns `held`, so the caller
- * writes no terminal status and the run stays `running` for the lease-expiry
- * finalizer to reconcile. Answering "no review" on a fault is what produced
+ * no review, so it holds. Answering "no review" on a fault is what produced
  * cinatra#3007 in the first place, and no branch here does it.
+ *
+ * FAIL-CLOSED IS ALSO PERSISTED. A hold that lives only in this function's return
+ * value is a run left `running` that no later pass can see, so every fail-closed
+ * branch PARKS the run rather than merely reporting the hold: the park row is the
+ * durable record, and the release drain converges it — a park whose production
+ * turns out to be absent or already decided is released on the next pass, which
+ * is why the candidate predicate does not require production to exist. Only a
+ * park write that itself fails leaves nothing behind, and that is the one outcome
+ * the caller turns into a retryable job failure.
  *
  * THE ONE EXCEPTION is the fence: when the review slice is switched off the
  * emitters write no produced events at all, so there is no review to wait for and
@@ -424,15 +552,16 @@ export async function holdRunForProducedReview(
         )
         .limit(1);
     } catch (err) {
-      // We cannot prove the run produced nothing, so we do not claim it — and we
-      // do NOT park it either: a park with no production behind it is invisible
-      // to the release drain and would strand. The run keeps its current
-      // non-terminal status, which the lease-expiry finalizer reconciles.
+      // We cannot prove the run produced nothing, so we do not claim it — and the
+      // hold is PARKED rather than merely returned, so a later pass can see it.
+      // A park with no production behind it is not a strand: the release drain's
+      // predicate asks whether anything still holds the run, and nothing does, so
+      // the next pass performs the withheld terminal write.
       console.error(
-        `[produced-review-hold] run=${runId} produced-output probe failed — no terminal write (fail-closed):`,
+        `[produced-review-hold] run=${runId} produced-output probe failed — parking instead of a terminal write (fail-closed):`,
         err,
       );
-      return { held: true, reason: "hold-check-failed" };
+      return await parkRun(input, authority, "hold-check-failed");
     }
     if (!produced) return { held: false, reason: "no-produced-output" };
 
@@ -484,16 +613,16 @@ export async function holdRunForProducedReview(
     // `outcome` is assigned inside the locked callback; TypeScript cannot see it.
     const settled = outcome as HoldRunOutcome | null;
     // The callback threw before assigning (its own errors are caught above, so
-    // this is the predicate read failing). Hold without parking, as the probe
-    // failure does.
-    if (!settled) return { held: true, reason: "hold-check-failed" };
+    // this is the predicate read failing). The production EXISTS, so the park is
+    // both safe and releasable — take it rather than leaving the hold in memory.
+    if (!settled) return await parkRun(input, authority, "hold-check-failed");
     return settled;
   } catch (err) {
     console.error(
-      `[produced-review-hold] run=${runId} hold check failed — no terminal write (fail-closed):`,
+      `[produced-review-hold] run=${runId} hold check failed — parking instead of a terminal write (fail-closed):`,
       err,
     );
-    return { held: true, reason: "hold-check-failed" };
+    return await parkRun(input, authority, "hold-check-failed");
   }
 }
 
@@ -502,7 +631,7 @@ export async function holdRunForProducedReview(
 async function parkRun(
   input: HoldRunInput,
   authority: OrgWriteAuthority | undefined,
-  reason: Extract<HoldRunOutcome, { held: true }>["reason"],
+  reason: Exclude<Extract<HoldRunOutcome, { held: true }>["reason"], "hold-unpersisted">,
 ): Promise<HoldRunOutcome> {
   const { runId, orgId, fromStatus } = input;
   const parkedStepResults = attachWithheldTerminal(input.stepResults, input.withheld);
@@ -556,11 +685,14 @@ async function parkRun(
     );
     return { held: true, reason };
   } catch (err) {
-    // The park itself failed. The run stays where it is and the caller writes NO
-    // terminal status — a run left `running` is reconciled by the lease-expiry
-    // finalizer, where a run falsely written `completed` never is.
+    // The park itself failed, so NOTHING durable records that this run still owes
+    // a review. The caller writes no terminal status and does not report success
+    // either: it throws, and the job is a retryable failure. A run left `running`
+    // is recoverable — the lease-expiry finalizer refuses to terminalize a run
+    // with unresolved production — where a run falsely written `completed` never
+    // is.
     console.error(`[produced-review-hold] run=${runId} could not be parked:`, err);
-    return { held: true, reason: "hold-check-failed" };
+    return { held: true, reason: UNPERSISTED_HOLD_REASON };
   }
 }
 
@@ -757,24 +889,54 @@ export async function readGateRunOwner(
 }
 
 /**
+ * The JSON path that matches a run row PARKED BY THIS MODULE, and nothing else.
+ *
+ * `agent_runs.step_results` is a JSON-array text column, and the withheld
+ * terminal write rides as a key on one of its TOP-LEVEL entries. A substring
+ * match over that column is not the same predicate: a run's own output is
+ * arbitrary nested JSON and may contain the marker's name as free text (a step
+ * that echoes this module's log line, a review-about-reviews agent), a retry
+ * carries the previous attempt's `step_results` forward, and every such row is
+ * refused by `releaseHeldRun` while still occupying a place in a bounded,
+ * stably-ordered page — which starves the genuinely releasable parks behind it.
+ *
+ * So the predicate is the SHAPE, expressed exactly as `readWithheldTerminal`
+ * reads it: a top-level entry carrying the marker key, whose `status` is one of
+ * the two statuses a withheld terminal write may hold. The two agree by
+ * construction, so the candidate query can no longer return a row the
+ * authoritative read then refuses.
+ *
+ * The cast is total: `step_results` has exactly two writers in the tree
+ * (`updateAgentRunStatus` and this module's already-parked update), and both
+ * write `JSON.stringify(<array>)`, which is valid JSON for every input.
+ */
+const WITHHELD_TERMINAL_JSONPATH =
+  `$[*].${WITHHELD_TERMINAL_KEY} ? (@.status == "completed" || @.status == "failed")`;
+
+/**
  * The runs whose produced-review hold has ACTUALLY CLEARED — the release drain's
  * candidate set, decided in SQL.
  *
- * Two properties matter, and both are why the predicate lives in the query rather
- * than in a filter after the LIMIT:
+ * Three properties matter, and all three are why the predicate lives in the query
+ * rather than in a filter after the LIMIT:
  *
- *   NO STARVATION. A bounded pass that selected arbitrary parked runs would keep
- *     returning the same still-undecided parks forever, and a run whose review
- *     expired behind them would never be looked at. Every row this returns is
- *     releasable, so the bound consumes progress instead of re-reading the queue.
+ *   NO STARVATION. A bounded pass that selected rows this module would refuse
+ *     would keep returning the same refused rows forever, and a run whose review
+ *     was decided behind them would never be looked at. Every row this returns is
+ *     one of OUR parks (the marker shape above) whose hold has cleared, so the
+ *     bound consumes progress instead of re-reading the queue.
  *
  *   NO ZERO-GATE STRAND. A park can clear without any gate ever existing: a drain
  *     that finally classifies the event as opening NO review marks it processed
- *     and links nothing. So the predicate is "no pending event AND no undecided
- *     linked gate" — not "has a resolved gate", which would never see that run.
+ *     and links nothing, and a fail-closed park taken on an unreadable probe may
+ *     have no production behind it at all. So the predicate is "no pending event
+ *     AND no unresolved linked gate" — never "has produced something", which
+ *     would strand exactly those parks.
  *
- * A run parked for any OTHER reason is refused by `releaseHeldRun`'s
- * withheld-terminal marker, which this query deliberately does not try to read.
+ *   NO SILENT DROP. The gate join is a LEFT JOIN with the org carried into the
+ *     join condition, so a linkage whose gate row is missing or belongs to
+ *     another organization keeps the run held instead of reading as "decided".
+ *     There is deliberately no foreign key from the outbox to the gate table.
  */
 export async function listReleasableHeldRuns(
   limit = 50,
@@ -788,30 +950,27 @@ export async function listReleasableHeldRuns(
         eq(agentRuns.status, PARKED_STATUS),
         // ...carries a WITHHELD TERMINAL WRITE, so it is one of OUR parks. This
         // has to be in the SQL, before the LIMIT, and not left to
-        // `releaseHeldRun`'s refusal: a template-declared park on a run that also
-        // has processed produced events matches everything else here, and a
-        // stable page of those would occupy every bounded pass forever while a
-        // genuinely releasable park behind them was never reached. The text match
-        // is a CANDIDATE filter; the authoritative read is still
-        // `readWithheldTerminal` on the parsed payload.
-        like(agentRuns.stepResults, `%${WITHHELD_TERMINAL_KEY}%`),
-        // has a production behind it...
-        sql`EXISTS (
-          SELECT 1 FROM ${artifactProducedOutbox} o
-          WHERE o.producer_run_id = ${agentRuns.id} AND o.org_id = ${agentRuns.orgId}
-        )`,
-        // ...nothing of it is still awaiting orchestration...
+        // `releaseHeldRun`'s refusal — see the starvation note above. A
+        // template-declared park carries no marker and is never selected.
+        sql`${agentRuns.stepResults} IS NOT NULL
+            AND jsonb_path_exists(${agentRuns.stepResults}::jsonb, ${WITHHELD_TERMINAL_JSONPATH}::jsonpath)`,
+        // ...nothing it produced is still awaiting orchestration...
         sql`NOT EXISTS (
           SELECT 1 FROM ${artifactProducedOutbox} o
           WHERE o.producer_run_id = ${agentRuns.id} AND o.org_id = ${agentRuns.orgId}
             AND o.status = 'pending'
         )`,
-        // ...and every gate its output opened has been decided.
+        // ...and every gate its output linked to EXISTS IN THIS ORG and has been
+        // decided. The LEFT JOIN is the fail-closed half: an unmatched linkage
+        // (a vanished gate, a cross-organization gate) leaves `g.id` NULL, which
+        // this counts as unresolved rather than as "no review".
         sql`NOT EXISTS (
           SELECT 1 FROM ${artifactProducedOutbox} o
-          JOIN ${artifactReviewGates} g ON g.id = o.continuation_address
+          LEFT JOIN ${artifactReviewGates} g
+            ON g.id = o.continuation_address AND g.org_id = o.org_id
           WHERE o.producer_run_id = ${agentRuns.id} AND o.org_id = ${agentRuns.orgId}
-            AND g.status <> 'resolved'
+            AND o.continuation_address IS NOT NULL
+            AND (g.id IS NULL OR g.status <> 'resolved')
         )`,
       ),
     )

@@ -124,6 +124,82 @@ async function readGateRow(gateId: string) {
     | undefined;
 }
 
+/** A run row already sitting in the parked status, carrying whatever
+ *  `step_results` payload the proof needs — including one that is deliberately
+ *  NOT a withheld terminal write. */
+async function seedParkedRun(runId: string, stepResults: unknown): Promise<void> {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs"
+       (id, template_id, org_id, status, input_params, run_by, step_results)
+     VALUES ($1, $2, $3, 'pending_approval', '{}', $4, $5)
+     ON CONFLICT (id) DO UPDATE SET status = 'pending_approval', step_results = EXCLUDED.step_results`,
+    [runId, `tpl-${randomUUID()}`, ORG, USER, JSON.stringify(stepResults)],
+  );
+}
+
+/** A produced-outbox row written straight to the table, so a proof can pin an
+ *  exact linkage shape (settled, unlinked, or pointing at a gate that does not
+ *  resolve in this org) without going through the emitter. */
+async function seedOutboxRow(
+  runId: string,
+  over: { status?: string; continuationAddress?: string | null; orgId?: string } = {},
+): Promise<void> {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
+       (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
+        producer_run_id, origin_kind, destination_class, continuation_mode,
+        continuation_address, status)
+     VALUES ($1, $2, $3, $4, 'artifact_produced', 'createSemanticArtifact', $5, 'agent_produced', 'none',
+             'async_effects_gated', $6, $7)`,
+    [
+      `ev-${randomUUID()}`,
+      over.orgId ?? ORG,
+      `art-${randomUUID()}`,
+      `rev-${randomUUID()}`,
+      runId,
+      over.continuationAddress ?? null,
+      over.status ?? "processed",
+    ],
+  );
+}
+
+/** A gate row written straight to the table, so a proof can own its org. */
+async function seedGateRow(
+  gateId: string,
+  over: { orgId?: string; runId?: string; status?: string } = {},
+): Promise<void> {
+  const status = over.status ?? "resolved";
+  const resolved = status !== "pending";
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       (id, run_id, org_id, review_task_id, status, pinned_targets,
+        disposition, fingerprint, resolved_at)
+     VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, $7, $8)`,
+    [
+      gateId,
+      over.runId ?? `run-${randomUUID()}`,
+      over.orgId ?? ORG,
+      `lifecycle-review:${randomUUID()}`,
+      status,
+      // A resolved gate must carry the terminal stamp its own CHECK demands.
+      resolved ? "approve" : null,
+      resolved ? `fp-${randomUUID()}` : null,
+      resolved ? new Date() : null,
+    ],
+  );
+}
+
+/** The withheld terminal write as it actually rides on a parked row. */
+function withheldPayload(status: "completed" | "failed" = "completed"): unknown[] {
+  return [
+    {
+      kind: "wayflow_response",
+      output: "the draft",
+      lifecycle_review_withheld_terminal: { status },
+    },
+  ];
+}
+
 /** Emit a produced event for `runId` and seed the objects row its review context
  *  resolves the artifact TYPE from. */
 async function produceFor(
@@ -850,6 +926,163 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       // ...and the release drain does not even consider it a candidate.
       const candidates = await hold.listReleasableHeldRuns(100);
       expect(candidates.map((c) => c.runId)).not.toContain(runId);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE CANDIDATE PREDICATE. The release drain reads a BOUNDED, stably-ordered
+  // page of parked runs, so a predicate that admits rows `releaseHeldRun` then
+  // refuses does not merely waste a pass — it occupies the same page forever and
+  // starves every genuinely releasable park behind it.
+  // -------------------------------------------------------------------------
+  describe("CANDIDATES", () => {
+    it("a run whose OWN OUTPUT contains the marker's name is not a park — and does not starve a real one", async () => {
+      const limit = 5;
+      // `limit` rows that satisfy every other condition — parked, production
+      // behind them, nothing pending, no undecided gate — and whose step_results
+      // merely CONTAIN the marker's name inside the run's own nested output. A
+      // substring predicate matches all of them; each is then refused by the
+      // authoritative read, and their ids sort ahead of the real park.
+      const decoys: string[] = [];
+      for (let i = 0; i < limit; i += 1) {
+        const runId = `aaa-decoy-${i}-${randomUUID()}`;
+        decoys.push(runId);
+        await seedParkedRun(runId, [
+          {
+            kind: "wayflow_response",
+            output: {
+              summary: "the agent reported on the release drain",
+              notes: [
+                "[produced-review-hold] run=... lifecycle_review_withheld_terminal seen",
+                { lifecycle_review_withheld_terminal: "not an object with a status" },
+              ],
+            },
+          },
+        ]);
+        await seedOutboxRow(runId);
+      }
+      // ...and ONE real park, sorting last.
+      const realRun = `zzz-real-${randomUUID()}`;
+      await seedParkedRun(realRun, withheldPayload("completed"));
+      await seedOutboxRow(realRun);
+
+      const candidates = await hold.listReleasableHeldRuns(limit);
+      const ids = candidates.map((c) => c.runId);
+
+      // The decoys are not parks at all, so the bounded page reaches the one row
+      // that is.
+      for (const decoy of decoys) expect(ids).not.toContain(decoy);
+      expect(ids).toContain(realRun);
+
+      // ...and the pass makes progress: the real park takes its withheld write.
+      expect(await hold.releaseHeldRun(realRun, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "completed",
+      });
+      // The decoys are untouched — nothing here decided anything about them.
+      for (const decoy of decoys) expect((await readRun(decoy))?.status).toBe("pending_approval");
+    });
+
+    it("a marker whose status is not a terminal write is not a park either", async () => {
+      const runId = `zzz-badstatus-${randomUUID()}`;
+      await seedParkedRun(runId, [
+        { kind: "wayflow_response", lifecycle_review_withheld_terminal: { status: "running" } },
+      ]);
+      await seedOutboxRow(runId);
+
+      expect((await hold.listReleasableHeldRuns(200)).map((c) => c.runId)).not.toContain(runId);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: false,
+        reason: "not-produced-review-park",
+      });
+    });
+
+    it("a park with NO production behind it at all is released, not stranded", async () => {
+      // The fail-closed park taken on an unreadable probe has exactly this shape:
+      // the marker is there, and there may be no produced row anywhere. Requiring
+      // production in the predicate would strand it forever.
+      const runId = `zzz-noproduction-${randomUUID()}`;
+      await seedParkedRun(runId, withheldPayload("failed"));
+
+      expect((await hold.listReleasableHeldRuns(200)).map((c) => c.runId)).toContain(runId);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "failed",
+      });
+      expect((await readRun(runId))?.status).toBe("failed");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE LINKAGE. A produced event records the gate it opened in its own
+  // `continuation_address`, and there is deliberately no foreign key behind it.
+  // So an address that resolves to nothing is an INCOHERENT state, never
+  // evidence that the run opened no review.
+  // -------------------------------------------------------------------------
+  describe("LINKAGE", () => {
+    it("a VANISHED gate holds the run — it is not read as 'no review'", async () => {
+      const runId = `run-${randomUUID()}`;
+      const missingGateId = `gate-gone-${randomUUID()}`;
+      await seedRun(runId);
+      await seedOutboxRow(runId, { continuationAddress: missingGateId });
+
+      expect(await hold.resolveProducedReviewHold(ORG, runId)).toEqual({
+        held: true,
+        reason: "gate-unresolvable",
+        gateIds: [missingGateId],
+      });
+
+      // ...and a park behind that linkage is not a release candidate.
+      await seedParkedRun(runId, withheldPayload("completed"));
+      expect((await hold.listReleasableHeldRuns(200)).map((c) => c.runId)).not.toContain(runId);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: false,
+        reason: "still-held",
+      });
+      expect((await readRun(runId))?.status).toBe("pending_approval");
+    });
+
+    it("a CROSS-ORGANIZATION gate holds the run, however decided that foreign row is", async () => {
+      const runId = `run-${randomUUID()}`;
+      const foreignGateId = `gate-foreign-${randomUUID()}`;
+      // The row EXISTS — resolved, even approved — but it belongs to someone
+      // else, so it is not this organization's review and cannot decide this
+      // run's terminal status.
+      await seedGateRow(foreignGateId, { orgId: "org-3007-elsewhere", status: "resolved" });
+      await seedRun(runId);
+      await seedOutboxRow(runId, { continuationAddress: foreignGateId });
+
+      expect(await hold.resolveProducedReviewHold(ORG, runId)).toEqual({
+        held: true,
+        reason: "gate-unresolvable",
+        gateIds: [foreignGateId],
+      });
+
+      await seedParkedRun(runId, withheldPayload("completed"));
+      expect((await hold.listReleasableHeldRuns(200)).map((c) => c.runId)).not.toContain(runId);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: false,
+        reason: "still-held",
+      });
+      expect((await readRun(runId))?.status).toBe("pending_approval");
+    });
+
+    it("the SAME-ORG resolved gate still releases — the fail-closed read is not a blanket refusal", async () => {
+      const runId = `run-${randomUUID()}`;
+      const gateId = `gate-ours-${randomUUID()}`;
+      await seedGateRow(gateId, { orgId: ORG, runId, status: "resolved" });
+      await seedOutboxRow(runId, { continuationAddress: gateId });
+      await seedParkedRun(runId, withheldPayload("completed"));
+
+      expect(await hold.resolveProducedReviewHold(ORG, runId)).toEqual({
+        held: false,
+        reason: "no-review",
+      });
+      expect((await hold.listReleasableHeldRuns(200)).map((c) => c.runId)).toContain(runId);
+      expect(await hold.releaseHeldRun(runId, AUTHORITY)).toEqual({
+        released: true,
+        terminal: "completed",
+      });
     });
   });
 });

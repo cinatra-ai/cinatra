@@ -384,6 +384,13 @@ export async function transitionRunStatus(
 //      DELETE, atomically.
 export type FinalizeExpiredLeaseOutcome =
   | { readonly outcome: "skipped"; readonly reason: "lease-gone" }
+  /** cinatra#3007 — the run still owes a produced-output review, so this
+   *  finalizer may not terminalize it and may not settle its lease either (a
+   *  non-terminal run never loses its lease). Not a dead end: the gate
+   *  maintenance drain resolves an expired gate and the release drain then
+   *  performs the withheld terminal write, after which the next pass settles the
+   *  lease through the already-terminal branch. */
+  | { readonly outcome: "skipped"; readonly reason: "produced-review-unresolved" }
   | { readonly outcome: "settled"; readonly mode: "lease-only" }
   | {
       readonly outcome: "settled";
@@ -438,6 +445,28 @@ export async function finalizeExpiredLeaseRun(
       }
 
       const from = row.status as AgentRunStatus;
+      // cinatra#3007 — DOES THIS RUN STILL OWE A PRODUCED-OUTPUT REVIEW?
+      //
+      // The run's own executor asks this before every terminal edge it owns; the
+      // lease-expiry finalizer is the ONE other writer that can terminalize a run,
+      // and it used to write `failed` without asking. That is the same defect from
+      // the other side: a run parked on an undecided review, or one whose produced
+      // events are still unorchestrated, would be terminalized by an unrelated
+      // sweep and the review would then have nothing left to release.
+      //
+      // Asked on THIS transaction so the answer is the one the fenced snapshot
+      // sees, and fail-closed inside the helper (an unreadable answer is "held").
+      // Refusing is convergent rather than a dead end — see the outcome's own
+      // note — and it is bounded to the narrow case: an active org's runs never
+      // reach here at all (the fence refuses `run.lease-expire`).
+      const { hasUnresolvedProducedReview } = await import("./run-produced-review-hold");
+      if (await hasUnresolvedProducedReview(orgId, runId, dtx)) {
+        console.log(
+          `[lease-expiry-finalizer] run ${runId} still owes a produced-output review — ` +
+            `no terminal write, lease left for a later pass`,
+        );
+        return { outcome: "skipped", reason: "produced-review-unresolved" };
+      }
       // Defensive legality pre-guard: every non-terminal status now has a
       // `->failed` edge so this can never throw in production — kept as a
       // guard, not a silent cast, so a future status addition that

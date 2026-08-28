@@ -158,6 +158,7 @@ describe("runLeaseExpiryFinalizerSweep — empty sweep", () => {
     expect(summary).toEqual({
       swept: 0,
       skippedLeaseGone: 0,
+      skippedProducedReview: 0,
       cancelDeferred: 0,
       settled: 0,
       settledLeaseOnly: 0,

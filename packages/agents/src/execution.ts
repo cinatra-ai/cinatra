@@ -736,6 +736,184 @@ const EXTERNAL_A2A_SUCCESS_STATE = "completed";
  * Exported for the honesty suite; the ONLY production call site is the external
  * dispatch branch in `runAgentBuilderExecutionJobInner`.
  */
+// ---------------------------------------------------------------------------
+// cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
+//
+// The artifacts a run produces are written mid-flow, and each write splices a
+// durable produced-event row into its own transaction. Whether one of those
+// outputs opens a review is decided by the orchestration core, which used to be
+// reached only by a recurring drain — so the gate was minted seconds AFTER the
+// terminal write, onto a run that had already finished and has no legal edge
+// back. The decided reading said the run had been released to continue when
+// there was nothing left to release.
+//
+// So the decision is taken BEFORE every terminal edge this file owns, through
+// the one seam below: the run's own production is drained inline (the same one
+// core, never a second copy of it), and if a review opens, the run parks in
+// `pending_approval` carrying the terminal write it is withholding.
+// `releaseHeldRun` performs that write when the decision lands. A run whose
+// output opens no review is untouched and takes its terminal edge immediately,
+// exactly as before.
+//
+// The seam is a DYNAMIC import for the same reason the materializer is: this
+// file sits in the locked dev-perf routes' reachable graph, and the hold module
+// reaches the review store.
+// ---------------------------------------------------------------------------
+
+/**
+ * The terminal write being withheld, carried STRUCTURALLY.
+ *
+ * Declared here rather than imported so this file adds no static edge to the
+ * hold module — the same duplication precedent the hold module itself keeps for
+ * `WithheldDerivationOutbox`. The value is handed over verbatim.
+ */
+type WithheldTerminalWrite = {
+  status: "completed" | "failed";
+  error?: string;
+  derivationOutbox?: {
+    orgId: string;
+    templateId: string;
+    packageVersion: string | null;
+    createdBy: string | null;
+    content: string;
+    contentIsJson: boolean;
+    contentHash: string;
+  };
+};
+
+/**
+ * The produced-review hold could not be recorded ANYWHERE — not as a park, not
+ * as anything else — so no later pass can see that this run still owes a review.
+ *
+ * Thrown rather than swallowed: the alternative is a job that completes
+ * successfully over a `running` row nothing will converge, which is the shape of
+ * the defect this fix exists to remove. A thrown attempt is retried, and is
+ * visible in job telemetry while it is not.
+ */
+export class ProducedReviewHoldUnpersistedError extends Error {
+  readonly runId: string;
+  constructor(runId: string) {
+    super(
+      `run ${runId}: the produced-output review hold could not be recorded — ` +
+        `the run keeps its non-terminal status and this attempt fails so it is retried`,
+    );
+    this.name = "ProducedReviewHoldUnpersistedError";
+    this.runId = runId;
+  }
+}
+
+/**
+ * Ask the review question before a terminal write. `true` ⇒ the caller must
+ * write NO terminal status and announce NO terminal event: the run is waiting,
+ * and a run that is waiting has not finished.
+ *
+ * FAIL-CLOSED on a broken seam: `holdRunForProducedReview` is total by contract,
+ * so a throw here means the seam ITSELF is broken, and a broken seam cannot
+ * prove this run owes no review. Writing a terminal status on that is precisely
+ * the defect, so the run keeps its non-terminal status.
+ *
+ * @throws {ProducedReviewHoldUnpersistedError} when the hold is held but nothing
+ *   durable records it.
+ */
+async function producedReviewHoldsRun(args: {
+  runId: string;
+  orgId: string;
+  fromStatus: AgentRunStatus;
+  stepResults: readonly unknown[];
+  withheld: WithheldTerminalWrite;
+  authority: OrgWriteAuthority | undefined;
+  /** Which terminal edge is asking — log context only. */
+  where: string;
+}): Promise<boolean> {
+  const { runId, where } = args;
+  let outcome: { held: boolean; reason: string };
+  try {
+    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+    outcome = await holdRunForProducedReview(
+      {
+        runId,
+        orgId: args.orgId,
+        fromStatus: args.fromStatus,
+        stepResults: args.stepResults,
+        withheld: args.withheld,
+      },
+      args.authority,
+    );
+  } catch (err) {
+    console.error(
+      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write (fail-closed):`,
+      err,
+    );
+    return true;
+  }
+  if (!outcome.held) return false;
+  // The one held outcome with nothing durable behind it (the park write itself
+  // failed). The literal is read rather than imported for the no-static-edge
+  // reason above; the hold module exports it as `UNPERSISTED_HOLD_REASON` and its
+  // own suite pins the two together.
+  if (outcome.reason === "hold-unpersisted") throw new ProducedReviewHoldUnpersistedError(runId);
+  return true;
+}
+
+/**
+ * Land a WayFlow DISPATCH failure — the transport never delivered the task, or
+ * `handleWayflowTaskState` itself threw — asking the review question first.
+ *
+ * cinatra#3007: `sendTask` is BLOCKING and the flow runs inside it, calling back
+ * into cinatra as it goes, so a transport failure can arrive AFTER the flow has
+ * already written an artifact. That output opens a review exactly as a completed
+ * run's does, and `failed` is just as terminal as `completed`. So this edge asks
+ * the same question at the same moment as the others: a held run announces no
+ * end, because it has not reached one.
+ */
+export async function failRunOnWayflowDispatchError(args: {
+  runId: string;
+  orgId: string;
+  runError: string;
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  const { runId, orgId, runError, authority } = args;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId,
+      fromStatus: "running",
+      stepResults: [],
+      withheld: { status: "failed", error: runError },
+      authority,
+      where: "wayflow dispatch",
+    })
+  ) {
+    return;
+  }
+  // Terminal-consistency for the durable AG-UI log (cinatra#809):
+  // RUN_STARTED was already published before sendTask, so a dispatch
+  // failure must also publish RUN_ERROR — otherwise the log ends on
+  // RUN_STARTED and every later page load replays the run into a phantom
+  // "running" state. Mirrors the handleWayflowTaskState failed branch
+  // (publish first, then transition). Best-effort like every publish —
+  // a Redis outage must not block the failed transition.
+  try {
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: runError,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+  } catch {
+    /* best-effort: an event log that throws synchronously must not block the transition */
+  }
+  await transitionRunStatus(runId, "running", "failed", { error: runError }, authority).catch(
+    (e) => {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+      throw e;
+    },
+  );
+}
+
 export async function finalizeExternalA2ARun(args: {
   authority: OrgWriteAuthority | undefined;
   runId: string;
@@ -853,47 +1031,24 @@ export async function finalizeExternalA2ARun(args: {
       ? describeMaterializationFailure(materializationFailures, recordedOutcomes.length)
       : null;
 
-  // cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
-  //
-  // The artifacts this run produced were written above, and each write spliced a
-  // durable produced-event row into its own transaction. Whether one of those
-  // outputs opens a review is decided by the orchestration core, which used to be
-  // reached only by a recurring drain — so the gate was minted seconds AFTER the
-  // terminal write below, onto a run that had already finished and has no legal
-  // edge back. The decided reading said the run had been released to continue
-  // when there was nothing left to release.
-  //
-  // So the decision is taken HERE, before either terminal edge: the run's own
-  // production is drained inline (the same one core, never a second copy of it),
-  // and if a review opens, the run parks in `pending_approval` carrying the
-  // terminal write it is withholding. `releaseHeldRun` performs that write when
-  // the decision lands. A run whose output opens no review is untouched and
-  // takes its terminal edge immediately, exactly as before.
-  //
-  // The seam is a dynamic import for the same reason the materializer above is:
-  // this path is inside the locked dev-perf routes' reachable graph.
-  try {
-    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
-    const hold = await holdRunForProducedReview(
-      {
-        runId,
-        orgId: run.orgId,
-        fromStatus: "running",
-        stepResults: terminalStepResults ?? [],
-        withheld:
-          materializationError !== null
-            ? { status: "failed", error: materializationError }
-            : { status: "completed" },
-      },
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: "running",
+      stepResults: terminalStepResults ?? [],
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          : { status: "completed" },
       authority,
-    );
-    if (hold.held) return;
-  } catch (err) {
-    // Fail closed, exactly as on the WayFlow path above.
-    console.error(
-      `[produced-review-hold] run=${runId} (external-a2a) hold seam threw — no terminal write (fail-closed):`,
-      err,
-    );
+      where: "external-a2a",
+    })
+  ) {
     return;
   }
 
@@ -1725,24 +1880,17 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // on, and the invariant does not make an exception for an
         // infrastructure failure: the run holds at that review and the decision
         // releases it to the failure it was going to reach anyway.
-        try {
-          const { holdRunForProducedReview } = await import("./run-produced-review-hold");
-          const hold = await holdRunForProducedReview(
-            {
-              runId,
-              orgId: run.orgId,
-              fromStatus,
-              stepResults: [],
-              withheld: { status: "failed", error },
-            },
+        if (
+          await producedReviewHoldsRun({
+            runId,
+            orgId: run.orgId,
+            fromStatus,
+            stepResults: [],
+            withheld: { status: "failed", error },
             authority,
-          );
-          if (hold.held) return;
-        } catch (err) {
-          console.error(
-            `[produced-review-hold] run=${runId} (human gate) hold seam threw — no terminal write (fail-closed):`,
-            err,
-          );
+            where: "human gate",
+          })
+        ) {
           return;
         }
         await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
@@ -1761,24 +1909,17 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // mid-flow and then failed has produced output a review may be open on, so
     // the same question is asked here, BEFORE the terminal announcement: a run
     // that parks announces no end, because it has not reached one.
-    try {
-      const { holdRunForProducedReview } = await import("./run-produced-review-hold");
-      const hold = await holdRunForProducedReview(
-        {
-          runId,
-          orgId: run.orgId,
-          fromStatus,
-          stepResults: [],
-          withheld: { status: "failed", error: errMsg },
-        },
+    if (
+      await producedReviewHoldsRun({
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: [],
+        withheld: { status: "failed", error: errMsg },
         authority,
-      );
-      if (hold.held) return;
-    } catch (err) {
-      console.error(
-        `[produced-review-hold] run=${runId} (wayflow failed) hold seam threw — no terminal write (fail-closed):`,
-        err,
-      );
+        where: "wayflow failed",
+      })
+    ) {
       return;
     }
     await Promise.resolve(
@@ -1987,51 +2128,24 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ? describeMaterializationFailure(materializationFailures, artifactMaterializations.length)
       : null;
 
-  // cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
-  //
-  // The artifacts this run produced were written above, and each write spliced a
-  // durable produced-event row into its own transaction. Whether one of those
-  // outputs opens a review is decided by the orchestration core, which used to be
-  // reached only by a recurring drain — so the gate was minted seconds AFTER the
-  // terminal write below, onto a run that had already finished and has no legal
-  // edge back. The decided reading said the run had been released to continue
-  // when there was nothing left to release.
-  //
-  // So the decision is taken HERE, before either terminal edge: the run's own
-  // production is drained inline (the same one core, never a second copy of it),
-  // and if a review opens, the run parks in `pending_approval` carrying the
-  // terminal write it is withholding. `releaseHeldRun` performs that write when
-  // the decision lands. A run whose output opens no review is untouched and
-  // takes its terminal edge immediately, exactly as before.
-  //
-  // The seam is a dynamic import for the same reason the materializer above is:
-  // this path is inside the locked dev-perf routes' reachable graph.
-  try {
-    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
-    const hold = await holdRunForProducedReview(
-      {
-        runId,
-        orgId: run.orgId,
-        fromStatus,
-        stepResults: terminalStepResults,
-        withheld:
-          materializationError !== null
-            ? { status: "failed", error: materializationError }
-            : { status: "completed", ...(derivationOutbox ? { derivationOutbox } : {}) },
-      },
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus,
+      stepResults: terminalStepResults,
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          : { status: "completed", ...(derivationOutbox ? { derivationOutbox } : {}) },
       authority,
-    );
-    if (hold.held) return;
-  } catch (err) {
-    // FAIL CLOSED. `holdRunForProducedReview` is total by contract, so reaching
-    // here means the seam ITSELF is broken — and a broken seam cannot prove this
-    // run owes no review. Writing a terminal status on that is precisely the
-    // defect (#3007), so the run keeps its non-terminal status and the
-    // lease-expiry finalizer reconciles it.
-    console.error(
-      `[produced-review-hold] run=${runId} hold seam threw — no terminal write (fail-closed):`,
-      err,
-    );
+      where: "wayflow completed",
+    })
+  ) {
     return;
   }
 
@@ -3476,33 +3590,26 @@ async function runAgentBuilderExecutionJobInner(
           ? { cause: (err as { cause?: unknown }).cause }
           : "",
       );
+      // cinatra#3007 — an unrecordable hold is already a decision this catch
+      // must not overrule: `handleWayflowTaskState` threw it precisely because
+      // no terminal status may be written for this run yet. Re-throwing keeps
+      // the attempt a retryable failure instead of converting it into the
+      // `failed` write the hold exists to prevent.
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       const runError = describeWayflowDispatchError(err, wayflowUrl, {
         // Read here (the single I/O point) and threaded in: the guidance
         // must match what THIS install recorded, not assume every install
         // owns a local runtime it can "start".
         runtimeMode: process.env.CINATRA_WAYFLOW_RUNTIME,
       });
-      // Terminal-consistency for the durable AG-UI log (cinatra#809):
-      // RUN_STARTED was already published before sendTask, so a dispatch
-      // failure must also publish RUN_ERROR — otherwise the log ends on
-      // RUN_STARTED and every later page load replays the run into a phantom
-      // "running" state. Mirrors the handleWayflowTaskState failed branch
-      // (publish first, then transition). Best-effort like every publish —
-      // a Redis outage must not block the failed transition.
-      await Promise.resolve(
-        publishAgUiEvent(runId, {
-          type: "RUN_ERROR",
-          threadId: runId,
-          runId,
-          message: runError,
-          timestamp: Date.now(),
-        } as never),
-      ).catch(() => undefined);
-      await transitionRunStatus(runId, "running", "failed", {
-        error: runError,
-      }, executionAuthority).catch((e) => {
-        if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-        throw e;
+      // cinatra#3007 — the review question comes first here too: `sendTask` is
+      // blocking, so the flow may already have produced an artifact when the
+      // transport failed. A held run gets no RUN_ERROR and no terminal write.
+      await failRunOnWayflowDispatchError({
+        runId,
+        orgId: run.orgId,
+        runError,
+        authority: executionAuthority,
       });
     }
     return;

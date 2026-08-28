@@ -21,20 +21,28 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // transition the executor WOULD have made, verdict, error and derivation capture
 // included, because that is what the decision later performs.
 
-const { publishAgUiEventSpy, materializeRunArtifactsSpy, holdSpy } = vi.hoisted(() => ({
-  publishAgUiEventSpy: vi.fn(async () => undefined),
-  materializeRunArtifactsSpy: vi.fn(async () => [] as Array<Record<string, unknown>>),
-  holdSpy: vi.fn(async () => ({ held: false, reason: "no-produced-output" }) as {
-    held: boolean;
-    reason: string;
+const { publishAgUiEventSpy, materializeRunArtifactsSpy, holdSpy, readBackSpy } = vi.hoisted(
+  () => ({
+    publishAgUiEventSpy: vi.fn(async () => undefined),
+    materializeRunArtifactsSpy: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    holdSpy: vi.fn(async () => ({ held: false, reason: "no-produced-output" }) as {
+      held: boolean;
+      reason: string;
+    }),
+    /** The human gate's read-back. `null` is the miss that drives the seam to its
+     *  `failRun` callback — the one seam this suite could not previously reach. */
+    readBackSpy: vi.fn(
+      async () => null as { reviewTaskId: string; xRenderer: string | null } | null,
+    ),
   }),
-}));
+);
 
 vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
     publishAgUiEvent: publishAgUiEventSpy,
+    readLatestAgUiInterrupt: readBackSpy,
     enrichSchemaWithResolvedData: vi.fn(async (schema: unknown) => ({ ...(schema as object) })),
     DualAdapterDispatch: class MockDualAdapterDispatch {
       onInterrupt = vi.fn();
@@ -97,7 +105,12 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 const enqueueBackgroundJobSpy = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@/lib/background-jobs", () => ({ enqueueBackgroundJob: enqueueBackgroundJobSpy }));
 
-import { handleWayflowTaskState, CINATRA_ENDNODE_OUTPUTS_SENTINEL } from "../execution";
+import {
+  handleWayflowTaskState,
+  failRunOnWayflowDispatchError,
+  ProducedReviewHoldUnpersistedError,
+  CINATRA_ENDNODE_OUTPUTS_SENTINEL,
+} from "../execution";
 import type { AgentRunRecord } from "../store";
 
 const TEST_AUTHORITY = { orgId: "org-3007", can: () => true };
@@ -178,6 +191,7 @@ describe("cinatra#3007 — the review question precedes the terminal write", () 
     vi.clearAllMocks();
     materializeRunArtifactsSpy.mockResolvedValue([]);
     holdSpy.mockResolvedValue({ held: false, reason: "no-produced-output" });
+    readBackSpy.mockResolvedValue(null);
   });
 
   it("HELD: no terminal transition, no RUN_FINISHED — the run is waiting, not finished", async () => {
@@ -370,5 +384,215 @@ describe("cinatra#3007 — the review question precedes the terminal write", () 
     expect([calls[0][1], calls[0][2]]).toEqual(["running", "failed"]);
     expect(String(calls[0][3]?.error)).toBe("the flow failed");
     expect(agUiEventTypes()).toContain("RUN_ERROR");
+  });
+
+  // -------------------------------------------------------------------------
+  // The DISPATCH-FAILURE edge. `sendTask` is blocking and the flow runs inside
+  // it, calling back into cinatra as it goes — so a transport failure can arrive
+  // AFTER the flow has already written an artifact. That output opens a review
+  // exactly as a completed run's does, and this edge used to announce RUN_ERROR
+  // and write `running -> failed` without ever asking.
+  // -------------------------------------------------------------------------
+  it("DISPATCH FAILURE with a produced event behind it: no RUN_ERROR, no terminal write", async () => {
+    // "A produced event exists and is not orchestrated yet" is exactly what the
+    // hold answers `awaiting-orchestration` to.
+    holdSpy.mockResolvedValue({ held: true, reason: "awaiting-orchestration" });
+
+    await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError: "the WayFlow runtime could not be reached (fetch failed)",
+      authority: TEST_AUTHORITY,
+    });
+
+    expect(holdSpy).toHaveBeenCalledTimes(1);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+
+  it("DISPATCH FAILURE carries the failure it was going to write as the withheld terminal", async () => {
+    holdSpy.mockResolvedValue({ held: true, reason: "gate-undecided" });
+
+    await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError: "the WayFlow runtime could not be reached (fetch failed)",
+      authority: TEST_AUTHORITY,
+    });
+
+    const input = holdInput() as {
+      runId: string;
+      orgId: string;
+      fromStatus: string;
+      withheld: { status: string; error?: string };
+    };
+    expect([input.runId, input.orgId, input.fromStatus]).toEqual([
+      "run-3007",
+      "org-3007",
+      "running",
+    ]);
+    expect(input.withheld).toEqual({
+      status: "failed",
+      error: "the WayFlow runtime could not be reached (fetch failed)",
+    });
+  });
+
+  it("DISPATCH FAILURE is unchanged when nothing holds the run — RUN_ERROR, then running -> failed", async () => {
+    await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError: "the WayFlow runtime could not be reached (fetch failed)",
+      authority: TEST_AUTHORITY,
+    });
+
+    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+      [string, string, string, Record<string, unknown> | undefined, unknown]
+    >;
+    expect(calls).toHaveLength(1);
+    expect([calls[0][1], calls[0][2]]).toEqual(["running", "failed"]);
+    expect(String(calls[0][3]?.error)).toContain("could not be reached");
+    expect(agUiEventTypes()).toContain("RUN_ERROR");
+  });
+
+  it("DISPATCH FAILURE with a BROKEN hold seam fails closed — no terminal write", async () => {
+    holdSpy.mockRejectedValue(new Error("the seam itself is broken"));
+
+    await failRunOnWayflowDispatchError({
+      runId: "run-3007",
+      orgId: "org-3007",
+      runError: "the WayFlow runtime could not be reached (fetch failed)",
+      authority: TEST_AUTHORITY,
+    });
+
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+
+  // -------------------------------------------------------------------------
+  // An UNPERSISTED hold. Every other held outcome has a durable park behind it,
+  // so a later pass converges on its own and the job is genuinely done. This one
+  // does not: nothing records that the run still owes a review. Completing the
+  // job successfully over that is the shape of the defect, so the seam throws.
+  // -------------------------------------------------------------------------
+  it("UNPERSISTED hold: the seam THROWS so the attempt is retried, and writes nothing", async () => {
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+
+    await expect(run()).rejects.toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
+  });
+
+  it("UNPERSISTED hold on the dispatch-failure edge throws too", async () => {
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+
+    await expect(
+      failRunOnWayflowDispatchError({
+        runId: "run-3007",
+        orgId: "org-3007",
+        runError: "the WayFlow runtime could not be reached (fetch failed)",
+        authority: TEST_AUTHORITY,
+      }),
+    ).rejects.toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The MID-RUN HUMAN GATE's failure callback. `parkRunOnHumanGate` lands the run
+// `failed` when the gate cannot be built, read back or persisted — and `failed`
+// is terminal, so a run that already wrote an artifact in an earlier node has
+// produced output a review may be open on. The read-back miss below is the
+// cheapest way to drive that exact callback through the real seam.
+// ---------------------------------------------------------------------------
+describe("cinatra#3007 — the mid-run human gate's failure callback asks first", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+    holdSpy.mockResolvedValue({ held: false, reason: "no-produced-output" });
+    readBackSpy.mockResolvedValue(null);
+  });
+
+  async function driveHumanGate(fromStatus: "running" | "pending_approval" = "running") {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3007",
+      run: makeRun(),
+      fromStatus,
+      task: {
+        id: "task-3007",
+        contextId: "ctx-3007",
+        status: { state: "input-required", message: { parts: [] } },
+        metadata: { pendingApproval: { question: "approve?" } },
+        history: [],
+      },
+    });
+  }
+
+  it("HELD: the failure callback writes no terminal status and announces no end", async () => {
+    holdSpy.mockResolvedValue({ held: true, reason: "gate-undecided" });
+
+    await driveHumanGate();
+
+    // The seam reached its failure callback (an unreadable gate), and the hold
+    // was asked there — not after a terminal write.
+    expect(holdSpy).toHaveBeenCalledTimes(1);
+    const input = holdInput() as {
+      runId: string;
+      fromStatus: string;
+      withheld: { status: string; error?: string };
+    };
+    expect(input.runId).toBe("run-3007");
+    expect(input.fromStatus).toBe("running");
+    expect(input.withheld.status).toBe("failed");
+    expect(String(input.withheld.error)).toContain("WayFlow gate");
+    // No terminal write at all: not the park's, not the failure's.
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+
+  it("the hold is asked BEFORE the failure transition, never after", async () => {
+    const order: string[] = [];
+    holdSpy.mockImplementation(async () => {
+      order.push("hold");
+      return { held: false, reason: "no-produced-output" };
+    });
+    storeMock.transitionRunStatus.mockImplementation(async () => {
+      order.push("transition");
+      return undefined;
+    });
+
+    await driveHumanGate();
+
+    expect(order).toEqual(["hold", "transition"]);
+  });
+
+  it("NOT HELD: the run fails immediately, exactly as before", async () => {
+    await driveHumanGate();
+
+    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+      [string, string, string, Record<string, unknown> | undefined, unknown]
+    >;
+    expect(calls).toHaveLength(1);
+    expect([calls[0][0], calls[0][1], calls[0][2]]).toEqual(["run-3007", "running", "failed"]);
+    expect(String(calls[0][3]?.error)).toContain("WayFlow gate");
+  });
+
+  it("a BROKEN hold seam fails closed here too — no terminal write", async () => {
+    holdSpy.mockRejectedValue(new Error("the seam itself is broken"));
+
+    await driveHumanGate();
+
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("an UNPERSISTED hold throws out of the gate seam so the attempt is retried", async () => {
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+
+    await expect(driveHumanGate()).rejects.toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 });

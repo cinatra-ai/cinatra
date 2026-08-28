@@ -355,6 +355,8 @@ function resolveAnthropicSkillReconcileRunner(): AnthropicSkillReconcileRunner |
 type LeaseExpiryFinalizerSweepSummary = {
   swept: number;
   skippedLeaseGone: number;
+  /** cinatra#3007 — the run still owed a produced-output review. */
+  skippedProducedReview: number;
   cancelDeferred: number;
   settled: number;
   settledLeaseOnly: number;
@@ -2798,7 +2800,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           const summary = await runner.sweep();
           if (summary.swept > 0) {
             console.log(
-              `[lease-expiry-finalizer] swept=${summary.swept} settled=${summary.settled} settledLeaseOnly=${summary.settledLeaseOnly} skippedLeaseGone=${summary.skippedLeaseGone} cancelDeferred=${summary.cancelDeferred} escalated=${summary.escalated} failed=${summary.failed}`,
+              `[lease-expiry-finalizer] swept=${summary.swept} settled=${summary.settled} settledLeaseOnly=${summary.settledLeaseOnly} skippedLeaseGone=${summary.skippedLeaseGone} skippedProducedReview=${summary.skippedProducedReview} cancelDeferred=${summary.cancelDeferred} escalated=${summary.escalated} failed=${summary.failed}`,
             );
           }
         },
