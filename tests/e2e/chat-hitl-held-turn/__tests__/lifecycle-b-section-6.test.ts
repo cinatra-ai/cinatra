@@ -32,7 +32,7 @@
 //   D. "Every fixture named in plan section 6 … run … inside the held-turn
 //      harness rather than a second harness" (cinatra#2936) — four of this
 //      plan's own waves shipped their proof in a private
-//      `vitest.integration-*.config.ts` tier no workflow invoked. RECORDED as a
+//      `vitest/integration/<slice>.config.ts` tier no workflow invoked. RECORDED as a
 //      gap when this file landed; CLOSED in the same slice's CI change, which
 //      made all four steps OF THIS HARNESS'S OWN JOB — the clause's "rather
 //      than a second harness", read as it is written — and taught
@@ -524,7 +524,7 @@ describe("§6 The runner — the schedule moment for a run a person starts", () 
 const WORKFLOWS_DIR = path.join(REPO_ROOT, ".github", "workflows");
 
 /**
- * THIS PLAN'S OWN private proof tiers — a root `vitest.integration-*.config.ts`
+ * THIS PLAN'S OWN private proof tiers — a `vitest/integration/<slice>.config.ts` tier
  * per wave — and the package script each is reached through.
  *
  * SCOPED TO THIS PLAN ON PURPOSE. Other slices' tiers are in the same condition;
@@ -536,10 +536,10 @@ const PLAN_PROOF_TIERS: ReadonlyArray<{
   readonly config: string;
   readonly wave: string;
 }> = [
-  { script: "test:lifecycle-moment", config: "vitest.integration-2928.config.ts", wave: "W2a" },
-  { script: "test:lent-action-grant", config: "vitest.integration-2932.config.ts", wave: "W5a" },
-  { script: "test:run-window", config: "vitest.integration-2933.config.ts", wave: "W5b" },
-  { script: "test:named-agent-start", config: "vitest.integration-2935.config.ts", wave: "W5d" },
+  { script: "test:lifecycle-moment", config: "vitest/integration/2928.config.ts", wave: "W2a" },
+  { script: "test:lent-action-grant", config: "vitest/integration/2932.config.ts", wave: "W5a" },
+  { script: "test:run-window", config: "vitest/integration/2933.config.ts", wave: "W5b" },
+  { script: "test:named-agent-start", config: "vitest/integration/2935.config.ts", wave: "W5d" },
 ];
 
 /** Every package script, by name. */
@@ -704,20 +704,20 @@ describe("§6 — the plan's fixtures run in CI", () => {
     expect(
       invokedByAWorkflow(
         "test:async-notification-seam",
-        "vitest.integration-2882.config.ts",
+        "vitest/integration/2882.config.ts",
       ),
     ).toBe(true);
     expect(
       invokedByAWorkflow(
         "test:async-notification-seam",
-        "vitest.integration-2882.config.ts",
+        "vitest/integration/2882.config.ts",
         harnessJobText(),
       ),
     ).toBe(false);
     expect(
       invokedByAWorkflow(
         "test:no-such-tier-x2936",
-        "vitest.integration-no-such-tier-x2936.config.ts",
+        "vitest/integration/no-such-tier-x2936.config.ts",
       ),
     ).toBe(false);
   });
@@ -974,10 +974,10 @@ const RUN_WINDOW_DB_FIXTURE =
   "src/lib/lifecycle/__tests__/run-window-conversation.integration.test.ts";
 const RUN_WINDOW_TIER: FixtureRunner = {
   tier: "W5b's real-database tier (`pnpm test:run-window`)",
-  config: "vitest.integration-2933.config.ts",
+  config: "vitest/integration/2933.config.ts",
   configLiterals: [`"${RUN_WINDOW_DB_FIXTURE}"`],
   invoked: () =>
-    invokedByAWorkflow("test:run-window", "vitest.integration-2933.config.ts"),
+    invokedByAWorkflow("test:run-window", "vitest/integration/2933.config.ts"),
   selects: (relative) => relative === RUN_WINDOW_DB_FIXTURE,
   selfSkipGuard: 'CINATRA_RUN_WINDOW_REALDB: "1"',
 };
@@ -1420,7 +1420,7 @@ describe("§6 One road — the clauses whose piece is still in an open PR", () =
       // THE REAL-DATABASE HALF of the attachment claim is
       // `src/lib/lifecycle/__tests__/screen-fill.integration.test.ts` ›
       // "the files stay on the person's own row and read back whole", reached on
-      // that head through `vitest.integration-2934.config.ts` — a FIFTH private
+      // that head through `vitest/integration/2934.config.ts` — a FIFTH private
       // tier. It joins PLAN_PROOF_TIERS when it lands, or it arrives already
       // wired; either way section D's arm is the one that says so, not this one.
     },
