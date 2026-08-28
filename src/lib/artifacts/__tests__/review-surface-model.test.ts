@@ -1,6 +1,6 @@
 /**
  * Unit tests for the PURE artifact-review surface model (cinatra#1795 S12 item 4;
- * spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f). Proves the §III provenance mapping, the §V permission
+ * spec design@0c484154b069c6369a33c1375056126289888997). Proves the §III provenance mapping, the §V permission
  * copy, and — the load-bearing rule — the FAIL-CLOSED submit-result → outcome
  * mapping (§IV: a fingerprint conflict / settled gate is a BLOCK, never a silent
  * success). No React / DB — every seam is plain data.

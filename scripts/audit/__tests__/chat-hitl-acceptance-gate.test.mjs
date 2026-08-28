@@ -303,7 +303,7 @@ describe("the REAL manifest", () => {
     // record is that a pin move leaves a trail, so the assertions walk the
     // WHOLE trail rather than only checking the head — a move that dropped an
     // older pin on its way past would still satisfy a head-only check.
-    expect(m.specCommit).toContain("458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f");
+    expect(m.specCommit).toContain("0c484154b069c6369a33c1375056126289888997");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     expect(m.specCommitDrift.previousPin).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
