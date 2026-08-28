@@ -122,10 +122,21 @@ third-party application cannot be released from inside it**, which is why this
 round released one on the app's own run page — disclosed, and the only act it
 took outside the widget.
 
-`P2__schedule-moment-in-the-widget__site_widget__light.png` is **byte-identical**
-to `W3`, the settled chip row. That is the measurement, not an accident: at the
-schedule moment this host's column draws exactly what it drew before the moment
-opened.
+`P2__schedule-moment-in-the-widget__site_widget__light.png` shows run
+`096e5a56-d42b-46fc-9dd4-8e3da018998b` (thread `w6b3-northwind-sweep`): its row
+read `lifecycle_moment=schedule` / `lifecycle_card_kind=trigger_schedule_proposal`
+/ `lifecycle_card_ref=null` at that moment (TIMELINE 06:14), while the widget
+panel's own status badge in the picture still reads **"Awaiting input"** — the
+panel had not refreshed. No schedule card and no Confirm were drawn. `W13` /
+`W14` show the same absence, on run `01b55935-2a9c-47ce-85cc-b677eef9df56`,
+after a reload, badge **"pending trigger"**.
+
+`P2…light.png` is **not** byte-identical to `W3`: P2 is 289,246 bytes
+(sha256 `753595d9…`), `W3__recommendation-card__site_widget__settled__light.png`
+is 275,726 bytes (sha256 `24228047…`), and they are different runs — W3 shows
+run `01b55935…` in thread `w6b3-northwind-quarterly`. `page-controls.json`'s own
+`byteIdenticalGroups` lists only the `S1` pair and `[P1, P3]`; P2/W3 is not
+among them.
 
 ### 4 — A cell the contract calls unphotographable is drawn, and the recorder refuses it
 
@@ -197,9 +208,10 @@ as such.
 
 ## The graded cells
 
-Each cell: **requires** (the drawing's own words at the contract's pin,
-`design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f`, rendered with the capture
-browser — `drivers/00-render-the-drawing.mjs`, which prints each numbered section's own text; the sections themselves are not copied into this repository, only the clauses each cell is graded against) /
+Each cell: **requires** (the ratified drawing at the contract's pin, rendered
+with the capture browser — `drivers/00-render-the-drawing.mjs`, which prints
+each numbered section's own text; the sections themselves are not copied into
+this repository, only the clauses each cell is graded against) /
 **shows** (measured — anchors counted by the shipped recorder, values read back
 from the database, luminance measured) / **verdict**. PASS only where every
 clause shows.
@@ -273,8 +285,12 @@ so the palette is a class the app's own control writes for the app ORIGIN, and
 the embed frame is a document on that origin. Every dark frame in this round was
 made by **pressing the app's own Toggle theme control** in an app tab of the same
 browser and then polling the FRAME until it reported the class itself. The
-operating system's colour scheme was never emulated, and it reads
-`osPrefersDark: false` on every record.
+browser context was opened with the **light** operating-system preference
+emulated (`colorScheme: "light"`, `drivers/04-widget-run-sequence.mjs:72` and
+`capture-walk.json`'s own `contexts.widget.colorScheme`) — the dark palette
+never came from emulating a different OS preference, only from the app's own
+control — and it reads `osPrefersDark: false` on every record, light and dark
+alike.
 
 **Two luminances are stated for every picture, and the second is the one the
 claim is about.** The widget sits inside a third-party page with its own light
@@ -303,7 +319,14 @@ sign-in opens a SECOND WINDOW, which the closed action vocabulary has no action
 for, and the credential it returns *"lands in the ref and nowhere else"*
 (`src/app/embed/assistant/embed-assistant-client.tsx`), so no fresh context can
 carry one in either. The probe timed out waiting for
-`[data-embed-assistant][data-phase="active"]` after the press.
+`[data-embed-assistant][data-phase="active"]` after the press. **That is a
+limitation, not a refusal** — the CLI was not told no by anything, it ran out of
+vocabulary for a second window — and it is the third and last of the round's own
+blocked-path events. The other two ARE recorder refusals, both against the
+`agent_hitl_screen` claim on `site_widget` and both quoted in `refusals.json` /
+`run-state.json`: `validateWalkPlan` at plan time, and `observeWalkCell` on the
+live page (finding 4). So this round's own count is **two refusals and one
+limitation** — never three refusals.
 
 So `drivers/04-widget-run-sequence.mjs` drives the browser — including that second
 window — and **every record is written by the shipped recorder on that live
