@@ -70,8 +70,11 @@ function ScreenWithAWindow() {
       {/* The plainest control the platform has, on purpose: the assertion is
           about the VALUE the turn placed, so nothing about a wrapper's own
           behaviour may stand between the fill and what is read back. The
-          design-system rule is about product surfaces, and this is a harness. */}
-      {/* eslint-disable-next-line no-restricted-syntax */}
+          design-system rule is about product surfaces, and this is a harness.
+          THE CARVE-OUT IS IN `eslint.config.mjs`, NOT ON THIS LINE: the gate
+          runs ESLint with `--no-inline-config`, so an inline directive here
+          would be invisible to it and this file would fail the gate while
+          reading as though it had been exempted. */}
       <input id="idea" value={idea} onChange={(e) => setIdea(e.target.value)} />
       <HitlConversationPanel
         surface="run-page"

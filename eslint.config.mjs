@@ -1152,6 +1152,35 @@ const eslintConfig = defineConfig([
     },
   },
 
+  // ONE HARNESS FILE KEEPS A PLAIN <input>, AND THIS IS WHERE THAT IS SAID
+  // (cinatra#2934, lifecycle-b W5c).
+  //
+  // `run-window-fill-through-drawn-panel.test.tsx` mounts the real window over a
+  // real field and asserts THE VALUE THE TURN PLACED. Nothing about a wrapper's
+  // own controlled-input behaviour may stand between the fill and what is read
+  // back, or the test would be proving the wrapper rather than the road. The
+  // design-system rule is about product surfaces; this is a harness.
+  //
+  // IT IS STATED HERE RATHER THAN ON THE LINE because the gate runs ESLint with
+  // `--no-inline-config`: an `eslint-disable-next-line` is invisible to it, so a
+  // carve-out that is not in this file is not a carve-out at all. Everything
+  // else the zone bans still applies to this file — only the raw-`<input>`
+  // selector is dropped, and only for this one path.
+  {
+    files: [
+      "packages/agents/src/__tests__/run-window-fill-through-drawn-panel.test.tsx",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...RAW_JSX_RESTRICTIONS.filter(
+          (r) => r.selector !== "JSXOpeningElement[name.name='input']",
+        ),
+        ...DYNAMIC_BANS_L1,
+      ],
+    },
+  },
+
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
