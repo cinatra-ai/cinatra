@@ -94,11 +94,11 @@ tests/e2e/**/.auth/*
 !tests/e2e/**/.auth/.gitignore
 # WP/Drupal UAT seed IDs (regenerated each run)
 tests/e2e/wp-drupal-uat/.uat/
-# chat-hitl S9k run-minted captures (cinatra#2824). The committed set beside it is
-# the FROZEN reference; a run mints here so a passing run leaves the tree clean.
-# It sits under evidence/ because the S9h recorder refuses a screenshot path
-# outside evidence/ — see RUN_EVIDENCE_DIR in tests/e2e/chat-hitl-held-turn/.
-evidence/2824-s9k/.run/
+
+# --- Proof artifacts (captures, run records, PR proof bundles) ---
+# Never committed: they are posted on the PR and cited by permalink.
+evidence/
+pr-evidence/
 
 # Internal planning notes (local only)
 .planning/

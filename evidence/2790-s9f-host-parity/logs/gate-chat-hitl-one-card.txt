@@ -1,5 +1,0 @@
-# cinatra#2790 (S9f) — scripts/audit/chat-hitl-one-card-gate.mjs, rework tree.
-#
-# EXIT 0.
-
-[chat-hitl-one-card] clean — every lifecycle card kind is drawn, consumed, mounted and proven.

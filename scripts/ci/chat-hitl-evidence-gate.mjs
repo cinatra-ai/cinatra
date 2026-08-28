@@ -308,8 +308,8 @@ export function scanCaptureEvidence(repoRoot, io = {}) {
     } catch (err) {
       return [
         {
-          key: "evidence/index-unreadable",
-          code: "evidence/index-unreadable",
+          key: "capture/index-unreadable",
+          code: "capture/index-unreadable",
           detail: `the capture index could not be parsed: ${err.message}`,
         },
       ];
