@@ -33,7 +33,7 @@
 //      S9d rework) then DREW the schedule card — packages/chat/src/renderable-
 //      views/registry.tsx now maps `trigger_schedule_proposal` to the shipped
 //      `ScheduleProposalCard` — and its own ten-record capture round
-//      (evidence/2788-s9d-rework) gave AC-3 the rendered proof its gap named as
+//      (https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework) gave AC-3 the rendered proof its gap named as
 //      absent, so that row is MAPPED again. The conformance-matrix row is
 //      UNTOUCHED by this round and stays MISSING: it asks for the S0 spec-
 //      matrix capture sweep specifically, which is a different round's work.
@@ -59,6 +59,7 @@ import {
   DISPOSITIONS,
   MANIFEST_PATH,
   auditManifest,
+  proofExists,
   proofsOf,
   strictReport,
 } from "../chat-hitl-acceptance-gate.mjs";
@@ -355,7 +356,7 @@ describe("the REAL manifest", () => {
     // dark) and this row cites all ten — pinned exactly, not merely "some",
     // so a future citation dropped or silently added is caught here.
     expect(row.e2eProofs).toHaveLength(10);
-    expect(row.e2eProofs.every((p) => p.file === "evidence/2788-s9d-rework/README.md")).toBe(
+    expect(row.e2eProofs.every((p) => p.file === "https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/README.md")).toBe(
       true,
     );
     expect(new Set(row.e2eProofs.map((p) => p.testName)).size).toBe(10);
@@ -377,5 +378,55 @@ describe("the REAL manifest", () => {
       // public manifest (the source-leak gate enforces the same rule repo-wide).
       expect(r.ruling, r.criterion.slice(0, 50)).not.toMatch(/eng(ineering)?#\d+/);
     }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// EVERY READER OVERRIDE IS GATED BY THE ONE FLAG. `proofExists` and
+// `auditManifest` took reader overrides that were honoured merely for being
+// passed — the last place in this module where supplying a function replaced
+// the source of truth without asking for a virtual filesystem.
+// ---------------------------------------------------------------------------
+describe("an injected document reader is honoured only under the flag", () => {
+  // `package.json` really exists and really does NOT contain this string, so a
+  // reader that vouches for it is vouching for something untrue.
+  const CELL = "ZZZ__review-card__chat_thread__pending.png";
+  const proof = { file: "package.json", testName: CELL };
+  const vouchingReader = () => `a document that mentions ${CELL} and nothing else`;
+
+  it("WITHOUT the flag the override is dropped and the lexical check reads the real file", () => {
+    const found = proofExists(proof, REPO_ROOT, vouchingReader);
+    expect(found.ok).toBe(false);
+    expect(found.reason).toBe(`no "${CELL}" in package.json`);
+  });
+
+  it("WITH the flag the suite's reader is honoured, as designed", () => {
+    expect(proofExists(proof, REPO_ROOT, vouchingReader, null, true)).toEqual({ ok: true });
+  });
+
+  it("the real file still answers honestly for something it DOES contain", () => {
+    expect(proofExists({ file: "package.json", testName: '"name"' }, REPO_ROOT).ok).toBe(true);
+  });
+
+  it("auditManifest passes the flag through — a vouching reader is ignored without it", () => {
+    const manifest = {
+      rows: [
+        {
+          criterion: CANONICAL_CRITERIA[0],
+          disposition: "BUILT",
+          unitProofs: [{ file: "package.json", testName: CELL }],
+        },
+      ],
+    };
+    const ignored = auditManifest({ manifest, repoRoot: REPO_ROOT, readFileImpl: vouchingReader });
+    expect(ignored.some((v) => v.includes(`no "${CELL}" in package.json`))).toBe(true);
+    const honoured = auditManifest({
+      manifest,
+      repoRoot: REPO_ROOT,
+      readFileImpl: vouchingReader,
+      virtualFilesystem: true,
+    });
+    expect(honoured.some((v) => v.includes(`no "${CELL}"`))).toBe(false);
   });
 });

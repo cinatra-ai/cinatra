@@ -21,7 +21,7 @@
  * USAGE, from a checkout with a running app and a signed-in storage state:
  *
  *   node scripts/audit/lib/chat-hitl-capture-driver.mjs \
- *     --plan evidence/<slice>/capture-plan.json \
+ *     --plan test-results/<slice>/capture-plan.json \
  *     --out  scripts/ci/chat-hitl-capture-index.json   # the default
  *
  * The plan is a JSON array of cells:
@@ -44,12 +44,12 @@ import { CAPTURE_INDEX_RELATIVE_PATH } from "../../ci/lib/capture-record-contrac
 import {
   CAPTURE_INDEX_SCHEMA_VERSION,
   RECORDER_ID,
-  hashFile,
   mergeWalkRecords,
   observeCapture,
   observeWalkCell,
   validateCaptureRecord,
   validateWalkPlan,
+  readWalkPlan,
   walkCellsOf,
 } from "./chat-hitl-capture-recorder.mjs";
 
@@ -198,9 +198,13 @@ export function playwrightPage(page) {
      * so every capture round written before this argument existed frames
      * exactly as it did.
      */
-    screenshot: async (absPath, { framing = "page" } = {}) => {
-      mkdirSync(dirname(absPath), { recursive: true });
-      await page.screenshot({ path: absPath, fullPage: framing !== "window" });
+    screenshot: async (absPath, { framing = "page", type = "png" } = {}) => {
+      // NO `mkdir` HERE. The recorder has already created and RESOLVED this
+      // directory component by component inside the capture root; a recursive
+      // mkdir at the last moment would be a second, unchecked way to make
+      // directories — the exact pattern the resolved path exists to prevent.
+      // The format is passed explicitly so it never depends on the file name.
+      await page.screenshot({ path: absPath, fullPage: framing !== "window", type });
     },
   };
 }
@@ -242,8 +246,11 @@ export async function driveCapture({ plan, repoRoot = process.cwd(), log = conso
         // extras when it reads a committed index, because the canonical driver
         // writes honest records that claim none of them; what THIS driver
         // produces owes every one, and owes it here, before anything is written.
+        // NO INJECTED HASHER: passing one marks the caller as supplying its own
+        // filesystem and skips the resolved-path check. The validator hashes
+        // from disk under `repoRoot` and resolves the path itself.
         const violations = validateCaptureRecord(record, {
-          hashOf: (rel) => hashFile(resolve(repoRoot, rel)),
+          repoRoot,
           tier: "audit",
         });
         if (violations.length > 0) {
@@ -509,7 +516,11 @@ async function main(argv) {
   let records;
   let retires = [];
   if (walkPath) {
-    const walk = JSON.parse(readFileSync(walkPath, "utf8"));
+    // THROUGH THE SHIPPED LOADER, never a bare read: a committed plan names its
+    // outputs under the proof tree that is gone, and the loader moves them onto
+    // the live capture root so preflight passes on the plan as committed. It is
+    // the same call the suites make, so what they grade is what this runs.
+    const walk = readWalkPlan(walkPath);
     retires = walk.retires ?? [];
     records = await driveWalk({
       plan: walk,

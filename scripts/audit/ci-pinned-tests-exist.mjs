@@ -13,7 +13,7 @@
 //      test`) — or carry a machine-readable exception entry in
 //      scripts/audit/package-suite-runner-exceptions.json.
 //   4. ROOT TIER → RUNNER (cinatra#2936). Every root private proof tier —
-//      a `vitest.integration-*.config.ts` beside the root config, reached
+//      a `vitest/integration/<slice>.config.ts` tier config, reached
 //      through a package script — MUST be invoked by a workflow that can turn
 //      a check red, or carry a machine-readable exception entry in
 //      scripts/audit/root-tier-runner-exceptions.json.
@@ -27,7 +27,7 @@
 //
 // Why (4) exists: the same hole, one door further out. A tier written as a
 // dedicated ROOT config plus a `"test:x": "vitest run --config
-// vitest.integration-N.config.ts"` package script is invisible to (1), (2) and
+// vitest/integration/N.config.ts"` package script is invisible to (1), (2) and
 // (3) alike: (1) reads file paths PINNED INSIDE a workflow and this tier pins
 // none; (2) governs `scripts/audit/__tests__`; (3) governs `packages/**`. So a
 // tier of this shape joins CI only when somebody adds a step, and — exactly as
@@ -2435,8 +2435,9 @@ export function auditPackageSuiteRunners(repoRoot = REPO_ROOT, workflowDir = WOR
 
 // ── Direction 4 — root integration tiers (cinatra#2936) ─────────────────────
 //
-// GOVERNED SET: every `vitest.integration-*.config.ts` FILE at the repository
-// root. The FILE and not the script is the unit, because the file is the
+// GOVERNED SET: every `*.config.ts` FILE under `vitest/integration/` — the tier
+// directory; the repository root carries product files only. The FILE and not
+// the script is the unit, because the file is the
 // durable artifact — a tier whose script was renamed away is exactly as unrun
 // as one whose step was deleted, and keying on the script would make the first
 // case invisible.
@@ -2485,12 +2486,19 @@ export function auditPackageSuiteRunners(repoRoot = REPO_ROOT, workflowDir = WOR
 // exists, is itself a failure, so the list can only shrink honestly.
 export const ROOT_TIER_EXCEPTIONS_FILE = "scripts/audit/root-tier-runner-exceptions.json";
 
-// The naming convention every root tier in this repository already follows.
-export const ROOT_TIER_CONFIG_RE = /^vitest\.integration-[A-Za-z0-9._-]+\.config\.ts$/;
+// The location + naming convention every root tier follows: one
+// `vitest/integration/<slice>.config.ts` per tier. The tiers left the repository
+// root so the root carries product files only; the audit keys on the directory
+// instead, and a tier file anywhere else is not a root tier.
+export const ROOT_TIER_DIR = "vitest/integration";
+export const ROOT_TIER_CONFIG_RE = /^vitest\/integration\/[A-Za-z0-9._-]+\.config\.ts$/;
 
 /** Every root tier config file on disk, sorted. */
 export function rootTierConfigs(repoRoot = REPO_ROOT) {
-  return readdirSync(repoRoot)
+  const dir = join(repoRoot, ROOT_TIER_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .map((f) => `${ROOT_TIER_DIR}/${f}`)
     .filter((f) => ROOT_TIER_CONFIG_RE.test(f))
     .sort();
 }
@@ -2732,7 +2740,7 @@ export function readRootTierExceptions(repoRoot = REPO_ROOT, text) {
     }
     const { config, slice, reason } = entry;
     if (typeof config !== "string" || !ROOT_TIER_CONFIG_RE.test(config)) {
-      throw new Error(`${at}: \`config\` must be a root vitest.integration-*.config.ts, got ${JSON.stringify(config)}.`);
+      throw new Error(`${at}: \`config\` must be a vitest/integration/<slice>.config.ts tier config, got ${JSON.stringify(config)}.`);
     }
     if (seen.has(config)) throw new Error(`${at}: duplicate entry for ${config}.`);
     seen.add(config);
@@ -3157,7 +3165,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       console.error(`  - ${t.config} (${how})`);
     }
     console.error(
-      "\nEach tier above is a dedicated root config — somebody wrote a whole file to\n" +
+      "\nEach tier above is a dedicated tier config — somebody wrote a whole file to\n" +
         "say these suites need a real database and must never pass as skipped — and\n" +
         "no workflow runs it, so its suites run NOWHERE. Fix by EITHER adding a step\n" +
         "to a job with the services that tier needs (`pnpm <its script>`, bare: a\n" +

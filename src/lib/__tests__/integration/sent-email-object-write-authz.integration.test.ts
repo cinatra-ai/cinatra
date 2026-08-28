@@ -24,7 +24,7 @@
  *
  * Runner (real DB required — else the suite self-skips):
  *   SUPABASE_DB_URL=<verify pg conn> SUPABASE_SCHEMA=<lane schema> \
- *     pnpm exec vitest run --config vitest.integration-1983.config.ts
+ *     pnpm exec vitest run --config vitest/integration/1983.config.ts
  * (The SUPABASE_SCHEMA schema is CREATED + cloned in beforeAll and DROPPED in
  * afterAll; the store's `@/lib/database` is shimmed to resolve conn/schema from
  * these env vars — see tests/__stubs__/database-realconn-1983.ts.)

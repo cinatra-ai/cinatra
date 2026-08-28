@@ -1,6 +1,0 @@
-79. [POST] http://localhost:3152/agents/cinatra-ai/blog-idea-generator-agent/86afc6e9-78e4-4e00-9f83-f6e798e96445 => [200] OK
-86. [POST] http://localhost:3152/agents/cinatra-ai/blog-idea-generator-agent/86afc6e9-78e4-4e00-9f83-f6e798e96445 => [200] OK
-87. [POST] http://localhost:3152/agents/cinatra-ai/blog-idea-generator-agent/86afc6e9-78e4-4e00-9f83-f6e798e96445 => [200] OK
-89. [POST] http://localhost:3152/agents/cinatra-ai/blog-idea-generator-agent/86afc6e9-78e4-4e00-9f83-f6e798e96445 => [200] OK
-
-Note: 78 static requests not shown, run with "static" option to see them.

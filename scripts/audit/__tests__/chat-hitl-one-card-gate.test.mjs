@@ -69,9 +69,10 @@ import {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE_REL = "scripts/audit/chat-hitl-one-card-gate.mjs";
 const GATE = join(REPO_ROOT, GATE_REL);
-// The committed verbatim transcript of the required run, quoted in the S9a
-// evidence record and in the pull request description.
-const TRANSCRIPT_REL = "evidence/2785-s9a-placeholder-proof/required-gate-run.txt";
+// The committed verbatim transcript of a CLEAN run of this gate. It is a real
+// test input — the assertion below re-runs the gate and compares byte for byte
+// — so it lives beside the suite as a fixture rather than in a proof folder.
+const TRANSCRIPT_REL = "scripts/audit/__fixtures__/one-card-gate/clean-run-transcript.txt";
 const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8");
 
 describe("R1 — a second card implementation is a violation", () => {
@@ -1434,7 +1435,7 @@ describe("the two modes on the real tree", () => {
   });
 
   it("the COMMITTED gate transcript is a fresh run of this gate, byte for byte", () => {
-    // The evidence record quotes the required run verbatim. Without this test
+    // The fixture quotes a clean run verbatim. Without this test
     // nothing compares the quote to the gate: a finding could be reworded,
     // added or silenced and the committed transcript would still read as the
     // gate's own output. The comparison is the whole file, not a substring, so
@@ -1459,10 +1460,10 @@ describe("the two modes on the real tree", () => {
 });
 
 describe("exemptions and the live tree", () => {
-  it("tests, fixtures, evidence and docs are exempt — they may name anything", () => {
+  it("tests, fixtures and docs are exempt — they may name anything", () => {
     for (const rel of [
       "packages/agents/src/__tests__/review-gate-card.test.tsx",
-      "evidence/2566-s2/README.md",
+      "scripts/audit/__fixtures__/one-card-gate/clean-run-transcript.txt",
       "docs/internals/whatever.md",
       "tests/e2e/agents-run/fixtures.ts",
     ]) {

@@ -1,5 +1,0 @@
-{
-  "plan_validator": [
-    "cell \"S1__hitl-card__site_widget__asking__light\": \"agent_hitl_screen\" is recorded as composition-only on \"site_widget\" — a card travels from the run's own turn, and a widget conversation cannot start a run that reaches `pending_approval`: `agent_run` is not in the delegated widget allowlist (packages/mcp-server/src/delegated-widget-tool-policy.ts), and the content-editor launch claims no present human and runs queued -> running -> completed without ever parking (src/lib/host-content-editor-dispatch.ts). The mount is real and is proven by the card suite's widget arms and the real-store submit tier; it is the PICTURE that has no reachable subject."
-  ]
-}
