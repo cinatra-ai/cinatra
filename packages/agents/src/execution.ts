@@ -849,7 +849,10 @@ export class ProducedReviewHoldUnpersistedError extends Error {
     const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
     super(
       `run ${args.runId}: the produced-output review hold could not be recorded — ` +
-        `the run keeps its non-terminal status and this attempt is re-delivered in ${delayMs}ms`,
+        `the run keeps its non-terminal status and ` +
+        (args.delivered
+          ? `the terminal write it still owes is queued for delivery in ${delayMs}ms`
+          : `the terminal write it still owes could NOT be queued — it needs an operator`),
     );
     this.name = "ProducedReviewHoldUnpersistedError";
     this.runId = args.runId;
@@ -884,6 +887,9 @@ async function producedReviewHoldsRun(args: {
   /** How many recovery deliveries this run's withheld write has already taken.
    *  Only a recovery leg carries one; a first raise leaves it at zero. */
   holdPark?: number;
+  /** Which recovery chain this raise belongs to. Only a recovery leg carries
+   *  one; a first raise mints a new chain. */
+  holdChain?: string;
 }): Promise<boolean> {
   const { runId, where } = args;
   let outcome: { held: boolean; reason: string };
@@ -905,7 +911,7 @@ async function producedReviewHoldsRun(args: {
     // the run keeps its non-terminal status, and the attempt must not report
     // success over a hold nothing can see. So it takes the same exit.
     console.error(
-      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write, attempt re-delivered (fail-closed):`,
+      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write (fail-closed):`,
       err,
     );
     throw await unpersistedHoldSentinel(runId, args);
@@ -1054,6 +1060,21 @@ function buildProducedReviewRecovery(
 /** The id prefix a withheld terminal write's delivery is keyed on. */
 export const PRODUCED_REVIEW_RECOVERY_JOB_PREFIX = "produced-review-recovery__";
 
+/** The delivery id for one chain's nth attempt. Keyed on the run, the CHAIN and
+ *  the ordinal — never on the run and the ordinal alone. The queue keeps settled
+ *  jobs by count (see the runtime's `removeOnComplete`/`removeOnFail`) and an
+ *  add on an id that is still held is a silent no-op, so an id that repeated
+ *  across chains would report a delivery it never made. A chain is minted per
+ *  raise, so its ids are its own; within a chain the ordinal still collapses a
+ *  redelivered leg onto the one queued recovery. */
+export function producedReviewRecoveryJobId(
+  runId: string,
+  chain: string,
+  ordinal: number,
+): string {
+  return `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}${runId}__${chain}__${ordinal}`;
+}
+
 /**
  * Hand the withheld terminal write to the ONE road that can still finish the
  * run: a delayed execution delivery carrying the recovery, consumed by the
@@ -1068,9 +1089,13 @@ export const PRODUCED_REVIEW_RECOVERY_JOB_PREFIX = "produced-review-recovery__";
  * write again. Raised-point delivery means no caller holds the payload, so no
  * caller can lose it, and there is exactly one carrier and one consumer.
  *
- * IDEMPOTENT: the delivery is keyed on the run AND the delivery ordinal, so two
- * attempts raising the same ordinal — a retried resume, two callers racing the
- * same run — collapse onto the one queued recovery instead of forking it.
+ * IDEMPOTENT: the delivery is keyed on the run, its chain and the ordinal, so a
+ * leg redelivered at the same ordinal collapses onto the one queued recovery
+ * instead of forking it. Two callers racing the SAME run raise two chains and
+ * queue two recoveries; that is deliberate — the alternative is a shared id that
+ * a settled job of an earlier chain still holds, which the queue would swallow
+ * silently. Both chains converge: whichever records the hold first wins, and the
+ * other finds the run already parked or already terminal and stops.
  *
  * BOUNDED: it carries exactly what `buildProducedReviewRecovery` built, which is
  * already under `PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES` on every branch.
@@ -1088,8 +1113,9 @@ async function deliverProducedReviewRecovery(args: {
   runId: string;
   recovery: ProducedReviewRecovery;
   park: number;
+  chain: string;
 }): Promise<boolean> {
-  const { runId, recovery, park } = args;
+  const { runId, recovery, park, chain } = args;
   if (park >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
     console.error(
       `[produced-review-hold] run=${runId} could not record its hold across ${park} deliveries — ` +
@@ -1103,13 +1129,18 @@ async function deliverProducedReviewRecovery(args: {
     const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
     await enqueueBackgroundJob(
       BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      { runId, producedReviewHold: recovery, producedReviewHoldPark: next },
+      {
+        runId,
+        producedReviewHold: recovery,
+        producedReviewHoldPark: next,
+        producedReviewHoldChain: chain,
+      },
       {
         delay: PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
         // One shot per delivery: the leg re-raises and queues the next ordinal
         // itself, so a BullMQ-level retry would only double the chain.
         attempts: 1,
-        jobId: `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}${runId}__${next}`,
+        jobId: producedReviewRecoveryJobId(runId, chain, next),
         // The leg anchors the run's own org-scoped dispatch authority; it must
         // not inherit the resuming principal's frame.
         inheritActorContext: false,
@@ -1140,6 +1171,7 @@ async function unpersistedHoldSentinel(
     withheld: WithheldTerminalWrite;
     stepResults: readonly unknown[];
     holdPark?: number;
+    holdChain?: string;
   },
 ): Promise<ProducedReviewHoldUnpersistedError> {
   const recovery = buildProducedReviewRecovery(runId, args.withheld, args.stepResults);
@@ -1147,6 +1179,7 @@ async function unpersistedHoldSentinel(
     runId,
     recovery,
     park: args.holdPark ?? 0,
+    chain: args.holdChain ?? randomUUID(),
   });
   return new ProducedReviewHoldUnpersistedError({ runId, recovery, delivered });
 }
@@ -1158,9 +1191,9 @@ async function unpersistedHoldSentinel(
  * still owed a review. This asks the question again and finishes it — a park if
  * something holds the run, the withheld terminal write if nothing does.
  *
- * Throws `ProducedReviewHoldUnpersistedError` again while the write still fails,
- * so the worker re-delivers up to its own cap. The run is never landed terminal
- * on an unproven review.
+ * Raises `ProducedReviewHoldUnpersistedError` again while the write still fails,
+ * queueing the NEXT delivery of the same chain up to the chain's cap before it
+ * does. The run is never landed terminal on an unproven review.
  */
 export async function recoverProducedReviewHold(args: {
   runId: string;
@@ -1170,6 +1203,8 @@ export async function recoverProducedReviewHold(args: {
   /** Which delivery this is, so a hold that still cannot be recorded queues the
    *  NEXT one and the cap counts the chain rather than restarting it. */
   park?: number;
+  /** The chain this delivery belongs to, so the next one keeps its identity. */
+  chain?: string;
 }): Promise<void> {
   const { runId, run, recovery, authority } = args;
   const withheld = recovery.withheld;
@@ -1186,6 +1221,7 @@ export async function recoverProducedReviewHold(args: {
       authority,
       where: "hold recovery",
       holdPark: args.park,
+      holdChain: args.chain,
     })
   ) {
     console.log(`[produced-review-hold] run=${runId} recovery recorded the hold`);
@@ -2804,6 +2840,7 @@ export async function runAgentBuilderExecutionJob(
     // presence makes this leg a hold recovery rather than a dispatch.
     producedReviewHold?: ProducedReviewRecovery;
     producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2849,6 +2886,7 @@ async function runAgentBuilderExecutionJobInner(
     // cinatra#3007 — see the outer signature.
     producedReviewHold?: ProducedReviewRecovery;
     producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2895,6 +2933,7 @@ async function runAgentBuilderExecutionJobInner(
       authority: executionAuthority,
       park:
         typeof data.producedReviewHoldPark === "number" ? data.producedReviewHoldPark : 0,
+      chain: data.producedReviewHoldChain,
     });
     return;
   }

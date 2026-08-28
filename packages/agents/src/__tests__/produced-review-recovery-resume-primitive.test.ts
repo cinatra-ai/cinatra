@@ -183,7 +183,8 @@ import {
   recoverProducedReviewHold,
   PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
   PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
-  PRODUCED_REVIEW_RECOVERY_JOB_PREFIX,
+  producedReviewRecoveryJobId,
+  MAX_PRODUCED_REVIEW_HOLD_PARKS,
   CINATRA_ENDNODE_OUTPUTS_SENTINEL,
 } from "../execution";
 
@@ -274,7 +275,12 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
     const [, data, options] = call!;
     expect(data.runId).toBe("run-1");
     expect(data.producedReviewHoldPark).toBe(1);
-    expect(options.jobId).toBe(`${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__1`);
+    // Keyed on the run, its CHAIN and the ordinal — the chain is what keeps a
+    // later chain's first delivery off an id a settled job still holds.
+    expect(typeof data.producedReviewHoldChain).toBe("string");
+    expect(options.jobId).toBe(
+      producedReviewRecoveryJobId("run-1", data.producedReviewHoldChain as string, 1),
+    );
     expect(options.delay).toBe(PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS);
     expect(
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),

@@ -126,7 +126,8 @@ import {
   ProducedReviewHoldUnpersistedError,
   PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
   PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
-  PRODUCED_REVIEW_RECOVERY_JOB_PREFIX,
+  producedReviewRecoveryJobId,
+  MAX_PRODUCED_REVIEW_HOLD_PARKS,
   CINATRA_ENDNODE_OUTPUTS_SENTINEL,
 } from "../execution";
 
@@ -204,7 +205,12 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
     const [, data, options] = call!;
     expect(data.runId).toBe("run-1");
     expect(data.producedReviewHoldPark).toBe(1);
-    expect(options.jobId).toBe(`${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__1`);
+    // Keyed on the run, its CHAIN and the ordinal — the chain is what keeps a
+    // later chain's first delivery off an id a settled job still holds.
+    expect(typeof data.producedReviewHoldChain).toBe("string");
+    expect(options.jobId).toBe(
+      producedReviewRecoveryJobId("run-1", data.producedReviewHoldChain as string, 1),
+    );
     expect(options.delay).toBe(PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS);
     expect(
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
@@ -235,9 +241,10 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
     expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
   });
 
-  it("a recovery that still cannot record the hold queues the NEXT delivery, capped", async () => {
+  it("a recovery that still cannot record the hold queues the NEXT delivery of the SAME chain", async () => {
     await approveReviewTaskInternal("wayflow-task-1", "user-a").catch(() => undefined);
     const [, data] = deliveredRecovery()!;
+    const chain = data.producedReviewHoldChain as string;
     enqueueSpy.mockClear();
 
     // The delivered leg re-raises: the write still fails.
@@ -247,11 +254,15 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
       recovery: data.producedReviewHold as never,
       authority: AUTHORITY,
       park: data.producedReviewHoldPark as number,
+      chain,
     }).catch(() => undefined);
 
     const [, next, options] = deliveredRecovery()!;
     expect(next.producedReviewHoldPark).toBe(2);
-    expect(options.jobId).toBe(`${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__2`);
+    // The chain is the run's ONE recovery identity: it does not restart, so the
+    // cap counts this chain rather than beginning again at one.
+    expect(next.producedReviewHoldChain).toBe(chain);
+    expect(options.jobId).toBe(producedReviewRecoveryJobId("run-1", chain, 2));
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 });

@@ -123,10 +123,12 @@ import { deliverArtifactReviewResumeIntent } from "../artifact-review-resume-del
 import type { ResumeIntentRow } from "../artifact-review-gate-store";
 import {
   recoverProducedReviewHold,
+  runAgentBuilderExecutionJob,
   ProducedReviewHoldUnpersistedError,
   PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
   PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
-  PRODUCED_REVIEW_RECOVERY_JOB_PREFIX,
+  producedReviewRecoveryJobId,
+  MAX_PRODUCED_REVIEW_HOLD_PARKS,
   CINATRA_ENDNODE_OUTPUTS_SENTINEL,
 } from "../execution";
 
@@ -223,7 +225,12 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     const [, data, options] = call!;
     expect(data.runId).toBe("run-1");
     expect(data.producedReviewHoldPark).toBe(1);
-    expect(options.jobId).toBe(`${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__1`);
+    // Keyed on the run, its CHAIN and the ordinal — the chain is what keeps a
+    // later chain's first delivery off an id a settled job still holds.
+    expect(typeof data.producedReviewHoldChain).toBe("string");
+    expect(options.jobId).toBe(
+      producedReviewRecoveryJobId("run-1", data.producedReviewHoldChain as string, 1),
+    );
     expect(options.delay).toBe(PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS);
     // The carried record stays under the cap the withheld write is bounded by.
     expect(
@@ -259,16 +266,87 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
   });
 
-  it("is idempotent under a retried delivery: the same ordinal collapses onto one queued recovery", async () => {
+  it("the queued delivery is what the execution job consumes — carrier and consumer agree", async () => {
     await deliverArtifactReviewResumeIntent(intent()).catch(() => undefined);
+    const [, data] = deliveredRecovery()!;
+    enqueueSpy.mockClear();
+
+    // Hand the queue record BACK to the worker exactly as it was queued. Nothing
+    // is re-executed: the leg asks the review question again and finishes the run.
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    storeMock.readAgentRunById.mockResolvedValue({
+      ...pausedRun(),
+      projectId: null,
+    });
+    await runAgentBuilderExecutionJob(
+      data as { runId: string; producedReviewHold?: never },
+      "delivery-1",
+    );
+
+    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+      [string, string, string, Record<string, unknown> | undefined, unknown]
+    >;
+    expect(calls).toHaveLength(1);
+    expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
+    expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
+  });
+
+  it("a leg redelivered at the same ordinal collapses onto the one queued recovery", async () => {
     await deliverArtifactReviewResumeIntent(intent()).catch(() => undefined);
+    const [, data] = deliveredRecovery()!;
+    const chain = data.producedReviewHoldChain as string;
+    const park = data.producedReviewHoldPark as number;
+    enqueueSpy.mockClear();
+
+    // The SAME leg runs twice — a lock lost and reclaimed, a redelivery. Both
+    // raises carry the chain and the ordinal, so both address one queue record.
+    const run = { orgId: "org-1", status: "pending_approval" as const };
+    await recoverProducedReviewHold({
+      runId: "run-1",
+      run,
+      recovery: data.producedReviewHold as never,
+      authority: AUTHORITY,
+      park,
+      chain,
+    }).catch(() => undefined);
+    await recoverProducedReviewHold({
+      runId: "run-1",
+      run,
+      recovery: data.producedReviewHold as never,
+      authority: AUTHORITY,
+      park,
+      chain,
+    }).catch(() => undefined);
 
     const jobIds = enqueueSpy.mock.calls
       .filter((c) => (c as unknown[])[0] === "agent-builder-execution")
       .map((c) => ((c as unknown[])[2] as { jobId?: string }).jobId);
     expect(jobIds).toEqual([
-      `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__1`,
-      `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}run-1__1`,
+      producedReviewRecoveryJobId("run-1", chain, park + 1),
+      producedReviewRecoveryJobId("run-1", chain, park + 1),
     ]);
+  });
+
+  it("AT THE CAP nothing more is queued, and the run is still not terminal", async () => {
+    await deliverArtifactReviewResumeIntent(intent()).catch(() => undefined);
+    const [, data] = deliveredRecovery()!;
+    enqueueSpy.mockClear();
+
+    const err = (await recoverProducedReviewHold({
+      runId: "run-1",
+      run: { orgId: "org-1", status: "pending_approval" },
+      recovery: data.producedReviewHold as never,
+      authority: AUTHORITY,
+      park: MAX_PRODUCED_REVIEW_HOLD_PARKS,
+      chain: data.producedReviewHoldChain as string,
+    }).catch((e: unknown) => e)) as ProducedReviewHoldUnpersistedError;
+
+    expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+    // No delivery was made, and the sentinel says so rather than promising one.
+    expect(err.delivered).toBe(false);
+    expect(err.message).toContain("could NOT be queued");
+    expect(deliveredRecovery()).toBeUndefined();
+    // And still no terminal write: the cap never licenses one.
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 });
