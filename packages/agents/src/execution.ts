@@ -953,12 +953,15 @@ function sliceWholeCharacters(text: string, keep: number): string {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }
 
-/** Says the text was cut, and by how much — so a reader of the landed run never
- *  mistakes a cut error for the whole one. */
-function markCutError(kept: string, ofLength: number): string {
+/** Says the text was cut, and by how much — counted in the same unit the cap is
+ *  in, so a reader of the landed run never mistakes a cut error for the whole
+ *  one and never has to guess what the number counts. String length would not do
+ *  it: it counts UTF-16 code units, so an astral character reports as two. */
+function markCutError(kept: string, totalBytes: number): string {
+  const dropped = totalBytes - Buffer.byteLength(kept, "utf8");
   return (
     `${kept}\n[error text truncated to fit the recovery payload cap: ` +
-    `${ofLength - kept.length} of ${ofLength} characters dropped]`
+    `${dropped} of ${totalBytes} bytes dropped]`
   );
 }
 
@@ -984,6 +987,7 @@ function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
   if (withErrorBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
     return { recovery: withError, bytes: withErrorBytes };
   }
+  const totalErrorBytes = Buffer.byteLength(error, "utf8");
   let keep = error.length;
   let over = withErrorBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
   for (let pass = 0; pass < PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES; pass++) {
@@ -991,7 +995,7 @@ function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
     const cut: ProducedReviewRecovery = {
       withheld: {
         status: withheld.status,
-        error: markCutError(sliceWholeCharacters(error, keep), error.length),
+        error: markCutError(sliceWholeCharacters(error, keep), totalErrorBytes),
       },
     };
     const cutBytes = producedReviewRecoveryBytes(cut);
@@ -1000,6 +1004,15 @@ function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
     }
     if (keep === 0) break;
     over = cutBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  }
+  // None of the text fits. The marker alone still states the omission, so an
+  // omitted error is never silently indistinguishable from an absent one.
+  const omitted: ProducedReviewRecovery = {
+    withheld: { status: withheld.status, error: markCutError("", totalErrorBytes) },
+  };
+  const omittedBytes = producedReviewRecoveryBytes(omitted);
+  if (omittedBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: omitted, bytes: omittedBytes };
   }
   // Not even the marker fits: the verdict alone still lands the run.
   return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };

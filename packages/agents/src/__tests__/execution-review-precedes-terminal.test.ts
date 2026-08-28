@@ -857,7 +857,9 @@ describe("cinatra#3007 — the carried recovery is bounded in UTF-8 bytes", () =
     // only the text gives way — and it says how much of it went.
     expect(recovery.withheld.status).toBe("failed");
     expect(String(recovery.withheld.error)).toContain("error text truncated");
-    expect(String(recovery.withheld.error)).toContain(`of ${error.length} characters dropped`);
+    expect(String(recovery.withheld.error)).toContain(
+      `of ${Buffer.byteLength(error, "utf8")} bytes dropped`,
+    );
     expect(recovery.stepResults).toBeUndefined();
   });
 
@@ -894,5 +896,29 @@ describe("cinatra#3007 — the carried recovery is bounded in UTF-8 bytes", () =
     expect(payloadBytes(err.recovery)).toBeLessThanOrEqual(
       PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES,
     );
+  });
+
+  it("an ASTRAL error is cut on whole characters, and the marker counts BYTES", async () => {
+    // Every character here is a surrogate PAIR: two code units, four UTF-8
+    // bytes. A cut on code units can land between the halves, and a count of
+    // code units would report twice the characters there are — so the marker
+    // counts the one unit the cap is in.
+    const error = "\u{1F600}".repeat(80_000);
+    const errorBytes = Buffer.byteLength(error, "utf8");
+    expect(errorBytes).toBeGreaterThan(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+
+    const recovery = await dispatchFailureRecovery(error);
+    const carried = String(recovery.withheld.error);
+
+    expect(payloadBytes(recovery)).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+    expect(recovery.withheld.status).toBe("failed");
+    expect(carried).toContain(`of ${errorBytes} bytes dropped`);
+    // No half of a pair survives the cut, in either direction.
+    expect(carried).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(carried).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    // The marker's arithmetic is exact against the text it kept.
+    const dropped = Number(/: (\d+) of \d+ bytes dropped\]$/.exec(carried.trimEnd())?.[1]);
+    const kept = carried.slice(0, carried.lastIndexOf("\n["));
+    expect(dropped).toBe(errorBytes - Buffer.byteLength(kept, "utf8"));
   });
 });
