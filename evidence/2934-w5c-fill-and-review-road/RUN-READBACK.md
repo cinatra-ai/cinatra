@@ -7,141 +7,84 @@ any point in this leg**, and the drivers carry no `insert`/`update` statement of
 
 | run | agent | what it is here | final row |
 |---|---|---|---|
-| `a5613ebb-d11c-4b75-a462-ebe399961bc5` | Blog Draft Writer Agent | the schedule reading and the armed-trigger tab | `status=armed`; `input_params={"idea": {"title": "Why cadence beats bursts for blog reach"}}` |
-| `fc9f58d7-4de8-480a-901e-244f2a178a16` | Blog Draft Writer Agent | the run page's three readings (the kept captures) | `status=pending_trigger`; `input_params={"idea": {"title": "Why cadence beats bursts for blog reach"}}` |
-| `b61089bd-b850-4e77-a757-da3dff059aa9` | Blog Draft Writer Agent | the first review-run attempt; in no picture | `status=failed`, `error=WayFlow task failed`; its artifact produced review gate `b3f16977` (`pending`, unused) |
-| `aced3514-2bee-4126-be19-a4ec2d0e7170` | Blog Draft Writer Agent | the review page's two readings | `status=failed`, `error=WayFlow task failed`; artifact produced, review gate `40533412` |
-| `lifecycle-repair-run:f312794a-d5b8-4c71-90af-e6737a50eebe` | Blog Draft Writer Agent | the repair the request for changes put in flight | `status=pending_approval`, parked on setup field `idea`; no page renders for it |
-| `d88ddadc-5300-46e5-b42d-27c39f62153d` | Email Outreach Agent | the step-by-step readings | `status=pending_approval` at step 2 |
+| `ac70cd70-bf6d-4c70-a60b-c947eca64318` | Blog Draft Writer Agent | the run page's submit-on-ask reading, the schedule reading, and the armed-trigger tab | `status=armed`; `input_params={"idea": {"title": "Why cadence beats bursts for blog reach"}}`; trigger `scheduled` / `2026-08-29T07:00:00Z` / `Europe/Berlin` / `released_at=NULL` |
+| `512836b7-18c9-408e-9c10-c7d49e418cab` | Blog Draft Writer Agent | the run page's question reading | `status=pending_approval`; `input_params={}` |
+| `3fa04248-f674-4b77-abeb-e5b6dd049139` | Blog Draft Writer Agent | the run page's fill reading | `status=pending_approval`; `input_params={}` |
+| `3c694cde-4d6c-4fbd-8408-7e0a209e3e74` | Email Outreach Agent | the first step-by-step pass; in no picture (see the second observation in the README) | `status=pending_approval` |
+| `89f947a2-3f48-42b0-8a7e-5f46cecf311a` | Email Outreach Agent | the step-by-step readings — draft, fill, attachment | `status=pending_approval` at step 2; two gate rows, `{"stepNumber": 1}` at `03:37:08.405230Z` and `{"stepNumber": 2}` at `03:41:25.695801Z` |
+| `baa08154-209c-41c4-8f0a-ee88a78373e1` | Blog Draft Writer Agent | the review page's two readings | `status=failed`, `error=WayFlow task failed`; its artifact produced review gate `lifecycle-review:367341bf…`, now `resolved` / `changes_requested` at `03:56:22.518980Z` |
+| `lifecycle-repair-run:a9fa4445-8b15-489c-b7e8-7d59bc61ed71` | Blog Draft Writer Agent | the repair the request for changes put in flight | `status=pending_approval`, parked on the producer's own setup gate; `lifecycle_repair.successor_gate_id` still NULL |
 
-## The run page (`fc9f58d7`)
+## The window's own rows, per cell
 
-The gate this run parked on is the object-valued case the run-page defect lived in:
+Every row below is `cinatra.agent_run_messages`, in sequence, read after the turn.
 
-```
-field_name = "idea"
-input_schema = {"type": "object", "title": "idea", "required": ["title"],
-                "properties": {"title": {...}, "outline": {...}, "summary": {...}},
-                "x-multiline": true, "x-placeholder": "What should this post be about?",
-                "x-object-text-property": "title"}
-```
+**Run page — the fill (`3fa04248`)**
 
-Six window rows for three messages, in order — a fill for the first, an answer, an answer for the
-second, a fill and `Submitted.` for the third:
+| seq | role | content | at |
+|---|---|---|---|
+| 1 | user | `make the idea "A weekly publishing rhythm beats a burst of posts" and leave everything else as it is` | `03:28:46.197Z` |
+| 2 | assistant | *(the fill row — `values` for the screen, no text)* | `03:29:00.171Z` |
+| 3 | assistant | `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` | `03:29:02.251Z` |
 
-| # | reading | field before → after | run row | store |
+**Run page — the question (`512836b7`)**
+
+| seq | role | content | at |
+|---|---|---|---|
+| 4 | user | `what is this field for?` | `03:25:25.789Z` |
+| 5 | assistant | `The **idea** field tells the Blog Draft Writer Agent what blog concept to turn into a draft.` … | `03:25:39.862Z` |
+
+The stored text keeps its markdown; what changed at this head is that the WINDOW now draws it. The
+frame's DOM readback for that bubble: `strong=1`, `tables=0`, raw `**` `=0`, raw `|` `=0`.
+
+**Run page — the submit on ask (`ac70cd70`)**
+
+| seq | role | content | at |
+|---|---|---|---|
+| 6 | user | `set the idea to "Why cadence beats bursts for blog reach" and send it` | `03:09:56.367Z` |
+| 7 | assistant | *(the fill row)* | `03:10:11.232Z` |
+| 8 | assistant | `Submitted.` | `03:10:16.566Z` |
+
+Two rows for one message — a fill, then the press's own answer — and `input_params` afterwards is the
+person's own words.
+
+**The schedule screen (`ac70cd70`)**
+
+| seq | role | content | at |
+|---|---|---|---|
+| 9 | user | `set it for tomorrow at 9 in the morning, Berlin time` | `03:21:34.332Z` |
+| 10 | assistant | *(the fill row — `scheduledAt`)* | `03:21:47.536Z` |
+| 11 | assistant | `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` | `03:21:49.197Z` |
+
+`cinatra.agent_run_triggers` held **no row** for the run at that moment; the row that exists now was
+written later by the person pressing the form's own button for the armed-trigger cell.
+
+**Step by step (`89f947a2`)**
+
+| seq | role | content | at |
+|---|---|---|---|
+| 1 | user | `set the offering company website to "https://example.test" and the call to action to "Book a 20-minute demo", and leave the sender name as it is` | `03:38:55.870Z` |
+| 2 | assistant | *(the fill row — two fields, the third deliberately not touched)* | `03:39:10.878Z` |
+| 3 | assistant | `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` | `03:39:12.731Z` |
+| 4 | user | `set the sender name to "Rita Owner" and send it` — **carrying `campaign-brief.txt`**, digest `576038005379a871f562e47022857a40c30371a389a38d872d0accc9a4816d11` | `03:40:27.025Z` |
+| 5 | assistant | *(the fill row — `{"senderName":"Rita Owner"}`)* | `03:41:21.384Z` |
+| 6 | assistant | `Submitted.` | `03:41:27.197Z` |
+
+The attachment is on the PERSON'S own row, in `content_json.attachments`, and the step advanced —
+which is the clause. The window draws no chip for it; that is observation D in the README, with the
+code fact.
+
+**The review page (`baa08154`)**
+
+| reading | gate before → after | dispositions | repairs | decision bar before → after |
 |---|---|---|---|---|
-| 1 | `make the idea "…" and leave everything else as it is` | `field-idea` `""` → `A weekly publishing rhythm beats a burst of posts` | `pending_approval` → `pending_approval` | one fill row for that message; `input_params` still `{}` |
-| 2 | `what is this field for?` | unchanged | `pending_approval` → `pending_approval` | no fill row |
-| 3 | `set the idea to "Why cadence beats bursts for blog reach" and send it` | the screen re-read into the scheduler form | `pending_approval` → `pending_trigger` | a fill row then `Submitted.`; `input_params={"idea": {"title": "Why cadence beats bursts for blog reach"}}` |
+| `what changed in this draft?` | `pending` → `pending` (disposition NULL) | 0 → 0 | 0 → 0 | `["Comment","Reject","Approve"]` → `["Comment","Reject","Approve"]`, rationale `""` both times |
+| `tighten the opening paragraph` | `pending` → `resolved` / `changes_requested` | 0 → 0 | 0 → **1** | `["Comment","Reject","Approve"]` → `[]` |
 
-Every turn was served on its first attempt: `toolboxMissing: false`, `platformCouldNotAnswer: false`.
+The repair row's `findings`, character for character:
 
-## The schedule screen (`a5613ebb`)
-
-| before | after |
-|---|---|
-| `scheduledAt` `""`, run `pending_trigger`, `agent_run_triggers` empty | `scheduledAt` `2026-08-28T09:00`, run `pending_trigger`, `agent_run_triggers` **still empty** |
-
-The answer above the box: `Placed in the fields on the person's screen. Nothing was submitted — they
-press the button.`
-
-## The armed trigger (`a5613ebb`)
-
-After the PERSON pressed the form's own button:
-
-```
-agent_run_triggers: trigger_type=scheduled  scheduled_at=2026-08-29 07:00:00+00
-                    timezone=Europe/Berlin  released_at=NULL
-agent_runs.status = armed
+```json
+[{"id": "prompt-window", "message": "tighten the opening paragraph"}]
 ```
 
-No fill was attempted on the armed tab and none is claimed.
-
-## The review page (`aced3514`, gate `40533412`)
-
-```
-gate 40533412  before: status=pending   disposition=NULL   resolved_at=NULL
-               after the QUESTION:      status=pending   disposition=NULL
-                                        artifact_review_dispositions = 0 rows
-                                        lifecycle_repair             = 0 rows
-                                        decision bar ["Comment","Reject","Approve"], rationale ""
-               after the REQUEST:       status=resolved  disposition=changes_requested
-                                        resolved_at=2026-08-28 00:27:23.082771+00
-
-lifecycle_repair f312794a  status=dispatched  attempt=1  route=producer_repair
-                           successor_gate_id=NULL
-                           findings=[{"id": "prompt-window",
-                                      "message": "tighten the opening paragraph"}]
-```
-
-`findings[0].message` is character-for-character the sentence the person typed.
-
-The repair run's own row carries the whole request:
-
-```
-lifecycle-repair-run:f312794a-…  status=pending_approval
-input_params.lifecycleRepairRequest = {kind: lifecycle_repair_request, repairId: f312794a…,
-  gateId: 40533412…, attempt: 1, baseTarget: {artifactId: ad936445…, representationRevisionId: 079eae33…},
-  findings: [{id: prompt-window, message: "tighten the opening paragraph"}],
-  continuationMode: async_effects_gated, originatingRunBy: 9d081292…}
-```
-
-and its HITL gate's `field_name` is `idea` with those same values stored — which is the park the app's
-own log names, and the reason no successor gate exists.
-
-## The step-by-step screen (`d88ddadc`)
-
-Six window rows for two messages:
-
-```
-1 user      set the offering company website to "https://example.test" and the call to action to
-            "Book a 20-minute demo", and leave the sender name as it is
-2 assistant fill = {"callToAction": "Book a 20-minute demo",
-                    "offeringCompanyWebsite": "https://example.test"}
-3 assistant Placed in the fields on the person's screen. Nothing was submitted — they press the button.
-4 user      set the sender name to "Rita Owner" and send it
-            attachments = [{"filename": "campaign-brief.txt", "mime": "text/plain", "size": 133,
-                            "digest": "576038005379a871f562e47022857a40c30371a389a38d872d0accc9a4816d11",
-                            "artifactId": "9229c4fd-…", "originKind": "upload"}]
-5 assistant fill = {"senderName": "Rita Owner"}
-6 assistant Submitted.
-```
-
-Field readback, before → after row 3: `field-offeringCompanyWebsite` `""` → `https://example.test`,
-`callToAction` `""` → `Book a 20-minute demo`, `field-senderName` `""` → `""`. The gate's stored values
-stayed `{"stepNumber": 1}` and `input_params` stayed `{}` — nothing was submitted.
-
-After row 6 a SECOND gate row materialized, `{"stepNumber": 2}` at `2026-08-28 00:50:14.126038+00`, and
-the app's own runtime log carries what actually reached the waiting agent:
-
-```
-[wayflow-interrupt] run=d88ddadc-… history_last=[{"role":"user","parts":[{"kind":"text","text":
-  "{\"text\":\"{\\\"stepNumber\\\":1,\\\"senderName\\\":\\\"Rita Owner\\\"}\",\"attachments\":[{
-   \"artifactId\":\"9229c4fd-…\",\"digest\":\"576038005379a871…\",\"mime\":\"text/plain\",
-   \"title\":\"campaign-brief.txt\"…}]}"}]}]
-```
-
-The draft reading wrote no row at all: `please set the call to action to` was typed, the page was
-reloaded, and the half sentence came back out of the field's own persistence key
-`cinatra_hitl_assist_<templateId>_@cinatra-ai/email-outreach-agent:setup-form`.
-
-## Provider evidence, and its limits
-
-`cinatra.usage_events` on this instance:
-
-| provider | model | calls | input tokens | output tokens |
-|---|---|---|---|---|
-| `openai` | `gpt-5.5-2026-04-23` | 30 | 120,665 | 5,587 |
-| `openai` | `gpt-5.5` | 12 | 281,095 | 2,945 |
-
-The instance's own server log for this leg: **51** `POST /api/mcp 200` callbacks from the provider's own
-servers over the public origin · **3** `llm-bridge-run-select` lines from the agent runtime · **0**
-scripted-runtime lines · **0** `NO_LLM_PROVIDER` refusals · **0** turns refused for a missing toolbox
-· **1** `424 Failed Dependency`, named above with its cause and its fix.
-
-**The limit, said rather than implied**: a zero on that list is the absence of that particular line and
-nothing more. `CINATRA_TEST_LLM_PROVIDER` is set in nothing this leg started, and the capture library
-refuses to run at all where it can see it. Every pictured turn was served on its first attempt, so the
-retry road — which is decided by the SERVER'S OWN LOG for that turn's own window, never by whether the
-answer was the one wanted — was never taken.
+which EQUALS what the person typed.

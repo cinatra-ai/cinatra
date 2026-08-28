@@ -38,7 +38,10 @@ stamp("half a sentence typed into the window, nothing sent", { draftBefore, stor
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForTimeout(22_000);
 const draftAfter = (await readWindow(page)).draft;
-const shotsDraft = await shoot(page, "step-by-step__draft-survives-reload");
+// IN PLACE, and this is the one reading that must be. The draft lives in the
+// BROWSER'S own storage, so a second context — which is how every other pair
+// is taken — would open on an empty field and photograph nothing.
+const shotsDraft = await shoot(page, "step-by-step__draft-survives-reload", { inPlace: true });
 record.readings.push({
   name: "draft-survives-reload",
   typed: HALF, draftBefore, draftAfter,

@@ -1,0 +1,96 @@
+{
+  "cell": "review__question",
+  "path": "/agents/cinatra-ai/blog-draft-writer-agent/baa08154-209c-41c4-8f0a-ee88a78373e1/review/lifecycle-review%3A367341bf6c0dfafd24432622a662f51fb6896fa0f860b08b392f2a3ef20e9369",
+  "frames": [
+    {
+      "theme": "light",
+      "file": "review__question__light.png",
+      "accountFooter": "RORita Ownerowner@example.com",
+      "footerSettled": true,
+      "footerWaitedMs": 0,
+      "windowPlaceholder": null,
+      "bubbles": [
+        {
+          "text": "what changed in this draft?",
+          "side": "person",
+          "drawn": null
+        },
+        {
+          "text": "This draft does not show a prior version to diff against.What I can verify:ItemDetailsDraftWhy Weekly Publishing Beats a Burst of PostsArtifact typeBlog post draftRevision count1 revisionCreated byThis Blog Draft Writer Agent runCreated atAugust 28, 2026, 03:46 UTCReview statePending your reviewRun statusFailed after producing the review artifactSo the “change” appears to be: the agent created a new first draft from the idea titled “Why Weekly Publishing Beats a Burst of Posts.” There is no earlier saved draft revision available here for a line-by-line comparison.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 6,
+            "tables": 1,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
+        }
+      ],
+      "decisionBar": {
+        "bar": {
+          "top": 664,
+          "bottom": 794,
+          "left": 393,
+          "right": 1424
+        },
+        "panel": {
+          "top": 588,
+          "bottom": 822,
+          "left": 464,
+          "right": 1232
+        },
+        "barHeightPx": 130,
+        "overlapHeightPx": 130,
+        "overlapWidthPx": 768,
+        "panelZIndex": "auto",
+        "barCoveredAtItsOwnMiddle": true
+      }
+    },
+    {
+      "theme": "dark",
+      "file": "review__question__dark.png",
+      "accountFooter": "RORita Ownerowner@example.com",
+      "footerSettled": true,
+      "footerWaitedMs": 0,
+      "windowPlaceholder": null,
+      "bubbles": [
+        {
+          "text": "what changed in this draft?",
+          "side": "person",
+          "drawn": null
+        },
+        {
+          "text": "This draft does not show a prior version to diff against.What I can verify:ItemDetailsDraftWhy Weekly Publishing Beats a Burst of PostsArtifact typeBlog post draftRevision count1 revisionCreated byThis Blog Draft Writer Agent runCreated atAugust 28, 2026, 03:46 UTCReview statePending your reviewRun statusFailed after producing the review artifactSo the “change” appears to be: the agent created a new first draft from the idea titled “Why Weekly Publishing Beats a Burst of Posts.” There is no earlier saved draft revision available here for a line-by-line comparison.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 6,
+            "tables": 1,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
+        }
+      ],
+      "decisionBar": {
+        "bar": {
+          "top": 664,
+          "bottom": 794,
+          "left": 393,
+          "right": 1424
+        },
+        "panel": {
+          "top": 588,
+          "bottom": 822,
+          "left": 464,
+          "right": 1232
+        },
+        "barHeightPx": 130,
+        "overlapHeightPx": 130,
+        "overlapWidthPx": 768,
+        "panelZIndex": "auto",
+        "barCoveredAtItsOwnMiddle": true
+      }
+    }
+  ]
+}

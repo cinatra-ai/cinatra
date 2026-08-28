@@ -1,11 +1,11 @@
 {
-  "runId": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+  "runId": "baa08154-209c-41c4-8f0a-ee88a78373e1",
   "presses": [
     {
-      "at": "2026-08-28T00:10:55.885Z",
+      "at": "2026-08-28T03:45:04.725Z",
       "label": "setup gate",
       "fields": {
-        "field-idea": "Why a weekly publishing cadence beats a burst of posts"
+        "field-idea": "Why Weekly Publishing Beats a Burst of Posts"
       },
       "buttons": [
         "RORita Ownerowner@example.com",
@@ -15,7 +15,7 @@
       ]
     },
     {
-      "at": "2026-08-28T00:11:20.957Z",
+      "at": "2026-08-28T03:45:29.999Z",
       "label": "waiting screen 0",
       "fields": {
         "scheduledAt": ""
@@ -45,7 +45,7 @@
       ]
     },
     {
-      "at": "2026-08-28T00:11:49.273Z",
+      "at": "2026-08-28T03:45:58.195Z",
       "label": "waiting screen 1",
       "fields": {},
       "buttons": [
@@ -56,7 +56,7 @@
       ]
     },
     {
-      "at": "2026-08-28T00:12:13.967Z",
+      "at": "2026-08-28T03:46:22.974Z",
       "label": "waiting screen 2",
       "fields": {},
       "buttons": [
@@ -69,33 +69,33 @@
   ],
   "states": [
     {
-      "at": "2026-08-28T00:11:04.983Z",
+      "at": "2026-08-28T03:45:13.819Z",
       "status": "pending_trigger",
       "moment": "schedule",
       "gates": 0
     },
     {
-      "at": "2026-08-28T00:11:33.212Z",
+      "at": "2026-08-28T03:45:42.246Z",
       "status": "pending_approval",
       "moment": null,
       "gates": 0
     },
     {
-      "at": "2026-08-28T00:12:23.061Z",
+      "at": "2026-08-28T03:46:32.052Z",
       "status": "failed",
       "moment": null,
       "gates": 0
     }
   ],
   "finalRun": {
-    "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+    "id": "baa08154-209c-41c4-8f0a-ee88a78373e1",
     "status": "failed",
-    "created_at": "2026-08-28T00:10:37.541Z",
+    "created_at": "2026-08-28T03:44:46.891Z",
     "started_at": null,
-    "completed_at": "2026-08-28T00:12:16.973Z",
+    "completed_at": "2026-08-28T03:46:30.916Z",
     "lifecycle_moment": null,
-    "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
-    "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+    "template_id": "935b41c4-a274-4101-8c45-51aeb895fd04",
+    "run_by": "304a8a80-9fe6-4093-b4ef-b718c1ad7566"
   },
   "reviewGates": [],
   "error": "WayFlow task failed"

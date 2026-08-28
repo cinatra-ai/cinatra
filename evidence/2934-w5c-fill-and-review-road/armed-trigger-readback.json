@@ -1,16 +1,16 @@
 {
   "cell": "armed-trigger",
-  "runId": "a5613ebb-d11c-4b75-a462-ebe399961bc5",
+  "runId": "ac70cd70-bf6d-4c70-a60b-c947eca64318",
   "before": {
     "run": {
-      "id": "a5613ebb-d11c-4b75-a462-ebe399961bc5",
+      "id": "ac70cd70-bf6d-4c70-a60b-c947eca64318",
       "status": "pending_trigger",
-      "created_at": "2026-08-27T23:44:29.224Z",
+      "created_at": "2026-08-28T03:01:56.622Z",
       "started_at": null,
       "completed_at": null,
       "lifecycle_moment": "schedule",
-      "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
-      "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+      "template_id": "935b41c4-a274-4101-8c45-51aeb895fd04",
+      "run_by": "304a8a80-9fe6-4093-b4ef-b718c1ad7566"
     },
     "triggers": [],
     "fields": {
@@ -23,14 +23,14 @@
   },
   "after": {
     "run": {
-      "id": "a5613ebb-d11c-4b75-a462-ebe399961bc5",
+      "id": "ac70cd70-bf6d-4c70-a60b-c947eca64318",
       "status": "armed",
-      "created_at": "2026-08-27T23:44:29.224Z",
+      "created_at": "2026-08-28T03:01:56.622Z",
       "started_at": null,
       "completed_at": null,
       "lifecycle_moment": "schedule",
-      "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
-      "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+      "template_id": "935b41c4-a274-4101-8c45-51aeb895fd04",
+      "run_by": "304a8a80-9fe6-4093-b4ef-b718c1ad7566"
     },
     "triggers": [
       {
@@ -42,7 +42,7 @@
     ]
   },
   "armedTab": {
-    "text": "INTELLIGENCE Chat Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts TOOLS Skills Connectors RO Rita Owner owner@example.com Toggle Sidebar Agents Blog Draft Writer Agent (1) Schedule Toggle theme 3 Blog Draft Writer Agent (1) Setup Schedule Permissions 1 Schedule 2 Recommendation 3 Review When should this run? Run right after setup Schedule for later Run at Timezone Recurring Estimated run duration Unavailable. Save changes make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is Placed in the fields on the person's screen. Nothing was submitted — they press the button. what is this field for? The **idea** field is the topic or angle the Blog Draft Writer Agent will use to draft the blog post. Right now this run is waiting for that field before it can continue. It’s set to: > A weekly publishing rhythm bea",
+    "text": "INTELLIGENCE Chat Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts TOOLS Skills Connectors RO Rita Owner owner@example.com Toggle Sidebar Agents Blog Draft Writer Agent (1) Schedule Toggle theme 2 Blog Draft Writer Agent (1) Setup Schedule Permissions 1 Schedule 2 Recommendation 3 Review When should this run? Run right after setup Schedule for later Run at Timezone Recurring Estimated run duration Unavailable. Save changes make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is Placed in the fields on your screen. Nothing was submitted — press the button when you are ready. what is this field for? The idea field is the topic or thesis the Blog Draft Writer Agent will use to draft the blog post. Right now it should stay as: A weekly publishing rhythm beats a burst of posts The agent is still waiting for y",
     "fields": {},
     "window": {
       "present": true,
@@ -51,35 +51,67 @@
       "bubbles": [
         {
           "text": "make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is",
-          "side": "person"
+          "side": "person",
+          "drawn": null
         },
         {
-          "text": "Placed in the fields on the person's screen. Nothing was submitted — they press the button.",
-          "side": "assistant"
+          "text": "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 0,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
         },
         {
           "text": "what is this field for?",
-          "side": "person"
+          "side": "person",
+          "drawn": null
         },
         {
-          "text": "The **idea** field is the topic or angle the Blog Draft Writer Agent will use to draft the blog post. Right now this run is waiting for that field before it can continue. It’s set to: > A weekly publishing rhythm beats a burst of posts Use the screen’s submit button when you’re ready.",
-          "side": "assistant"
+          "text": "The idea field is the topic or thesis the Blog Draft Writer Agent will use to draft the blog post.Right now it should stay as:A weekly publishing rhythm beats a burst of postsThe agent is still waiting for you to submit the screen.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 1,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
         },
         {
           "text": "set the idea to \"Why cadence beats bursts for blog reach\" and send it",
-          "side": "person"
+          "side": "person",
+          "drawn": null
         },
         {
           "text": "Submitted.",
-          "side": "assistant"
+          "side": "assistant",
+          "drawn": {
+            "strong": 0,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
         },
         {
           "text": "set it for tomorrow at 9 in the morning, Berlin time",
-          "side": "person"
+          "side": "person",
+          "drawn": null
         },
         {
-          "text": "Placed in the fields on the person's screen. Nothing was submitted — they press the button.",
-          "side": "assistant"
+          "text": "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 0,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
         }
       ]
     },

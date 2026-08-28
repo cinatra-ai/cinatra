@@ -13,7 +13,7 @@ import { openAs, readWindow, sendTurnWithColdStartRetry, shoot, stamp, db, runRo
 
 const RUN_ID = process.env.RUN_ID;
 const c = await db();
-const record = { cell: "review-page", runId: RUN_ID, reviewPath: process.env.REVIEW_PATH, readings: [] };
+const record = { cell: "review-page", runId: RUN_ID, reviewPath: process.env.REVIEW_PATH, only: process.env.ONLY_READING ?? null, readings: [] };
 
 const gateRows = async () => (await c.query(
   `select id, review_task_id, status, disposition, resolved_by, resolved_at, created_at
@@ -75,15 +75,24 @@ async function reading(name, message, capture) {
   return r;
 }
 
-await reading("question", "what changed in this draft?", "review__question");
-await reading("request-changes", "tighten the opening paragraph", "review__request-changes");
+// EACH READING CAN BE RUN ON ITS OWN. The two readings share one gate and the
+// second RESOLVES it, so a frame of the first has to be taken while the first is
+// still the newest turn in the window. `ONLY_READING` lets the question be
+// driven, photographed and measured before the change request is typed.
+const ONLY = process.env.ONLY_READING ?? "";
+if (!ONLY || ONLY === "question") {
+  await reading("question", "what changed in this draft?", "review__question");
+}
+if (!ONLY || ONLY === "request-changes") {
+  await reading("request-changes", "tighten the opening paragraph", "review__request-changes");
+}
 
 // The fresh review beneath the resolved one: wait for the repair to return.
 let fresh = null;
-for (let i = 0; i < 40; i += 1) {
+for (let i = 0; ONLY !== "question" && i < 40; i += 1) {
   const g = await gateRows();
   const pending = g.filter((x) => x.status === "pending");
-  if (g.length > record.readings[1].before.gates.length && pending.length > 0) { fresh = pending[pending.length - 1]; break; }
+  if (g.length > record.readings[record.readings.length - 1].before.gates.length && pending.length > 0) { fresh = pending[pending.length - 1]; break; }
   await page.waitForTimeout(15_000);
 }
 record.freshGate = fresh;
@@ -103,7 +112,7 @@ record.finalGates = await gateRows();
 record.finalRepairs = await repairRows();
 record.finalDispositions = await dispositionRows();
 record.finalRun = await runRow(c, RUN_ID);
-write("review-readback.json", record);
+write(process.env.READBACK_NAME ?? "review-readback.json", record);
 console.log(JSON.stringify({ gates: record.finalGates.map((g) => `${g.status}/${g.disposition ?? "-"}`), repairs: record.finalRepairs.length, fresh: Boolean(fresh) }, null, 2));
 await c.end();
 await browser.close();

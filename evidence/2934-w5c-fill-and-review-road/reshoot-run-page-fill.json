@@ -1,0 +1,60 @@
+{
+  "cell": "run-page__fill-no-submit",
+  "path": "/agents/cinatra-ai/blog-draft-writer-agent/3fa04248-f674-4b77-abeb-e5b6dd049139",
+  "frames": [
+    {
+      "theme": "light",
+      "file": "run-page__fill-no-submit__light.png",
+      "accountFooter": "RORita Ownerowner@example.com",
+      "footerSettled": true,
+      "footerWaitedMs": 0,
+      "windowPlaceholder": null,
+      "bubbles": [
+        {
+          "text": "make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is",
+          "side": "person",
+          "drawn": null
+        },
+        {
+          "text": "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 0,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
+        }
+      ],
+      "decisionBar": null
+    },
+    {
+      "theme": "dark",
+      "file": "run-page__fill-no-submit__dark.png",
+      "accountFooter": "RORita Ownerowner@example.com",
+      "footerSettled": true,
+      "footerWaitedMs": 0,
+      "windowPlaceholder": null,
+      "bubbles": [
+        {
+          "text": "make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is",
+          "side": "person",
+          "drawn": null
+        },
+        {
+          "text": "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+          "side": "assistant",
+          "drawn": {
+            "strong": 0,
+            "tables": 0,
+            "listRows": 0,
+            "rawAsterisks": 0,
+            "rawPipes": 0
+          }
+        }
+      ],
+      "decisionBar": null
+    }
+  ]
+}

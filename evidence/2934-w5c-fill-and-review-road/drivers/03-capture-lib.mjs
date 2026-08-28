@@ -39,7 +39,7 @@ export async function db() {
   return c;
 }
 
-export async function openAs(email, password) {
+export async function openAs(email, password, { theme } = {}) {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({
     baseURL: APP,
@@ -53,6 +53,14 @@ export async function openAs(email, password) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(420_000);
   page.setDefaultNavigationTimeout(420_000);
+  // THE THEME IS CHOSEN BEFORE THE SURFACE UNDER TEST OPENS, through the app's
+  // own control on its own chrome, and the CONTEXT is what remembers it.
+  if (theme) {
+    await page.goto("/agents", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(6000);
+    await setTheme(page, theme);
+    await page.waitForTimeout(1500);
+  }
   return { browser, ctx, page };
 }
 
@@ -85,13 +93,32 @@ export async function readFields(page) {
   });
 }
 
-/** The window's own field: its placeholder and its current text. */
+/**
+ * The window's own field: its placeholder and its current text.
+ *
+ * THE BUBBLES ARE READ BY THEIR OWN HOOK, not by a class. The assistant's line
+ * is now DRAWN markdown (cinatra#2934, fix A), so it no longer carries the
+ * pre-wrap class the person's line still does — a reader keyed on that class
+ * would have quietly stopped seeing half the exchange. `data-run-window-entry`
+ * names the side, and the assistant's own markup is read back beside its text
+ * so a picture's claim that bold reads bold has a DOM fact under it.
+ */
 export async function readWindow(page) {
   return page.evaluate((sel) => {
     const f = document.querySelector(sel);
-    const bubbles = Array.from(document.querySelectorAll(".whitespace-pre-wrap")).map((b) => ({
+    const bubbles = Array.from(document.querySelectorAll("[data-run-window-entry]")).map((b) => ({
       text: b.textContent.replace(/\s+/g, " ").trim().slice(0, 600),
-      side: b.parentElement?.className?.includes("justify-end") ? "person" : "assistant",
+      side: b.getAttribute("data-run-window-entry"),
+      drawn:
+        b.getAttribute("data-run-window-entry") === "assistant"
+          ? {
+              strong: b.querySelectorAll("strong").length,
+              tables: b.querySelectorAll("table").length,
+              listRows: b.querySelectorAll("div.flex.gap-2").length,
+              rawAsterisks: (b.textContent.match(/\*\*/g) ?? []).length,
+              rawPipes: (b.textContent.match(/\|/g) ?? []).length,
+            }
+          : null,
     }));
     return {
       present: Boolean(f),
@@ -114,48 +141,148 @@ export async function setTheme(page, theme) {
 }
 
 /**
- * One cell, both themes, full window, uncropped.
+ * One cell, both themes, full window, uncropped — EACH THEME IN ITS OWN CONTEXT.
  *
- * The panel above the field closes when a click lands outside the window — which
- * is exactly what pressing the app's own theme control is. §IX: "clicking into
- * the field opens it again", so the field is clicked once after the theme is
- * set, before the frame is taken. Nothing is typed and nothing is sent.
+ * WHY NOT ONE PAGE AND A TOGGLE. The graded leg toggled the theme on the page it
+ * was standing on, and every frame of one run came back with a blank account
+ * footer — an empty avatar, no name, no email. `src/components/nav-user.tsx`
+ * draws `name` and `email` as "" while `authClient.useSession()` is pending, so
+ * a frame taken while the chrome is in that state photographs a person who is
+ * not there. Measured on this head, same run, same identity: opened once and
+ * themed in place, the footer stayed blank past a 60 s wait in BOTH frames;
+ * opened in a context that was already in its theme, it drew
+ * "Rita Owner / owner@example.com" before the shutter, in both.
+ *
+ * So a pair is two contexts, each signed in, each themed on the app's own
+ * chrome BEFORE the run page opens. The exchange is not lost by doing this: §IX
+ * keeps it with the RUN, so the second context opens on the same turns.
+ *
+ * It presses NO screen button — the only clicks are the theme control and the
+ * window's own field, which §IX says is how the panel opens again.
+ *
+ * `inPlace` is for the one reading that CANNOT be re-opened: an unsent draft
+ * lives in the browser's own storage, so a fresh context would have nothing to
+ * photograph. That reading toggles in place and records what its footer drew.
  */
-export async function shoot(page, name) {
+export async function shoot(page, name, { inPlace = false } = {}) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  if (inPlace) return shootInPlace(page, name);
+  const url = page.url();
+  const files = [];
+  for (const theme of ["light", "dark"]) {
+    const { browser, page: fresh } = await openAs(
+      process.env.OWNER_EMAIL,
+      process.env.OWNER_PW,
+      { theme },
+    );
+    await fresh.goto(url, { waitUntil: "domcontentloaded" });
+    await fresh.waitForTimeout(12_000);
+    const settled = await waitForDrawnFrame(fresh);
+    await openPanel(fresh);
+    const file = path.join(OUT_DIR, `${name}__${theme}.png`);
+    await fresh.screenshot({ path: file });
+    files.push(file);
+    stamp("capture recorded", {
+      file: path.basename(file), theme, footer: settled.footer, footerSettled: settled.settled,
+    });
+    await browser.close();
+  }
+  return files;
+}
+
+/** §IX: "clicking into the field opens it again", and the panel holds itself at
+ *  the bottom so the newest turn is the one in view. Nothing is typed. */
+export async function openPanel(page) {
+  try {
+    const f = page.locator(PROMPT).first();
+    if (await f.count()) {
+      await f.click();
+      await page.waitForTimeout(1800);
+    }
+    // THE PANEL IS ADDRESSED DIRECTLY. The old walk climbed from the first
+    // pre-wrap bubble looking for a scrollable ancestor; in the graded leg's
+    // dark sibling of one cell it found none and the frame was left showing an
+    // EARLIER exchange. The panel names itself now.
+    await page.evaluate(() => {
+      const panel = document.querySelector("[data-run-window-scroll]");
+      if (panel) panel.scrollTop = panel.scrollHeight;
+    });
+    await page.waitForTimeout(1200);
+  } catch { /* the surface may not carry the window */ }
+  await waitForDrawnFrame(page, { tries: 20 });
+}
+
+/** The pair taken on the page as it stands, for a reading whose state is in the
+ *  browser rather than in the run. */
+async function shootInPlace(page, name) {
   const files = [];
   for (const theme of ["light", "dark"]) {
     await setTheme(page, theme);
     await page.waitForTimeout(1200);
-    try {
-      const f = page.locator(PROMPT).first();
-      if (await f.count()) { await f.click(); await page.waitForTimeout(1200); }
-      // §IX: the panel "holds itself at the bottom, so the newest turn is the one
-      // in view". Re-opening it by clicking the field restores it at the top, so
-      // the frame puts it back where the drawing says it stands. Scrolling reads
-      // nothing and changes nothing.
-      await page.evaluate(() => {
-        const bubble = document.querySelector(".whitespace-pre-wrap");
-        let n = bubble?.parentElement ?? null;
-        while (n && n !== document.body) {
-          const st = getComputedStyle(n);
-          if (/auto|scroll/.test(st.overflowY) && n.scrollHeight > n.clientHeight + 4) {
-            n.scrollTop = n.scrollHeight;
-            return;
-          }
-          n = n.parentElement;
-        }
-      });
-      await page.waitForTimeout(900);
-    } catch { /* the surface may not carry the window */ }
-    await page.waitForTimeout(1500);
+    await openPanel(page);
+    await page.waitForTimeout(1200);
+    const settled = await waitForDrawnFrame(page, { tries: 25 });
     const file = path.join(OUT_DIR, `${name}__${theme}.png`);
-    await page.screenshot({ path: file });           // the window, not the document
+    await page.screenshot({ path: file });
     files.push(file);
-    stamp("capture recorded", { file: path.basename(file), theme });
+    stamp("capture recorded", {
+      file: path.basename(file), theme, footer: settled.footer, footerSettled: settled.settled,
+      inPlace: true,
+    });
   }
   await setTheme(page, "light");
   return files;
+}
+
+/**
+ * A FRAME IS ONLY EVIDENCE ONCE THE PAGE HAS FINISHED DRAWING IT.
+ *
+ * Three things make a frame unusable and all three are waits, not fixes:
+ *
+ *   · the development server's own "Compiling…" pill, which says the picture
+ *     was taken of a build rather than of the product;
+ *   · a form still reading "Loading…", which photographs the page's spinner
+ *     instead of the fields the cell is about;
+ *   · THE ACCOUNT FOOTER, which is why the graded leg's run-page pictures show
+ *     an empty avatar with no name and no email. `src/components/nav-user.tsx`
+ *     renders `name` as "" and `email` as "" while `authClient.useSession()` is
+ *     still pending, so a frame taken inside that window draws a blank person.
+ *     It is the app shell's own loading state; here it is simply waited out, so
+ *     every frame carries the person who is looking at it.
+ *
+ * Bounded, and it reports rather than throws — a cell that genuinely cannot
+ * reach a settled frame should say so in its record, not lose the run.
+ */
+export async function waitForDrawnFrame(page, { tries = 60, everyMs = 1000 } = {}) {
+  for (let i = 0; i < tries; i += 1) {
+    const state = await page.evaluate(() => {
+      const footer = document.querySelector('[data-sidebar="footer"]');
+      const footerText = footer ? footer.textContent.replace(/\s+/g, " ").trim() : "";
+      const drawsPerson = /\S+@\S+\.\S+/.test(footerText) && footerText.replace(/\S+@\S+/, "").trim().length > 1;
+      const body = document.body.innerText;
+      // The dev indicator lives in its own portal, often behind a shadow root.
+      const portals = Array.from(document.querySelectorAll("nextjs-portal"));
+      const portalText = portals
+        .map((p) => (p.shadowRoot ? p.shadowRoot.textContent : "") || "")
+        .join(" ");
+      return {
+        footerText,
+        drawsPerson,
+        compiling: /Compiling/i.test(body) || /Compiling/i.test(portalText),
+        loading: /\bLoading…|\bLoading\.\.\./.test(body),
+      };
+    });
+    if (state.drawsPerson && !state.compiling && !state.loading) {
+      return { settled: true, waitedMs: i * everyMs, footer: state.footerText.slice(0, 120) };
+    }
+    await page.waitForTimeout(everyMs);
+  }
+  const last = await page.evaluate(() => {
+    const f = document.querySelector('[data-sidebar="footer"]');
+    return f ? f.textContent.replace(/\s+/g, " ").trim() : "";
+  });
+  stamp("the frame never settled within the wait", { footer: last.slice(0, 120) });
+  return { settled: false, waitedMs: tries * everyMs, footer: last.slice(0, 120) };
 }
 
 /** The platform's own line when the turn could not be answered at all. */
