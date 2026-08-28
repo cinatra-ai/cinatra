@@ -1,0 +1,102 @@
+{
+  "runId": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+  "presses": [
+    {
+      "at": "2026-08-28T00:10:55.885Z",
+      "label": "setup gate",
+      "fields": {
+        "field-idea": "Why a weekly publishing cadence beats a burst of posts"
+      },
+      "buttons": [
+        "RORita Ownerowner@example.com",
+        "Toggle Sidebar",
+        "Toggle theme",
+        "Continue"
+      ]
+    },
+    {
+      "at": "2026-08-28T00:11:20.957Z",
+      "label": "waiting screen 0",
+      "fields": {
+        "scheduledAt": ""
+      },
+      "buttons": [
+        "RORita Ownerowner@example.com",
+        "Toggle Sidebar",
+        "Toggle theme",
+        "1Schedule",
+        "2Recommendation",
+        "3Review",
+        "Run right after setup",
+        "Europe/Berlin",
+        "1",
+        "week(s)",
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "09",
+        "00",
+        "Europe/Berlin",
+        "Continue"
+      ]
+    },
+    {
+      "at": "2026-08-28T00:11:49.273Z",
+      "label": "waiting screen 1",
+      "fields": {},
+      "buttons": [
+        "RORita Ownerowner@example.com",
+        "Toggle Sidebar",
+        "Toggle theme",
+        "Continue"
+      ]
+    },
+    {
+      "at": "2026-08-28T00:12:13.967Z",
+      "label": "waiting screen 2",
+      "fields": {},
+      "buttons": [
+        "RORita Ownerowner@example.com",
+        "Toggle Sidebar",
+        "Toggle theme",
+        "Continue"
+      ]
+    }
+  ],
+  "states": [
+    {
+      "at": "2026-08-28T00:11:04.983Z",
+      "status": "pending_trigger",
+      "moment": "schedule",
+      "gates": 0
+    },
+    {
+      "at": "2026-08-28T00:11:33.212Z",
+      "status": "pending_approval",
+      "moment": null,
+      "gates": 0
+    },
+    {
+      "at": "2026-08-28T00:12:23.061Z",
+      "status": "failed",
+      "moment": null,
+      "gates": 0
+    }
+  ],
+  "finalRun": {
+    "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+    "status": "failed",
+    "created_at": "2026-08-28T00:10:37.541Z",
+    "started_at": null,
+    "completed_at": "2026-08-28T00:12:16.973Z",
+    "lifecycle_moment": null,
+    "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+    "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+  },
+  "reviewGates": [],
+  "error": "WayFlow task failed"
+}

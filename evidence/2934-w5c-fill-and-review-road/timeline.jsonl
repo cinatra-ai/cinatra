@@ -1,108 +1,123 @@
-{"at":"2026-08-27T18:25:12.519Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:25:13.413Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:25:36.053Z","what":"capture recorded","file":"run-page__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T18:25:38.890Z","what":"capture recorded","file":"run-page__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:25:40.111Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:25:40.116Z","what":"--- question-no-press: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:25:40.343Z","what":"the person typed into the window and sent","text":"what is this field for?"}
-{"at":"2026-08-27T18:26:08.985Z","what":"capture recorded","file":"run-page__question-no-press__light.png","theme":"light"}
-{"at":"2026-08-27T18:26:11.808Z","what":"capture recorded","file":"run-page__question-no-press__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:26:13.039Z","what":"--- question-no-press: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:26:13.042Z","what":"--- submit-on-ask: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:26:13.639Z","what":"the person typed into the window and sent","text":"set the idea to \"Why cadence beats bursts for blog reach\" and send it"}
-{"at":"2026-08-27T18:26:44.308Z","what":"capture recorded","file":"run-page__submit-on-ask__light.png","theme":"light"}
-{"at":"2026-08-27T18:26:47.204Z","what":"capture recorded","file":"run-page__submit-on-ask__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:26:48.436Z","what":"--- submit-on-ask: after","status":"pending_trigger","changed":["scheduledAt"],"gateRows":"1->1"}
-{"at":"2026-08-27T18:30:19.272Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:30:20.154Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:30:29.173Z","what":"the platform reported it could not answer — the SAME message is sent once more","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:30:29.996Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:30:46.652Z","what":"capture recorded","file":"run-page__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T18:30:49.472Z","what":"capture recorded","file":"run-page__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:30:50.695Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:30:50.700Z","what":"--- question-no-press: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:30:50.922Z","what":"the person typed into the window and sent","text":"what is this field for?"}
-{"at":"2026-08-27T18:31:17.590Z","what":"capture recorded","file":"run-page__question-no-press__light.png","theme":"light"}
-{"at":"2026-08-27T18:31:20.431Z","what":"capture recorded","file":"run-page__question-no-press__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:31:21.657Z","what":"--- question-no-press: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:31:21.661Z","what":"--- submit-on-ask: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:31:22.256Z","what":"the person typed into the window and sent","text":"set the idea to \"Why cadence beats bursts for blog reach\" and send it"}
-{"at":"2026-08-27T18:31:48.897Z","what":"capture recorded","file":"run-page__submit-on-ask__light.png","theme":"light"}
-{"at":"2026-08-27T18:31:51.717Z","what":"capture recorded","file":"run-page__submit-on-ask__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:31:52.939Z","what":"--- submit-on-ask: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:35:49.076Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:35:49.975Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:35:58.991Z","what":"the app's own log says the model was served WITHOUT its toolbox (424) — the SAME message is sent again","attempt":1,"text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:36:05.832Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
-{"at":"2026-08-27T18:36:36.524Z","what":"capture recorded","file":"run-page__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T18:36:39.363Z","what":"capture recorded","file":"run-page__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:36:40.587Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:36:40.596Z","what":"--- question-no-press: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:36:40.834Z","what":"the person typed into the window and sent","text":"what is this field for?"}
-{"at":"2026-08-27T18:37:07.522Z","what":"capture recorded","file":"run-page__question-no-press__light.png","theme":"light"}
-{"at":"2026-08-27T18:37:10.338Z","what":"capture recorded","file":"run-page__question-no-press__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:37:11.563Z","what":"--- question-no-press: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
-{"at":"2026-08-27T18:37:11.568Z","what":"--- submit-on-ask: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
-{"at":"2026-08-27T18:37:12.173Z","what":"the person typed into the window and sent","text":"set the idea to \"Why cadence beats bursts for blog reach\" and send it"}
-{"at":"2026-08-27T18:37:40.855Z","what":"capture recorded","file":"run-page__submit-on-ask__light.png","theme":"light"}
-{"at":"2026-08-27T18:37:43.706Z","what":"capture recorded","file":"run-page__submit-on-ask__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:37:44.934Z","what":"--- submit-on-ask: after","status":"pending_trigger","changed":["scheduledAt"],"gateRows":"1->1"}
-{"at":"2026-08-27T18:41:28.831Z","what":"half a sentence typed into the window, nothing sent","draftBefore":"please set the call to action to","storedBefore":{"cinatra_hitl_assist_d1df13e0-abe9-41bf-af05-c3e342a4d55a_@cinatra-ai/email-outreach-agent:setup-form":"please set the call to action to"}}
-{"at":"2026-08-27T18:41:53.630Z","what":"capture recorded","file":"step-by-step__draft-survives-reload__light.png","theme":"light"}
-{"at":"2026-08-27T18:41:56.483Z","what":"capture recorded","file":"step-by-step__draft-survives-reload__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:41:57.711Z","what":"--- draft-survives-reload","draftAfter":"please set the call to action to","survived":true}
-{"at":"2026-08-27T18:41:59.251Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"","label":"Offering company website *","tag":"input"},"callToAction":{"value":"","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
-{"at":"2026-08-27T18:42:00.408Z","what":"the person typed into the window and sent","text":"set the offering company website to \"https://example.test\" and the call to action to \"Book a 20-minute demo\", and leave the sender name as it is"}
-{"at":"2026-08-27T18:42:27.088Z","what":"capture recorded","file":"step-by-step__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T18:42:29.928Z","what":"capture recorded","file":"step-by-step__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:42:31.157Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":["field-offeringCompanyWebsite","callToAction"]}
-{"at":"2026-08-27T18:42:31.160Z","what":"--- attachment-reaches-run: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"https://example.test","label":"Offering company website *","tag":"input"},"callToAction":{"value":"Book a 20-minute demo","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
-{"at":"2026-08-27T18:42:40.618Z","what":"a file was attached beside the message through the window's own paperclip","file":"campaign-brief.txt"}
-{"at":"2026-08-27T18:42:41.080Z","what":"the person typed into the window and sent","text":"fill the brief from the file I attached and send it"}
-{"at":"2026-08-27T18:43:09.876Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__light.png","theme":"light"}
-{"at":"2026-08-27T18:43:12.880Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:43:14.140Z","what":"--- attachment-reaches-run: after","status":"pending_approval","changed":[]}
-{"at":"2026-08-27T18:45:58.193Z","what":"--- attachment-reaches-run: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"","label":"Offering company website *","tag":"input"},"callToAction":{"value":"","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
-{"at":"2026-08-27T18:45:58.600Z","what":"the window's own paperclip uploaded the file beside the message","file":"campaign-brief.txt","status":201}
-{"at":"2026-08-27T18:46:03.095Z","what":"the person typed into the window and sent","text":"fill the brief from the file I attached and send it"}
-{"at":"2026-08-27T18:46:12.112Z","what":"the app's own log says the model was served WITHOUT its toolbox (424) — the SAME message is sent again","attempt":1,"text":"fill the brief from the file I attached and send it"}
-{"at":"2026-08-27T18:46:18.571Z","what":"the person typed into the window and sent","text":"fill the brief from the file I attached and send it"}
-{"at":"2026-08-27T18:46:43.247Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__light.png","theme":"light"}
-{"at":"2026-08-27T18:46:46.079Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:46:47.304Z","what":"--- attachment-reaches-run: after","status":"pending_approval","changed":["field-offeringCompanyWebsite","callToAction"]}
-{"at":"2026-08-27T18:49:42.110Z","what":"--- attachment-reaches-run: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"","label":"Offering company website *","tag":"input"},"callToAction":{"value":"","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
-{"at":"2026-08-27T18:49:42.475Z","what":"the window's own paperclip uploaded the file beside the message","file":"campaign-brief.txt","status":201}
-{"at":"2026-08-27T18:49:46.949Z","what":"the person typed into the window and sent","text":"fill the brief from the file I attached and send it"}
-{"at":"2026-08-27T18:50:11.666Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__light.png","theme":"light"}
-{"at":"2026-08-27T18:50:14.525Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:50:15.747Z","what":"--- attachment-reaches-run: after","status":"pending_approval","changed":["field-offeringCompanyWebsite","callToAction"]}
-{"at":"2026-08-27T18:51:41.091Z","what":"--- attachment-reaches-run: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"","label":"Offering company website *","tag":"input"},"callToAction":{"value":"","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
-{"at":"2026-08-27T18:51:41.622Z","what":"the window's own paperclip uploaded the file beside the message","file":"campaign-brief.txt","status":201}
-{"at":"2026-08-27T18:51:46.117Z","what":"the person typed into the window and sent","text":"set the sender name to \"Rita Owner\" and send it"}
-{"at":"2026-08-27T18:51:55.131Z","what":"the app's own log says the model was served WITHOUT its toolbox (424) — the SAME message is sent again","attempt":1,"text":"set the sender name to \"Rita Owner\" and send it"}
-{"at":"2026-08-27T18:52:01.488Z","what":"the window's own paperclip uploaded the file beside the message","file":"campaign-brief.txt","status":201}
-{"at":"2026-08-27T18:52:05.898Z","what":"the person typed into the window and sent","text":"set the sender name to \"Rita Owner\" and send it"}
-{"at":"2026-08-27T18:52:56.705Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__light.png","theme":"light"}
-{"at":"2026-08-27T18:52:59.567Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:53:00.799Z","what":"--- attachment-reaches-run: after","status":"pending_approval","changed":["Search lists by name"]}
-{"at":"2026-08-27T18:56:17.556Z","what":"--- fill-no-submit: before","status":"pending_trigger","fields":{"scheduledAt":{"value":"","label":"Run at","tag":"input"}}}
-{"at":"2026-08-27T18:56:18.528Z","what":"the person typed into the window and sent","text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T18:56:29.554Z","what":"the app's own log says the model was served WITHOUT its toolbox (424) — the SAME message is sent again","attempt":1,"text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T18:56:36.330Z","what":"the person typed into the window and sent","text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T18:56:45.346Z","what":"the app's own log says the model was served WITHOUT its toolbox (424) — the SAME message is sent again","attempt":2,"text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T18:56:52.136Z","what":"the person typed into the window and sent","text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T18:57:10.804Z","what":"capture recorded","file":"schedule__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T18:57:13.699Z","what":"capture recorded","file":"schedule__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T18:57:14.928Z","what":"--- fill-no-submit: after","status":"pending_trigger","changed":[]}
-{"at":"2026-08-27T19:06:57.177Z","what":"--- fill-no-submit: before","status":"pending_trigger","fields":{"scheduledAt":{"value":"","label":"Run at","tag":"input"}}}
-{"at":"2026-08-27T19:07:02.265Z","what":"the person typed into the window and sent","text":"schedule this for later — tomorrow at 09:00 in the Europe/Berlin timezone"}
-{"at":"2026-08-27T19:07:32.995Z","what":"capture recorded","file":"schedule__fill-no-submit__light.png","theme":"light"}
-{"at":"2026-08-27T19:07:35.888Z","what":"capture recorded","file":"schedule__fill-no-submit__dark.png","theme":"dark"}
-{"at":"2026-08-27T19:07:37.145Z","what":"--- fill-no-submit: after","status":"pending_trigger","changed":[]}
-{"at":"2026-08-27T19:09:30.234Z","what":"the person chose 'Run right after setup' on the scheduler form"}
-{"at":"2026-08-27T19:09:33.532Z","what":"the person pressed the screen's own button"}
-{"at":"2026-08-27T19:09:33.556Z","what":"run state","status":"pending_trigger","gates":0}
-{"at":"2026-08-27T19:09:43.568Z","what":"run state","status":"pending_approval","gates":0}
-{"at":"2026-08-27T19:20:59.391Z","what":"the person pressed the screen's own button"}
-{"at":"2026-08-27T19:20:59.408Z","what":"run state","status":"pending_approval","gates":0}
-{"at":"2026-08-27T19:22:09.453Z","what":"run state","status":"failed","gates":0}
+{"at":"2026-08-27T23:47:41.880Z","what":"ingress probe before the warm turn","checked":true,"ok":true,"tries":1,"ms":4177}
+{"at":"2026-08-27T23:48:06.063Z","what":"warm turn sent on the chat page (a probe, not a capture)"}
+{"at":"2026-08-27T23:51:11.386Z","what":"warm turn result","refused":false,"e424":false,"callbacks":2}
+{"at":"2026-08-27T23:52:07.823Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-27T23:52:10.460Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
+{"at":"2026-08-27T23:52:49.291Z","what":"capture recorded","file":"run-page__fill-no-submit__light.png","theme":"light"}
+{"at":"2026-08-27T23:52:52.297Z","what":"capture recorded","file":"run-page__fill-no-submit__dark.png","theme":"dark"}
+{"at":"2026-08-27T23:52:53.535Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":["field-idea"],"gateRows":"1->1"}
+{"at":"2026-08-27T23:52:53.544Z","what":"--- question-no-press: before","status":"pending_approval","fields":{"field-idea":{"value":"A weekly publishing rhythm beats a burst of posts","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-27T23:52:55.402Z","what":"the person typed into the window and sent","text":"what is this field for?"}
+{"at":"2026-08-27T23:53:24.264Z","what":"capture recorded","file":"run-page__question-no-press__light.png","theme":"light"}
+{"at":"2026-08-27T23:53:27.300Z","what":"capture recorded","file":"run-page__question-no-press__dark.png","theme":"dark"}
+{"at":"2026-08-27T23:53:28.560Z","what":"--- question-no-press: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
+{"at":"2026-08-27T23:53:28.570Z","what":"--- submit-on-ask: before","status":"pending_approval","fields":{"field-idea":{"value":"A weekly publishing rhythm beats a burst of posts","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-27T23:53:30.577Z","what":"the person typed into the window and sent","text":"set the idea to \"Why cadence beats bursts for blog reach\" and send it"}
+{"at":"2026-08-27T23:54:05.867Z","what":"capture recorded","file":"run-page__submit-on-ask__light.png","theme":"light"}
+{"at":"2026-08-27T23:54:09.138Z","what":"capture recorded","file":"run-page__submit-on-ask__dark.png","theme":"dark"}
+{"at":"2026-08-27T23:54:10.417Z","what":"--- submit-on-ask: after","status":"pending_trigger","changed":[],"gateRows":"1->1"}
+{"at":"2026-08-27T23:59:42.471Z","what":"--- schedule-fill-no-submit: before","status":"pending_trigger","fields":{"scheduledAt":{"value":"","label":"Run at","tag":"input"}}}
+{"at":"2026-08-27T23:59:45.137Z","what":"the person typed into the window and sent","text":"set it for tomorrow at 9 in the morning, Berlin time"}
+{"at":"2026-08-28T00:00:20.415Z","what":"capture recorded","file":"schedule__fill-no-submit__light.png","theme":"light"}
+{"at":"2026-08-28T00:00:25.999Z","what":"capture recorded","file":"schedule__fill-no-submit__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:00:27.269Z","what":"--- schedule-fill-no-submit: after","status":"pending_trigger","changed":[{"field":"scheduledAt","from":"","to":"2026-08-28T09:00"}]}
+{"at":"2026-08-28T00:03:44.966Z","what":"ingress before the run is started","checked":true,"ok":true,"tries":1,"ms":1203}
+{"at":"2026-08-28T00:04:02.776Z","what":"the run was created by the app","runId":"b61089bd-b850-4e77-a757-da3dff059aa9","url":"http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/b61089bd-b850-4e77-a757-da3dff059aa9"}
+{"at":"2026-08-28T00:04:02.866Z","what":"the person typed the setup field","idea":"Why a weekly publishing cadence beats a burst of posts"}
+{"at":"2026-08-28T00:04:04.872Z","what":"the screen offers","label":"setup gate","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:04:04.920Z","what":"the person pressed the screen's own button","label":"setup gate"}
+{"at":"2026-08-28T00:04:13.936Z","what":"run state","status":"pending_trigger","moment":"schedule","gates":0}
+{"at":"2026-08-28T00:04:30.269Z","what":"the screen offers","label":"waiting screen 0","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","1Schedule","2Recommendation","3Review","Run right after setup","Europe/Berlin"]}
+{"at":"2026-08-28T00:04:30.333Z","what":"the person chose 'Run right after setup'"}
+{"at":"2026-08-28T00:04:33.488Z","what":"the person pressed the screen's own button","label":"waiting screen 0"}
+{"at":"2026-08-28T00:04:42.515Z","what":"run state","status":"running","moment":null,"gates":0}
+{"at":"2026-08-28T00:05:12.606Z","what":"run state","status":"pending_approval","moment":null,"gates":0}
+{"at":"2026-08-28T00:05:42.956Z","what":"the screen offers","label":"waiting screen 4","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:05:43.094Z","what":"the person pressed the screen's own button","label":"waiting screen 4"}
+{"at":"2026-08-28T00:06:10.500Z","what":"the screen offers","label":"waiting screen 5","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:06:10.926Z","what":"the person pressed the screen's own button","label":"waiting screen 5"}
+{"at":"2026-08-28T00:06:56.055Z","what":"the screen offers","label":"waiting screen 6","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:06:56.693Z","what":"the person pressed the screen's own button","label":"waiting screen 6"}
+{"at":"2026-08-28T00:07:27.106Z","what":"the screen offers","label":"waiting screen 7","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:07:27.211Z","what":"the person pressed the screen's own button","label":"waiting screen 7"}
+{"at":"2026-08-28T00:08:36.735Z","what":"the screen offers","label":"waiting screen 8","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:08:36.867Z","what":"the person pressed the screen's own button","label":"waiting screen 8"}
+{"at":"2026-08-28T00:09:05.198Z","what":"the screen offers","label":"waiting screen 9","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Retry","Start new run"]}
+{"at":"2026-08-28T00:09:05.264Z","what":"run state","status":"failed","moment":null,"gates":0}
+{"at":"2026-08-28T00:10:34.741Z","what":"ingress before the run is started","checked":true,"ok":true,"tries":1,"ms":1802}
+{"at":"2026-08-28T00:10:53.774Z","what":"the run was created by the app","runId":"aced3514-2bee-4126-be19-a4ec2d0e7170","url":"http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/aced3514-2bee-4126-be19-a4ec2d0e7170"}
+{"at":"2026-08-28T00:10:53.879Z","what":"the person typed the setup field","idea":"Why a weekly publishing cadence beats a burst of posts"}
+{"at":"2026-08-28T00:10:55.885Z","what":"the screen offers","label":"setup gate","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:10:55.962Z","what":"the person pressed the screen's own button","label":"setup gate"}
+{"at":"2026-08-28T00:11:04.983Z","what":"run state","status":"pending_trigger","moment":"schedule","gates":0}
+{"at":"2026-08-28T00:11:20.957Z","what":"the screen offers","label":"waiting screen 0","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","1Schedule","2Recommendation","3Review","Run right after setup","Europe/Berlin"]}
+{"at":"2026-08-28T00:11:21.020Z","what":"the person chose 'Run right after setup'"}
+{"at":"2026-08-28T00:11:24.189Z","what":"the person pressed the screen's own button","label":"waiting screen 0"}
+{"at":"2026-08-28T00:11:33.212Z","what":"run state","status":"pending_approval","moment":null,"gates":0}
+{"at":"2026-08-28T00:11:49.273Z","what":"the screen offers","label":"waiting screen 1","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:11:49.344Z","what":"the person pressed the screen's own button","label":"waiting screen 1"}
+{"at":"2026-08-28T00:12:13.967Z","what":"the screen offers","label":"waiting screen 2","buttons":["RORita Ownerowner@example.com","Toggle Sidebar","Toggle theme","Continue"]}
+{"at":"2026-08-28T00:12:14.043Z","what":"the person pressed the screen's own button","label":"waiting screen 2"}
+{"at":"2026-08-28T00:12:23.061Z","what":"run state","status":"failed","moment":null,"gates":0}
+{"at":"2026-08-28T00:25:41.334Z","what":"--- question: before","gates":["pending"],"bar":["Comment","Reject","Approve"],"rail":["1Schedule","2Review"]}
+{"at":"2026-08-28T00:25:43.351Z","what":"the person typed into the window and sent","text":"what changed in this draft?"}
+{"at":"2026-08-28T00:26:53.646Z","what":"capture recorded","file":"review__question__light.png","theme":"light"}
+{"at":"2026-08-28T00:27:00.135Z","what":"capture recorded","file":"review__question__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:27:01.404Z","what":"--- question: after","gates":["pending/-"],"dispositions":0,"repairs":0,"rail":["1Schedule","2Review"]}
+{"at":"2026-08-28T00:27:01.422Z","what":"--- request-changes: before","gates":["pending"],"bar":["Comment","Reject","Approve"],"rail":["1Schedule","2Review"]}
+{"at":"2026-08-28T00:27:03.322Z","what":"the person typed into the window and sent","text":"tighten the opening paragraph"}
+{"at":"2026-08-28T00:27:50.292Z","what":"capture recorded","file":"review__request-changes__light.png","theme":"light"}
+{"at":"2026-08-28T00:27:55.477Z","what":"capture recorded","file":"review__request-changes__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:27:56.755Z","what":"--- request-changes: after","gates":["resolved/changes_requested"],"dispositions":0,"repairs":1,"rail":["1Schedule","2Review"]}
+{"at":"2026-08-28T00:33:59.610Z","what":"the person opened the agent's own start page","path":"/agents/cinatra-ai/blog-draft-writer-agent/new"}
+{"at":"2026-08-28T00:34:19.841Z","what":"the run parked","runId":"fc9f58d7-4de8-480a-901e-244f2a178a16","status":"pending_approval","gates":1}
+{"at":"2026-08-28T00:35:17.531Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-idea":{"value":"","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-28T00:35:20.530Z","what":"the person typed into the window and sent","text":"make the idea \"A weekly publishing rhythm beats a burst of posts\" and leave everything else as it is"}
+{"at":"2026-08-28T00:35:54.715Z","what":"capture recorded","file":"run-page__fill-no-submit__light.png","theme":"light"}
+{"at":"2026-08-28T00:36:01.119Z","what":"capture recorded","file":"run-page__fill-no-submit__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:36:02.376Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":["field-idea"],"gateRows":"1->1"}
+{"at":"2026-08-28T00:36:02.382Z","what":"--- question-no-press: before","status":"pending_approval","fields":{"field-idea":{"value":"A weekly publishing rhythm beats a burst of posts","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-28T00:36:04.074Z","what":"the person typed into the window and sent","text":"what is this field for?"}
+{"at":"2026-08-28T00:36:36.297Z","what":"capture recorded","file":"run-page__question-no-press__light.png","theme":"light"}
+{"at":"2026-08-28T00:36:42.734Z","what":"capture recorded","file":"run-page__question-no-press__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:36:43.995Z","what":"--- question-no-press: after","status":"pending_approval","changed":[],"gateRows":"1->1"}
+{"at":"2026-08-28T00:36:44.017Z","what":"--- submit-on-ask: before","status":"pending_approval","fields":{"field-idea":{"value":"A weekly publishing rhythm beats a burst of posts","label":"Idea(optional)","tag":"textarea"}}}
+{"at":"2026-08-28T00:36:46.053Z","what":"the person typed into the window and sent","text":"set the idea to \"Why cadence beats bursts for blog reach\" and send it"}
+{"at":"2026-08-28T00:37:28.499Z","what":"capture recorded","file":"run-page__submit-on-ask__light.png","theme":"light"}
+{"at":"2026-08-28T00:37:34.975Z","what":"capture recorded","file":"run-page__submit-on-ask__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:37:36.262Z","what":"--- submit-on-ask: after","status":"pending_trigger","changed":["scheduledAt"],"gateRows":"1->1"}
+{"at":"2026-08-28T00:37:56.983Z","what":"no fresh review gate returned within the wait"}
+{"at":"2026-08-28T00:39:18.884Z","what":"the person opened the repair run","path":"/agents/cinatra-ai/blog-draft-writer-agent/lifecycle-repair-run%3Af312794a-d5b8-4c71-90af-e6737a50eebe","url":"http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/lifecycle-repair-run%3Af312794a-d5b8-4c71-90af-e6737a50eebe"}
+{"at":"2026-08-28T00:39:18.900Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:39:34.680Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:39:50.628Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:40:06.451Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:40:22.257Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:40:38.149Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:40:53.985Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:41:09.931Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:41:25.779Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:41:41.732Z","what":"state","repairRunStatus":"pending_approval","baseGates":1,"repairs":["dispatched"]}
+{"at":"2026-08-28T00:44:14.319Z","what":"the person opened the agent's own start page","path":"/agents/cinatra-ai/email-outreach-agent/new"}
+{"at":"2026-08-28T00:44:17.986Z","what":"before arming","status":"pending_trigger","triggers":0}
+{"at":"2026-08-28T00:44:23.160Z","what":"the person pressed the form's own button to arm the schedule"}
+{"at":"2026-08-28T00:44:32.689Z","what":"the run parked","runId":"d88ddadc-5300-46e5-b42d-27c39f62153d","status":"pending_approval","gates":1}
+{"at":"2026-08-28T00:44:37.182Z","what":"after arming","status":"armed","triggers":[{"trigger_type":"scheduled","scheduled_at":"2026-08-29T07:00:00.000Z","released_at":null,"timezone":"Europe/Berlin"}]}
+{"at":"2026-08-28T00:45:14.062Z","what":"the person opened the run's Schedule tab"}
+{"at":"2026-08-28T00:45:19.213Z","what":"capture recorded","file":"armed-trigger__fill__light.png","theme":"light"}
+{"at":"2026-08-28T00:45:25.625Z","what":"capture recorded","file":"armed-trigger__fill__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:46:48.009Z","what":"half a sentence typed into the window, nothing sent","draftBefore":"please set the call to action to","storedBefore":{"cinatra_hitl_assist_4e00d4e6-b7b5-4393-9de4-61a21d4ec1a4_@cinatra-ai/email-outreach-agent:setup-form":"please set the call to action to"}}
+{"at":"2026-08-28T00:47:17.228Z","what":"capture recorded","file":"step-by-step__draft-survives-reload__light.png","theme":"light"}
+{"at":"2026-08-28T00:47:23.599Z","what":"capture recorded","file":"step-by-step__draft-survives-reload__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:47:24.865Z","what":"--- draft-survives-reload","draftAfter":"please set the call to action to","survived":true}
+{"at":"2026-08-28T00:47:26.442Z","what":"--- fill-no-submit: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"","label":"Offering company website *","tag":"input"},"callToAction":{"value":"","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
+{"at":"2026-08-28T00:47:29.052Z","what":"the person typed into the window and sent","text":"set the offering company website to \"https://example.test\" and the call to action to \"Book a 20-minute demo\", and leave the sender name as it is"}
+{"at":"2026-08-28T00:48:01.196Z","what":"capture recorded","file":"step-by-step__fill-no-submit__light.png","theme":"light"}
+{"at":"2026-08-28T00:48:07.585Z","what":"capture recorded","file":"step-by-step__fill-no-submit__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:48:08.850Z","what":"--- fill-no-submit: after","status":"pending_approval","changed":["field-offeringCompanyWebsite","callToAction"]}
+{"at":"2026-08-28T00:48:08.855Z","what":"--- attachment-reaches-run: before","status":"pending_approval","fields":{"field-offeringCompanyWebsite":{"value":"https://example.test","label":"Offering company website *","tag":"input"},"callToAction":{"value":"Book a 20-minute demo","label":"Call to action*","tag":"textarea"},"field-senderName":{"value":"","label":"Sender name(optional)","tag":"input"}}}
+{"at":"2026-08-28T00:48:51.195Z","what":"the window's own paperclip uploaded the file beside the message","file":"campaign-brief.txt","status":201}
+{"at":"2026-08-28T00:48:58.041Z","what":"the person typed into the window and sent","text":"set the sender name to \"Rita Owner\" and send it"}
+{"at":"2026-08-28T00:50:33.850Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__light.png","theme":"light"}
+{"at":"2026-08-28T00:50:40.686Z","what":"capture recorded","file":"step-by-step__attachment-reaches-run__dark.png","theme":"dark"}
+{"at":"2026-08-28T00:50:42.046Z","what":"--- attachment-reaches-run: after","status":"pending_approval","changed":["Search lists by name"]}

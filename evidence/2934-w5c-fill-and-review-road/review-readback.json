@@ -1,0 +1,235 @@
+{
+  "cell": "review-page",
+  "runId": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+  "reviewPath": "/agents/cinatra-ai/blog-draft-writer-agent/aced3514-2bee-4126-be19-a4ec2d0e7170/review/lifecycle-review%3Ac6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+  "readings": [
+    {
+      "name": "question",
+      "message": "what changed in this draft?",
+      "before": {
+        "gates": [
+          {
+            "id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+            "review_task_id": "lifecycle-review:c6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+            "status": "pending",
+            "disposition": null,
+            "resolved_by": null,
+            "resolved_at": null,
+            "created_at": "2026-08-28T00:12:49.880Z"
+          }
+        ],
+        "dispositions": [],
+        "repairs": [],
+        "run": {
+          "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+          "status": "failed",
+          "created_at": "2026-08-28T00:10:37.541Z",
+          "started_at": null,
+          "completed_at": "2026-08-28T00:12:16.973Z",
+          "lifecycle_moment": null,
+          "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+          "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+        },
+        "decisionBar": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ],
+        "rail": [
+          "1Schedule",
+          "2Review"
+        ],
+        "rationale": ""
+      },
+      "after": {
+        "gates": [
+          {
+            "id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+            "review_task_id": "lifecycle-review:c6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+            "status": "pending",
+            "disposition": null,
+            "resolved_by": null,
+            "resolved_at": null,
+            "created_at": "2026-08-28T00:12:49.880Z"
+          }
+        ],
+        "dispositions": [],
+        "repairs": [],
+        "run": {
+          "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+          "status": "failed",
+          "created_at": "2026-08-28T00:10:37.541Z",
+          "started_at": null,
+          "completed_at": "2026-08-28T00:12:16.973Z",
+          "lifecycle_moment": null,
+          "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+          "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+        },
+        "decisionBar": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ],
+        "rail": [
+          "1Schedule",
+          "2Review"
+        ],
+        "rationale": ""
+      },
+      "bubbles": [],
+      "turnAttempts": [
+        {
+          "attempt": 1,
+          "toolboxMissing": false,
+          "platformCouldNotAnswer": false,
+          "publicOrigin": {
+            "checked": true,
+            "ok": true,
+            "tries": 1,
+            "ms": 1621
+          }
+        }
+      ],
+      "decisionButtonPressedByTheDriver": false,
+      "shots": [
+        "review__question__light.png",
+        "review__question__dark.png"
+      ]
+    },
+    {
+      "name": "request-changes",
+      "message": "tighten the opening paragraph",
+      "before": {
+        "gates": [
+          {
+            "id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+            "review_task_id": "lifecycle-review:c6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+            "status": "pending",
+            "disposition": null,
+            "resolved_by": null,
+            "resolved_at": null,
+            "created_at": "2026-08-28T00:12:49.880Z"
+          }
+        ],
+        "dispositions": [],
+        "repairs": [],
+        "run": {
+          "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+          "status": "failed",
+          "created_at": "2026-08-28T00:10:37.541Z",
+          "started_at": null,
+          "completed_at": "2026-08-28T00:12:16.973Z",
+          "lifecycle_moment": null,
+          "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+          "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+        },
+        "decisionBar": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ],
+        "rail": [
+          "1Schedule",
+          "2Review"
+        ],
+        "rationale": ""
+      },
+      "after": {
+        "gates": [
+          {
+            "id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+            "review_task_id": "lifecycle-review:c6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+            "status": "resolved",
+            "disposition": "changes_requested",
+            "resolved_by": "9d081292-4195-40b7-a3fd-278eab295b69",
+            "resolved_at": "2026-08-28T00:27:23.082Z",
+            "created_at": "2026-08-28T00:12:49.880Z"
+          }
+        ],
+        "dispositions": [],
+        "repairs": [
+          {
+            "id": "f312794a-d5b8-4c71-90af-e6737a50eebe",
+            "producer_run_id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+            "gate_id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+            "status": "dispatched",
+            "attempt": 1,
+            "successor_gate_id": null,
+            "findings": "[{\"id\": \"prompt-window\", \"message\": \"tighten the opening paragraph\"}]",
+            "created_at": "2026-08-28T00:27:23.082Z"
+          }
+        ],
+        "run": {
+          "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+          "status": "failed",
+          "created_at": "2026-08-28T00:10:37.541Z",
+          "started_at": null,
+          "completed_at": "2026-08-28T00:12:16.973Z",
+          "lifecycle_moment": null,
+          "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+          "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+        },
+        "decisionBar": [],
+        "rail": [
+          "1Schedule",
+          "2Review"
+        ],
+        "rationale": null
+      },
+      "bubbles": [],
+      "turnAttempts": [
+        {
+          "attempt": 1,
+          "toolboxMissing": false,
+          "platformCouldNotAnswer": false,
+          "publicOrigin": {
+            "checked": true,
+            "ok": true,
+            "tries": 1,
+            "ms": 1469
+          }
+        }
+      ],
+      "decisionButtonPressedByTheDriver": false,
+      "shots": [
+        "review__request-changes__light.png",
+        "review__request-changes__dark.png"
+      ]
+    }
+  ],
+  "freshGate": null,
+  "finalGates": [
+    {
+      "id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+      "review_task_id": "lifecycle-review:c6804f5576cd18e171df4e425f8b09ed4d15c55eb35ecbe71010ae573a8b6ef4",
+      "status": "resolved",
+      "disposition": "changes_requested",
+      "resolved_by": "9d081292-4195-40b7-a3fd-278eab295b69",
+      "resolved_at": "2026-08-28T00:27:23.082Z",
+      "created_at": "2026-08-28T00:12:49.880Z"
+    }
+  ],
+  "finalRepairs": [
+    {
+      "id": "f312794a-d5b8-4c71-90af-e6737a50eebe",
+      "producer_run_id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+      "gate_id": "40533412-f687-4a5c-9f21-9bb145ea668c",
+      "status": "dispatched",
+      "attempt": 1,
+      "successor_gate_id": null,
+      "findings": "[{\"id\": \"prompt-window\", \"message\": \"tighten the opening paragraph\"}]",
+      "created_at": "2026-08-28T00:27:23.082Z"
+    }
+  ],
+  "finalDispositions": [],
+  "finalRun": {
+    "id": "aced3514-2bee-4126-be19-a4ec2d0e7170",
+    "status": "failed",
+    "created_at": "2026-08-28T00:10:37.541Z",
+    "started_at": null,
+    "completed_at": "2026-08-28T00:12:16.973Z",
+    "lifecycle_moment": null,
+    "template_id": "4e2fd61e-5577-4cdc-a42d-af998df477cb",
+    "run_by": "9d081292-4195-40b7-a3fd-278eab295b69"
+  }
+}

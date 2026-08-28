@@ -113,12 +113,41 @@ export async function setTheme(page, theme) {
   throw new Error(`the app's own theme control did not reach ${theme}`);
 }
 
-/** One cell, both themes, full window, uncropped. */
+/**
+ * One cell, both themes, full window, uncropped.
+ *
+ * The panel above the field closes when a click lands outside the window — which
+ * is exactly what pressing the app's own theme control is. §IX: "clicking into
+ * the field opens it again", so the field is clicked once after the theme is
+ * set, before the frame is taken. Nothing is typed and nothing is sent.
+ */
 export async function shoot(page, name) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const files = [];
   for (const theme of ["light", "dark"]) {
     await setTheme(page, theme);
+    await page.waitForTimeout(1200);
+    try {
+      const f = page.locator(PROMPT).first();
+      if (await f.count()) { await f.click(); await page.waitForTimeout(1200); }
+      // §IX: the panel "holds itself at the bottom, so the newest turn is the one
+      // in view". Re-opening it by clicking the field restores it at the top, so
+      // the frame puts it back where the drawing says it stands. Scrolling reads
+      // nothing and changes nothing.
+      await page.evaluate(() => {
+        const bubble = document.querySelector(".whitespace-pre-wrap");
+        let n = bubble?.parentElement ?? null;
+        while (n && n !== document.body) {
+          const st = getComputedStyle(n);
+          if (/auto|scroll/.test(st.overflowY) && n.scrollHeight > n.clientHeight + 4) {
+            n.scrollTop = n.scrollHeight;
+            return;
+          }
+          n = n.parentElement;
+        }
+      });
+      await page.waitForTimeout(900);
+    } catch { /* the surface may not carry the window */ }
     await page.waitForTimeout(1500);
     const file = path.join(OUT_DIR, `${name}__${theme}.png`);
     await page.screenshot({ path: file });           // the window, not the document

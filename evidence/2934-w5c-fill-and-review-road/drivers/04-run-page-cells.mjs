@@ -18,7 +18,7 @@ const { browser, page } = await openAs(process.env.OWNER_EMAIL, process.env.OWNE
 await page.goto(RUN_PATH, { waitUntil: "domcontentloaded" });
 await page.waitForTimeout(25_000);
 
-async function reading(name, message, files) {
+async function reading(name, message, files, { expectResume = false } = {}) {
   const fieldsBefore = await readFields(page);
   const runBefore = await runRow(c, RUN_ID);
   const gateBefore = (await c.query(
@@ -28,6 +28,18 @@ async function reading(name, message, files) {
   stamp(`--- ${name}: before`, { status: runBefore?.status, fields: fieldsBefore });
   const sent = await sendTurnWithColdStartRetry(page, message);
   await page.waitForTimeout(8000);
+  // The card is the visible truth: where the message may have pressed, the frame
+  // waits for the screen to re-read itself rather than photographing its loading
+  // reading. Bounded, and it never presses anything of its own.
+  if (expectResume) {
+    for (let i = 0; i < 18; i += 1) {
+      const now = await runRow(c, RUN_ID);
+      const keys = Object.keys(await readFields(page)).join(",");
+      if (now?.status !== runBefore?.status && keys !== Object.keys(fieldsBefore).join(",")) break;
+      await page.waitForTimeout(5000);
+    }
+    await page.waitForTimeout(4000);
+  }
   const fieldsAfter = await readFields(page);
   const win = await readWindow(page);
   const runAfter = await runRow(c, RUN_ID);
@@ -85,6 +97,7 @@ await reading(
   "submit-on-ask",
   'set the idea to "Why cadence beats bursts for blog reach" and send it',
   "run-page__submit-on-ask",
+  { expectResume: true },
 );
 
 record.windowRows = (await c.query(

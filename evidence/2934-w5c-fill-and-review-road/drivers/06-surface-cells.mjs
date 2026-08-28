@@ -27,6 +27,19 @@ for (const spec of READINGS) {
   stamp(`--- ${spec.name}: before`, { status: runBefore?.status, fields: fieldsBefore });
   const sent = await sendTurnWithColdStartRetry(page, spec.message);
   await page.waitForTimeout(8000);
+  // Where the message may have PRESSED, the card is the visible truth only once
+  // it has re-read itself. Wait for the run row to move and then for the screen
+  // to redraw, up to 90 s, so the frame is the card's settled reading and not
+  // its loading one.
+  if (spec.expectResume) {
+    for (let i = 0; i < 18; i += 1) {
+      const now = await runRow(c, RUN_ID);
+      const keys = Object.keys(await readFields(page)).join(",");
+      if (now?.status !== runBefore?.status && keys !== Object.keys(fieldsBefore).join(",")) break;
+      await page.waitForTimeout(5000);
+    }
+    await page.waitForTimeout(4000);
+  }
   const fieldsAfter = await readFields(page);
   const win = await readWindow(page);
   const runAfter = await runRow(c, RUN_ID);

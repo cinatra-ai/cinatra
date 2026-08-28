@@ -1,25 +1,24 @@
-# TIMELINE — cinatra#2934 W5c picture leg (all times UTC, 2026-08-27)
+# TIMELINE — cinatra#2934 W5c picture leg, re-taken at `270d1f8ab422` (all times UTC, 2026-08-27/28)
 
 The driver's own clock, line by line, is in [`timeline.jsonl`](timeline.jsonl). This is the shape of it.
 
 | when | what |
 |---|---|
-| 17:38 | The lane database is created on the verify Postgres. The agent runtime, the dev registry and the credential store come up from this checkout. |
-| 17:41 | `instance setup dev`: schema built, the default organization created, 113 packages published to the instance's own registry, the agent runtime reports healthy with 29 agents mounted. |
-| 17:43 | The dev server boots and registers the in-tree extension fleet (112/112 cloned pinned). The instance administrator is created through the app's own sign-up; the instance namespace is typed into `/setup/name`. The run owner and a second ordinary member are created the same way. |
-| 17:44 | The provider is configured **through the app's own `/setup/model` form**; the instance holds a sealed connection row. |
-| 17:45 | The public origin is set through the app's own development configuration screen and read back from the app's own settings endpoint. |
-| 18:07 | The run owner and the bystander are invited by the administrator and accept — the app's own membership road, no row written by hand. |
-| 18:12 | Six agent packages are installed through the product's own Upload Extension screen; each install row reads back `active`. |
-| 18:16 | The Email Outreach Agent run is started from the app's own agents list. It parks at `Campaign setup`. |
-| 18:18 | A Blog Draft Writer Agent run is started. It parks at its setup gate — the run page's reading. |
-| 18:25 | First measured turns. The provider's hosted connector answers `424` on the cold path; the first turn is served without its toolbox and the platform says so. |
-| 18:30 | A second run is measured and discarded: every turn on it was served without a toolbox. The retry is put on the server's own log rather than on the answer's wording. |
-| 18:35–18:38 | **The run page's three readings** on run `25866caa…`: the fill, the question, the submit on an explicit ask. Captured light and dark. |
-| 18:41–18:43 | **The step-by-step readings** on run `e915e59b…`: the half-typed message surviving a real reload, and the described change landing in the step's own fields with nothing submitted. Captured light and dark. |
-| 18:46 | The attachment reading is re-taken: the first pass sent the message before the app's own upload had answered, which measured the driver. The wait is put on the upload's own response. |
-| 18:49–18:53 | **The attachment reading**: the file on the person's own row, the fill, the press, and the run advancing to step 2 — with the file in the resumed task's own history. Captured light and dark. |
-| 18:56 | The schedule reading is refused three times: the instance's public origin stops answering and the runtime refuses the turn rather than run it without its tools. |
-| 19:06 | A public-origin readiness gate is put in front of every turn. **The schedule reading** is taken with the ingress up and the toolbox present. Captured light and dark. |
-| 19:09–19:20 | The review leg is attempted: the person's own presses carry a run through its setup and context gates; the run then fails inside the draft step because the provider could not reach the instance's public MCP server. `artifact_review_gates` stays empty. |
-| 19:20+ | The ingress is measured directly: three consecutive 12 s timeouts, then `200`, then 30 s timeouts again. The funnel is left exactly as it was found. The armed-trigger reading and the two review fixtures are recorded as owed. |
+| 22:45 | The lane database is created empty on the verify Postgres and the app's own `setup:dev` builds its schema. The agent runtime comes up from this checkout; the dev server boots and registers the in-tree extension fleet (112/112 cloned pinned). |
+| 23:08 | The instance administrator is created through the app's own sign-up — the endpoint the setup form posts to — and the instance namespace is typed into `/setup/name`. The run owner is created the same way and is never given a platform role. |
+| 23:22 | First attempt to commit the provider from the operator's own machine over the instance's public origin: the app REFUSES it — `Invalid origin` — because that origin is not yet trusted. Recorded rather than worked around: the instance is told about its own public origin by the documented environment escape hatch, the app is restarted, and the attempt is repeated. |
+| 23:32 | **The provider is committed through the app's own `/setup/model` form**, driven from the operator's machine against the instance's public origin. The key is read from the environment the vault wrapper provides and never printed, logged or written to disk; the form's own field reports 164 characters and the instance ends the step holding a sealed connection row (`openai_connection`, `setup_provider_commit`). |
+| 23:34 | **The public origin is stored through the app's own development configuration screen** and read back off the re-rendered field: `""` → the instance's own public origin, `matches: true`. The app is restarted so its OAuth audience allowlist reflects it, exactly as the screen's own message says. |
+| 23:38 | The administrator invites the run owner into the organization the boot import stamped its agent templates with; the owner accepts. The app's own membership road — no row written by hand. |
+| 23:47 | **The ingress is warmed with a disclosed PROBE turn on the chat page** — never on a run whose window is photographed. The server's own log for that turn: no refusal, no 424, two `POST /api/mcp 200` callbacks from the provider's own servers over the public origin. |
+| 23:52–23:54 | The run page's three readings, first pass, on run `a5613ebb`. The fill lands on the drawn `Idea` control; the question touches nothing; the ask fills and presses and the run moves to `pending_trigger`. |
+| 23:59–00:00 | **The schedule reading** on that run's own unarmed scheduler form: `scheduledAt` `""` → `2026-08-28T09:00`, `Schedule for later` selected, `Europe/Berlin`, nothing submitted, no trigger row. Captured light and dark. |
+| 00:03–00:09 | The review run is attempted. The person's own presses carry it through its setup gate; the run then fails inside the draft step because the FIRST `/api/llm-bridge` call on a cold development server compiled the route for 75 s and the provider's connector could not fetch the tool list over the public origin in that window (`HTTP 424 Failed Dependency`). Its artifact is still produced and gate `b3f16977` is minted over it. |
+| 00:09 | `/api/llm-bridge`, `/api/mcp` and the run API are warmed directly. No further 424 occurs in the whole leg. |
+| 00:10–00:12 | The review run is produced: run `aced3514`, the blog post artifact, and review gate `40533412` minted at `00:12:49Z`. |
+| 00:25–00:27 | **The review page's two readings.** `what changed in this draft?` — answered, gate still `pending`, zero dispositions, zero repairs. Then `tighten the opening paragraph` — the gate resolves `changes_requested` at `00:27:23Z`, the repair row carries the person's words verbatim, and the repair run is created and parks at `00:27:28Z`. Captured light and dark. |
+| 00:39–00:41 | The repair is followed: its run has no page (`404 — Page not found`), so the corrected version cannot be carried forward from the product. The fresh-review half of that cell is recorded as not reached, with the four facts that make it so. |
+| 00:34–00:37 | The run page's three readings are re-taken on a fresh run `fc9f58d7`, with the panel re-opened after each theme switch (§IX) and the frame waiting for the card to settle after a press. These are the captures kept. |
+| 00:44–00:45 | The person arms `a5613ebb` with the form's own control (`08/29/2026 09:00`, `Europe/Berlin`) and **the armed-trigger tab** is photographed with the window's own sentence. No fill is attempted there. |
+| 00:47–00:50 | **The step-by-step readings** on run `d88ddadc`: the half-typed message surviving a real reload, the described change landing in the step's own fields with nothing submitted, and the attachment reaching the waiting run when the answer is finally sent — the run advancing to step 2. |
+| 00:52+ | Provider evidence, gate re-runs and the record. The instance's public origin was left exactly as it was found. |
