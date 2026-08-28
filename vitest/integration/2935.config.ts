@@ -17,7 +17,10 @@ import * as path from "node:path";
 //   SUPABASE_DB_URL='<your scratch-database DSN>' pnpm test:named-agent-start
 // The suite self-skips without one, so any OTHER config that picks it up keeps
 // the ordinary skip. Mirrors the #2928 and #2932 tiers' shape and reasoning.
-const root = __dirname;
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and every path below has to climb back out of it — the paths
+// themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
 
 /** The throwaway schema this tier builds and drops. */
 const TEST_SCHEMA = "cinatra_x2935";

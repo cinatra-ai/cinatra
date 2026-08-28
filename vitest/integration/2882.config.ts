@@ -21,7 +21,10 @@ import * as path from "node:path";
 // The suites themselves still self-skip without one, so any OTHER config that
 // picks them up (the root tier under CINATRA_DB_INTEGRATION_TESTS=1, say) keeps
 // the ordinary skip.
-const root = __dirname;
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and every path below has to climb back out of it — the paths
+// themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
 
 export default defineConfig({
   resolve: {

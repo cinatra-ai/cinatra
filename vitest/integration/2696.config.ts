@@ -21,7 +21,10 @@ import * as path from "node:path";
 // anywhere; point it at a scratch Postgres:
 //   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/postgres \
 //     pnpm test:install-semantics
-const root = __dirname;
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and every path below has to climb back out of it — the paths
+// themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
 
 export default defineConfig({
   resolve: {

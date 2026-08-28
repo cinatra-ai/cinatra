@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
-import rootConfig from "./vitest.config";
+import rootConfig from "../../vitest.config";
 
 // cinatra#1983 — DEDICATED config for the REAL-STORE integration test that drives
 // the real saveSentEmailObject → real objects_save handler → real
@@ -16,6 +16,11 @@ import rootConfig from "./vitest.config";
 //      actor-context leaf (missing the classifier's three symbols); swap it for a
 //      shim that supplies them (never called — the fast-path handles the
 //      registered sent-email type).
+// The REPOSITORY ROOT. This config lives in `vitest/integration/`, so `__dirname`
+// is that directory and the stub paths below have to climb back out of it — the
+// paths themselves are unchanged, and still name the same files they always did.
+const root = path.resolve(__dirname, "..", "..");
+
 const rootResolve = (rootConfig as { resolve?: { alias?: unknown; tsconfigPaths?: boolean } })
   .resolve ?? {};
 const rootAlias =
@@ -33,19 +38,19 @@ export default defineConfig({
       // First-match-wins: the two overrides precede the inherited root aliases.
       {
         find: "@/lib/database",
-        replacement: path.join(__dirname, "tests/__stubs__/database-realconn-1983.ts"),
+        replacement: path.join(root, "tests/__stubs__/database-realconn-1983.ts"),
       },
       {
         // The lane schema is pre-cloned; suppress the from-scratch bootstrap that
         // several objects_save-path modules trigger via a direct import here.
         find: "@/lib/postgres-schema-init",
-        replacement: path.join(__dirname, "tests/__stubs__/postgres-schema-init-noop-1983.ts"),
+        replacement: path.join(root, "tests/__stubs__/postgres-schema-init-noop-1983.ts"),
       },
       {
         // Exact-match the bare barrel (a subpath like `@cinatra-ai/llm/actor-context`
         // still falls through to the inherited leaf alias below).
         find: /^@cinatra-ai\/llm$/,
-        replacement: path.join(__dirname, "tests/__stubs__/llm-classifier-min-1983.ts"),
+        replacement: path.join(root, "tests/__stubs__/llm-classifier-min-1983.ts"),
       },
       ...inheritedAlias,
     ],

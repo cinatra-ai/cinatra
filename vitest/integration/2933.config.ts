@@ -24,7 +24,9 @@ const TEST_SCHEMA = "cinatra_x2933";
 
 export default defineConfig({
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    // `__dirname` is `vitest/integration/`; the app source is two levels up. The
+    // directory it names is unchanged — still the repository's own `src/`.
+    alias: { "@": path.resolve(__dirname, "..", "..", "src") },
   },
   test: {
     globals: true,
