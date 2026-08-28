@@ -39,7 +39,10 @@
  * Mirrors the pure-leaf + server-binder split of
  * `renderer-dispatch.ts` / `renderer-resolution.ts`.
  */
-import type { ArtifactRendererProps } from "./artifact-renderer-props";
+import {
+  ARTIFACT_RENDERER_PROPS_API_VERSION,
+  type ArtifactRendererProps,
+} from "./artifact-renderer-props";
 import type { ArtifactSummary } from "./artifact-service";
 import type { SerializedRuntimeRendererDescriptor } from "./runtime-renderer-descriptor";
 import {
@@ -139,17 +142,62 @@ export type ArtifactReadOutcome =
   | { kind: "not-found" }
   | { kind: "denied" };
 
-export type RevisionMemberOutcome = { mime: string } | null;
+/**
+ * A pinned revision that IS a member of its artifact.
+ *
+ * THE NON-FILE ARM (enabler 0.10 of `PLAN: Agents Lifecycle (C)`,
+ * cinatra#3027). Before it, membership was answered only by the FILE-serving
+ * resolver, so "the review path serves file-backed resources only, so a non-file
+ * artifact floors before any renderer runs, however good the renderer, and a
+ * revision of it carries nothing pinned to draw". A dashboard revision now
+ * answers here too, with its FORM and its PINNED CONFIGURATION RECORD — and,
+ * because it has no bytes, "non-file props carry no preview or download
+ * address", which the binder honours by building those hrefs as null.
+ *
+ * `form` is optional so every existing caller and fixture keeps compiling; an
+ * absent form reads as `file`, which is what every one of them meant.
+ */
+export type RevisionMemberOutcome =
+  | {
+      mime: string;
+      /** The substrate's own recorded form — never a caller claim. */
+      form?: "file" | "connectorRef" | "dashboard";
+      /** The pinned configuration record for a non-file revision, or null. */
+      configuration?: unknown;
+      /** Its stable digest — what a data capability is sealed to (enabler 0.12). */
+      configurationDigest?: string | null;
+    }
+  | null;
+
+/** Is this member a FILE (and therefore byte-addressable)? An absent form reads
+ *  as `file`: that is what every caller written before enabler 0.10 meant. */
+export function isFileFormMember(member: NonNullable<RevisionMemberOutcome>): boolean {
+  return (member.form ?? "file") === "file";
+}
 
 /** The renderer-resolution outcome the host derives FROM the artifact type. Only
  * the two loadable paths + the two type-level floors — the artifact-level floors
  * (unknown / denied / non-member) are produced by the core BEFORE resolveMount
  * is ever consulted. */
-export type ResolvedRendererMount =
+export type ResolvedRendererMount = (
   | { kind: "build-map"; packageName: string; generatedKey: string }
   | { kind: "runtime"; packageName: string; descriptor: SerializedRuntimeRendererDescriptor }
   | { kind: "form"; arm: "first-party"; form: ReviewFormArm }
-  | { kind: "floor"; packageName: string | null; reason: "requires-rebuild" | "no-semantic-renderer" };
+  | { kind: "floor"; packageName: string | null; reason: "requires-rebuild" | "no-semantic-renderer" }
+) & {
+  /**
+   * THE VERSION THIS DISPLAY NEGOTIATED (enabler 0.4 of
+   * `PLAN: Agents Lifecycle (C)`): "resolve the display, read its declared props
+   * version, then build the snapshot at that version". The core builds the
+   * snapshot at this number, so a v1 display admitted under a later host is
+   * handed a v1 snapshot rather than one it cannot read.
+   *
+   * Optional: a resolver that names none leaves the host's own version standing,
+   * which is exactly the pre-0.4 behaviour and what the host's own form arm and
+   * floors mean.
+   */
+  propsApiVersion?: number;
+};
 
 export interface PrepareReviewPorts {
   /** Verify the reviewing actor may READ the run (enforceRunAccess "read"). */
@@ -165,8 +213,29 @@ export interface PrepareReviewPorts {
   /** Read the artifact with object.read enforced (mirrors readArtifactForDetail). */
   readArtifact(artifactId: string): Promise<ArtifactReadOutcome> | ArtifactReadOutcome;
   /** Confirm the pinned revision is a member of the artifact (and resolve its
-   * mime). Null ⇒ non-member / tombstoned-away. */
+   * mime, its form and — for a non-file revision — its pinned configuration).
+   * Null ⇒ non-member / tombstoned-away. */
   revisionMember(
+    artifactId: string,
+    representationRevisionId: string,
+  ): Promise<RevisionMemberOutcome> | RevisionMemberOutcome;
+  /**
+   * THE RUN- OR GATE-AUTHORIZED HISTORICAL READER (enabler 0.9 of
+   * `PLAN: Agents Lifecycle (C)`, cinatra#3027): "a run- or gate-authorized
+   * historical reader reads exactly that pinned representation EVEN AFTER THE
+   * ARTIFACT IS TOMBSTONED; the ordinary artifact page stays live and latest."
+   *
+   * Consulted ONLY on the settled reading, and ONLY after the gate has vouched
+   * for the exact target — which is what "gate-authorized" means and why it is
+   * a SECOND port rather than a flag on the first: nothing that can decide
+   * anything is ever handed it. Without it, "the reviewed revision can be
+   * tombstoned later, so a settled card that read the live artifact could show
+   * nothing where the approved work was".
+   *
+   * Optional: a binder that supplies none keeps the live-only reading, which is
+   * the pre-0.9 behaviour.
+   */
+  revisionMemberHistorical?(
     artifactId: string,
     representationRevisionId: string,
   ): Promise<RevisionMemberOutcome> | RevisionMemberOutcome;
@@ -175,13 +244,20 @@ export interface PrepareReviewPorts {
   resolveMount(input: {
     artifact: ArtifactSummary;
     mime: string;
+    /** The host's NEWEST props version — the negotiation CEILING, never an
+     *  equality target (enabler 0.4). */
     propsApiVersion: number;
   }): Promise<ResolvedRendererMount> | ResolvedRendererMount;
-  /** Build the serialized, display-only props snapshot for a pinned revision. */
+  /** Build the serialized, display-only props snapshot for a pinned revision,
+   *  AT THE VERSION THE DISPLAY NEGOTIATED (enabler 0.4), and with the member's
+   *  own form so a non-file revision carries no preview or download address
+   *  (enabler 0.10). */
   buildProps(input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
+    propsApiVersion: number;
+    member: NonNullable<RevisionMemberOutcome>;
   }): ArtifactRendererProps;
 }
 
@@ -283,6 +359,12 @@ export async function prepareReviewTargetsCore(
 
   // 4. NO CLIENT TARGET SUBSTITUTION: every caller target must be in the pinned
   //    set. Any that is not is a HARD rejection — never a per-target degrade.
+  // The SETTLED reading is the one the gate answered `resolved` for AND the
+  // caller asked for. Both halves matter: a caller that merely set the flag on a
+  // still-pending gate gets the ordinary live reading, and a resolved gate the
+  // caller did not ask about was already refused above.
+  const settledReading = gate.status === "resolved" && input.acceptResolvedGate === true;
+
   const { member, substituted } = partitionAgainstPinnedTargets(normalized.targets, pinned);
   if (substituted.length > 0) {
     return { ok: false, error: { kind: "target-substitution", substituted } };
@@ -291,7 +373,7 @@ export async function prepareReviewTargetsCore(
   // 5. Per (pinned, member) target: resolve the never-blank display.
   const prepared: PreparedReviewTarget[] = [];
   for (const target of member) {
-    prepared.push(await prepareOneTarget(target, ports));
+    prepared.push(await prepareOneTarget(target, ports, settledReading));
   }
   return { ok: true, prepared };
 }
@@ -299,6 +381,7 @@ export async function prepareReviewTargetsCore(
 async function prepareOneTarget(
   target: ArtifactReviewTarget,
   ports: PrepareReviewPorts,
+  settled: boolean,
 ): Promise<PreparedReviewTarget> {
   // Artifact-level floors (props null — nothing authorized to render props from).
   const read = await ports.readArtifact(target.artifactId);
@@ -310,11 +393,29 @@ async function prepareOneTarget(
   }
   const artifact = read.artifact;
 
-  const member = await ports.revisionMember(target.artifactId, target.representationRevisionId);
+  // THE MEMBERSHIP READ. On the SETTLED reading the gate has already vouched for
+  // this exact target, so the historical reader may answer for a tombstoned
+  // artifact (enabler 0.9); everywhere else the live-only reader answers, and a
+  // tombstoned pin floors exactly as it did before.
+  const historical = settled === true && typeof ports.revisionMemberHistorical === "function";
+  const member = historical
+    ? await ports.revisionMemberHistorical!(target.artifactId, target.representationRevisionId)
+    : await ports.revisionMember(target.artifactId, target.representationRevisionId);
   if (!member) {
     return { target, props: null, mount: floor(null, "revision-not-member") };
   }
   const { mime } = member;
+
+  // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4). The display is resolved
+  // FIRST, at the host's ceiling, and the snapshot is then built at the version
+  // that display declared — "resolve the display, read its declared props
+  // version, then build the snapshot at that version". Building first and
+  // resolving after would have made the order impossible to honour.
+  const resolved = await ports.resolveMount({
+    artifact,
+    mime,
+    propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
+  });
 
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
@@ -323,9 +424,10 @@ async function prepareOneTarget(
     artifact,
     representationRevisionId: target.representationRevisionId,
     mime,
+    propsApiVersion: resolved.propsApiVersion ?? ARTIFACT_RENDERER_PROPS_API_VERSION,
+    member,
   });
 
-  const resolved = await ports.resolveMount({ artifact, mime, propsApiVersion: props.propsApiVersion });
   if (resolved.kind === "build-map") {
     return {
       target,

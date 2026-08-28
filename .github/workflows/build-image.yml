@@ -3460,6 +3460,18 @@ jobs:
         shell: bash
         run: pnpm test:run-window
 
+      # cinatra#3027 (epic #3023, lifecycle-c W3). The NON-FILE REVISION READER
+      # (enabler 0.10) needs a real Postgres to prove anything: its whole subject
+      # is that the substrate agrees about the (organization, artifact,
+      # representation-revision) tuple, the form filter and the pinned
+      # configuration record. Wired here on arrival, in the same job and by the
+      # same convention as the four tiers above, so it cannot join the class of
+      # root tiers that run nowhere.
+      - name: Non-file revision reader — real-DB tier (cinatra#3027, lifecycle-c W3)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-c-w3
+
       # cinatra#2936 (epic #2926 W6). Plan (B) section 6, Conformance, verbatim:
       # "The lifecycle-screens epic's own gates — the one-card gate, the
       # host-parity ratchet, the held-turn card contract — stay green through
