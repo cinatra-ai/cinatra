@@ -77,6 +77,7 @@ import { fileURLToPath } from "node:url";
 import {
   CAPTURE_INDEX_PATH,
   isHistoricalPermalink,
+  parsePermalink,
   readPinnedArtifact,
   repoPathOf,
   validateCaptureIndex as validateCanonicalIndex,
@@ -425,13 +426,11 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
-    // The image must live where the citing proof lives. Without this the row
-    // cites one proof folder's README while its record points at a screenshot
-    // in another, and the two halves of the claim never meet. Both sides are
-    // read as the IN-REPOSITORY PATH first, so a pinned permalink and a live
-    // path are compared on the same axis and the binding survives the pin --
-    // the two halves may be pinned at different commits (each file's own last
-    // one), which is why the commit is not part of the comparison.
+    // THE IMAGE MUST LIVE WHERE THE CITING PROOF LIVES, in the same PLACE and
+    // at the same MOMENT. Without the place, the row cites one proof folder's
+    // README while its record points at a screenshot in another and the two
+    // halves of the claim never meet. Both sides are read as the IN-REPOSITORY
+    // PATH first, so a pinned permalink and a live path compare on one axis.
     const claimPath = repoPathOf(claim.file);
     const shotPath = repoPathOf(record.screenshot);
     const claimDir = claimPath.slice(0, claimPath.lastIndexOf("/"));
@@ -439,6 +438,25 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       violations.push(
         `manifest row ${claim.row} cites "${claim.cell}" from ${claim.file}, but its record's ` +
           `screenshot is ${record.screenshot} — the image must sit with the proof that cites it`,
+      );
+      continue;
+    }
+    // ...AND AT THE SAME MOMENT. Reading both halves as paths is what makes the
+    // place comparable, and on its own it throws the COMMIT away: a README
+    // pinned at one commit and a screenshot pinned at another satisfy the
+    // directory rule while never having coexisted in any tree, which is a
+    // bundle assembled after the fact rather than a round that happened. When
+    // both halves are pinned they must name the SAME commit. Every file of one
+    // proof directory is pinned at that directory's own last commit, so an
+    // honest bundle satisfies this by construction; a hand-assembled one does
+    // not. A live path is exempt: it has no commit to agree with.
+    const claimPin = parsePermalink(claim.file);
+    const shotPin = parsePermalink(record.screenshot);
+    if (claimPin && shotPin && claimPin.sha !== shotPin.sha) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" from a proof pinned at ${claimPin.sha}, ` +
+          `but its record's screenshot is pinned at ${shotPin.sha} — the two halves of the claim ` +
+          "were never in the same tree, so they are not one round",
       );
       continue;
     }

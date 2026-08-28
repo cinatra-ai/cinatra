@@ -656,6 +656,22 @@ export function repoPathOf(value) {
   return value.slice(PERMALINK_PREFIX.length).replace(/^[0-9a-f]{40}\//, "");
 }
 
+/**
+ * THE ROOT A PIN MAY POINT INTO.
+ *
+ * A permalink into this repository can name ANY path in it, and a record whose
+ * "screenshot" is `src/app/icon.png` -- pinned, hashing correctly, and not a
+ * capture of anything -- would otherwise satisfy every other rule. The old gate
+ * refused that implicitly by requiring the proof-artifact root on disk; the pin
+ * has to carry the same requirement or the root check was simply deleted.
+ *
+ * `evidence/` is the HISTORICAL root: the tree these pictures were committed in
+ * before they left the product tree. It is a read-only fact about the past --
+ * nothing writes there any more (a live run writes under the recorder's
+ * `CAPTURE_OUTPUT_ROOT`), which is exactly why it is safe to keep naming it.
+ */
+export const PINNED_ARTIFACT_ROOT = "evidence/";
+
 /** The commit and the path a pin names, or null when it is not a pin. */
 export function parsePermalink(value) {
   if (!isHistoricalPermalink(value)) return null;
@@ -885,7 +901,14 @@ export function validateCaptureRecord(record, io = {}) {
   if (typeof shot !== "string" || shot === "") {
     push("record/no-screenshot", "the record names no screenshot");
   } else if (isHistoricalPermalink(shot)) {
-    if (!HEX64.test(String(record.sha256 ?? ""))) {
+    const pinnedPath = repoPathOf(shot);
+    if (!pinnedPath.startsWith(PINNED_ARTIFACT_ROOT)) {
+      push(
+        "record/pinned-screenshot-outside-proof-root",
+        `"${shot}" pins ${pinnedPath}, which is not under ${PINNED_ARTIFACT_ROOT} — a pin may only ` +
+          "name a picture from the proof-artifact tree, not an arbitrary file in the repository",
+      );
+    } else if (!HEX64.test(String(record.sha256 ?? ""))) {
       push("record/sha256-malformed", `"${record.sha256}" is not a sha256 digest`);
     } else {
       const got = hashPinned(shot, { repoRoot, readPinned: io.readPinned, run: io.run });
@@ -1018,14 +1041,24 @@ export function validateCaptureIndex(index, io = {}) {
       byCell.set(cell, record);
     }
     if (record?.screenshot) {
-      const prev = seenPath.get(record.screenshot);
+      // KEYED ON THE REPOSITORY PATH, not on the citation. Two records pinning
+      // the SAME path at DIFFERENT commits are two claims about one picture --
+      // and because the bytes may differ between those commits, keying on the
+      // whole permalink let the pair through with no duplicate finding at all.
+      // The path is the identity; the commit only says which version.
+      const shotPath = repoPathOf(record.screenshot);
+      const prev = seenPath.get(shotPath);
       if (prev) {
         violations.push({
           code: "index/duplicate-screenshot-path",
-          detail: `"${record.screenshot}" already answers cell "${prev}"`,
+          detail:
+            `"${shotPath}" already answers cell "${prev.cell}"` +
+            (prev.citation !== record.screenshot
+              ? " — and the two records pin it at DIFFERENT commits, so they are not even the same bytes"
+              : ""),
           cell,
         });
-      } else seenPath.set(record.screenshot, cell);
+      } else seenPath.set(shotPath, { cell, citation: record.screenshot });
     }
     if (record?.sha256) {
       const prev = seenHash.get(record.sha256);

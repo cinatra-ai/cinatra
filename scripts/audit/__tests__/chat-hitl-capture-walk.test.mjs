@@ -27,9 +27,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { validateCaptureRecord as validateCanonicalRecord } from "../../ci/lib/capture-record-contract.mjs";
 import {
@@ -43,10 +41,11 @@ import {
   walkCellState,
   walkCellsOf,
 } from "../lib/chat-hitl-capture-recorder.mjs";
+import { loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const WALK_PLAN_PATH = join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json");
-const S9D_WALK = JSON.parse(readFileSync(WALK_PLAN_PATH, "utf8"));
+// The committed round-5 plan, byte for byte, with its OUTPUT paths on the
+// current capture root — see the loader for why that one rewrite happens.
+const S9D_WALK = loadWalkPlan();
 
 const PNG = "test-results/capture-fixture/walk.png";
 const BYTES = Buffer.from("walk-fixture-bytes");
@@ -160,7 +159,7 @@ describe("the walk plan is judged before the browser opens", () => {
     // asserts `[data-lifecycle-card-host]`, and neither screen draws a card —
     // one is the shipped trigger screen, the other lists the schedule as a rail
     // ROW. Both are photographed as PAGE CONTROLS instead
-    // (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
+    // (`https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
     // same reader, filed with their hashes, and given no record.
     const cardless = S9D_WALK.steps.filter((s) => s.id === "setup-scheduling-step");
     expect(cardless).toHaveLength(1);

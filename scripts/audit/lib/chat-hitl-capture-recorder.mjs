@@ -102,6 +102,8 @@ import {
   absenceInstanceViolations,
   captureHostAdmissibility,
   isHistoricalPermalink,
+  PINNED_ARTIFACT_ROOT,
+  repoPathOf,
   requiredAssertionsFor,
   settledIsAbsence,
   sha256Pinned,
@@ -428,7 +430,22 @@ export function screenshotPathViolation(screenshot, { allowPinned = false } = {}
   // graded, not written, so only the READER may accept one: an observer about
   // to fire the shutter and a walk plan describing what a run will write are
   // both declaring an output path, and a URL is not one.
-  if (allowPinned && isHistoricalPermalink(screenshot)) return null;
+  //
+  // A PIN IS STILL ROOT-CHECKED. A permalink can name any path in the
+  // repository, so accepting one unconditionally would let a record claim
+  // `src/app/icon.png` as its capture and pass on a matching hash. A pinned
+  // picture must come from the HISTORICAL proof-artifact root, exactly as a
+  // live one must be written under the CURRENT capture root.
+  if (allowPinned && isHistoricalPermalink(screenshot)) {
+    const pinnedPath = repoPathOf(screenshot);
+    if (!pinnedPath.startsWith(PINNED_ARTIFACT_ROOT)) {
+      return (
+        `a pinned screenshot must name a picture under ${PINNED_ARTIFACT_ROOT} — ` +
+        `this one pins ${pinnedPath}`
+      );
+    }
+    return null;
+  }
   if (screenshot.startsWith("/") || screenshot.includes("..")) {
     return "screenshot must be a repo-relative path inside the tree";
   }
@@ -1481,13 +1498,20 @@ export function validateCaptureIndex({ index, hashOf, hashPinnedOf, repoRoot = p
     }
     const cell = record?.cell ?? "(unnamed)";
     if (isNonEmptyString(record?.screenshot)) {
-      const first = byPath.get(record.screenshot);
+      // KEYED ON THE REPOSITORY PATH. Two records pinning one path at two
+      // different commits are two claims about one picture, and keying on the
+      // whole citation let that pair through as if they were unrelated files.
+      const shotPath = repoPathOf(record.screenshot);
+      const first = byPath.get(shotPath);
       if (first !== undefined) {
         v.push(
-          `"${cell}" reuses the screenshot ${record.screenshot} already claimed by "${first}" — ` +
-            "one image cannot be the evidence for two cells",
+          `"${cell}" reuses the screenshot ${shotPath} already claimed by "${first.cell}" — ` +
+            "one image cannot be the evidence for two cells" +
+            (first.citation !== record.screenshot
+              ? " (and the two pin it at different commits)"
+              : ""),
         );
-      } else byPath.set(record.screenshot, cell);
+      } else byPath.set(shotPath, { cell, citation: record.screenshot });
     }
     if (SHA256_RE.test(record?.sha256 ?? "")) {
       const first = byHash.get(record.sha256);

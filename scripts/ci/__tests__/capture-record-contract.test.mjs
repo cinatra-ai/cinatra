@@ -27,6 +27,11 @@ import {
   requiredAssertionsFor,
   validateCaptureIndex,
   validateCaptureRecord,
+  isHistoricalPermalink,
+  parsePermalink,
+  readPinnedArtifact,
+  repoPathOf,
+  sha256Pinned,
 } from "../lib/capture-record-contract.mjs";
 
 /** The tree the committed index's screenshots are resolved against. */
@@ -645,5 +650,188 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "verification_summary | run_card | advisory": 1,
     });
     expect(index.records.length).toBe(111);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE PINNED READER — the thing that lets a picture leave the tree without the
+// gate losing its grip on it. Every branch is driven with an INJECTED `run`,
+// `fetched` and `cache`, so nothing here spawns git and nothing touches a
+// network: what is under test is the decision-making, not git itself.
+// ---------------------------------------------------------------------------
+describe("readPinnedArtifact — reading a proof out of history", () => {
+  const SHA = "a".repeat(40);
+  const URL = `https://github.com/cinatra-ai/cinatra/blob/${SHA}/evidence/round/shot.png`;
+  const BYTES = Buffer.from("PINNED-PNG-BYTES");
+  const PIN_HASH = createHash("sha256").update(BYTES).digest("hex");
+
+  /**
+   * A `spawnSync` stand-in that starts SHALLOW: `cat-file` misses until a
+   * `fetch` has succeeded. `calls` records argv so the suite can assert both
+   * WHAT was run and HOW MANY times.
+   */
+  function gitStub({ fetchMakesItLocal = true, fetchOk = true } = {}) {
+    const calls = [];
+    let local = false;
+    return {
+      calls,
+      run(cmd, args, opts) {
+        calls.push({ cmd, args, opts });
+        if (args[0] === "cat-file") {
+          return local
+            ? { status: 0, stdout: BYTES, stderr: Buffer.alloc(0) }
+            : { status: 128, stdout: Buffer.alloc(0), stderr: Buffer.from("fatal: Not a valid object name") };
+        }
+        if (args[0] === "fetch") {
+          if (fetchOk && fetchMakesItLocal) local = true;
+          return fetchOk
+            ? { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+            : { status: 128, stdout: Buffer.alloc(0), stderr: Buffer.from("fatal: could not read from remote") };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      },
+    };
+  }
+  /** Fresh DI state per case — the caches are module-level in production. */
+  const io = (run) => ({ repoRoot: "/repo", run, fetched: new Set(), cache: new Map() });
+
+  it("a MISS is followed by exactly one shallow fetch and one retry", () => {
+    const git = gitStub();
+    const got = readPinnedArtifact(URL, io(git.run));
+    expect(got.ok).toBe(true);
+    expect(got.bytes.toString()).toBe("PINNED-PNG-BYTES");
+    expect(git.calls.map((c) => c.args)).toEqual([
+      ["cat-file", "blob", `${SHA}:evidence/round/shot.png`],
+      ["fetch", "--depth=1", "origin", SHA],
+      ["cat-file", "blob", `${SHA}:evidence/round/shot.png`],
+    ]);
+  });
+
+  it("argv is an ARRAY and no shell is involved", () => {
+    const git = gitStub();
+    readPinnedArtifact(URL, io(git.run));
+    for (const call of git.calls) {
+      expect(call.cmd).toBe("git");
+      expect(Array.isArray(call.args)).toBe(true);
+      // A shell would make the sha:path pair splittable on whitespace and would
+      // make `opts.shell` truthy; neither may ever be the case here.
+      expect(call.opts?.shell).toBeFalsy();
+      expect(call.args.every((a) => typeof a === "string")).toBe(true);
+    }
+    expect(git.calls[0].opts.cwd).toBe("/repo");
+  });
+
+  it("ONE fetch per commit, not per record — a second path at that sha adds none", () => {
+    const git = gitStub();
+    const shared = io(git.run);
+    readPinnedArtifact(URL, shared);
+    readPinnedArtifact(`https://github.com/cinatra-ai/cinatra/blob/${SHA}/evidence/round/other.png`, shared);
+    expect(git.calls.filter((c) => c.args[0] === "fetch")).toHaveLength(1);
+  });
+
+  it("a cache hit spawns NOTHING", () => {
+    const git = gitStub();
+    const shared = io(git.run);
+    readPinnedArtifact(URL, shared);
+    const spawned = git.calls.length;
+    const again = readPinnedArtifact(URL, shared);
+    expect(again.ok).toBe(true);
+    expect(git.calls).toHaveLength(spawned);
+  });
+
+  it("STILL MISSING after the fetch is a failure, never a pass", () => {
+    const git = gitStub({ fetchMakesItLocal: false });
+    const got = readPinnedArtifact(URL, io(git.run));
+    expect(got.ok).toBe(false);
+    expect(got.reason).toMatch(/could not produce/);
+  });
+
+  it("a FAILING fetch is a failure, and says so", () => {
+    const git = gitStub({ fetchOk: false });
+    const got = readPinnedArtifact(URL, io(git.run));
+    expect(got.ok).toBe(false);
+    expect(got.reason).toMatch(/fetch of a{40} failed/);
+  });
+
+  it("sha256Pinned derives the digest from the bytes it read", () => {
+    const git = gitStub();
+    expect(sha256Pinned(URL, io(git.run))).toEqual({ ok: true, sha256: PIN_HASH });
+  });
+
+  it("parsePermalink splits the pin, and a branch ref is not one", () => {
+    expect(parsePermalink(URL)).toEqual({ sha: SHA, path: "evidence/round/shot.png" });
+    expect(parsePermalink("https://github.com/cinatra-ai/cinatra/blob/main/evidence/x.png")).toBe(null);
+    expect(isHistoricalPermalink(URL)).toBe(true);
+    expect(repoPathOf(URL)).toBe("evidence/round/shot.png");
+  });
+
+  describe("what the RECORD does with it", () => {
+    const pinnedRecord = (overrides = {}) => ({
+      ...honestChatPending(),
+      screenshot: URL,
+      sha256: PIN_HASH,
+      ...overrides,
+    });
+    const withGit = (git) => ({
+      repoRoot: "/repo",
+      readPinned: (u, extra) => readPinnedArtifact(u, { ...extra, ...io(git.run) }),
+    });
+
+    it("an unreachable object yields capture/pinned-object-unreachable", () => {
+      const git = gitStub({ fetchMakesItLocal: false });
+      const found = codes(validateCaptureRecord(pinnedRecord(), withGit(git)));
+      expect(found).toContain("capture/pinned-object-unreachable");
+      expect(found).not.toContain("record/sha256-mismatch");
+    });
+
+    it("a WRONG digest is caught after re-derivation, and names the real hash", () => {
+      const git = gitStub();
+      const found = validateCaptureRecord(pinnedRecord({ sha256: "d".repeat(64) }), withGit(git));
+      const mismatch = found.find((v) => v.code === "record/sha256-mismatch");
+      expect(mismatch).toBeDefined();
+      expect(mismatch.detail).toContain(PIN_HASH);
+      expect(codes(found)).not.toContain("capture/pinned-object-unreachable");
+    });
+
+    it("the honest digest passes through the same path", () => {
+      const git = gitStub();
+      const found = codes(validateCaptureRecord(pinnedRecord(), withGit(git)));
+      expect(found).not.toContain("record/sha256-mismatch");
+      expect(found).not.toContain("capture/pinned-object-unreachable");
+    });
+
+    it("a pin OUTSIDE the proof-artifact root is refused, hash or no hash", () => {
+      const git = gitStub();
+      const elsewhere = `https://github.com/cinatra-ai/cinatra/blob/${SHA}/src/app/icon.png`;
+      const found = codes(
+        validateCaptureRecord(pinnedRecord({ screenshot: elsewhere }), withGit(git)),
+      );
+      expect(found).toContain("record/pinned-screenshot-outside-proof-root");
+    });
+  });
+
+  it("TWO records pinning ONE path at DIFFERENT commits is a duplicate", () => {
+    // Keying the duplicate map on the whole citation missed this entirely: the
+    // two URLs differ, so nothing compared them — while they name one picture,
+    // whose bytes may well differ between the two commits.
+    const at = (sha, cell) => ({
+      ...honestChatPending(),
+      cell,
+      screenshot: `https://github.com/cinatra-ai/cinatra/blob/${sha}/evidence/round/shot.png`,
+      sha256: PIN_HASH,
+    });
+    const result = validateCaptureIndex(
+      {
+        records: [
+          at("a".repeat(40), "C1__review-card__chat_thread__pending"),
+          at("b".repeat(40), "C2__review-card__chat_thread__decided"),
+        ],
+      },
+      { repoRoot: "/repo", readPinned: () => ({ ok: false, reason: "not read in this case" }) },
+    );
+    const dup = result.violations.filter((v) => v.code === "index/duplicate-screenshot-path");
+    expect(dup).toHaveLength(1);
+    expect(dup[0].detail).toMatch(/DIFFERENT commits/);
   });
 });

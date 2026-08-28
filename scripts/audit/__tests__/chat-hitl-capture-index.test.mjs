@@ -48,6 +48,7 @@ import {
   validateCaptureRecord,
   validateWalkPlan,
 } from "../lib/chat-hitl-capture-recorder.mjs";
+import { loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 import {
   CAPTURE_INDEX_PATH,
   auditCaptureIndex,
@@ -843,9 +844,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   it("admits it in a WALK PLAN for that kind, and refuses it for another", () => {
     // Built by rewriting ONE cell of a committed, valid plan, so the only thing
     // this case can be failing on is the state vocabulary.
-    const base = JSON.parse(
-      readFileSync(join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json"), "utf8"),
-    );
+    const base = loadWalkPlan();
     expect(validateWalkPlan(base)).toEqual([]);
     const withCell = (kind) => {
       const plan = JSON.parse(JSON.stringify(base));
