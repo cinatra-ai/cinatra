@@ -275,52 +275,52 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 328
+      "line": 280
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 313
+      "line": 265
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 508
+      "line": 460
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 460
+      "line": 412
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 441
+      "line": 393
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 424
+      "line": 376
     },
     {
       "primitiveName": "artifact_promote_request",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 532
+      "line": 484
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 369
+      "line": 321
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 399
+      "line": 351
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 351
+      "line": 303
     },
     {
       "primitiveName": "artifact_review_gate_render",
@@ -355,17 +355,17 @@
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 274
+      "line": 226
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 246
+      "line": 198
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 286
+      "line": 238
     },
     {
       "primitiveName": "assistant_send",
@@ -510,22 +510,22 @@
     {
       "primitiveName": "change_set_eligibility_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 65
+      "line": 75
     },
     {
       "primitiveName": "change_set_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 50
+      "line": 60
     },
     {
       "primitiveName": "change_set_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 55
+      "line": 65
     },
     {
       "primitiveName": "change_set_undo",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 40
+      "line": 50
     },
     {
       "primitiveName": "chat_mention_reply",
@@ -800,7 +800,7 @@
     {
       "primitiveName": "freshness_check_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 75
+      "line": 85
     },
     {
       "primitiveName": "gmail_aliases_list",
@@ -863,6 +863,16 @@
       "line": 16
     },
     {
+      "primitiveName": "memory_promote_request",
+      "file": "src/lib/memory/mcp.ts",
+      "line": 51
+    },
+    {
+      "primitiveName": "memory_recall",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 44
+    },
+    {
       "primitiveName": "metric_cost_budget_get",
       "file": "packages/metric-cost-api/src/mcp/registry.ts",
       "line": 22
@@ -905,12 +915,12 @@
     {
       "primitiveName": "object_history_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 60
+      "line": 70
     },
     {
       "primitiveName": "object_version_restore",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 45
+      "line": 55
     },
     {
       "primitiveName": "objects_classify",
@@ -1075,12 +1085,12 @@
     {
       "primitiveName": "remote_effect_attempt_retry",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 85
+      "line": 95
     },
     {
       "primitiveName": "remote_effect_attempts_list_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 80
+      "line": 90
     },
     {
       "primitiveName": "role_grant_grant",

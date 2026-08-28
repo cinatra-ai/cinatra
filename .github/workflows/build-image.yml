@@ -3458,6 +3458,56 @@ jobs:
         shell: bash
         run: pnpm test:run-window
 
+      # cinatra#2936 (epic #2926 W6). Plan (B) section 6, Conformance, verbatim:
+      # "The lifecycle-screens epic's own gates — the one-card gate, the
+      # host-parity ratchet, the held-turn card contract — stay green through
+      # every wave." Two of those three were watched by CI. The ONE-CARD GATE
+      # was not: a search of this directory for the gate's name returned NOTHING
+      # on main, so `scripts/audit/chat-hitl-one-card-gate.mjs` — this epic's
+      # done-check, that every lifecycle card kind is drawn by a named owner and
+      # every mount host-declared — could go red and no check would move. It
+      # stayed unwired for a reason that has since expired: it exited 1 while
+      # `trigger_schedule_proposal` was an undrawn placeholder, and wiring a red
+      # gate would have reddened every pull request in the repository over a
+      # known gap. cinatra#3014 drew that fifth card and the gate went green,
+      # which is what this step now holds.
+      #
+      # HERE, for the same reason the four tiers above are here: this job is
+      # already a `build` prerequisite, so the gate becomes a merge gate through
+      # a required context that already exists — NO branch-protection change and
+      # NO new required context. The gate is a pure static read of the tracked
+      # tree (it imports nothing from a dependency and touches no service), so it
+      # asks NOTHING of this job: no database, no Redis, no runtime mode, no
+      # placeholder of any kind. That is why it can join as one more step rather
+      # than as a job with a checkout and an install of its own.
+      #
+      # LAST, AND LAST IS A FREE CHOICE — said plainly so the next reader does
+      # not take it for one more ordering constraint. The gate READS files and
+      # writes nothing: no database, no schema, no file in the workspace. It can
+      # neither disturb an earlier step nor be disturbed by one. It is APPENDED
+      # rather than inserted precisely because it is free: the four tiers above
+      # were measured in the order they stand, and adding a step after the last
+      # of them is the one placement that cannot have changed that.
+      #
+      # BARE FIRST, and the bare run is the one that gates. The done-check is
+      # the gate with no argument: exit 0 iff green. `--audit` is a WEAKER,
+      # different question ("no NEW false claim") and would not hold the clause
+      # on its own; it is run after, for its one-line kinds count in the log, and
+      # under `set -e` it can only add a red, never mask one.
+      #
+      # `shell: bash` and `!cancelled()` are the siblings' and load-bearing for
+      # the same two reasons stated at the tiers above: this job's `runs-on:` is
+      # an expression, so a static reader must refuse a step that leaves the
+      # shell implicit — and `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
+      # such a reader, its direction 5 being what keeps THIS step from being
+      # quietly deleted — and a red e2e above must not hide a red gate.
+      - name: One-card gate — every lifecycle card kind drawn by a named owner (cinatra#2936, W6)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          node scripts/audit/chat-hitl-one-card-gate.mjs
+          node scripts/audit/chat-hitl-one-card-gate.mjs --audit
+
   image:
     # The container build itself, UN-SERIALIZED from the unit tier (critical-path
     # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +
