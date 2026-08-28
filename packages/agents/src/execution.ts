@@ -840,10 +840,21 @@ export class ProducedReviewHoldUnpersistedError extends Error {
    *  operator can finish the run — which is why it is logged as an error there
    *  and reported here rather than left implicit. */
   readonly delivered: boolean;
+  /** True when the chain reached its cap, so NOTHING should re-deliver it: the
+   *  cap is the operator signal, and re-entering the road past it would loop. */
+  readonly capped: boolean;
+  /** The chain this raise belongs to, and the ordinal its delivery carries — so
+   *  a holder of an execution job can enter the SAME road in place, with the
+   *  same job data, when the producer connection could not queue it. */
+  readonly chain: string;
+  readonly nextPark: number;
   constructor(args: {
     runId: string;
     recovery: ProducedReviewRecovery;
     delivered?: boolean;
+    capped?: boolean;
+    chain?: string;
+    nextPark?: number;
     delayMs?: number;
   }) {
     const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
@@ -859,6 +870,9 @@ export class ProducedReviewHoldUnpersistedError extends Error {
     this.delayMs = delayMs;
     this.recovery = args.recovery;
     this.delivered = args.delivered ?? false;
+    this.capped = args.capped ?? false;
+    this.chain = args.chain ?? "";
+    this.nextPark = args.nextPark ?? 1;
   }
 }
 
@@ -1094,8 +1108,12 @@ export function producedReviewRecoveryJobId(
  * instead of forking it. Two callers racing the SAME run raise two chains and
  * queue two recoveries; that is deliberate — the alternative is a shared id that
  * a settled job of an earlier chain still holds, which the queue would swallow
- * silently. Both chains converge: whichever records the hold first wins, and the
- * other finds the run already parked or already terminal and stops.
+ * silently. Both chains reach the same STATUS: the run is parked or terminal
+ * either way, and the terminal write is one CAS with one winner. They do not
+ * arbitrate the parked payload between them — `parkRun` writes the marker it was
+ * handed — so a run with two competing withheld writes lands the later one. Both
+ * are legitimate terminal writes for the same run, and the CAS would have picked
+ * one regardless; making the marker first-writer-wins belongs to the park itself.
  *
  * BOUNDED: it carries exactly what `buildProducedReviewRecovery` built, which is
  * already under `PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES` on every branch.
@@ -1107,21 +1125,25 @@ export function producedReviewRecoveryJobId(
  * the cap surfaces as an operator signal over a run that is still non-terminal.
  *
  * Best-effort by necessity and never fail-open: a delivery that cannot be queued
- * is reported and the sentinel is raised regardless.
+ * is reported on the sentinel and the sentinel is raised regardless. A holder of
+ * an execution job re-enters the SAME road in place when that happens — the
+ * producer connection is fail-fast by design while a worker's own connection
+ * rides a brief outage out, so the two are not interchangeable and the second
+ * on-ramp is not a second road.
  */
 async function deliverProducedReviewRecovery(args: {
   runId: string;
   recovery: ProducedReviewRecovery;
   park: number;
   chain: string;
-}): Promise<boolean> {
+}): Promise<{ delivered: boolean; capped: boolean }> {
   const { runId, recovery, park, chain } = args;
   if (park >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
     console.error(
       `[produced-review-hold] run=${runId} could not record its hold across ${park} deliveries — ` +
         `no further recovery is queued; the run keeps its non-terminal status`,
     );
-    return false;
+    return { delivered: false, capped: true };
   }
   const next = park + 1;
   try {
@@ -1150,14 +1172,14 @@ async function deliverProducedReviewRecovery(args: {
       `[produced-review-hold] run=${runId} hold unrecorded — recovery queued in ` +
         `${PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS}ms (delivery ${next})`,
     );
-    return true;
+    return { delivered: true, capped: false };
   } catch (err) {
     console.error(
       `[produced-review-hold] run=${runId} could not queue the recovery delivery — the run keeps ` +
         `its non-terminal status and nothing is written over the unproven review:`,
       err,
     );
-    return false;
+    return { delivered: false, capped: false };
   }
 }
 
@@ -1175,13 +1197,17 @@ async function unpersistedHoldSentinel(
   },
 ): Promise<ProducedReviewHoldUnpersistedError> {
   const recovery = buildProducedReviewRecovery(runId, args.withheld, args.stepResults);
-  const delivered = await deliverProducedReviewRecovery({
+  const park = args.holdPark ?? 0;
+  const chain = args.holdChain ?? randomUUID();
+  const outcome = await deliverProducedReviewRecovery({ runId, recovery, park, chain });
+  return new ProducedReviewHoldUnpersistedError({
     runId,
     recovery,
-    park: args.holdPark ?? 0,
-    chain: args.holdChain ?? randomUUID(),
+    delivered: outcome.delivered,
+    capped: outcome.capped,
+    chain,
+    nextPark: park + 1,
   });
-  return new ProducedReviewHoldUnpersistedError({ runId, recovery, delivered });
 }
 
 /**

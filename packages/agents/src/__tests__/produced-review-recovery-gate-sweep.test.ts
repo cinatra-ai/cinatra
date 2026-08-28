@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * cinatra#3007 — the review-gate delivery sweep is a DIRECT resume caller: it
@@ -327,6 +329,63 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     ]);
   });
 
+  it("the sentinel carries what a job holder needs to enter the SAME delivery in place", async () => {
+    const err = (await deliverArtifactReviewResumeIntent(intent()).catch(
+      (e: unknown) => e,
+    )) as ProducedReviewHoldUnpersistedError;
+    const [, data] = deliveredRecovery()!;
+
+    // Identity and ordinal, so a re-delivery in place is indistinguishable from
+    // the queued one to the leg that consumes it.
+    expect(err.chain).toBe(data.producedReviewHoldChain);
+    expect(err.nextPark).toBe(data.producedReviewHoldPark);
+    expect(err.capped).toBe(false);
+  });
+
+  it("a delivery the queue REFUSED is reported as undelivered, uncapped, and still non-terminal", async () => {
+    enqueueSpy.mockRejectedValueOnce(new Error("the queue refused the delivery"));
+
+    const err = (await deliverArtifactReviewResumeIntent(intent()).catch(
+      (e: unknown) => e,
+    )) as ProducedReviewHoldUnpersistedError;
+
+    expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
+    // Undelivered but NOT capped — the difference a job holder branches on.
+    expect(err.delivered).toBe(false);
+    expect(err.capped).toBe(false);
+    expect(err.chain).not.toBe("");
+    expect(err.nextPark).toBe(1);
+    // The payload is still on the sentinel, whole and bounded.
+    expect(err.recovery.withheld.status).toBe("completed");
+    expect(
+      Buffer.byteLength(JSON.stringify(err.recovery) ?? "", "utf8"),
+    ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("the execution worker re-enters the SAME delivery in place, and ONLY when the queue refused", () => {
+    // Read on purpose: the worker's branch lives in the host dispatcher, which
+    // owns the job handle this package cannot reach. What must hold is
+    // structural — it re-delivers exactly the road's own job data, it branches
+    // on the sentinel rather than on a guess, and it never re-delivers a chain
+    // that is delivered or capped.
+    const registry = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "src/lib/background-jobs-registry.ts"),
+      "utf-8",
+    );
+    const at = registry.indexOf("err instanceof ProducedReviewHoldUnpersistedError");
+    expect(at).toBeGreaterThan(-1);
+    const branch = registry.slice(at, at + 1200);
+    expect(branch).toContain("if (err.delivered || err.capped) throw err;");
+    expect(branch).toContain("producedReviewHold: err.recovery");
+    expect(branch).toContain("producedReviewHoldPark: err.nextPark");
+    expect(branch).toContain("producedReviewHoldChain: err.chain");
+    expect(branch).toContain("moveToDelayed");
+    expect(branch).toContain("DelayedError");
+    // And it never writes a terminal status on this edge.
+    expect(branch).not.toContain("transitionRunStatus");
+  });
+
   it("AT THE CAP nothing more is queued, and the run is still not terminal", async () => {
     await deliverArtifactReviewResumeIntent(intent()).catch(() => undefined);
     const [, data] = deliveredRecovery()!;
@@ -344,6 +403,8 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
     // No delivery was made, and the sentinel says so rather than promising one.
     expect(err.delivered).toBe(false);
+    // CAPPED, which is what stops a job holder from re-delivering it in place.
+    expect(err.capped).toBe(true);
     expect(err.message).toContain("could NOT be queued");
     expect(deliveredRecovery()).toBeUndefined();
     // And still no terminal write: the cap never licenses one.
