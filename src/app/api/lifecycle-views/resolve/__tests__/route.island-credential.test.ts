@@ -238,9 +238,17 @@ describe("the cookie arm is untouched — the credential is ADDITIVE", () => {
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
   });
 
-  it("never even decodes the ref for a credential it will not mint", async () => {
+  it("decodes the ref ONCE — for the rows every host draws — and mints nothing", async () => {
+    // Until cinatra#3051 the cookie arm decoded nothing at all, because the ref
+    // was only ever decoded to mint an address this arm has no use for. The
+    // answer now also carries the gate's own target rows, which EVERY host draws
+    // its §IV header and §V floor from, so the ref is decoded here too — ONCE,
+    // by the one hoisted decode both compositions are addressed from. What stays
+    // true is the sentence this case was written for: the credential is
+    // ADDITIVE, and nothing is minted on this arm.
     await POST(post({ widget: false }));
-    expect(decodeLifecycleGateRef).not.toHaveBeenCalled();
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
+    expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
   });
 });
 

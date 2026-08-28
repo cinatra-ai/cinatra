@@ -392,6 +392,26 @@ describe("§III the target island", () => {
   // event, which used to paint a blank white box (evidence/2674-s8e V5).
   // ---------------------------------------------------------------------
 
+  /**
+   * Report the frame's load THE WAY THE ISLAND DOES — carrying the island's own
+   * body anchor.
+   *
+   * Since cinatra#3051 a bare `load` event is no longer a painted target: every
+   * island refusal answers 200 with an empty document and fires `load` exactly
+   * like a full one, so the card reads the framed document and only the island's
+   * own body anchor says it painted.
+   */
+  function islandPaints(container: HTMLElement): void {
+    const frame = container.querySelector("iframe") as HTMLIFrameElement;
+    const doc = frame.contentDocument!;
+    doc.open();
+    doc.write(
+      '<html><body><div data-conformance-id="review-target-island-body"></div></body></html>',
+    );
+    doc.close();
+    fireEvent.load(frame);
+  }
+
   function island(container: HTMLElement): HTMLElement {
     return container.querySelector('[data-conformance-id="review-target-island"]')!;
   }
@@ -415,7 +435,7 @@ describe("§III the target island", () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    fireEvent.load(container.querySelector("iframe")!);
+    islandPaints(container);
     await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
     expect(
       container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
@@ -477,7 +497,7 @@ describe("§III the target island", () => {
 
     // The ORIGINAL iframe (never remounted — no retry was pressed) finally
     // fires its load event.
-    fireEvent.load(container.querySelector("iframe")!);
+    islandPaints(container);
 
     await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
     expect(
@@ -510,7 +530,7 @@ describe("§III the target island", () => {
       </LifecycleCardSurfaceProvider>,
     );
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    fireEvent.load(container.querySelector("iframe")!);
+    islandPaints(container);
     await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
 
     mockResolve({ state: "pending", canDecide: true, canComment: true });

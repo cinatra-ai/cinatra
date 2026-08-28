@@ -225,17 +225,69 @@ export function reviewTypeLabel(objectType: string): string {
  * Pure copy, no type keying — every artifact type reads the same line.
  */
 export function reviewTargetRowFacts(artifact: {
-  ownerLevel: string;
-  visibility: string;
-  mime: string;
-  updatedAt: string;
+  ownerLevel: string | null;
+  visibility: string | null;
+  mime: string | null;
+  updatedAt: string | null;
 }): string[] {
-  return [
-    `Ownership: ${artifact.ownerLevel}`,
-    `Visibility: ${artifact.visibility}`,
-    artifact.mime,
-    `updated ${artifact.updatedAt}`,
-  ];
+  // NULLABLE SINCE cinatra#3051, and the fields are DROPPED rather than printed
+  // as absences. The page always has all four, so this is a no-op there; the
+  // card draws the same line from the gate's own rows, where a target whose
+  // artifact this reader may not read (or which is gone) carries ids and
+  // nothing else — and "Ownership: null" is worse than a shorter true line.
+  const facts: string[] = [];
+  if (artifact.ownerLevel) facts.push(`Ownership: ${artifact.ownerLevel}`);
+  if (artifact.visibility) facts.push(`Visibility: ${artifact.visibility}`);
+  if (artifact.mime) facts.push(artifact.mime);
+  if (artifact.updatedAt) facts.push(`updated ${artifact.updatedAt}`);
+  return facts;
+}
+
+// ---------------------------------------------------------------------------
+// The PREVIEW floor (§V, cinatra#3051) — the never-blank line the CARD draws
+// under the target header while the representation is not on screen.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the representation is not on screen. A closed set, and every member is a
+ * state of the PREVIEW rather than of the gate: the gate is exactly as open as
+ * it was, and the floor never says otherwise.
+ *
+ *   `preview-loading`      — the frame has not painted yet.
+ *   `preview-unavailable`  — the frame's bound was reached.
+ */
+export type ReviewPreviewFloorReason = "preview-loading" | "preview-unavailable";
+
+/**
+ * The §V diagnostic, in the drawing's own shape: `package · slot · reason`, and
+ * nothing else. Sanitized and telemetry-safe by construction — it composes only
+ * a package name the host resolved, the slot literal, and a member of the closed
+ * set above. No error text, no value, no href.
+ */
+export function reviewPreviewFloorDiagnostic(
+  packageName: string | null,
+  slot: string,
+  reason: ReviewPreviewFloorReason,
+): string {
+  const pkg = packageName ? `package "${packageName}" · ` : "";
+  return `${pkg}slot "${slot}" · reason "${reason}"`;
+}
+
+/**
+ * The package the floor names for one target: the one whose renderer the host
+ * resolved, or — when the host's own form rung drew it, so no package did — the
+ * artifact TYPE's own defining package, read off the type id
+ * (`@scope/pack:kind` → `@scope/pack`). `null` when neither is known, which
+ * drops the `package` half of the line rather than inventing one.
+ */
+export function reviewTargetPackageName(
+  resolvedPackageName: string | null,
+  objectType: string | null,
+): string | null {
+  if (resolvedPackageName) return resolvedPackageName;
+  if (!objectType) return null;
+  const base = objectType.split(":")[0] ?? "";
+  return base.length > 0 ? base : null;
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,

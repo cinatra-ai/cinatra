@@ -151,6 +151,7 @@ import {
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
+  type ReviewTargetRow,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
 import type {
@@ -160,6 +161,17 @@ import type {
 import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
+} from "@/lib/artifacts/review-surface-model";
+// The header and floor projections the review PAGE has always used. Imported as
+// values (not re-implemented) so the reading this card draws before a frame has
+// painted is composed by the same functions that compose the one inside it.
+import {
+  reviewPreviewFloorDiagnostic,
+  reviewRevisionMarker,
+  reviewTargetPackageName,
+  reviewTargetRowFacts,
+  reviewTypeLabel,
+  type ReviewPreviewFloorReason,
 } from "@/lib/artifacts/review-surface-model";
 
 import {
@@ -300,6 +312,81 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /** Clamped island height (§ the issue's clamp + internal scroll + expand). */
+/**
+ * DID THE ISLAND ACTUALLY PAINT? (cinatra#3051)
+ *
+ * The island is same-origin by construction — the module header says so, and
+ * says why the sandbox is not an isolation boundary — so the card can read which
+ * of the island's two documents arrived. It answers on the island's OWN anchors
+ * and on nothing else:
+ *
+ * ONE ANCHOR SAYS PAINTED, AND NOTHING ELSE DOES. The island's own body carries
+ * `review-target-island-body`; that is the whole test. Every other document —
+ * the island's `review-target-island-empty` refusal, a framework error page, a
+ * response that did not parse, a document this card cannot read at all — is NOT
+ * a painted target, and the header, the floor and the retry all stay on screen.
+ *
+ * THE DEFAULT FAILS TOWARD THE NAMED PANEL, deliberately. The two ways to be
+ * wrong are not symmetric: reading an unpainted frame as painted puts the reader
+ * back in front of a box that names nothing, which is the defect this slice
+ * exists to close; reading a painted frame as unpainted leaves the header, the
+ * floor and a retry over a frame that is in fact fine — a worse-looking panel,
+ * not an unreadable one, and one press away from correct. So the fallback is
+ * "not painted", and the anchor is what has to be present.
+ *
+ * THE ANCHOR CANNOT SILENTLY GO AWAY: it is in the review surface's ratified
+ * conformance set and its own suite requires the island body to carry it.
+ *
+ * BOTH SERVER HALVES ARE HELD TO THIS. The island page renders both documents,
+ * and the request guard's own empty answer to a cross-site widget frame that
+ * presented no address is the anchored one too — it used to be a zero-byte body.
+ * `review-island-first-render` drives the REAL guard and asserts the document it
+ * returns is the one read here, so the two cannot drift.
+ *
+ * It learns nothing a denial must not disclose: it distinguishes "the preview is
+ * on screen" from "the preview is not on screen", never WHY — the card says the
+ * same sentence for every reason a frame did not paint.
+ */
+function islandPainted(frame: HTMLIFrameElement): boolean {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return false;
+    // Read the anchors OFF the framed document rather than composing an
+    // attribute-VALUE selector here: the review surface's conformance gate scans
+    // this file's text for conformance-id attributes carrying a literal value
+    // and holds every one it finds to the ratified anchor set — and a selector
+    // is not an anchor this file renders. So the query names the attribute
+    // alone, and the values are compared as values.
+    const ids = new Set<string | null>(
+      Array.from(doc.querySelectorAll("[data-conformance-id]"), (el) =>
+        el.getAttribute("data-conformance-id"),
+      ),
+    );
+    return ids.has(ISLAND_BODY_ANCHOR);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The island's own two documents, named by their conformance anchors.
+ *
+ * The server halves are `src/app/lifecycle/review-island/page.tsx` (both) and
+ * the request guard's own empty response in `src/lib/auth-route-guard.ts`, which
+ * answers the cross-site widget frame that presented no address. EXPORTED so the
+ * suites that drive the real guard and the real page can assert the documents
+ * they return are the ones this card reads, rather than files agreeing by
+ * coincidence. Only the BODY anchor decides `islandPainted`; the EMPTY one is
+ * named here because it is the refusal both server halves render, and because a
+ * test that asserts it is asserting the seam.
+ */
+export const ISLAND_BODY_ANCHOR = "review-target-island-body";
+export const ISLAND_EMPTY_ANCHOR = "review-target-island-empty";
+
+/** An answer that carried no target rows — the one shared empty, so a re-render
+ *  never hands the reading a new array identity for the same nothing. */
+const EMPTY_TARGET_ROWS: readonly ReviewTargetRow[] = Object.freeze([]);
+
 const ISLAND_HEIGHT_CLAMPED = 380;
 const ISLAND_HEIGHT_EXPANDED = 760;
 
@@ -517,6 +604,12 @@ export function ReviewGateCard({
   //     for a fresh one. An answer that fails, or that carries no grant, leaves
   //     the island painted as it is rather than blanking it, and the next
   //     palette the reader chooses asks again.
+  // §IV's header and §V's floor, from the GATE'S OWN ROWS (cinatra#3051). They
+  // arrive with the answer that authorized this card, so the panel names what is
+  // under review at the FIRST render — before any frame has loaded, and whatever
+  // the frame goes on to do. An answer that carried none draws the floor alone,
+  // which is still a named panel rather than the blank one this closes.
+  const targetRows: readonly ReviewTargetRow[] = resolved?.targets ?? EMPTY_TARGET_ROWS;
   const liveIslandSrc = resolved?.islandSrc ?? null;
   const liveCredential = islandCredentialFrom(liveIslandSrc, view.ref);
   const [islandAddress, setIslandAddress] = useState<{
@@ -734,6 +827,7 @@ export function ReviewGateCard({
   const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
+    targetRows,
     islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
     islandCredentialed: heldCredential !== null,
     expanded,
@@ -781,6 +875,8 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  /** The gate's own pinned rows — the header and floor the card draws itself. */
+  targetRows: readonly ReviewTargetRow[];
   islandSrc: string;
   islandCredentialed: boolean;
   expanded: boolean;
@@ -795,6 +891,7 @@ function renderState(args: {
 }): ReactElement | null {
   const {
     state,
+    targetRows,
     islandSrc,
     islandCredentialed,
     expanded,
@@ -807,6 +904,19 @@ function renderState(args: {
     suggestionDecisionsFor,
     focusBinding,
   } = args;
+
+  // §III's target reading — ONE element, used by both arms that draw a target,
+  // so the pending and the decided readings cannot drift apart.
+  const targetReading: ReactElement = (
+    <ReviewTargetIsland
+      src={islandSrc}
+      credentialed={islandCredentialed}
+      rows={targetRows}
+      expanded={expanded}
+      onToggleExpanded={onToggleExpanded}
+      onRetryResolve={onRefresh}
+    />
+  );
 
   switch (state.state) {
     case "loading":
@@ -867,13 +977,7 @@ function renderState(args: {
               reading drew them: one island, every pinned target, the renderer
               resolved from the artifact's own type. The island carries no
               decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            expanded={expanded}
-            onToggleExpanded={onToggleExpanded}
-            onRetryResolve={onRefresh}
-          />
+          {targetReading}
           {/* §VIII — the RECORDED partition, in the place it annotated: between
               the target it is about and the decision it rode on. */}
           {state.suggestions && state.suggestions.length > 0 ? (
@@ -911,13 +1015,7 @@ function renderState(args: {
           {/* §III — the target(s). ONE island renders every pinned target as
               sibling panels, exactly as the page stacks them, because the
               decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            expanded={expanded}
-            onToggleExpanded={onToggleExpanded}
-            onRetryResolve={onRefresh}
-          />
+          {targetReading}
           {/* §VIII — the per-item chips, between the target they annotate and
               the floor that decides them. Marks are LIVE only for a reader who
               may take the terminal decision they would ride on: a reader with
@@ -1445,6 +1543,7 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 function ReviewTargetIsland({
   src,
   credentialed,
+  rows,
   expanded,
   onToggleExpanded,
   onRetryResolve,
@@ -1452,6 +1551,9 @@ function ReviewTargetIsland({
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
+  /** The gate's own pinned rows — what the panel names while the frame has not
+   *  painted, so no load state is ever a panel that names nothing. */
+  rows: readonly ReviewTargetRow[];
   expanded: boolean;
   onToggleExpanded: () => void;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
@@ -1461,20 +1563,39 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  //
+  // `attempt` REMOUNTS the frame; `wait` only restarts the bound. They are two
+  // fields because a CREDENTIALED address must not be remounted (cinatra#3051):
+  // its grant is worth one paint and is already spent, so re-presenting it is a
+  // guaranteed empty island. See the retry below.
+  const [load, setLoad] = useState({
+    src,
+    attempt: 0,
+    wait: 0,
+    loaded: false,
+    timedOut: false,
+    empty: false,
+  });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ src, attempt: 0, wait: 0, loaded: false, timedOut: false, empty: false });
   }
 
   useEffect(() => {
-    if (load.loaded) return;
+    if (load.loaded || load.empty) return;
     const timer = setTimeout(() => {
       setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
     }, ISLAND_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.loaded]);
+  }, [load.src, load.attempt, load.wait, load.loaded, load.empty]);
 
-  const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
+  // A FRAME THAT LOADED IS NOT NECESSARILY A FRAME THAT PAINTED (cinatra#3051).
+  // An island that refused — a spent or expired address, a reader who may not
+  // read the run, a gate that moved — answers 200 with the EMPTY document, and
+  // an empty document fires `load` exactly like a full one. Treating that as
+  // "loaded" is what put the reader back in front of a blank box with nothing
+  // to press, which is the defect this slice is closing.
+  const state: IslandLoadState =
+    load.loaded ? "loaded" : load.timedOut || load.empty ? "timed-out" : "loading";
   const height = expanded ? ISLAND_HEIGHT_EXPANDED : ISLAND_HEIGHT_CLAMPED;
 
   return (
@@ -1506,9 +1627,12 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
-        }
+        onLoad={(event) => {
+          const painted = islandPainted(event.currentTarget);
+          setLoad((current) =>
+            current.src === src ? { ...current, loaded: painted, empty: !painted } : current,
+          );
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The
@@ -1518,23 +1642,39 @@ function ReviewTargetIsland({
       {state !== "loaded" ? (
         <div className="absolute inset-x-0 top-0" style={{ height }}>
           {state === "loading" ? (
-            <IslandLoadingSkeleton />
+            <IslandLoadingSkeleton rows={rows} />
           ) : (
             <IslandLoadTimedOut
+              rows={rows}
               onRetry={() => {
                 // A RETRY RE-RESOLVES FIRST (cinatra#2754). A credentialed src
                 // that failed has very likely expired, and remounting the frame
                 // on the same URL would present the same dead credential; the
                 // re-resolve mints a fresh one and the new `src` remounts the
-                // frame by itself. The attempt bump stays for the cookie arm,
-                // where the URL does not change and the remount is the retry.
+                // frame by itself.
+                //
+                // AND ON THAT ARM IT DOES NOTHING ELSE (cinatra#3051). The
+                // attempt bump used to run here too, which remounted the frame
+                // on the address that had just been spent — the second
+                // presentation of a single-use grant, which the serving path
+                // refuses, so the retry's own first act was to guarantee an
+                // empty island. The bump stays for the COOKIE arm, where the
+                // URL does not change and the remount IS the retry; the
+                // credentialed arm only restarts the bound and waits for the
+                // fresh address, which remounts by itself.
                 onRetryResolve();
-                setLoad((current) => ({
-                  ...current,
-                  attempt: current.attempt + 1,
-                  loaded: false,
-                  timedOut: false,
-                }));
+                setLoad((current) =>
+                  credentialed
+                    ? { ...current, wait: current.wait + 1, timedOut: false, empty: false }
+                    : {
+                        ...current,
+                        attempt: current.attempt + 1,
+                        wait: current.wait + 1,
+                        loaded: false,
+                        timedOut: false,
+                        empty: false,
+                      },
+                );
               }}
             />
           )}
@@ -1571,18 +1711,17 @@ function ReviewTargetIsland({
  * one bar-skeleton language the card family already ships rather than
  * inventing a second one.
  */
-function IslandLoadingSkeleton(): ReactElement {
+function IslandLoadingSkeleton({ rows }: { rows: readonly ReviewTargetRow[] }): ReactElement {
   return (
     <div
-      aria-busy="true"
       data-conformance-id="review-target-island-skeleton"
-      className="h-full animate-pulse space-y-4 p-4"
+      className="h-full space-y-3 overflow-y-auto bg-surface-strong p-4"
     >
-      <div className="space-y-1.5 border-b border-line pb-3">
-        <div className="h-2.5 w-1/3 rounded bg-surface-muted" />
-        <div className="h-1.5 w-1/4 rounded bg-surface-muted" />
-      </div>
-      <div className="space-y-2">
+      {/* §IV's header, REAL and from the gate's own rows — the bars that used to
+          stand in for it named nothing, which is the whole defect (cinatra#3051). */}
+      <ReviewTargetRows rows={rows} reason="preview-loading" />
+      {/* Only the REPRESENTATION is still unknown, so only it is a skeleton. */}
+      <div aria-busy="true" className="animate-pulse space-y-2">
         <div className="h-1.5 w-11/12 rounded bg-surface-muted" />
         <div className="h-1.5 w-4/5 rounded bg-surface-muted" />
         <div className="h-1.5 w-full rounded bg-surface-muted" />
@@ -1594,6 +1733,122 @@ function IslandLoadingSkeleton(): ReactElement {
 }
 
 /**
+ * §IV's IMMUTABLE TARGET HEADER + §V's NEVER-BLANK FLOOR, drawn by the CARD
+ * (cinatra#3051).
+ *
+ * WHY IT IS HERE AND NOT ONLY IN THE FRAME. The header names what is under
+ * review and fixes it in place; the floor guarantees the surface never shows an
+ * empty panel where a target should be. Both used to exist only INSIDE the
+ * island document, so every state that is not a painted frame — still loading,
+ * past its bound, or a frame this host cannot authenticate — drew a panel that
+ * named nothing at all. Measured inside a third-party application at the pending
+ * instant, the reader was shown "The preview did not load" with no title, no
+ * package, no revision, no ownership, no visibility and no floor.
+ *
+ * THE FIELDS ARE THE GATE'S, NOT THE PREVIEW'S. They come off the gate's own
+ * pinned rows on the resolve answer, so this reading is available at the card's
+ * FIRST render and does not depend on any fetch the frame makes.
+ *
+ * ONE PROJECTION, TWO PLACES. `reviewTypeLabel`, `reviewRevisionMarker` and
+ * `reviewTargetRowFacts` are the same functions `ReviewTargetPanel` renders the
+ * header inside the frame with, so what the card names before the frame paints
+ * is what the frame paints.
+ *
+ * NOTHING IS DRAWN TWICE. This reading is the frame's OVERLAY: it is in the DOM
+ * exactly while the frame has not painted, and a painted frame — which carries
+ * its own §IV header, from the same functions — replaces it.
+ *
+ * PLAIN DATA ATTRIBUTES, NOT CONFORMANCE ANCHORS. `review-target` is the spec's
+ * anchor for the panel, and the panel is what the frame draws; this reading is
+ * the card's own account of the same target while that panel is not there, so it
+ * does not claim the anchor.
+ *
+ * NEVER BLANK, EVEN WITH NO ROWS. An answer that carried no rows still draws the
+ * floor — one sanitized `package · slot · reason` line — because "no rows" is
+ * exactly the state a blank panel would be indistinguishable from.
+ */
+function ReviewTargetRows({
+  rows,
+  reason,
+}: {
+  rows: readonly ReviewTargetRow[];
+  reason: ReviewPreviewFloorReason;
+}): ReactElement {
+  return (
+    <div data-review-target-reading={reason} className="space-y-3">
+      {rows.length === 0 ? (
+        <ReviewTargetFloorLine packageName={null} reason={reason} />
+      ) : (
+        rows.map((row) => (
+          <div
+            key={`${row.artifactId}:${row.representationRevisionId}`}
+            data-review-target-header=""
+            data-field="name=type.displayName"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-sans text-sm font-bold text-foreground">
+                {row.title ?? row.artifactId}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-xs font-semibold text-blue">
+                {row.objectType ? reviewTypeLabel(row.objectType) : "Artifact"}
+              </span>
+            </div>
+            <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
+              {row.objectType ? <span>{row.objectType} · </span> : null}
+              <span title={reviewRevisionMarker(row.representationRevisionId).full}>
+                revision {reviewRevisionMarker(row.representationRevisionId).short}
+              </span>
+              <span className="text-mustard-ink"> · pinned</span>
+              {row.ownerLevel || row.visibility || row.mime || row.updatedAt ? (
+                <>
+                  {" · "}
+                  {reviewTargetRowFacts({
+                    ownerLevel: row.ownerLevel,
+                    visibility: row.visibility,
+                    mime: row.mime,
+                    updatedAt: row.updatedAt,
+                  }).join(" · ")}
+                </>
+              ) : null}
+            </p>
+            <ReviewTargetFloorLine
+              packageName={reviewTargetPackageName(row.packageName, row.objectType)}
+              reason={reason}
+            />
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** §V's floor — ONE sanitized, telemetry-safe `package · slot · reason` line.
+ *  Never a raw error, never a value, and never absent while the representation
+ *  is not on screen. */
+function ReviewTargetFloorLine({
+  packageName,
+  reason,
+}: {
+  packageName: string | null;
+  reason: ReviewPreviewFloorReason;
+}): ReactElement {
+  return (
+    <p
+      role="status"
+      data-review-target-floor={reason}
+      data-review-floor-package={packageName ?? ""}
+      data-review-floor-slot={REVIEW_TARGET_SLOT}
+      className="mt-1 font-mono text-badge-2xs tracking-tight text-muted-foreground"
+    >
+      {reviewPreviewFloorDiagnostic(packageName, REVIEW_TARGET_SLOT, reason)}
+    </p>
+  );
+}
+
+/** The one slot a review target is ever mounted in this release (§III). */
+const REVIEW_TARGET_SLOT = "detail";
+
+/**
  * The island's past-the-bound presentation (cinatra#2713) — reuses
  * `ReviewGateBlocked`'s exact visual shape (icon circle, title/body, `link`
  * retry) rather than the component itself; see the doc above
@@ -1601,13 +1856,24 @@ function IslandLoadingSkeleton(): ReactElement {
  * floor below is untouched and still live — a preview that did not load is
  * never drawn as a reason the reviewer cannot decide.
  */
-function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement {
+function IslandLoadTimedOut({
+  rows,
+  onRetry,
+}: {
+  rows: readonly ReviewTargetRow[];
+  onRetry: () => void;
+}): ReactElement {
   return (
     <div
       data-conformance-id="review-target-island-timeout"
-      className="grid h-full place-items-center px-4 text-center"
+      className="h-full space-y-3 overflow-y-auto bg-surface-strong p-4"
     >
-      <div>
+      {/* THE HEADER AND THE FLOOR STAY (cinatra#3051). A preview that did not
+          arrive removes the preview, not the target: the reader still has to be
+          told what they are deciding about, and §V's floor is what makes this a
+          named panel rather than an empty one. */}
+      <ReviewTargetRows rows={rows} reason="preview-unavailable" />
+      <div className="text-center">
         <div className="mx-auto mb-2.5 grid size-9 place-items-center rounded-lg bg-destructive/10 text-destructive">
           <CircleX aria-hidden="true" className="size-[18px]" />
         </div>

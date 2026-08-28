@@ -23,6 +23,14 @@
  * proof with cookies OMITTED. Then the RELOAD — the same persisted turn mounted
  * afresh — draws the card again on the first paint.
  *
+ * AND THE CARD NAMES WHAT IS BEING DECIDED (cinatra#3051, second round). The
+ * first round proved the card ARRIVES; the capture then showed it arriving with
+ * a target panel that named nothing — "The preview did not load", no header, no
+ * floor — because the header and the floor lived only inside the island
+ * document. So the pending and the restored moments now also read the panel: the
+ * §IV header off the gate's own rows and the §V floor line, present the moment
+ * the card is, before the frame has loaded anything.
+ *
  * WHY THE REAL RUN CARD HERE. The other widget carriage suites stand a marker in
  * for the inline run card because they are about the column's dispatch. This one
  * is about what the run card DRAWS on this host, so a stand-in would measure the
@@ -234,6 +242,50 @@ function seedBody(over: Record<string, unknown> = {}) {
 
 const PENDING = { state: "pending", canDecide: true, canComment: true };
 
+/** The gate's own pinned row, as the resolve answers it — the facts the card's
+ *  target header and floor are drawn from, and the ones the capture found
+ *  missing at the pending instant. */
+const TARGET_ROW = {
+  artifactId: "artifact-3051",
+  representationRevisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+  title: "Launch post draft",
+  objectType: "@cinatra-ai/blog-post-artifact:post",
+  ownerLevel: "organization",
+  visibility: "organization",
+  mime: "text/markdown",
+  updatedAt: "8 min ago",
+  packageName: "@cinatra-ai/blog-post-artifact",
+};
+
+/** What the panel must read at ANY moment the frame has not painted: the header
+ *  fields the drawing names, and the one sanitized floor line under them. */
+function expectTargetNamed(root: HTMLElement, when: string): void {
+  const header = root.querySelector("[data-review-target-header]");
+  expect(header, `${when}: the target header is drawn`).not.toBeNull();
+  const text = header!.textContent ?? "";
+  for (const fact of [
+    "Launch post draft",
+    "@cinatra-ai/blog-post-artifact:post",
+    "revision ea615d36-2ad",
+    "pinned",
+    "Ownership: organization",
+    "Visibility: organization",
+    "text/markdown",
+    "updated 8 min ago",
+  ]) {
+    expect(text, `${when}: ${fact}`).toContain(fact);
+  }
+  const floor = root.querySelector("[data-review-target-floor]");
+  expect(floor, `${when}: the never-blank floor`).not.toBeNull();
+  expect(floor!.getAttribute("data-review-floor-package"), when).toBe(
+    "@cinatra-ai/blog-post-artifact",
+  );
+  expect(floor!.getAttribute("data-review-floor-slot"), when).toBe("detail");
+  // The sentence the capture photographed is a preview state, never a reason the
+  // reviewer cannot decide — and it never stands alone any more.
+  expect(root.textContent, `${when}: the decision floor is live`).toContain("Approve");
+}
+
 /**
  * The widget's server. `installWidgetServiceStub` answers the conversation
  * routes; this wraps it with the two routes THIS turn adds — the run's seed and
@@ -248,7 +300,15 @@ function installTurnServer(state: {
   const calls: Call[] = [];
   const base = installWidgetServiceStub({
     threadMessages: namedStartTranscript(),
-    lifecycle: () => ({ kind: "artifact_review_gate", state: state.gate(), body: null }),
+    lifecycle: () => ({
+      kind: "artifact_review_gate",
+      state: state.gate(),
+      body: null,
+      // The gate's own rows ride the answer that authorized the card
+      // (cinatra#3051), which is what lets the panel name its target before the
+      // island has loaded anything.
+      targets: [TARGET_ROW],
+    }),
   });
   const inner = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -385,6 +445,16 @@ describe("a run started from the widget's own composer", () => {
     // It is the WIDGET's card, drawn on the widget's own host…
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     expect(card.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    // …and at that instant it NAMES what is under review. This is the reading
+    // the capture found empty: the island frame has not painted, and the header
+    // and the floor are on screen anyway, from the gate's own rows.
+    expect(
+      root
+        .querySelector('[data-conformance-id="review-target-island"]')
+        ?.getAttribute("data-island-load-state"),
+      "the frame has not painted at the pending instant",
+    ).toBe("loading");
+    expectTargetNamed(root, "the pending instant");
     // …and it asked with the reader's own proof.
     const resolves = callsTo(server.calls, LIFECYCLE_VIEW_RESOLVE_PATH);
     expectBrokered(resolves[0], "the resolve");
@@ -437,6 +507,7 @@ describe("a run started from the widget's own composer", () => {
     );
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     expect(cardCounts(root)).toEqual({ reviewCards: 1, slots: 1, placeholders: 0 });
+    expectTargetNamed(root, "the reloaded page's first paint");
     expectBrokered(callsTo(server.calls, LIFECYCLE_VIEW_RESOLVE_PATH)[0], "the resolve");
   }, 60_000);
 });

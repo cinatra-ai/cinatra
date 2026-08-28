@@ -1102,6 +1102,55 @@ export type LifecycleCardBodyByKind = {
 };
 
 /**
+ * ONE REVIEW TARGET, as a ROW (cinatra#3051).
+ *
+ * WHY THE ANSWER CARRIES THESE AT ALL. Everything the reader must be told about
+ * what is under review — the immutable header of `app-artifact-review` §IV and
+ * the never-blank floor of its §V — used to live INSIDE the island document, so
+ * every outcome that is not a completed frame load (a frame still loading, one
+ * whose bound was reached, one this host cannot authenticate) presented a panel
+ * that named nothing at all. The header fields are facts of the GATE'S OWN
+ * pinned rows and not of the preview, so they travel with the answer that
+ * authorized the card, and the card draws them before any frame has loaded.
+ *
+ * DISPLAY FACTS ONLY, AND EVERY ONE OF THEM NULLABLE. A row is a projection of
+ * the same `PreparedReviewTarget` the island renders, taken from the SAME
+ * loader, so the two cannot disagree; a target whose artifact this reader may
+ * not read (or which is gone) still yields a row carrying its ids and nothing
+ * else, because a floor with no header is the defect this closes. No bytes, no
+ * renderer descriptor, no href.
+ */
+export const REVIEW_TARGET_ROW_FIELD_MAX_LENGTH = 200;
+
+/** Ceiling on how many target rows one gate may answer with. A gate pins a
+ *  bounded set; an answer past this is a producer this card does not trust. */
+export const REVIEW_TARGET_ROWS_MAX = 8;
+
+const reviewTargetRowField = z.string().max(REVIEW_TARGET_ROW_FIELD_MAX_LENGTH).nullable();
+
+export const reviewTargetRowSchema = z
+  .object({
+    artifactId: z.string().min(1).max(REVIEW_TARGET_ROW_FIELD_MAX_LENGTH),
+    representationRevisionId: z.string().min(1).max(REVIEW_TARGET_ROW_FIELD_MAX_LENGTH),
+    /** The artifact display title. `null` when there is no readable artifact. */
+    title: reviewTargetRowField,
+    /** The artifact type id — the header type tag, and the floor's package. */
+    objectType: reviewTargetRowField,
+    ownerLevel: reviewTargetRowField,
+    visibility: reviewTargetRowField,
+    mime: reviewTargetRowField,
+    updatedAt: reviewTargetRowField,
+    /** The package whose renderer the host resolved for this target, where one
+     *  resolved — the `package` half of the §V floor diagnostic. */
+    packageName: reviewTargetRowField,
+  })
+  .strict();
+
+export type ReviewTargetRow = z.infer<typeof reviewTargetRowSchema>;
+
+const reviewTargetRowsSchema = z.array(reviewTargetRowSchema).max(REVIEW_TARGET_ROWS_MAX);
+
+/**
  * Ceiling on a server-issued island `src` (cinatra#2754). The island credential
  * bounds its own sealed value; this leaves room for the path, the ref and the
  * frame selectors around it and refuses anything larger, so an oversized value
@@ -1142,7 +1191,16 @@ export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
  * A same-site host receives `null` here and keeps composing its own cookie URL.
  */
 export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
-  LifecycleResolveEnvelopeFor<K> & { islandSrc: string | null };
+  LifecycleResolveEnvelopeFor<K> & {
+    islandSrc: string | null;
+    /**
+     * The gate's own pinned target rows (cinatra#3051), or `null` when the
+     * answer carried none. They ride the ANSWER for the reason `islandSrc`
+     * does: the resolution ladder authorizes, and this is the projection the
+     * one route that draws a card composes from what that ladder admitted.
+     */
+    targets: readonly ReviewTargetRow[] | null;
+  };
 
 /**
  * The closed runtime registry behind the type map above. A kind with a `null`
@@ -1167,6 +1225,19 @@ const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
  * that attached one of those is a producer whose other answers cannot be
  * trusted either — the same posture `absent` + body already takes.
  */
+/**
+ * The server-composed target rows, read as ONE shape (cinatra#3051). `null`
+ * means the answer carried none — an older producer, or a state that draws no
+ * target — and the card names the gate alone rather than drawing nothing.
+ * `undefined` means the answer carried something that is not one of ours, and
+ * REFUSES the envelope, exactly as a bad `islandSrc` does.
+ */
+function readReviewTargetRows(raw: unknown): readonly ReviewTargetRow[] | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  const parsed = reviewTargetRowsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function readIslandSrc(raw: unknown): string | null | undefined {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "string") return undefined;
@@ -1203,27 +1274,37 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const bodyPresent = rawBody !== undefined && rawBody !== null;
     const islandSrc = readIslandSrc(record.islandSrc);
     if (islandSrc === undefined) return null;
+    const targets = readReviewTargetRows(record.targets);
+    if (targets === undefined) return null;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
-      if (bodyPresent || islandSrc !== null) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc: null } as
-        LifecycleResolveAnswerFor<K>;
+      // Target rows name what a gate pinned, so a set arriving beside the
+      // collapse of every denial is the same oracle an island URL would be —
+      // refused exactly like the body and the address.
+      if (bodyPresent || islandSrc !== null || targets !== null) return null;
+      return {
+        kind: expectedKind,
+        state: state.data,
+        body: null,
+        islandSrc: null,
+        targets: null,
+      } as LifecycleResolveAnswerFor<K>;
     }
 
     const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
     if (schema === null) {
       if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc } as
+      return { kind: expectedKind, state: state.data, body: null, islandSrc, targets } as
         LifecycleResolveAnswerFor<K>;
     }
 
     if (!bodyPresent) return null;
     const body = schema.safeParse(rawBody);
     if (!body.success) return null;
-    return { kind: expectedKind, state: state.data, body: body.data, islandSrc } as
+    return { kind: expectedKind, state: state.data, body: body.data, islandSrc, targets } as
       LifecycleResolveAnswerFor<K>;
   } catch {
     // A throwing getter is a hostile shape; it draws nothing, like every other
