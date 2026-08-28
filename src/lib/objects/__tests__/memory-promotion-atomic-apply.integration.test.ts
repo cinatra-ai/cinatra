@@ -1,6 +1,6 @@
 /**
  * cinatra#1381: THE APPLY IS ONE TRANSACTION, proven against a REAL database
- * with the REAL statement sequence (review round 1, finding 1).
+ * with the REAL statement sequence.
  *
  * WHY THIS SUITE EXISTS. The unit suites next to it mock the canonical writer:
  * `memory-promotion-atomic-apply.test.ts` makes `historyAwareUpsert` THROW a
