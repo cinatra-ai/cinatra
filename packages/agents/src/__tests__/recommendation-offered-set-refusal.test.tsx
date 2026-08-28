@@ -102,6 +102,7 @@ const OFFERED = [
     rank: 1,
     recommended: true,
     scoredFeatures: [],
+    vendorName: null,
   },
 ];
 

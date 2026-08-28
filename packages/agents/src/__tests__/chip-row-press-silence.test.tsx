@@ -93,9 +93,9 @@ afterEach(() => {
 });
 
 const THREE_SKILLS: RecommendedSkillForChip[] = [
-  { skillId: "skill-enrich", skillRevisionId: "rev-1", recommended: true, rank: 1, score: 0.9, scoredFeatures: [], name: "Enrich contacts" },
-  { skillId: "skill-draft", skillRevisionId: "rev-2", recommended: true, rank: 2, score: 0.8, scoredFeatures: [], name: "Draft email" },
-  { skillId: "skill-send", skillRevisionId: "rev-3", recommended: true, rank: 3, score: 0.7, scoredFeatures: [], name: "Schedule send" },
+  { skillId: "skill-enrich", skillRevisionId: "rev-1", recommended: true, rank: 1, score: 0.9, scoredFeatures: [], name: "Enrich contacts", vendorName: "Northstar" },
+  { skillId: "skill-draft", skillRevisionId: "rev-2", recommended: true, rank: 2, score: 0.8, scoredFeatures: [], name: "Draft email", vendorName: "Northstar" },
+  { skillId: "skill-send", skillRevisionId: "rev-3", recommended: true, rank: 3, score: 0.7, scoredFeatures: [], name: "Schedule send", vendorName: null },
 ];
 
 async function mountRow() {

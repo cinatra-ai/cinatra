@@ -399,6 +399,77 @@ async function settleFrame() {
 }
 
 // ---------------------------------------------------------------------------
+// POINT 4 (the second review round) — NO CARD AROUND THE ROW.
+//
+// The pills and their Continue sit DIRECTLY in the run detail column beside the
+// rail. The row's own suite measures its root in isolation; this measures the
+// composition it is actually drawn in — the frame the run page builds — so a
+// card supplied by the HOST rather than by the row would be caught here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Card chrome, as classes rather than as a vibe: an outline, a ground, a corner
+ * radius, a drop shadow, or padding that insets content from an edge.
+ */
+const CARD_CHROME =
+  /(^|\s)(border|border-[a-z]|rounded(-|$)|bg-(?!transparent)|shadow(-|$)|p-|px-|py-|pt-|pb-)/;
+
+describe("point 4 — the Skills step sits directly in the detail column", () => {
+  it("puts NOTHING with panel chrome between the detail column and the row's root", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(HELD);
+    const { container } = render(
+      <RunSurface panel="none" hasPark held initialSelection="recommendation" />,
+    );
+    await settleFrame();
+
+    const column = detailColumn(container);
+    const root = column.querySelector<HTMLElement>("[data-run-recommendation-chip-row]");
+    expect(root).not.toBeNull();
+
+    // Walk the ancestors from the row's root up to the detail column: every one
+    // of them must be free of card treatment, and the column itself too.
+    let node: HTMLElement | null = root!;
+    const seen: string[] = [];
+    while (node && node !== column) {
+      seen.push(node.className);
+      node = node.parentElement;
+    }
+    expect(node).toBe(column);
+    for (const className of seen) expect(className).not.toMatch(CARD_CHROME);
+    expect(column.className).not.toMatch(CARD_CHROME);
+  });
+
+  it("draws the row as an immediate child of the detail column — no wrapper at all", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(HELD);
+    const { container } = render(
+      <RunSurface panel="none" hasPark held initialSelection="recommendation" />,
+    );
+    await settleFrame();
+
+    const column = detailColumn(container);
+    const root = column.querySelector<HTMLElement>("[data-run-recommendation-chip-row]");
+    // The surface is handed over BARE: the card is the whole of the step.
+    expect(root!.parentElement).toBe(column);
+  });
+
+  it("does the same for the read-only reading after the run has started", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue({ ...SETTLED, runStarted: true });
+    const { container } = render(
+      <RunSurface panel="none" hasPark held={false} initialSelection="recommendation" />,
+    );
+    await settleFrame();
+
+    const column = detailColumn(container);
+    const root = column.querySelector<HTMLElement>("[data-run-recommendation-chip-row]");
+    expect(root).not.toBeNull();
+    expect(root!.parentElement).toBe(column);
+    expect(root!.className).not.toMatch(CARD_CHROME);
+    // …and no bordered outcome panel is drawn on this host at all.
+    expect(column.querySelector("[data-recommendation-outcome-panel]")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POINT D — EVERY STEP ON ITS OWN PAGE. The detail column shows the selected
 // step and nothing else, on every branch of `runDetailPanelKind`.
 // ---------------------------------------------------------------------------

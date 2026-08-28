@@ -35,6 +35,12 @@ const evidence = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
+  // The pre-start selection clear (cinatra#3047) — a no-op for these arms,
+  // which is exactly what it is on a run that has nothing to clear.
+  clearRunSelectedSkillRevisionsBeforeStart: vi.fn(() => 0),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: vi.fn(() => true),
   SKIP_RECOMMENDATION_SOURCE: "user_skipped",
   decidedSkillsFromEvidence: () => [],
   hasRunRecommendationSkip: () => {
