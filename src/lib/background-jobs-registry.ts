@@ -1405,12 +1405,6 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         // read added to the worker prologue must not make a run less likely to
         // survive a DB blip (`attempts` defaults to 1).
         ScopeRecheckUnavailableError,
-        // cinatra#3007: the run finished its work but the attempt could not
-        // WRITE DOWN that it still owed a produced-output review. Re-delivered,
-        // never failed-through: a terminal status written over an unproven
-        // review is the defect the hold exists to prevent.
-        ProducedReviewHoldUnpersistedError,
-        MAX_PRODUCED_REVIEW_HOLD_PARKS,
       } = await import("@cinatra-ai/agents");
       try {
         await runAgentBuilderExecutionJob(
@@ -1453,36 +1447,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         // The park ordinal is written back onto the job data (the SAME pattern
         // the trigger gate uses for `gateAttempt`) so the worker's own cap can
         // land the run `failed` on a PERMANENT fault instead of looping.
-        // cinatra#3007: same BullMQ flow-control move for a hold that could not
-        // be recorded. The re-delivered leg re-executes nothing — it carries the
-        // terminal write still owed and finishes it (a park if the review holds
-        // the run, the write itself if nothing does). The park ordinal rides the
-        // job data so this cap survives the moveToDelayed round trip; at the cap
-        // the job fails permanently and the run keeps its non-terminal status,
-        // because landing it terminal here is exactly what must not happen.
-        if (err instanceof ProducedReviewHoldUnpersistedError) {
-          const parks =
-            typeof (job.data as { producedReviewHoldPark?: number }).producedReviewHoldPark ===
-            "number"
-              ? (job.data as { producedReviewHoldPark: number }).producedReviewHoldPark
-              : 0;
-          if (parks >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
-            console.error(
-              `[produced-review-hold] run ${err.runId} could not record its hold after ${parks} re-deliveries — failing this job; the run keeps its non-terminal status`,
-            );
-            throw err;
-          }
-          console.warn(
-            `[produced-review-hold] run ${err.runId} hold unrecorded — re-delivering in ${err.delayMs}ms (park ${parks + 1})`,
-          );
-          await job.updateData({
-            ...(job.data as Record<string, unknown>),
-            producedReviewHold: err.recovery,
-            producedReviewHoldPark: parks + 1,
-          });
-          await job.moveToDelayed(Date.now() + err.delayMs, job.token);
-          throw new DelayedError();
-        }
+        // cinatra#3007: a hold that could not be recorded is deliberately NOT
+        // handled here. Its recovery is queued where the fault is raised, on the
+        // one delivery every path shares, so this worker and the three direct
+        // resume callers converge the same way and none of them carries — or can
+        // drop — the terminal write still owed. Nothing to add on this edge: the
+        // attempt failed, which is what an unrecordable hold is, and the run
+        // keeps its non-terminal status. Do not re-add a second carrier here.
         if (err instanceof ScopeRecheckUnavailableError) {
           console.warn(
             `[scope-recheck] run ${err.runId} scope check unreadable — re-queuing in ${err.delayMs}ms: ${err.message}`,

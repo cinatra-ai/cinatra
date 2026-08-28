@@ -785,10 +785,11 @@ type WithheldTerminalWrite = {
  * The produced-review hold could not be recorded ANYWHERE — not as a park, not
  * as anything else — so no later pass can see that this run still owes a review.
  *
- * Thrown rather than swallowed: the alternative is a job that completes
- * successfully over a `running` row nothing will converge, which is the shape of
- * the defect this fix exists to remove. A thrown attempt is retried, and is
- * visible in job telemetry while it is not.
+ * Thrown rather than swallowed: the alternative is an attempt that reports
+ * success over a `running` row nothing will converge, which is the shape of the
+ * defect this fix exists to remove. The withheld write is put on its own delayed
+ * delivery before the throw, so the run still converges; the throw is what keeps
+ * the failed attempt visible instead of silently green.
  */
 export const PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS = 15 * 1000;
 
@@ -834,7 +835,17 @@ export class ProducedReviewHoldUnpersistedError extends Error {
    *  it: the same verdict, payload and derivation capture the failed attempt was
    *  withholding. */
   readonly recovery: ProducedReviewRecovery;
-  constructor(args: { runId: string; recovery: ProducedReviewRecovery; delayMs?: number }) {
+  /** Whether the recovery was handed to its durable delivery before this was
+   *  raised. `false` means the queue could not take it either, so nothing but an
+   *  operator can finish the run — which is why it is logged as an error there
+   *  and reported here rather than left implicit. */
+  readonly delivered: boolean;
+  constructor(args: {
+    runId: string;
+    recovery: ProducedReviewRecovery;
+    delivered?: boolean;
+    delayMs?: number;
+  }) {
     const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
     super(
       `run ${args.runId}: the produced-output review hold could not be recorded — ` +
@@ -844,6 +855,7 @@ export class ProducedReviewHoldUnpersistedError extends Error {
     this.runId = args.runId;
     this.delayMs = delayMs;
     this.recovery = args.recovery;
+    this.delivered = args.delivered ?? false;
   }
 }
 
@@ -869,6 +881,9 @@ async function producedReviewHoldsRun(args: {
   authority: OrgWriteAuthority | undefined;
   /** Which terminal edge is asking — log context only. */
   where: string;
+  /** How many recovery deliveries this run's withheld write has already taken.
+   *  Only a recovery leg carries one; a first raise leaves it at zero. */
+  holdPark?: number;
 }): Promise<boolean> {
   const { runId, where } = args;
   let outcome: { held: boolean; reason: string };
@@ -893,10 +908,7 @@ async function producedReviewHoldsRun(args: {
       `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write, attempt re-delivered (fail-closed):`,
       err,
     );
-    throw new ProducedReviewHoldUnpersistedError({
-      runId,
-      recovery: buildProducedReviewRecovery(runId, args.withheld, args.stepResults),
-    });
+    throw await unpersistedHoldSentinel(runId, args);
   }
   if (!outcome.held) return false;
   // The one held outcome with nothing durable behind it (the park write itself
@@ -904,10 +916,7 @@ async function producedReviewHoldsRun(args: {
   // reason above; the hold module exports it as `UNPERSISTED_HOLD_REASON` and its
   // own suite pins the two together.
   if (outcome.reason === "hold-unpersisted") {
-    throw new ProducedReviewHoldUnpersistedError({
-      runId,
-      recovery: buildProducedReviewRecovery(runId, args.withheld, args.stepResults),
-    });
+    throw await unpersistedHoldSentinel(runId, args);
   }
   return true;
 }
@@ -1042,6 +1051,106 @@ function buildProducedReviewRecovery(
   return bounded.recovery;
 }
 
+/** The id prefix a withheld terminal write's delivery is keyed on. */
+export const PRODUCED_REVIEW_RECOVERY_JOB_PREFIX = "produced-review-recovery__";
+
+/**
+ * Hand the withheld terminal write to the ONE road that can still finish the
+ * run: a delayed execution delivery carrying the recovery, consumed by the
+ * recovery leg at the top of the execution job (which re-executes nothing — it
+ * asks the review question again and finishes the run).
+ *
+ * Handed over HERE, at the single point the sentinel is raised, rather than by
+ * each caller. Four paths reach an unrecordable hold — the execution worker, the
+ * operator's resume, the resume primitive and the review-gate delivery sweep —
+ * and only the first owns a job it could re-deliver; the other three would each
+ * need their own hand-off, and a fifth path added later would silently drop the
+ * write again. Raised-point delivery means no caller holds the payload, so no
+ * caller can lose it, and there is exactly one carrier and one consumer.
+ *
+ * IDEMPOTENT: the delivery is keyed on the run AND the delivery ordinal, so two
+ * attempts raising the same ordinal — a retried resume, two callers racing the
+ * same run — collapse onto the one queued recovery instead of forking it.
+ *
+ * BOUNDED: it carries exactly what `buildProducedReviewRecovery` built, which is
+ * already under `PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES` on every branch.
+ *
+ * CAPPED: past `MAX_PRODUCED_REVIEW_HOLD_PARKS` nothing further is queued. A
+ * write fault that survives that many deliveries is permanent, and looping on it
+ * forever hides it. The run is NEVER landed terminal at the cap — a terminal
+ * write over an unproven review is the defect this path exists to prevent — so
+ * the cap surfaces as an operator signal over a run that is still non-terminal.
+ *
+ * Best-effort by necessity and never fail-open: a delivery that cannot be queued
+ * is reported and the sentinel is raised regardless.
+ */
+async function deliverProducedReviewRecovery(args: {
+  runId: string;
+  recovery: ProducedReviewRecovery;
+  park: number;
+}): Promise<boolean> {
+  const { runId, recovery, park } = args;
+  if (park >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not record its hold across ${park} deliveries — ` +
+        `no further recovery is queued; the run keeps its non-terminal status`,
+    );
+    return false;
+  }
+  const next = park + 1;
+  try {
+    const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+    const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+      { runId, producedReviewHold: recovery, producedReviewHoldPark: next },
+      {
+        delay: PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
+        // One shot per delivery: the leg re-raises and queues the next ordinal
+        // itself, so a BullMQ-level retry would only double the chain.
+        attempts: 1,
+        jobId: `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}${runId}__${next}`,
+        // The leg anchors the run's own org-scoped dispatch authority; it must
+        // not inherit the resuming principal's frame.
+        inheritActorContext: false,
+      },
+    );
+    console.warn(
+      `[produced-review-hold] run=${runId} hold unrecorded — recovery queued in ` +
+        `${PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS}ms (delivery ${next})`,
+    );
+    return true;
+  } catch (err) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not queue the recovery delivery — the run keeps ` +
+        `its non-terminal status and nothing is written over the unproven review:`,
+      err,
+    );
+    return false;
+  }
+}
+
+/** Build the bounded recovery, put it on its delivery, and return the sentinel
+ *  for the caller to throw. The one exit for a hold nothing durable records, so
+ *  both raise sites take the same road. Returned rather than thrown so the
+ *  `throw` stays at the call site, where it reads as the terminator it is. */
+async function unpersistedHoldSentinel(
+  runId: string,
+  args: {
+    withheld: WithheldTerminalWrite;
+    stepResults: readonly unknown[];
+    holdPark?: number;
+  },
+): Promise<ProducedReviewHoldUnpersistedError> {
+  const recovery = buildProducedReviewRecovery(runId, args.withheld, args.stepResults);
+  const delivered = await deliverProducedReviewRecovery({
+    runId,
+    recovery,
+    park: args.holdPark ?? 0,
+  });
+  return new ProducedReviewHoldUnpersistedError({ runId, recovery, delivered });
+}
+
 /**
  * The re-delivered attempt for a run whose hold could not be recorded
  * (cinatra#3007). It re-executes NOTHING: the run already did its work and is
@@ -1058,6 +1167,9 @@ export async function recoverProducedReviewHold(args: {
   run: { orgId: string; status: AgentRunStatus };
   recovery: ProducedReviewRecovery;
   authority: OrgWriteAuthority | undefined;
+  /** Which delivery this is, so a hold that still cannot be recorded queues the
+   *  NEXT one and the cap counts the chain rather than restarting it. */
+  park?: number;
 }): Promise<void> {
   const { runId, run, recovery, authority } = args;
   const withheld = recovery.withheld;
@@ -1073,6 +1185,7 @@ export async function recoverProducedReviewHold(args: {
       withheld,
       authority,
       where: "hold recovery",
+      holdPark: args.park,
     })
   ) {
     console.log(`[produced-review-hold] run=${runId} recovery recorded the hold`);
@@ -1111,6 +1224,34 @@ export async function recoverProducedReviewHold(args: {
     throw e;
   });
   if (!transitioned) return;
+  // The terminal-success tail, in the order the immediate edge takes it: the
+  // unbound-output derivation enqueue for a capture that committed with the CAS,
+  // then the announcement, then the autosave sidecar. A recovery that stopped at
+  // the announcement would land a run that is terminal but missing the sidecars
+  // every other run of the same verdict gets — the derivation waits on the sweep
+  // instead of the one-shot job, and the autosave, which has no sweep behind it,
+  // never happens at all.
+  if (withheld.status === "completed" && withheld.derivationOutbox) {
+    try {
+      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
+        { runId, orgId: run.orgId },
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          jobId: `unbound-output-derive__${runId}`,
+          inheritActorContext: false,
+        },
+      );
+    } catch (e) {
+      console.warn(
+        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
   await Promise.resolve(
     publishAgUiEvent(
       runId,
@@ -1125,6 +1266,11 @@ export async function recoverProducedReviewHold(args: {
           }) as never,
     ),
   ).catch(() => undefined);
+  if (withheld.status === "completed") {
+    runSkillAutosaveOnRunCompletion(runId).catch((e) => {
+      console.warn(`[skill-autosave] autosave failed, run=${runId}`, e);
+    });
+  }
   console.log(
     `[produced-review-hold] run=${runId} recovery performed the withheld ${withheld.status} write`,
   );
@@ -2747,6 +2893,8 @@ async function runAgentBuilderExecutionJobInner(
       run: { orgId: run.orgId, status: run.status as AgentRunStatus },
       recovery: holdRecovery,
       authority: executionAuthority,
+      park:
+        typeof data.producedReviewHoldPark === "number" ? data.producedReviewHoldPark : 0,
     });
     return;
   }
