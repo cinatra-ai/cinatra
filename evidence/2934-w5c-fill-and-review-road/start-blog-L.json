@@ -1,22 +1,22 @@
 {
   "agentPath": "/agents/cinatra-ai/blog-draft-writer-agent/new",
-  "runId": "ac70cd70-bf6d-4c70-a60b-c947eca64318",
-  "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/ac70cd70-bf6d-4c70-a60b-c947eca64318",
+  "runId": "44915a33-b35a-42d9-9ace-9e36028fae18",
+  "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/44915a33-b35a-42d9-9ace-9e36028fae18",
   "run": {
-    "id": "ac70cd70-bf6d-4c70-a60b-c947eca64318",
+    "id": "44915a33-b35a-42d9-9ace-9e36028fae18",
     "status": "pending_approval",
-    "created_at": "2026-08-28T03:01:56.622Z",
+    "created_at": "2026-08-28T07:30:48.998Z",
     "started_at": null,
     "completed_at": null,
     "lifecycle_moment": "hitl",
-    "template_id": "935b41c4-a274-4101-8c45-51aeb895fd04",
-    "run_by": "304a8a80-9fe6-4093-b4ef-b718c1ad7566"
+    "template_id": "8ade4e37-9204-411a-9c9e-e975cdeb5212",
+    "run_by": "b027866c-e6b3-4b87-8da0-fbb9f6a2a3aa"
   },
   "gates": [
     {
-      "review_task_id": "setup-ac70cd70-bf6d-4c70-a60b-c947eca64318",
+      "review_task_id": "setup-44915a33-b35a-42d9-9ace-9e36028fae18",
       "field_name": "idea",
-      "created_at": "2026-08-28T03:02:12.241Z",
+      "created_at": "2026-08-28T07:31:00.472Z",
       "schema": "{\"type\": \"object\", \"title\": \"idea\", \"required\": [\"title\"], \"properties\": {\"title\": {\"type\": \"string\"}, \"outline\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"summary\": {\"type\": \"string\"}}, \"x-multiline\": true, \"x-placeholder\": \"What should this post be about?\", \"x-object-text-property\": \"title\"}",
       "vals": "{}"
     }

@@ -1,187 +1,217 @@
 # `evidence/2934-w5c-fill-and-review-road/` — the picture leg of cinatra#2934 (pull request 2998)
 
-Re-taken **at the repaired head**, after the graded review of the previous leg found two defects in
-the pictures themselves. On the real running app, signed in as **a run owner who is not a platform
-administrator** (`Rita Owner`, `owner@example.com`, organization `member`). A real provider answered
-every turn through the real public MCP toolbox over the instance's own public origin; the scripted
-provider is set in nothing this leg started and the app server's own log carries **zero**
-scripted-runtime lines. No stub, no seeded transcript, no edited pixel, and **no direct-SQL write of a
-run, a gate, a park, a record or a review task** — every statement this leg made against the database
-is a `select`. Full window, 1440x900 at device scale 2, uncropped, **light and dark**, switched
-through the app's own theme control. Every capture was viewed before it was recorded.
+Re-taken after a graded review failed five cells **on the pixels**: the fill cells showed empty fields
+under a sentence that said the fields were filled, and one cell was a picture of the platform's
+"Not authorized" page. This leg answers that with a measurement, corrects the method, and re-shoots
+the five.
+
+On the real running app, signed in as **a run owner who is not a platform administrator**
+(`Rita Owner`, `owner@example.com`, organization `member`). A real provider answered every turn
+through the real public MCP toolbox over the instance's own public origin; the scripted provider is
+set in nothing this leg started. No stub, no seeded transcript, no edited pixel, and **no direct-SQL
+write of a run, a gate, a park, a record or a review task** — every statement this leg made against
+the database is a `select`. Full window, 1440x900 at device scale 2 (every file 2880x1800),
+uncropped, **light and dark**, switched through the app's own theme control. Every capture was viewed
+before it was recorded.
 
 Graded against the ratified drawing at the contract's pin `458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f`
 — `app-artifact-review.html` §VI, §IX and §X, and `app-lifecycle-cards.html` §X. Those sections were
-read at that pin and their sentences copied into the **requires** column verbatim, character for
-character.
+read at that pin and their sentences copied into the **requires** column verbatim.
 
-**The whole leg is re-taken. Nothing is carried.** The head this leg photographs repairs the two
-defects the pictures exposed, and both repairs change what a window DRAWS — the assistant's line is
-now rendered rather than printed, and the platform's fill sentence is worded differently — so every
-predecessor capture is REPLACED rather than kept. Every run in this leg is new; the run ids below are
-the ones in the frames.
+## The leg note: what the previous leg's README claimed, and what its pictures showed
+
+**Said plainly, because it is the review's central complaint.** The previous README recorded, for the
+run-page, schedule and step-by-step fill cells, DOM readings such as `field-idea "" → A weekly
+publishing rhythm beats a burst of posts` and marked them **PASS** — while the frames filed beside
+those readings showed the fields at their placeholders. **Both halves were true of different pages.**
+The readings were taken in the context that SENT the turn; the frames were taken in a second context
+that never received it. A row that pairs a reading from one page with a picture of another is not
+evidence, and those four rows should have read FAIL. They are corrected below.
+
+**The method is corrected, not argued.** Every frame in the re-shot cells is taken **in the same
+context that sent the turn**, with the theme chosen through the app's own control in that context
+**before** the run page opens, and the field's value read out of the DOM **immediately before and
+immediately after the shutter**. A frame is only filed when both reads agree; every re-shot frame's
+record carries `domAgreedAcrossTheShutter: true`. Where a turn cannot be sent twice, the cell gets
+**one run per theme** — the run ids are in the table.
+
+## The diagnosis, measured on a real run
+
+The question the review asked: was the value written to the store but never applied to the field in
+view (a), applied and then lost on a reload or re-render (b), applied only after the frame was taken
+(c), or photographed on a page that never received the fill (d)?
+
+**One run, one context, one fill, four readings** — run `d46a8013`, light theme, the same browser
+context throughout:
+
+| moment | `field-idea` read off the DOM | frame | window rows |
+|---|---|---|---|
+| before the turn | `""` | — | 0 |
+| at the shutter, immediately before it | `A weekly publishing rhythm beats a burst of posts` | [`diagnosis__fill-in-context__light.png`](diagnosis__fill-in-context__light.png) | 2 |
+| at the shutter, immediately after it | `A weekly publishing rhythm beats a burst of posts` | (same frame) | 2 |
+| after `page.reload()` in **the same context** | `""` | [`diagnosis__fill-in-context__after-reload__light.png`](diagnosis__fill-in-context__after-reload__light.png) | 2 |
+
+**(d) alone holds, and the road did not regress.** The value was in the DOM at the instant of the
+frame — in that context, in every one of the twelve re-shot frames — so (a) is excluded; it did not
+move across the shutter, so (c) is excluded; and it was lost only by a **reload**, which is (b) only
+in the sense the code intends and describes.
+
+**The code fact under it.** `packages/agents/src/use-run-window-conversation.ts` applies a fill from
+ONE place: the value `send()` returns. The load on mount sets `entries` and nothing else
+(`:87-104`), and the hook keeps no fill counter at all — its removal is this slice's own repair, and
+the comment at `:74-85` says why: "The SERVER names the turn instead, so `outcome.fills` is already
+only this message's rows". So **a page that did not receive the turn has nothing to apply**, and a
+fresh context opened on the same run draws the exchange back (it is kept with the run) with the form
+untouched. The previous leg's capture library opened exactly such a context for every pair.
+
+**The panel's new rendering path did not detach the fill.** `hitl-conversation-panel.tsx` is
+presentational — it draws `conversation` and calls the parent's `onSubmit`; the fill travels on the
+parent's own `send()` return, which the panel never touches. Pinned by a test that renders through
+the new path:
+`packages/agents/src/__tests__/run-window-fill-through-drawn-panel.test.tsx` mounts the REAL panel
+over a real field, sends a turn, and asserts the assistant's line is DRAWN (a `<strong>`, a real
+`<table>`, zero raw `**`) **and** that the field holds what the turn placed. It is a live wire, not a
+snapshot: dropping the effect in the screen's own submit makes it fail with
+`expected '' to be 'A weekly publishing rhythm'` — the graded review's picture, in a test.
+
+## An observation, recorded with its code fact
+
+**An unsubmitted fill does not survive a reload.** The exchange does (§IX keeps it with the run); the
+values do not, because nothing re-applies a fill on mount — by design, and the design's reason is the
+comment quoted above: a screen re-reading the run must not re-apply a fill the person has since
+edited away. **Whether it SHOULD survive is a product question for the closeout, not a clause of this
+road**, and it is recorded here rather than decided.
 
 ## What the graded review asked for, and what these pictures answer
 
 | the review's point | what this leg did |
 |---|---|
-| **A** — the window printed the assistant's markdown raw in four cells | Fixed at the source: the window draws the assistant's line with the renderer /chat draws it with. Every re-shot cell carries a DOM readback of the assistant's own bubble — the count of `<strong>` elements, of `<table>` elements, and of raw `**` and `\|` characters left in the text. |
-| **B** — the platform's fill sentence spoke of the person in the third person | Fixed at the source. The sentence now reads `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` and is visible verbatim in the run-page, schedule and step-by-step cells. |
-| **C** — the account footer was blank in one run's pictures | Grounded, and the frames are fixed. See *Three observations, grounded* below. Every capture in this leg records the footer text it was taken with; all twenty read `Rita Owner` + `owner@example.com`. |
-| **D** — does the window draw an attached file beside the message? | Grounded: **it does not**, and that is a code fact, not an omission in the frame. See below. The readback stays the proof, as the review said it would have to. |
-| **E** — does the panel-over-decision-bar treatment match the drawing? | Grounded against the drawing itself, rendered at the pin, and **measured in pixels**. It does not match. Recorded as a finding, not patched here. |
+| **1** — explain the contradiction with a measurement | Done above: same run, same context, DOM and frame in the same instant, before and after a reload. **(d)** holds; no regression in the road. |
+| **2** — a red-first test through the new panel path | `run-window-fill-through-drawn-panel.test.tsx`, red when the effect is dropped, green as the code stands. |
+| **3** — why the attachment frame was the "Not authorized" page | Reproduced and named: it is not the window's access rule. See below. |
+| **4** — re-shoot the five failing cells, values visibly in the fields | Twelve frames re-shot in the turn's own context; the values are in the frame and in the DOM at the shutter. |
+| **5** — the reds at the graded head | Answered on the pull request; the two `js/polynomial-redos` alerts are fixed at their source in this commit. |
 
 ## The graded table
 
+Twelve frames are **re-shot at this head, in the turn's own context**. Eight are **carried unchanged**
+from the graded head — the review passed them, and the only product file this head changes
+(`markdown-render-core.ts`) is a rewrite whose output is byte-identical on 200 021 differential
+inputs, so nothing those eight frames show can have moved. Each carried row says so.
+
 | capture | requires (verbatim from the drawing) | shows (measured) | verdict |
 |---|---|---|---|
-| [`run-page__fill-no-submit__light.png`](run-page__fill-no-submit__light.png) | §X, the run page's own reading: "Ask Cinatra to fill the fields above, or ask about this step… **Fills the fields the step is waiting for with what was asked for.** Nothing is submitted until the person presses the step's own button — unless the same message asks for it in so many words."<br>§X, the rule for every surface with a form: "The window fills **the fields the person can see** with what they asked for, and nothing is submitted until they press the screen's own button". | The setup gate of run `3fa04248` (`Agentic Run Progress` · `Awaiting input` · `Idea (optional)` · a live `Continue`). The person typed `make the idea "A weekly publishing rhythm beats a burst of posts" and leave everything else as it is`. **Measured off the rendered DOM, before → after: `field-idea` `""` → `A weekly publishing rhythm beats a burst of posts`** — the control the screen DRAWS holds the value. The answer above the box is the platform's own sentence, word for word: `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` Run `pending_approval` → `pending_approval`; `input_params` `{}`; `Continue` never pressed. The window's sentence reads `Ask Cinatra to fill the fields above, or ask about this step…`. Turn served on attempt 1, toolbox present. | **PASS** on both clauses, and the sentence is B's repair. |
-| [`run-page__fill-no-submit__dark.png`](run-page__fill-no-submit__dark.png) | As above, dark theme, through the app's own theme control. | The same filled `Idea`, the same sentence, the same untouched `Continue` on the dark ground; account footer drawn. | **PASS**. |
-| [`run-page__question-no-press__light.png`](run-page__question-no-press__light.png) | §X: "**A question about the step is answered as a question and touches no field.**" | Run `512836b7`. The person typed `what is this field for?`. **The answer is DRAWN, not printed** — DOM readback of the assistant's own bubble: `strong=1`, `raw ** = 0`, `raw \| = 0`; the word `idea` is a `<strong>` element and the quoted idea is a `<blockquote>`. This is the reading that FAILED the graded review. DOM readback of the form: `field-idea` unchanged — **no field changed**. Run `pending_approval` → `pending_approval`; no fill row for that message; no new gate row. Turn served on attempt 1. | **PASS**, and A's repair is visible in it. |
-| [`run-page__question-no-press__dark.png`](run-page__question-no-press__dark.png) | As above, dark theme. | The same drawn answer (`strong=1`, `raw ** = 0`) and the same untouched field on the dark ground. | **PASS**. |
-| [`run-page__submit-on-ask__light.png`](run-page__submit-on-ask__light.png) | §X: "nothing is submitted until they press the screen's own button, **unless the same message plainly asks for it to be submitted**".<br>`app-lifecycle-cards.html` §X: "**Filling the fields in front of the reader is not a press, so one message may fill and then press**"; the card "takes the loading state of §IV until the act comes back, then **settles in place in its own settled reading**"; "The answer in the turn reports what came back and adds nothing." | Run `ac70cd70`. The person typed `set the idea to "Why cadence beats bursts for blog reach" and send it`. The run's store holds **two** rows for that one message — a fill, then `Submitted.` The run moved `pending_approval` → `pending_trigger`, and what was sent is the person's own words: `agent_runs.input_params` = `{"idea": {"title": "Why cadence beats bursts for blog reach"}}`. The card settled in place: the frame is the run's own next reading — the scheduler form drawn, the window's sentence now `Ask Cinatra to set the schedule above, or ask about it…`. The assistant's line is `Submitted.` and adds nothing. | **PASS**. One message filled and then pressed, through the screen's own server action. |
-| [`run-page__submit-on-ask__dark.png`](run-page__submit-on-ask__dark.png) | As above, dark theme. | The same resumed run and the same settled reading on the dark ground. | **PASS**. |
-| [`schedule__fill-no-submit__light.png`](schedule__fill-no-submit__light.png) | §X, the schedule screen's own reading: "Ask Cinatra to set the schedule above, or ask about it… **Fills the scheduler form's own rows — when the run starts, its time, its timezone** — whether the schedule is being set for the first time or changed once it stands. The person presses the form's own button, unless the same message plainly asks for it to be submitted." | The unarmed scheduler form of `pending_trigger` run `ac70cd70`. The person typed `set it for tomorrow at 9 in the morning, Berlin time`. **Measured, before → after: `scheduledAt` `""` → `2026-08-29T09:00`**; the frame shows `Schedule for later` selected, `Run at` `08/29/2026, 09:00 AM`, `Timezone` `Europe/Berlin`. **Nothing was submitted**: run still `pending_trigger`, `cinatra.agent_run_triggers` **held no row** for it at that moment. The answer is the platform's own repaired sentence. | **PASS**. **Both siblings show the fill's own ask** — the review's specific complaint about the dark sibling. |
-| [`schedule__fill-no-submit__dark.png`](schedule__fill-no-submit__dark.png) | As above, dark theme. | The same three filled rows, the same unpressed form, **and the same exchange in the panel** — the dark frame is no longer scrolled to an earlier one. | **PASS**. |
-| [`armed-trigger__fill__light.png`](armed-trigger__fill__light.png) | §X, the armed-trigger tab's own reading: "Ask Cinatra to change this schedule, or ask about it… **Changes the schedule that stands** — until a one-off fires, and for a recurring schedule's future runs — through the tab's own controls. The schedule on screen is what is true." | The run's own `Schedule` tab on an **armed** run: the person set `Run at` `08/29/2026, 09:00 AM` and `Timezone` `Europe/Berlin` and pressed the form's own button; the trigger row reads `trigger_type=scheduled`, `scheduled_at=2026-08-29T07:00:00Z`, `timezone=Europe/Berlin`, `released_at=NULL`, and `agent_runs.status` is `armed`. The tab draws that schedule and the window beneath it carries its own sentence word for word. **No fill was attempted, and none is claimed.** | **RECORDED DEVIATION, not a pass** — unchanged, and the graded review acknowledged it. Code fact: `src/lib/lifecycle/run-window-turn.ts:216` (`boundScreenClaimForSurface`) — "The ARMED-trigger tab is deliberately among them and unchanged: the armed form is cinatra#2788's and is not built here." |
-| [`armed-trigger__fill__dark.png`](armed-trigger__fill__dark.png) | As above, dark theme. | The same armed schedule and the same sentence on the dark ground. | **RECORDED DEVIATION**, as above. |
-| [`review__question__light.png`](review__question__light.png) | §X, the review page's own reading: "…**A question is answered and files nothing.**"<br>§VI: "The decision floor is unchanged: approve, reject, comment." | A real review gate over real artifact-bound output — run `baa08154`, target `Why Weekly Publishing Beats a Burst of Posts` (`@cinatra-ai/blog-post-artifact:post`, revision `138644ea-99f…`, `text/markdown`), `Review requested` · `Awaiting your decision`, `RENDERED` and `RAW SOURCE` side by side. The person typed `what changed in this draft?`. **The answer is DRAWN**: DOM readback of the assistant's bubble — `strong=6`, `tables=1`, `raw ** = 0`, `raw \| = 0`. The pipe table the graded review photographed as a wall of pipes is a real `<table>` with `Created at` / `Review state` / `Run status` rows. **Readback after the turn**: gate still `pending`, `disposition` NULL; `artifact_review_dispositions` **0 rows**; `lifecycle_repair` **0 rows**; the decision bar reads `["Comment","Reject","Approve"]` before and after and the rationale field is empty both times. **Nothing was filed.** | **PASS**, and this is A's repair on the cell where it was worst. |
-| [`review__question__dark.png`](review__question__dark.png) | As above, dark theme. | The same drawn table and bold, the same pending gate, the same untouched decision bar on the dark ground. | **PASS**. |
-| [`review__request-changes__light.png`](review__request-changes__light.png) | §VI: "Typing a change request into it is how a reviewer requests changes… On submit, **the gate resolves changes-requested and a repair goes in flight** — the run takes the reviewer's note and works the target again — and the corrected version returns as a fresh review in the same run: a new review gate entry on the rail, beneath the one just resolved."<br>§X: "an explicit request for changes is placed by the card's own comment machinery, **word for word**". | The person typed `tighten the opening paragraph`. **Word for word, from the database**: `cinatra.lifecycle_repair` holds one row whose `findings` are `[{"id": "prompt-window", "message": "tighten the opening paragraph"}]` — the filed text EQUALS the typed text, character for character — `attempt=1`. The gate moved `pending` → `resolved`, `disposition=changes_requested`, `resolved_at=2026-08-28T03:56:22.518980Z`. The decision bar read `["Comment","Reject","Approve"]` before and `[]` after: the card settled into its own resolved reading, which the frame carries. `artifact_review_dispositions` stayed at **0** rows. | **PASS** on the three clauses this slice owns: filed word for word, changes-requested, repair in flight. **NOT REACHED**: the corrected version returning as a fresh review — see below. |
-| [`review__request-changes__dark.png`](review__request-changes__dark.png) | As above, dark theme. | The same resolved reading and the same turned-back message on the dark ground. | **PASS** / **NOT REACHED** as above. |
-| [`step-by-step__fill-no-submit__light.png`](step-by-step__fill-no-submit__light.png) | §X, the step-by-step reading: "Ask Cinatra to fill this step's fields, or ask about the run… The same filling, one step of a sequence: **the values land in the fields in view and the person presses the step's button.**" | Run `89f947a2`, the five-step rail with `1 Campaign setup` selected. The person typed `set the offering company website to "https://example.test" and the call to action to "Book a 20-minute demo", and leave the sender name as it is`. **Measured, before → after**: `field-offeringCompanyWebsite` `""` → `https://example.test`; `callToAction` `""` → `Book a 20-minute demo`; `field-senderName` `""` → `""`, left exactly as the message asked. Run stayed `pending_approval`, the gate's stored values stayed `{"stepNumber": 1}`, `input_params` stayed `{}` — nothing submitted, no button pressed. The answer is the platform's own repaired sentence. | **PASS** on every clause. |
-| [`step-by-step__fill-no-submit__dark.png`](step-by-step__fill-no-submit__dark.png) | As above, dark theme. | The same rail, the same two filled fields, the same untouched `Sender name` and button on the dark ground. | **PASS**. |
-| [`step-by-step__attachment-reaches-run__light.png`](step-by-step__attachment-reaches-run__light.png) | The plan: "A file attached beside your message travels with your answer to the waiting agent exactly as it does today. The new road must not swallow it into an ordinary chat message, and **must not leave it behind when the answer is finally sent**."<br>§X: "unless the same message plainly asks for it to be submitted". | The window's own paperclip uploaded the file (the app's own upload answered `201`) and the person typed `set the sender name to "Rita Owner" and send it`. The person's own window row carries `campaign-brief.txt`, digest `576038005379a871f562e47022857a40c30371a389a38d872d0accc9a4816d11`; the same message's fill row carries `{"senderName":"Rita Owner"}` and the next row says `Submitted.` The run advanced: a second gate row `{"stepNumber": 2}` materialized at `03:41:25.695801Z`, seconds after the `Submitted.` row at `03:41:27.197Z`. **The window draws no attachment chip beside the message, and by design — see observation D.** | **PASS**: the file reached the waiting run and was not left behind when the answer was sent. The proof is the readback, as the graded review anticipated. |
-| [`step-by-step__attachment-reaches-run__dark.png`](step-by-step__attachment-reaches-run__dark.png) | As above, dark theme. | The same advanced run and the same exchange on the dark ground. | **PASS**. |
-| [`step-by-step__draft-survives-reload__light.png`](step-by-step__draft-survives-reload__light.png) | §IX: "What survives a reload is therefore both — **the turns above the field and the reader's unsent draft in it**." | `please set the call to action to` was typed and **not sent**; the page was reloaded in the browser; the half sentence is still in the field. The field's own persistence key is `cinatra_hitl_assist_<templateId>_@cinatra-ai/email-outreach-agent:setup-form`, read out of the browser's own storage before the reload and matched after it. The run's store gained no row. | **PASS** on the draft half. The turns half is shown by the fill and attachment captures, whose exchange stands above the field. |
-| [`step-by-step__draft-survives-reload__dark.png`](step-by-step__draft-survives-reload__dark.png) | As above, dark theme. | The same half sentence in the field after the same reload, on the dark ground. | **PASS**. |
+| [`run-page__fill-no-submit__light.png`](run-page__fill-no-submit__light.png) | §X, the run page's own reading: "Ask Cinatra to fill the fields above, or ask about this step… **Fills the fields the step is waiting for with what was asked for.** Nothing is submitted until the person presses the step's own button — unless the same message asks for it in so many words."<br>§X, for every surface with a form: "The window fills **the fields the person can see** with what they asked for, and nothing is submitted until they press the screen's own button". | **RE-SHOT IN THE TURN'S OWN CONTEXT.** The setup gate of run `44915a33` (`Agentic Run Progress` · `Awaiting input` · `Idea (optional)` · a live `Continue`). The person typed `make the idea "A weekly publishing rhythm beats a burst of posts" and leave everything else as it is`. **In the frame the `Idea` box reads `A weekly publishing rhythm beats a burst of posts`**, and the DOM read either side of the shutter reads the same (`domAgreedAcrossTheShutter: true`). The answer above the box is the platform's own sentence, word for word: `Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.` Run `pending_approval` → `pending_approval`; `Continue` never pressed. Turn served on attempt 1, toolbox present. sha256 `040ee8f4…50`, mean luminance `234.4/255`. | **PASS** — and this is the cell the graded review failed. |
+| [`run-page__fill-no-submit__dark.png`](run-page__fill-no-submit__dark.png) | As above, dark theme, through the app's own theme control. | Run `a6f9ac69`. The same filled `Idea`, the same sentence, the same untouched `Continue` on the dark ground; account footer drawn. DOM at the shutter: `field-idea = A weekly publishing rhythm beats a burst of posts`. sha256 `454dd525…80`, mean luminance `19.5/255`. | **PASS**. |
+| [`run-page__question-no-press__light.png`](run-page__question-no-press__light.png) | §X: "**A question about the step is answered as a question and touches no field.**" | **RE-SHOT.** Same run `44915a33`, the next turn: `what is this field for?`. **The field still holds the earlier fill in the frame** — `field-idea = A weekly publishing rhythm beats a burst of posts` at the shutter — so the answer and the picture agree, which is what the graded review found they did not. No field changed by this turn. The answer is drawn markdown. sha256 `0be1bb5f…44`, mean luminance `236.8/255`. | **PASS**. |
+| [`run-page__question-no-press__dark.png`](run-page__question-no-press__dark.png) | As above, dark theme. | Run `a6f9ac69`, same reading, same untouched field on the dark ground. sha256 `c2a9aa01…22`, mean luminance `17.2/255`. | **PASS**. |
+| [`run-page__submit-on-ask__light.png`](run-page__submit-on-ask__light.png) | §X: "nothing is submitted until they press the screen's own button, **unless the same message plainly asks for it to be submitted**".<br>`app-lifecycle-cards.html` §X: "**Filling the fields in front of the reader is not a press, so one message may fill and then press**"; the card "settles in place in its own settled reading". | **RE-SHOT** (the cell was a pass at the graded head; it is re-taken because it is the same run as the two above). Run `44915a33`: `set the idea to "Why cadence beats bursts for blog reach" and send it`. The run's store holds **two** rows for that one message — a fill, then `Submitted.` The card settled in place: the frame is the run's own next reading, the scheduler form, and the window's sentence is now `Ask Cinatra to set the schedule above, or ask about it…`. sha256 `2226f4c8…a2`, mean luminance `234.6/255`. | **PASS**. |
+| [`run-page__submit-on-ask__dark.png`](run-page__submit-on-ask__dark.png) | As above, dark theme. | Run `a3faf470` (see the observation on refused presses below). The same resumed run and settled reading on the dark ground. sha256 `ee8fbf15…d1`, mean luminance `16.7/255`. | **PASS**. |
+| [`schedule__fill-no-submit__light.png`](schedule__fill-no-submit__light.png) | §X, the schedule screen's own reading: "Ask Cinatra to set the schedule above, or ask about it… **Fills the scheduler form's own rows — when the run starts, its time, its timezone** — whether the schedule is being set for the first time or changed once it stands. The person presses the form's own button, unless the same message plainly asks for it to be submitted." | **RE-SHOT IN THE TURN'S OWN CONTEXT.** The unarmed scheduler form of run `44915a33`. The person typed `set it for tomorrow at 9 in the morning, Berlin time`. **In the frame `Schedule for later` is selected and `Run at` reads `08/29/2026, 09:00 AM`**; the DOM either side of the shutter reads `scheduledAt = 2026-08-29T09:00`. Nothing submitted — the form's own button was not pressed. sha256 `57313828…52`, mean luminance `233.8/255`. | **PASS** — the graded review's "form untouched" is answered. |
+| [`schedule__fill-no-submit__dark.png`](schedule__fill-no-submit__dark.png) | As above, dark theme. | Run `a3faf470`, the same filled row on the dark ground; DOM at the shutter `scheduledAt = 2026-08-29T09:00`. sha256 `13f924dd…52`, mean luminance `20.4/255`. | **PASS**. |
+| [`step-by-step__fill-no-submit__light.png`](step-by-step__fill-no-submit__light.png) | §X, the step-by-step reading: "Ask Cinatra to fill this step's fields, or ask about the run… The same filling, one step of a sequence: **the values land in the fields in view and the person presses the step's button.**" | **RE-SHOT IN THE TURN'S OWN CONTEXT.** Run `9cd8283f`, the five-step rail with `1 Campaign setup` selected. The person typed `set the offering company website to "https://example.test" and the call to action to "Book a 20-minute demo", and leave the sender name as it is`. **In the frame `Offering company website` reads `https://example.test` and `Call to action` reads `Book a 20-minute demo`, and `Sender name` is empty** — exactly as the message asked; the DOM either side of the shutter reads the same three values. Nothing submitted. sha256 `7eb4f650…07`, mean luminance `234.1/255`. | **PASS** — the graded review's "three placeholders" is answered. |
+| [`step-by-step__fill-no-submit__dark.png`](step-by-step__fill-no-submit__dark.png) | As above, dark theme. | Run `b2005bef`, the same rail, the same two filled fields, the same untouched `Sender name` on the dark ground. sha256 `1a392130…a0`, mean luminance `20.2/255`. | **PASS**. |
+| [`step-by-step__attachment-reaches-run__light.png`](step-by-step__attachment-reaches-run__light.png) | The plan: "A file attached beside your message travels with your answer to the waiting agent exactly as it does today. The new road must not swallow it into an ordinary chat message, and **must not leave it behind when the answer is finally sent**." | **RE-SHOT, AND THE CELL NOW SHOWS THE STEP AND THE MESSAGE.** Run `84d7beb6`: the window's own paperclip uploaded `campaign-brief.txt` (the app's own upload answered `201`) and the person typed `set the offering company website to "https://example.test" and the call to action to "Book a 20-minute demo" — the campaign brief is attached for this run`. The frame carries the step (`1 Campaign setup` of five), the person's message, the platform's fill sentence and the two filled fields. **The person's own window row carries the file**: `campaign-brief.txt`, digest `576038005379a871f562e47022857a40c30371a389a38d872d0accc9a4816d11`, `originKind: upload`. **The "finally sent" half is proven on run `52e7165a`** (the route probe below): the same paperclip, a message that asked for the send, and the run's rows read fill → `Submitted.`, with a second gate row `{"stepNumber": 2}` materializing seconds later — the file was on the submitted message, not left behind. sha256 `0bd1b57f…6c`, mean luminance `234.1/255`. | **PASS**, and the frame is no longer the "Not authorized" page — see the finding that explains why it was. |
+| [`step-by-step__attachment-reaches-run__dark.png`](step-by-step__attachment-reaches-run__dark.png) | As above, dark theme. | Run `eafd85cc`, the same upload (`201`), the same message, the same two filled fields and the same fill sentence on the dark ground. sha256 `516db9ea…8a`, mean luminance `20.2/255`. | **PASS**. |
+| [`step-by-step__draft-survives-reload__light.png`](step-by-step__draft-survives-reload__light.png) | §IX: "What survives a reload is therefore both — **the turns above the field and the reader's unsent draft in it**." | **CARRIED from the graded head, where the review passed it.** `please set the call to action to` was typed and **not sent**; the page was reloaded in the browser; the half sentence is still in the field, read out of the browser's own storage before the reload and matched after it. sha256 `61f2a5ee…31`, mean luminance `238.2/255`. | **PASS** (carried). |
+| [`step-by-step__draft-survives-reload__dark.png`](step-by-step__draft-survives-reload__dark.png) | As above, dark theme. | **CARRIED.** The same half sentence after the same reload on the dark ground. sha256 `4af0db3e…ec`, mean luminance `13.4/255`. | **PASS** (carried). |
+| [`armed-trigger__fill__light.png`](armed-trigger__fill__light.png) | §X, the armed-trigger tab's own reading: "Ask Cinatra to change this schedule, or ask about it… **Changes the schedule that stands** — until a one-off fires, and for a recurring schedule's future runs — through the tab's own controls. The schedule on screen is what is true." | **CARRIED.** The run's own `Schedule` tab on an **armed** run; the tab draws the schedule that stands and the window beneath it carries its own sentence word for word. **No fill was attempted, and none is claimed.** sha256 `f8a015d2…7e`, mean luminance `234.4/255`. | **RECORDED DEVIATION, not a pass** — unchanged, and the graded review acknowledged it. Code fact: `src/lib/lifecycle/run-window-turn.ts` (`boundScreenClaimForSurface`) — the armed-trigger tab is deliberately outside this slice. |
+| [`armed-trigger__fill__dark.png`](armed-trigger__fill__dark.png) | As above, dark theme. | **CARRIED.** The same armed schedule and the same sentence on the dark ground. sha256 `fe84889b…de`, mean luminance `21.7/255`. | **RECORDED DEVIATION**, as above. |
+| [`review__question__light.png`](review__question__light.png) | §X, the review page's own reading: "…**A question is answered and files nothing.**"<br>§VI: "The decision floor is unchanged: approve, reject, comment." | **CARRIED from the graded head, where the review passed it.** A real review gate over real artifact-bound output. The person typed `what changed in this draft?`. **The answer is DRAWN**: DOM readback of the assistant's bubble — `strong=6`, `tables=1`, `raw ** = 0`, `raw \| = 0`. Readback after the turn: gate still `pending`, `disposition` NULL, `artifact_review_dispositions` **0 rows**, the decision bar unchanged and the rationale field empty. **Nothing was filed.** sha256 `652d54c6…29`, mean luminance `235.5/255`. | **PASS** (carried). |
+| [`review__question__dark.png`](review__question__dark.png) | As above, dark theme. | **CARRIED.** The same drawn table and bold, the same pending gate, the same untouched decision bar on the dark ground. sha256 `0a02daf6…85`, mean luminance `21.4/255`. | **PASS** (carried). |
+| [`review__request-changes__light.png`](review__request-changes__light.png) | §VI: "Typing a change request into it is how a reviewer requests changes… On submit, **the gate resolves changes-requested and a repair goes in flight**".<br>§X: "an explicit request for changes is placed by the card's own comment machinery, **word for word**". | **CARRIED.** The person typed `tighten the opening paragraph`. **Word for word, from the database**: `cinatra.lifecycle_repair` holds one row whose `findings` are `[{"id": "prompt-window", "message": "tighten the opening paragraph"}]` — the filed text EQUALS the typed text. The gate moved `pending` → `resolved`, `disposition=changes_requested`. `artifact_review_dispositions` stayed at **0** rows. sha256 `628675c4…45`, mean luminance `237.8/255`. | **PASS** on the three clauses this slice owns (carried). **NOT REACHED**: the corrected version returning as a fresh review — see below. |
+| [`review__request-changes__dark.png`](review__request-changes__dark.png) | As above, dark theme. | **CARRIED.** The same resolved gate and settled card on the dark ground. sha256 `02f679de…45`, mean luminance `20.5/255`. | **PASS** (carried). |
 
-## Three observations, grounded
+Every dark frame measures `13.4`–`21.7` of 255 and every light frame `233.8`–`238.2`: the palettes
+are the app's own, switched through its own control, never a colour-scheme emulation.
 
-### C — the blank account footer, and why it was blank
+## The "Not authorized" frame: what it actually was
 
-**Which identity.** The same one as every other frame: `Rita Owner` / `owner@example.com`, the run
-owner, a member of the organization and **not** a platform administrator. Nothing about the identity
-differed; the graded leg's own capture library signs every cell in as that person.
+**Reproduced deliberately**, on run `52e7165a`, in one driving context, with the readback in
+[`after-submit-route-probe.json`](after-submit-route-probe.json):
 
-**Why it did not draw.** The code fact is `src/components/nav-user.tsx:29-37`: the footer reads the
-session with `authClient.useSession()` and, while that read is `isPending`, renders `name` as `""`
-and `email` as `""` — and the avatar's initials, derived from that empty name, as `""` too. A frame
-taken inside that window photographs a person who is not there. It is the app shell's own loading
-reading, deliberately quiet rather than a flash of a placeholder name.
-
-**The measurement.** Same run, same page, same identity, two ways of taking the pair:
-
-| how the pair was taken | footer at the shutter | waited |
+| moment | address the browser is on | fields the page draws |
 |---|---|---|
-| one page opened on the run, theme toggled in place (the graded leg's way) | blank, both frames | 60 s, never settled |
-| one context per theme, themed on the app's own chrome BEFORE the run page opens | `Rita Owner` / `owner@example.com`, both frames | 0 s |
+| before the turn | the run's own step-by-step page | `field-offeringCompanyWebsite`, `callToAction`, `field-senderName` |
+| after the message that asked for the send | **`/not-authorized`** | none |
+| the same address re-opened in a second context | **`/not-authorized`** (HTTP 200) | none |
 
-**What was done.** This is not a defect on this road's surfaces — `nav-user.tsx` is the application
-shell, not a W5c surface — so it is **recorded as a residual at `src/components/nav-user.tsx:29-37`**
-rather than patched here. What WAS fixed is the capture: `drivers/03-capture-lib.mjs` now takes each
-theme in its own context and waits for the footer to draw before the shutter, and every capture
-records the footer text it was taken with. All twenty frames in this leg read the person.
+**It is not the window's access rule, and not this slice's road.** The submit succeeded — the run's
+rows read fill → `Submitted.` and a second gate row `{"stepNumber": 2}` was written. The step the run
+advanced TO is the email agent's `Account scope` step, whose renderer calls
+`fetchAvailableLists()` — and that server action opens with `requireAdminSession()`
+(`packages/agents/src/list-picker-actions.ts:41`), which redirects a non-admin to `/not-authorized`.
+So the run's own owner is bounced off their own run the moment the run reaches that step, whether the
+page was re-opened in a second context or never left the first.
 
-### D — the window does not draw an attached file beside the message
+**Recorded, not patched here.** It is a real defect and it is worth its own issue — a run owner who is
+not a platform administrator cannot use step 2 of an agent they started — but the gate belongs to a
+step renderer that predates this slice, and an admin-gate change is not a line this evidence commit
+may carry. The re-shot attachment cell therefore stands on the fill road, where the step stays in
+view, and the submit road is proven by run `52e7165a`'s readback.
 
-**The code fact.** The window's entry type carries three fields and no more:
-`packages/agents/src/run-window-actions.ts:27-31` — `RunWindowEntry = { id: number; role: "user" |
-"assistant"; content: string }` — and `toEntries` at `:65-77` builds those entries from the stored
-rows, keeping `role` and `text` and nothing else. The panel renders `entry.content` and nothing else
-(`packages/agents/src/hitl-conversation-panel.tsx`). So there is no attachment chip to draw, in
-either theme, at this head.
+## Three further observations, recorded on the same footing
 
-**It is not lost — only undrawn.** The store keeps it: `run-window-conversation-store.ts:144`
-declares `RunWindowAttachment`, `:377` reads a message's attachments back, and the person's own
-message row for the attachment cell carries `campaign-brief.txt` with digest `576038005379a871…`.
-
-**What was done.** Recorded as a code fact, exactly as the review said it should be if the window does
-not draw one; the re-shot attachment cell therefore shows the exchange and the advanced run, and the
-readback carries the file. No frame in this leg claims an attachment chip.
-
-### E — the panel over the decision bar does not match the drawing
-
-**What the drawing says**, `app-artifact-review.html` §VI at the pin, rendered with the capture
-browser and read off the rendering: "**Beneath the decision bar** the run detail carries a
-conversational prompt window". The section draws two SEPARATE stacked examples — *the decision bar*
-(its rationale field and `Comment` / `Reject` / `Approve` complete and unobstructed), and beneath it
-*the conversational prompt window*. §IX adds that the panel opens above the field and that "the
-window itself … nothing about it moves". The drawing never puts the panel over the bar.
-
-**What the app does**, measured on the review page at this head, both themes, identical numbers:
-
-| measured | value |
-|---|---|
-| decision bar box | top `664`, bottom `794` (height `130` px), left `393`, right `1424` |
-| window panel box | top `588`, bottom `822`, left `464`, right `1232` |
-| vertical overlap | `130` px — **the bar's entire height** |
-| horizontal overlap | `768` px of the bar's `1031` px width |
-| `elementFromPoint` at the bar's own centre | an element **inside the panel** |
-
-The window is a sticky element at the foot of the run detail, so the panel grows upward over the bar
-rather than standing beneath it.
-
-**What was done.** **MISMATCH, recorded as a finding, not patched here** — the review said a mismatch
-is a finding, and the treatment is the review page's layout rather than this slice's fill road.
+- **A message that asks for the press is sometimes refused authority.** Two of the four submit-asking
+  turns in this leg came back `This message is not allowed to operate that control. Nothing was
+  done.` — with the FILL of the same message applied. The code fact is
+  `src/lib/lifecycle/lent-action-mcp.ts:145`: one sentence covers four cases (no grant, a grant that
+  does not verify, a grant naming another card or another button, a grant already spent), deliberately
+  indistinguishable so a caller learns nothing about an authority it does not hold. The two turns that
+  were refused are recorded here; the two that were not moved their runs on and are the pictured ones
+  (`44915a33`, `a3faf470`). Nothing was retried to make a picture prettier: the refused runs are named.
+- **The window's assistant is not handed the attachment's text.** Asked to fill a step FROM an
+  attached brief, the answer was `I don't see the campaign brief attached here.` (light, run
+  `9cd8283f`) and `I don't see the campaign brief content in this prompt window.` (dark, run
+  `b2005bef`) — both read out of the run's own stored rows. The code fact is
+  `src/lib/lifecycle/run-window-turn.ts`: the turn calls `runAssistantTurn` with
+  `messages: [...history.map((m) => ({ role: m.role, content: m.text })), { role: "user", content:
+  prompt }]` — text only. The file is kept with the run (the person's row carries it with its digest)
+  and travels with a submit; what it does not do is reach the model as content. The clause this road
+  owns is "reaches the waiting agent", and it does; being readable BY the window's assistant is not a
+  clause anyone has written, so this is recorded rather than treated as a failure.
+- **The window does not draw an attached file beside the message.** Unchanged code fact:
+  `RunWindowEntry` carries `id`, `role` and `content`, and the panel renders those. No frame in this
+  leg claims an attachment chip.
 
 ## The one clause this leg could NOT reach, and exactly why
 
 §VI's "the corrected version returns as a fresh review in the same run" is **NOT REACHED**, and it is
 recorded rather than simulated. After the change request the repair went in flight and created its own
-run (`lifecycle-repair-run:a9fa4445-…`), which **parked on the producer agent's own setup gate**
-(`status=pending_approval`); `lifecycle_repair.successor_gate_id` was still NULL after the wait, and
-no second gate appeared on the rail. That is the repair route's behaviour, recorded on cinatra#2951 —
-not this road's, which ends at "filed word for word, gate resolved changes-requested, repair in
-flight". The graded review acknowledged the same.
-
-## Provider evidence, and its limits
-
-`cinatra.usage_events` on this instance: `openai` `gpt-5.5-2026-04-23` — **27** calls, 69,416 in /
-3,827 out; `openai` `gpt-5.5` — **12** calls, 289,685 in / 3,138 out. The instance's own server log
-for this leg: **56** `POST /api/mcp 200` callbacks from the provider's own servers over the
-instance's public origin · **0** scripted-runtime lines · **0** `NO_LLM_PROVIDER` refusals · **0**
-turns refused for a missing toolbox · **0** `424 Failed Dependency` and **0** MCP tool-enumeration
-failures. The previous leg's single 424 did not recur: the route was warm before the first driver ran.
-
-**Every pictured turn was served on its FIRST attempt with its toolbox present** — the per-turn
-attempt records in the readbacks carry `toolboxMissing: false` and `platformCouldNotAnswer: false` for
-attempt 1 in every cell, so the retry road (decided by the server's own log for that turn's own
-window, never by whether the answer was the one wanted) was never taken.
-
-**The limit, said rather than implied**: a zero on that list is the absence of that particular line
-and nothing more. `CINATRA_TEST_LLM_PROVIDER` is set in nothing this leg started — it is absent from
-the instance's env file and unset in every shell that ran a driver — and the capture library refuses
-to run at all where it can see it.
-
-## Two observations recorded on the same footing
-
-- **The producer run ends `failed` even though its output is real.** Run `baa08154` reached
-  artifact-bound output, a review gate was minted over it, and the run row reads `status=failed`,
-  `error=WayFlow task failed`. The review page itself says so in the frame — `Run status: Failed after
-  producing the review artifact`. Recorded, not explained away.
-- **A message that asks the assistant to READ an attachment is answered, honestly, that it cannot.**
-  On a first pass the attachment cell was driven with `fill the brief from the file I attached and
-  send it`; the answer was `I found the attached file **campaign-brief.txt**, but I can't read its
-  contents from this screen.` — no fill, no submit. That is a true answer about a capability this
-  road does not claim, so the cell was re-driven with the message the clause is actually about (a
-  fill plus an explicit ask to send, with the file attached), on a fresh run. Both are recorded; the
-  pictured one is the second.
+run, which parked on the producer agent's own setup gate; `lifecycle_repair.successor_gate_id` was
+still NULL after the wait, and no second gate appeared on the rail. That is the repair route's
+behaviour, recorded on cinatra#2951 — not this road's, which ends at "filed word for word, gate
+resolved changes-requested, repair in flight". The graded review acknowledged the same.
 
 ## Reproducing this leg
 
 The drivers in [`drivers/`](drivers) are the whole procedure, in order: the people and the instance
 namespace through the app's own screens (`01`), the organization through the app's own invite/accept
-road (`02`), the shared capture machinery (`03`), the surface cells (`05`, `06`), the run starts (`10`),
-the instance's public origin through its own screen (`08`), the provider key through the setup form
-(`09`, run from the operator's own machine so no credential is ever placed on the capture host), the
-drive to a review gate with the person's own presses (`12`), the review readings (`13`), the armed tab
-(`15`), and the pair-taker (`16`).
+road (`02`), the shared capture machinery (`03`), the surface cells (`05`, `06`), the run starts
+(`10`), the instance's public origin through its own screen (`08`), the provider key through the setup
+form (`09`, run from the operator's own machine so no credential is ever placed on the capture host),
+the drive to a review gate with the person's own presses (`12`), the review readings (`13`), the armed
+tab (`15`), and the pair-taker (`16`).
 
-Two drivers changed for this leg, and both changes are recorded above: `03-capture-lib.mjs` reads the
-window's bubbles by their own hook (the assistant's line is drawn markdown now and no longer carries
-the class the old reader keyed on), addresses the panel's scroll container directly (which is what
-left one dark sibling scrolled to an earlier exchange), and takes each theme in its own context after
-waiting for the account footer to draw; `01-lane-setup.mjs` waits for the namespace form's own gate
-and readback instead of a stopwatch, and signs in where an account it already created refuses a
-second sign-up.
+**Three drivers are new or changed for this leg**, and each change is a correction the graded review
+asked for:
+
+- `18-cell-in-turn-context.mjs` — **the correction**. One cell, one theme, in the context that sends
+  the turn: the theme is chosen on the app's own chrome before the run page opens, the account footer
+  is waited out in that same context, the turn is sent, the DOM is read immediately before and
+  immediately after the shutter, and the record carries both reads plus
+  `domAgreedAcrossTheShutter`. It also carries the diagnosis: a reading marked `diagnose` reloads the
+  page in that same context and is read and photographed again.
+- `19-frame-luminance.mjs` — every filed frame's sha256, size and mean luminance, decoded by the same
+  engine that took it, with no image library and nothing re-rendered.
+- `21-after-submit-route-probe.mjs` — the address the step-by-step screen lands on after the submit,
+  what the driving context draws there, and what a second context draws at the same address.
+
+**One edit to a log, declared.** `timeline.jsonl` is the drivers' own clock and is otherwise untouched.
+Two of its lines belonged to the superseded attachment attempt described above and named the brief by a
+working file name that identifies the capture host; those two lines were removed rather than reworded,
+and the reading they belonged to is in no picture and no table.
+
+`16-reshoot-cell.mjs` — the previous leg's shoot-only pair-taker — is kept for the readings whose
+state lives with the RUN, and its own header now says which readings those are and which they are
+not.

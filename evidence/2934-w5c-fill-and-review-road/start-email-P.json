@@ -1,22 +1,22 @@
 {
   "agentPath": "/agents/cinatra-ai/email-outreach-agent/new",
-  "runId": "89f947a2-3f48-42b0-8a7e-5f46cecf311a",
-  "url": "http://localhost:3000/agents/cinatra-ai/email-outreach-agent/89f947a2-3f48-42b0-8a7e-5f46cecf311a",
+  "runId": "52e7165a-008e-4b61-ba7f-5b6c717359bb",
+  "url": "http://localhost:3000/agents/cinatra-ai/email-outreach-agent/52e7165a-008e-4b61-ba7f-5b6c717359bb",
   "run": {
-    "id": "89f947a2-3f48-42b0-8a7e-5f46cecf311a",
+    "id": "52e7165a-008e-4b61-ba7f-5b6c717359bb",
     "status": "pending_approval",
-    "created_at": "2026-08-28T03:37:04.751Z",
+    "created_at": "2026-08-28T07:58:50.048Z",
     "started_at": null,
     "completed_at": null,
     "lifecycle_moment": null,
-    "template_id": "4bdb5700-e4c3-4a92-8fd2-d34d0b2379a0",
-    "run_by": "304a8a80-9fe6-4093-b4ef-b718c1ad7566"
+    "template_id": "922c9d51-75bd-4686-9a1a-33c755d75831",
+    "run_by": "b027866c-e6b3-4b87-8da0-fbb9f6a2a3aa"
   },
   "gates": [
     {
-      "review_task_id": "wayflow-2072a1d1-ab0d-4e5e-83d3-75d8e6aad051",
+      "review_task_id": "wayflow-c78604ab-779f-414b-8b8f-0c7bc43728e1",
       "field_name": null,
-      "created_at": "2026-08-28T03:37:08.405Z",
+      "created_at": "2026-08-28T07:58:54.158Z",
       "schema": "{\"type\": \"object\", \"required\": [\"offeringCompanyWebsite\", \"callToAction\"], \"properties\": {\"senderName\": {\"type\": \"string\", \"title\": \"Sender name\"}, \"callToAction\": {\"type\": \"string\", \"title\": \"Call to action\", \"x-renderer\": \"@cinatra-ai/email-outreach-agent:cta\"}, \"offeringCompanyWebsite\": {\"type\": \"string\", \"title\": \"Offering company website\", \"format\": \"uri\"}}, \"x-renderer\": \"@cinatra-ai/email-outreach-agent:setup-form\"}",
       "vals": "{\"stepNumber\": 1}"
     }

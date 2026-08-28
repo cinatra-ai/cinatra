@@ -1,9 +1,19 @@
 // W5c picture leg — take ONE cell's pair and record what each frame shows.
 //
-// WHY A SHOOT-ONLY DRIVER. The turns are already in the run: §IX keeps the
-// window's exchange WITH THE RUN, so re-opening the page draws the same
-// exchange back. A frame can therefore be taken without sending anything, and
-// nothing here types, presses or uploads — the run is read, never driven.
+// WHY A SHOOT-ONLY DRIVER, AND WHAT IT MAY NOT BE USED FOR. The turns are
+// already in the run: §IX keeps the window's exchange WITH THE RUN, so
+// re-opening the page draws the same exchange back. A frame can therefore be
+// taken without sending anything, and nothing here types, presses or uploads —
+// the run is read, never driven.
+//
+// IT MAY NOT TAKE A FILL CELL. What the RUN holds comes back on a fresh page;
+// what the SCREEN holds does not. An unsubmitted fill is the second kind: the
+// values live in the page that received the turn, and nothing re-applies them
+// on mount (`use-run-window-conversation.ts` applies only what `send()`
+// returned). A pair taken here for a fill cell therefore photographs empty
+// fields under an answer that says they are filled, which is exactly what a
+// graded review caught. Fill cells go through `18-cell-in-turn-context.mjs`,
+// which takes the frame in the context that sent the turn.
 //
 // The pair itself is the capture library's (one context per theme, themed
 // before the run page opens, the account footer waited for); what this file

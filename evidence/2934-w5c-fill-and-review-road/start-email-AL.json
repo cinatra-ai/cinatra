@@ -1,0 +1,24 @@
+{
+  "agentPath": "/agents/cinatra-ai/email-outreach-agent/new",
+  "runId": "84d7beb6-19bd-461a-9ebb-ce0b38e7c664",
+  "url": "http://localhost:3000/agents/cinatra-ai/email-outreach-agent/84d7beb6-19bd-461a-9ebb-ce0b38e7c664",
+  "run": {
+    "id": "84d7beb6-19bd-461a-9ebb-ce0b38e7c664",
+    "status": "pending_approval",
+    "created_at": "2026-08-28T08:12:19.048Z",
+    "started_at": null,
+    "completed_at": null,
+    "lifecycle_moment": null,
+    "template_id": "922c9d51-75bd-4686-9a1a-33c755d75831",
+    "run_by": "b027866c-e6b3-4b87-8da0-fbb9f6a2a3aa"
+  },
+  "gates": [
+    {
+      "review_task_id": "wayflow-3d287a8e-dd43-496b-aadf-96878039eea5",
+      "field_name": null,
+      "created_at": "2026-08-28T08:12:22.455Z",
+      "schema": "{\"type\": \"object\", \"required\": [\"offeringCompanyWebsite\", \"callToAction\"], \"properties\": {\"senderName\": {\"type\": \"string\", \"title\": \"Sender name\"}, \"callToAction\": {\"type\": \"string\", \"title\": \"Call to action\", \"x-renderer\": \"@cinatra-ai/email-outreach-agent:cta\"}, \"offeringCompanyWebsite\": {\"type\": \"string\", \"title\": \"Offering company website\", \"format\": \"uri\"}}, \"x-renderer\": \"@cinatra-ai/email-outreach-agent:setup-form\"}",
+      "vals": "{\"stepNumber\": 1}"
+    }
+  ]
+}
