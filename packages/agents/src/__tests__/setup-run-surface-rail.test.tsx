@@ -338,7 +338,7 @@ describe("the setup run page draws the two-column run surface", () => {
 
     expect(rows(container).map((r) => r.textContent)).toEqual([
       "1Schedule",
-      "2Recommendation",
+      "2Skills",
       "3Review",
     ]);
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-step-key"))).toEqual([
@@ -457,7 +457,7 @@ describe("the skills-recommendation step opens exactly when the run has one to s
 
     // Still a row, still named, still in the series — muted, not removed.
     expect(rows(container).length).toBe(3);
-    expect(rows(container)[1].textContent).toBe("2Recommendation");
+    expect(rows(container)[1].textContent).toBe("2Skills");
     expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
     expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
     // The row's action NAMES the state instead of promising an open.

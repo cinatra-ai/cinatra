@@ -1156,14 +1156,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
-              // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047).
-              // It is used in two mutually exclusive slots — the rail step's
-              // surface above, and the run detail below — so the interaction has
-              // exactly one renderer on this host at any moment. No branch of
-              // `runDetailPanelKind` withholds it: the run-progress panel used to
-              // mount a second copy on the `agentic` branch, which is what moved
-              // the row between two placements as the run advanced, and that
-              // mount is deleted.
+              // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
+              // and it is used in exactly ONE slot: the Skills step's own
+              // surface. No branch of `runDetailPanelKind` withholds it and none
+              // adds one — the run-progress panel used to mount a second copy on
+              // the `agentic` branch, and the run detail carried a third
+              // placement of the same node under every later card, so the row
+              // had three homes between them. Both of those are gone: the step
+              // opens the row, the detail column draws the step the reader
+              // selected, and there is no moment at which the two are on screen
+              // together.
               const recommendationCardNode = (
                 <LifecycleCardSurfaceProvider host="run_card">
                   <RecommendationHoldCard
@@ -1248,38 +1250,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   stepOffset={railSteps.length}
                 />
               ) : null;
-              // A COLUMN with a GAP, not a margin on the row above. The card
-              // below resolves its own state on the client and renders NO DOM at
-              // all when there is no hold — the overwhelmingly common case — so a
-              // wrapper carrying `mb-4` would leave a 1rem hole above the panel on
-              // every ordinary run. A flex gap only ever applies BETWEEN rendered
-              // children, which is the spacing that was actually meant.
+              // A COLUMN with a GAP, not a margin on the row above. A flex gap
+              // only ever applies BETWEEN rendered children, which is the
+              // spacing that was actually meant for a column whose members each
+              // decide for themselves whether they draw anything.
+              //
+              // THE SKILLS ROW IS NOT IN IT (cinatra#3047, review point D).
+              // "Every HITL shows on its own dedicated page. Do not show skills
+              // on top of a HITL card. Do not show the skills on top of the
+              // review card or the schedule card or any other card either."
+              //
+              // The row used to stand HERE as well as on its own step, so the
+              // detail column drew it above whatever else the run's moment put
+              // in that column — the HITL card, the review card, the scheduling
+              // step. It is now ONLY the Skills step's own surface: the detail
+              // column shows the selected step and nothing else, and the rail
+              // still carries the Skills step, settled, for a reader who wants
+              // to see what was decided. Selecting that step is what opens the
+              // row, which is the same press every other step answers to.
               const detailNode = (
                 <>
-              {/* Run-start recommendation hold, through the ONE card
-                  (cinatra#2573, epic #2564 D-1). A held run draws the interactive
-                  confirm/adjust/skip row at the run-start position, before any
-                  work; a decided hold draws the read-only summary; an unheld run
-                  draws nothing at all.
-
-                  THIS SCREEN IS THE HOST, on every branch (cinatra#3047). It has
-                  to be one at all because a HELD run is `pending_input` and the
-                  run panel below (`AgenticRunPanel`, via
-                  `SetupCompletionWatcher`) renders only for
-                  `status !== "pending_input"` — without this mount the hold
-                  would be invisible on the very page the human is asked to
-                  decide it on. It is the ONLY host because the drawing fixes one
-                  placement for the row: the panel's own mount, which drew it
-                  inside the run-progress box at the HITL, working and review
-                  moments, is deleted.
-
-                  `wireRef` is NULL: this server-rendered mount has no run stream
-                  of its own. It costs nothing here — the card resolves on mount,
-                  on focus and when its own decision lands, the hold is already
-                  parked before this page is served, and the confirm/skip taken IN
-                  the row is the only transition out of it (which also fires
-                  `router.refresh()`, re-rendering this tree). */}
-              {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the
                   SAME component the chat transcript and the review page mount.

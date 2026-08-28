@@ -265,6 +265,34 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
+  it("KEEPS TODAY'S DRAWING while the run page changes (cinatra#3047, review point E)", async () => {
+    // The review changed the RUN PAGE's reading of this card: its Skills step
+    // draws a checkbox in front of each skill name and one Continue beneath the
+    // list, and no per-chip Confirm / Adjust / Skip. Point E asks for a separate
+    // issue to bring the same two changes to the chat and the widget — so until
+    // that issue lands, the conversation must keep drawing exactly what it draws
+    // today. This is the pin for that: the three affordances are present, and
+    // NEITHER of the run page's two new controls has leaked onto this host.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    await waitFor(() => {
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
+      }
+    });
+
+    expect(wrapper?.querySelectorAll('[data-skill-action="confirm"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="adjust"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="skip"]').length).toBeGreaterThan(0);
+    // The run page's Skills-step reading, absent here.
+    expect(wrapper?.querySelector("[data-skills-step-checkbox]")).toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-continue]")).toBeNull();
+    expect(wrapper?.querySelector('[role="checkbox"]')).toBeNull();
+    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBeNull();
+    // …and the host that decided which reading is drawn is this one.
+    expect(wrapper?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
   it("keeps the card OUTSIDE the inline run panel's subtree", async () => {
     // The panel is the `run_card` host and mounts its own copy of the same
     // component. A card nested inside it would be that host's card, not this

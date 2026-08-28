@@ -167,7 +167,17 @@ async function mountCard(props: {
       wireRef={props.wireRef ?? null}
     />
   );
-  const host = props.host === undefined ? "run_card" : props.host;
+  // THE DEFAULT HOST IS THE CONVERSATION (cinatra#3047, review points C and E).
+  //
+  // It was `run_card`, and every §V arm in this file was therefore driven on the
+  // run page. The run page no longer draws §V's chip-row: its Skills step draws
+  // a checkbox per pill and one Continue beneath the list, which is pinned in
+  // `skills-step-checkbox-pills.test.tsx` and `skills-step-continue.test.tsx`.
+  // The chat, the widget and the review page keep the three per-chip affordances
+  // until review point E's own issue lands, so the drawing this file asserts is
+  // driven where it actually lives. Every arm that is about the RUN PAGE names
+  // `run_card` explicitly, and reads the same as it did.
+  const host = props.host === undefined ? "chat_thread" : props.host;
   return render(
     host === null ? (
       card
@@ -721,9 +731,21 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
       // the host being driven rather than a constant the test supplied.
       expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
       expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      // THE AFFORDANCES ARE READ PER HOST (cinatra#3047). The run page's Skills
+      // step decides with a checkbox per pill and one Continue; the conversation
+      // keeps §V's three per-chip affordances. Both are a decision the reader can
+      // take on the row, which is what this count is about — and asserting the
+      // wrong set for the host would be asserting a drawing that host does not
+      // have.
+      if (host === "run_card") {
+        expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+        expect(root.querySelector("[data-skills-step-checkbox]")).not.toBeNull();
+        expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
+      } else {
+        expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      }
       // Every value above came from the VALIDATED hold state, not from a literal:
       // drop the skills the state carried and the row draws nothing to press.
       expect(root.textContent).toContain("Skill A");
@@ -778,9 +800,15 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
         expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
         expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
         expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-        expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-        expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-        expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+        // Per host — see the same reading in the arm above (cinatra#3047).
+        if (host === "run_card") {
+          expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+          expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
+        } else {
+          expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+          expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+          expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+        }
         // …and the row really came from the transport this host declares.
         expect(brokerFetch.mock.calls.length > 0).toBe(viaBroker);
         expect(holdStateMock.mock.calls.length > 0).toBe(!viaBroker);
@@ -1368,7 +1396,8 @@ describe("finding 3 — the card root declares its kind, its host and its state"
 
   it("a HELD row declares recommendation_hold / run_card / held on its own root", async () => {
     holdStateMock.mockImplementation(async () => HELD_THREE);
-    await mountCard({ wireRef: "hold-ref-3" });
+    // NAMED, not defaulted (cinatra#3047): this arm IS about the run page.
+    await mountCard({ wireRef: "hold-ref-3", host: "run_card" });
     await waitFor(() => expect(chips()).toHaveLength(3));
 
     expect(root()!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
@@ -1382,7 +1411,7 @@ describe("finding 3 — the card root declares its kind, its host and its state"
       skillNames: ["Draft email"],
       decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
     }));
-    await mountCard({ wireRef: null });
+    await mountCard({ wireRef: null, host: "run_card" });
     await waitFor(() => expect(chips()).toHaveLength(1));
 
     expect(root()!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
@@ -1433,7 +1462,7 @@ describe("finding 3 — the card root declares its kind, its host and its state"
       skillNames: ["Draft email"],
       decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
     }));
-    await mountCard({ wireRef: null });
+    await mountCard({ wireRef: null, host: "run_card" });
     await waitFor(() => expect(chips()).toHaveLength(1));
 
     const rootSel = CARD_KINDS.recommendation_hold.root;
@@ -1658,9 +1687,15 @@ describe("§V on a credential-declaring host — the broker carries the decision
       await mountCard({ wireRef: "hold-ref-3", host: "run_card" });
       await waitFor(() => expect(chips()).toHaveLength(3));
 
-      await press("skill-enrich", "confirm");
-      await press("skill-draft", "confirm");
-      await press("skill-send", "confirm");
+      // THE RUN PAGE DECIDES WITH CONTINUE (cinatra#3047, review point B), so
+      // the cookie road is taken by pressing that rather than three chips. What
+      // this arm is about — WHICH transport a cookie host uses — is unchanged.
+      const cont = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+      if (!cont) throw new Error("no Continue on the Skills step");
+      await act(async () => {
+        cont.click();
+        await Promise.resolve();
+      });
 
       await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
       expect(holdStateMock).toHaveBeenCalled();

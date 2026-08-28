@@ -36,9 +36,19 @@ import {
   runSurfaceRailTitleClass,
   useRunStepSelection,
 } from "./run-surface-rail";
+import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 
-/** The label the rail row carries — the plan's own word for this step. */
-export const RECOMMENDATION_RAIL_STEP_LABEL = "Recommendation";
+/**
+ * The label the rail row carries — READ FROM THE RAIL'S OWN VOCABULARY rather
+ * than authored a second time here (cinatra#3047, review point A).
+ *
+ * The word is "Skills": the step is the run's skill list with a checkbox each,
+ * and the rail names what the step shows. It used to be authored twice — this
+ * constant and RUN_SURFACE_RAIL_LABELS.recommendation — which is two places for
+ * one word and one of them for a rename to miss. There is one now, and the
+ * rail's other labels are untouched by it.
+ */
+export const RECOMMENDATION_RAIL_STEP_LABEL = RUN_SURFACE_RAIL_LABELS.recommendation;
 
 export function RecommendationRailStepRow({
   displayStep,

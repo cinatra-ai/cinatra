@@ -28,6 +28,18 @@
  * the skill name, the `data-chip-mark` and the element structure are kept for
  * the same reason.
  *
+ * THE HOST THIS IS TAKEN ON MOVED (cinatra#3047, the review's points C and E),
+ * and the baseline did NOT. The faces below are §V's per-chip settled faces, and
+ * §V is now the reading of the conversation, the widget and the review page: the
+ * run page draws the review's own Skills step, whose settled pill carries a
+ * read-only checkbox in front of the name. So the faces are rendered where they
+ * still live — `page_gate_region`, a composition host with no transcript marker
+ * of its own — and they must still match the recorded bytes exactly, which is
+ * the whole point: the reading that changed is one host's, and these faces are
+ * every other host's. The ONE normalization this costs is named at its own line
+ * below: the card root carries the host that declared it, and the host is a
+ * property of the mount rather than of the face.
+ *
  * Run:
  *   cd packages/agents && npx vitest run src/__tests__/settled-chip-faces.test.tsx
  */
@@ -87,7 +99,7 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   render(
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host="page_gate_region">
       <RunRecommendationChipRow
         runId="run-2893"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -115,7 +127,13 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   // carries, so a root that moved would break every settled capture on file.
   const root = document.querySelector("[data-run-recommendation-chip-row]");
   if (!root) throw new Error("no card root");
-  out["settled-card-root"] = normalizeFace(root).replace(/>[\s\S]*<\//, "></");
+  out["settled-card-root"] = normalizeFace(root)
+    .replace(/>[\s\S]*<\//, "></")
+    // THE ONE NORMALIZATION (cinatra#3047). The root declares the host that
+    // mounted it, and the baseline was recorded on `run_card` — the host whose
+    // reading the review changed. Nothing else about the root may move, and the
+    // comparison below is what proves it did not.
+    .replace('data-lifecycle-card-host="page_gate_region"', 'data-lifecycle-card-host="run_card"');
   return out;
 }
 

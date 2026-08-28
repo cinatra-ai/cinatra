@@ -30,6 +30,16 @@
  *   4. The rail ENTRY stays first, reads live or settled correctly, and opening
  *      it draws the row in the detail column without a second instance.
  *
+ * REWRITTEN FOR THE REVIEW'S POINT D (2026-08-28). "Every HITL shows on its own
+ * dedicated page. Do not show skills on top of a HITL card. Do not show the
+ * skills on top of the review card or the schedule card or any other card
+ * either." The one place became one PAGE: the row is the Skills step's own
+ * surface and it is NOT in the run detail beside the later cards, so the arms
+ * that measured "one row in the detail column at the HITL / working / review /
+ * schedule moment" now measure ZERO there and one on the step's own page. The
+ * frame below composes the detail the way the screen composes it now — the
+ * branch's panel and nothing else.
+ *
  * WHY THE FRAME AND NOT THE SCREEN. `SetupScreen` is a server component that
  * reaches the database; this file composes the frame exactly as that screen
  * composes it — one card node used by the step's surface and by the run detail,
@@ -43,7 +53,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Button } from "@/components/ui/button";
 
@@ -344,12 +354,10 @@ function RunSurface({
       <RunSurfaceRail
         steps={steps}
         rail={<ReviewRow />}
-        detail={
-          <>
-            {card}
-            <RunPanelForBranch panel={panel} moment={moment} />
-          </>
-        }
+        // THE RUN DETAIL IS THE BRANCH'S OWN PANEL, and nothing above it
+        // (cinatra#3047, review point D). The card used to stand here too, so
+        // every later card was drawn under a settled skills row.
+        detail={<RunPanelForBranch panel={panel} moment={moment} />}
         initialSelection={initialSelection}
       />
     </div>
@@ -372,28 +380,44 @@ function panelBoxes(c: HTMLElement): HTMLElement[] {
   );
 }
 
+/**
+ * SETTLING THE FRAME BEFORE AN ABSENCE IS MEASURED.
+ *
+ * Waiting for the row to appear is not available as a signal when the assertion
+ * IS its absence, and neither is waiting for the authoritative resolve: since
+ * the row is the Skills step's own surface, a page open on any other step never
+ * mounts the card at all and never asks. That is itself part of point D and it
+ * is asserted where it belongs, below; here the frame is simply flushed so the
+ * absence is measured on a settled tree rather than on a first paint.
+ */
+async function settleFrame() {
+  for (let i = 0; i < 3; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
-// CRITERION 1 — one owner, one place, on every branch.
+// POINT D — EVERY STEP ON ITS OWN PAGE. The detail column shows the selected
+// step and nothing else, on every branch of `runDetailPanelKind`.
 // ---------------------------------------------------------------------------
 describe.each(PANEL_KINDS)("runDetailPanelKind '%s'", (panel) => {
-  it("draws the SETTLED row in the run detail column, in one instance, and never inside the run-progress panel", async () => {
+  it("draws NO skills row in the run detail once the run has moved past the step", async () => {
     getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
-    // A settled run has executed, so the frame opens on the run detail — the
-    // moment the panel used to draw its own copy at.
     const { container } = render(
       <RunSurface panel={panel} hasPark held={false} initialSelection="detail" moment="working" />,
     );
 
-    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
-    // EXACTLY ONE. Two roots is the defect: one owner drew it beside the rail
-    // and the other inside the panel.
-    expect(chipRows(container)).toHaveLength(1);
-    const row = chipRows(container)[0];
-    expect(detailColumn(container).contains(row)).toBe(true);
-    expect(railColumn(container).contains(row)).toBe(false);
-    for (const box of panelBoxes(container)) {
-      expect(box.contains(row)).toBe(false);
-    }
+    await settleFrame();
+    // NOT above the branch's own card — that is the whole of point D.
+    expect(chipRows(container)).toHaveLength(0);
+    expect(detailColumn(container).querySelectorAll("[data-recommendation-chip]")).toHaveLength(0);
+    // The row is not merely hidden: it is not mounted, so the hold is not even
+    // read on a page that is not the Skills step.
+    expect(getRunRecommendationHoldStateAction).not.toHaveBeenCalled();
+    // …and the rail still records that the step was completed.
+    expect(railEntry(container)!.getAttribute("data-recommendation-step-settled")).toBe("true");
   });
 
   it("draws the HELD row as the step's own surface, in one instance, and never inside the run-progress panel", async () => {
@@ -421,48 +445,103 @@ describe.each(PANEL_KINDS)("runDetailPanelKind '%s'", (panel) => {
       <RunSurface panel={panel} hasPark={false} held={false} initialSelection="detail" />,
     );
 
-    await waitFor(() => {
-      if (getRunRecommendationHoldStateAction.mock.calls.length === 0) {
-        throw new Error("the hold was never read");
-      }
-    });
+    await settleFrame();
     expect(chipRows(container)).toHaveLength(0);
     expect(railEntry(container)).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// THE REVIEW MOMENT — the slot the panel swaps its placeholder for the review
-// screen in. The row is not in that box either, at either of its readings.
+// THE MOMENTS THE REVIEW NAMES — "Do not show skills on top of a HITL card. Do
+// not show the skills on top of the review card or the schedule card or any
+// other card either."
 // ---------------------------------------------------------------------------
-describe("the review moment on the agentic branch", () => {
-  it.each([["working" as const], ["review" as const]])(
-    "keeps the settled row in the run detail column while the panel's slot reads '%s'",
-    async (moment) => {
-      getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
-      const { container } = render(
-        <RunSurface
-          panel="agentic"
-          hasPark
-          held={false}
-          initialSelection="detail"
-          moment={moment}
-        />,
-      );
+describe("the cards the skills row must not sit above", () => {
+  it.each([
+    ["the HITL moment", "agentic" as const, "progress" as const, "detail" as const],
+    ["the working moment", "agentic" as const, "working" as const, "detail" as const],
+    ["the review moment", "agentic" as const, "review" as const, "detail" as const],
+    ["the schedule moment", "trigger" as const, "progress" as const, "detail" as const],
+  ])("%s draws its own page, with no skills row above it", async (_name, panel, moment, selection) => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
+    const { container } = render(
+      <RunSurface
+        panel={panel}
+        hasPark
+        held={false}
+        initialSelection={selection}
+        moment={moment}
+      />,
+    );
 
-      await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
-      const slot = container.querySelector<HTMLElement>("[data-run-review-slot]");
-      expect(slot).not.toBeNull();
-      expect(slot!.getAttribute("data-run-review-slot")).toBe(moment);
-      expect(chipRows(container)).toHaveLength(1);
-      expect(detailColumn(container).contains(chipRows(container)[0])).toBe(true);
-      expect(slot!.contains(chipRows(container)[0])).toBe(false);
-    },
-  );
+    await settleFrame();
+    // The moment's own card IS on the page…
+    expect(detailColumn(container).children.length).toBeGreaterThan(0);
+    // …and the skills row is nowhere on it.
+    expect(chipRows(container)).toHaveLength(0);
+  });
+
+  it("the schedule STEP's page carries none either", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
+    const { container } = render(
+      <RunSurface panel="trigger" hasPark held={false} initialSelection="schedule" />,
+    );
+
+    await settleFrame();
+    expect(container.querySelector('[data-testid="schedule-surface"]')).not.toBeNull();
+    expect(chipRows(container)).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// CRITERION 2 — the rail entry keeps its place and its two readings.
+// THE SKILLS STEP'S OWN PAGE — what selecting the completed step shows.
+// ---------------------------------------------------------------------------
+describe("the Skills step's own page", () => {
+  it("shows the settled pills, read-only, when the completed step is selected", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
+    const { container } = render(
+      <RunSurface panel="agentic" hasPark held={false} initialSelection="detail" moment="working" />,
+    );
+
+    await settleFrame();
+    expect(chipRows(container)).toHaveLength(0);
+
+    fireEvent.click(railEntry(container)!);
+    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
+
+    // ONE row, on the step's own page, in the detail column.
+    expect(chipRows(container)).toHaveLength(1);
+    const row = chipRows(container)[0];
+    expect(detailColumn(container).contains(row)).toBe(true);
+    expect(row.getAttribute("data-lifecycle-card-state")).toBe("decided");
+    // Read-only: the pill's box states what was recorded and cannot be moved,
+    // and there is no Continue on a settled step.
+    const box = row.querySelector<HTMLElement>('[role="checkbox"]')!;
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    expect(box.hasAttribute("disabled")).toBe(true);
+    expect(row.querySelector("[data-skills-step-continue]")).toBeNull();
+    // The step's surface REPLACES the run detail, so the panel's boxes are not
+    // on the page at all while the step is open.
+    expect(panelBoxes(container)).toHaveLength(0);
+  });
+
+  it("leaves the detail column empty of it again when another row is selected", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
+    const { container } = render(
+      <RunSurface panel="agentic" hasPark held={false} initialSelection="recommendation" moment="working" />,
+    );
+
+    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
+    fireEvent.click(container.querySelector('[data-testid="review-row"]')!);
+
+    await waitFor(() => expect(chipRows(container)).toHaveLength(0));
+    expect(panelBoxes(container).length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RAIL ENTRY — it keeps its place and its two readings (cinatra#3047's own
+// criterion 2, unchanged by the review).
 // ---------------------------------------------------------------------------
 describe("the rail entry", () => {
   it("is the FIRST row on the rail, ahead of the steps it would authorize", async () => {
@@ -471,7 +550,7 @@ describe("the rail entry", () => {
       <RunSurface panel="agentic" hasPark held={false} initialSelection="detail" />,
     );
 
-    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
+    await settleFrame();
     const rows = Array.from(
       railColumn(container).querySelectorAll(
         '[data-conformance-id="recommendation-rail-step"], [data-conformance-id="schedule-rail-step"], [data-testid="review-row"]',
@@ -500,31 +579,18 @@ describe("the rail entry", () => {
     const settled = render(
       <RunSurface panel="agentic" hasPark held={false} initialSelection="detail" />,
     );
-    await waitFor(() => expect(chipRows(settled.container).length).toBeGreaterThan(0));
+    await settleFrame();
     expect(
       railEntry(settled.container)!.getAttribute("data-recommendation-step-settled"),
     ).toBe("true");
   });
 
-  it("opens the row in the run detail when it is selected — and still only one", async () => {
+  it("names the step 'Skills'", async () => {
     getRunRecommendationHoldStateAction.mockResolvedValue(SETTLED);
     const { container } = render(
-      <RunSurface panel="agentic" hasPark held={false} initialSelection="detail" moment="working" />,
+      <RunSurface panel="agentic" hasPark held={false} initialSelection="detail" />,
     );
-
-    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
-    fireEvent.click(railEntry(container)!);
-
-    await waitFor(() =>
-      expect(railEntry(container)!.getAttribute("data-recommendation-step-selected")).toBe(
-        "true",
-      ),
-    );
-    await waitFor(() => expect(chipRows(container).length).toBeGreaterThan(0));
-    expect(chipRows(container)).toHaveLength(1);
-    expect(detailColumn(container).contains(chipRows(container)[0])).toBe(true);
-    // The step's surface REPLACES the run detail, so the panel's boxes are not
-    // on the page at all while the gate is open.
-    expect(panelBoxes(container)).toHaveLength(0);
+    await settleFrame();
+    expect(railEntry(container)!.textContent).toBe("Skills");
   });
 });

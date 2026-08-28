@@ -107,8 +107,8 @@ function ReviewRow() {
   );
 }
 
-/** The run detail as the screen composes it: the settled card, then the run's
- *  own progress section. */
+/** The run detail as the screen composes it: the run's own progress section,
+ *  and nothing above it (cinatra#3047, review point D). */
 function RunProgress() {
   return (
     <section data-testid="run-detail-panel">
@@ -118,9 +118,10 @@ function RunProgress() {
 }
 
 /**
- * The run surface, composed the way `SetupScreen` composes it: ONE card mount
- * used by the step's surface and by the run detail, which are mutually
- * exclusive slots of the same frame.
+ * The run surface, composed the way `SetupScreen` composes it: ONE card mount,
+ * given to the Skills step's surface and to nothing else (cinatra#3047, review
+ * point D — "every HITL shows on its own dedicated page"). The run detail is the
+ * run's own panel; the settled row is reached by selecting its step.
  */
 function surface(opts: {
   hasRecommendationStep?: boolean;
@@ -166,12 +167,7 @@ function surface(opts: {
       <RunSurfaceRail
         steps={steps}
         rail={<ReviewRow />}
-        detail={
-          <>
-            {card}
-            <RunProgress />
-          </>
-        }
+        detail={<RunProgress />}
         initialSelection={opts.initialSelection}
       />
     </div>
@@ -269,13 +265,13 @@ describe("a DECIDED hold — the settled reading in the rail, the run detail res
     expect(
       entry.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
     ).toBe("");
-    expect(entry.textContent).toBe("Recommendation");
-    // The run detail is what the run page otherwise shows.
+    expect(entry.textContent).toBe("Skills");
+    // The run detail is what the run page otherwise shows…
     expect(container.textContent).toContain("Agentic Run Progress");
-    // …and the settled chip row stays where the branch already draws it.
-    await waitFor(() => expect(chipRow(container)).not.toBeNull());
-    expect(detailColumn(container).contains(chipRow(container)!)).toBe(true);
-    expect(railColumn(container).contains(chipRow(container)!)).toBe(false);
+    // …and the settled row is NOT drawn above it (cinatra#3047, review point D).
+    // It is the Skills step's own page; the next test opens it.
+    expect(chipRow(container)).toBeNull();
+    expect(detailColumn(container).querySelectorAll("[data-recommendation-chip]")).toHaveLength(0);
   });
 
   it("re-opens the settled reading in the same place when its step is selected", async () => {

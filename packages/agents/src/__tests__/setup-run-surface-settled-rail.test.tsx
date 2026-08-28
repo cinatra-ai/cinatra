@@ -168,7 +168,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     });
     // …and no status word is added beside the title, because the drawing shows
     // none.
-    expect(row.textContent).toBe("Recommendation");
+    expect(row.textContent).toBe("Skills");
     // The completed circle takes the rail's FILLED tokens, exactly as the run
     // page's settled recommendation row does.
     const indicator = row.querySelector<HTMLElement>(INDICATOR_SEL)!;
@@ -206,7 +206,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
       railStepIndicatorText: "2",
       railStepIndicatorHasCheckGlyph: false,
     });
-    expect(rows(container)[1].textContent).toBe("2Recommendation");
+    expect(rows(container)[1].textContent).toBe("2Skills");
     // A gate that is still open is not history either.
     expect(rows(container)[2].getAttribute("data-run-surface-rail-settled")).toBe("false");
     expect(railStepRecord(rows(container)[2])).toEqual({

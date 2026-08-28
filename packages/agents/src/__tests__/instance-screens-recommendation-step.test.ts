@@ -216,7 +216,7 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     expect(SCREEN_SRC).toContain('settled={recommendationEntry === "settled"}');
   });
 
-  it("makes exactly ONE `recommendation_hold` mount and uses it in both slots", () => {
+  it("makes exactly ONE `recommendation_hold` mount and gives it to ONE slot", () => {
     // SCOPED TO THIS SCREEN, and it has to be: the module holds four screens,
     // and the setup run page is a screen of its own with a recommendation step
     // of its own (cinatra#2970). Two mounts in one FILE is not two mounts on one
@@ -229,11 +229,16 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     // UNCONDITIONAL (cinatra#3047): no branch of `runDetailPanelKind` withholds
     // it, because no other module draws the row on this page any more.
     expect(RUN_SCREEN_SRC).toContain("const recommendationCardNode = (");
-    // The step's surface and the run detail both reference that ONE mount —
-    // the surface takes it bare (`surface: recommendationCardNode`) and the
-    // detail slot draws it as a child (`{recommendationCardNode}`).
+    // THE STEP'S SURFACE IS THE ONLY SLOT (cinatra#3047, review point D). The
+    // detail slot used to draw the same node as a child, so a settled row stood
+    // above the HITL card, the review card and the scheduling step. The screen
+    // hands the node to the step and to nothing else, and the run detail is the
+    // run's own panels.
     expect(SCREEN_SRC).toContain("surface: recommendationCardNode,");
-    expect(RUN_SCREEN_SRC.match(/\{recommendationCardNode\}/g) ?? []).toHaveLength(1);
+    expect(RUN_SCREEN_SRC.match(/\{recommendationCardNode\}/g) ?? []).toHaveLength(0);
+    const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
+    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
+    expect(SCREEN_SRC.slice(detailStart, detailEnd)).not.toContain("recommendationCardNode");
   });
 
   it("keeps the run's panels INSIDE the detail slot — never beside the open gate step", () => {
