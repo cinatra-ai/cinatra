@@ -482,6 +482,7 @@
     { "alias": "@cinatra-ai/agent-ui-protocol/renderable-views", "target": "./packages/agent-ui-protocol/src/renderable-views/index.ts" },
     { "alias": "@cinatra-ai/agent-ui-protocol/conformance", "target": "./packages/agent-ui-protocol/src/conformance-entry.ts" },
     { "alias": "@cinatra-ai/objects", "target": "./packages/objects/src/index.ts" },
+    { "alias": "@cinatra-ai/memory/secret-scan", "target": "./packages/memory/src/secret-scan.ts" },
     { "alias": "@cinatra-ai/artifacts", "target": "./packages/artifacts/src/index.ts" },
     { "alias": "@cinatra-ai/chart-artifact/src/views/chart", "target": "./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx" },
     { "alias": "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx" },

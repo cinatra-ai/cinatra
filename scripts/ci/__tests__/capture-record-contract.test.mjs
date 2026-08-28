@@ -608,14 +608,42 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       "recommendation_hold | page_gate_region | decided": 4,
       "recommendation_hold | run_card | decided": 10,
       "recommendation_hold | run_card | pending": 12,
-      "recommendation_hold | site_widget | decided": 2,
-      "recommendation_hold | site_widget | pending": 5,
+      // MOVED 2026-08-28 by cinatra#2936 W6 part 2b batch 3 (+6) — the FIRST
+      // cells taken inside a THIRD-PARTY APPLICATION since the widget's own
+      // named-agent start landed. One real run of the blog-draft-writer agent,
+      // started by a sentence typed into the widget's OWN composer on a page
+      // served by another site, with four organization-owned skills assigned:
+      //
+      //   recommendation_hold | site_widget | pending   5 -> 7
+      //     the held chip row, light and dark, in the palette the reader chose
+      //     on the app's own control (the widget follows the app origin's
+      //     class; the OPERATING SYSTEM preference is `false` on every frame).
+      //   recommendation_hold | site_widget | decided   2 -> 6
+      //     the settled row — four chips, one SKIPPED — light and dark, and the
+      //     SAME row again in both palettes after the third-party page was
+      //     reloaded and the widget signed in again, which is plan (B) §6's
+      //     reload clause on this host.
+      //
+      // NOTHING ELSE MOVED, AND THE REST OF THIS HOST'S CELLS ARE OWED TO
+      // FIXES rather than to a batch. `artifact_review_gate | site_widget` did
+      // NOT move: a real widget-started run opened its review gate and the
+      // widget drew no review card at all, live or after a reload —
+      // `widgetHostedPanel` closes both readings of the run card's review slot
+      // (packages/agents/src/agentic-run-panel.tsx:1620/:1625/:1633) while the
+      // outbox withholds the injected part from the same turn on the ground
+      // that the run card would show it. `trigger_schedule_proposal |
+      // site_widget` did not move either: the widget's own conversation
+      // answered the schedule request with the shipped fixed refusal.
+      // `evidence/2936-w6-captures-batch-3-widget/` carries the run ids, the
+      // measurements and the code facts.
+      "recommendation_hold | site_widget | decided": 6,
+      "recommendation_hold | site_widget | pending": 7,
       "trigger_schedule_proposal | chat_thread | decided": 4,
       "trigger_schedule_proposal | chat_thread | pending": 4,
       "trigger_schedule_proposal | run_card | decided": 2,
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(105);
+    expect(index.records.length).toBe(111);
   });
 });
