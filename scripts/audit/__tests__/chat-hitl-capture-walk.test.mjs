@@ -37,7 +37,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   CAPTURE_INDEX_PATH,
@@ -100,6 +100,7 @@ function pageAnswering(requirements, { url, overrides = {} } = {}) {
   const page = {
     log,
     shots: [],
+    shotOptions: [],
     url: async () => url,
     count: async (selector) => countOf(selector),
     countVisible: async (selector) => countOf(selector),
@@ -119,6 +120,9 @@ function pageAnswering(requirements, { url, overrides = {} } = {}) {
     screenshot: async (abs, options = {}) => {
       log.push(`screenshot:${options.framing ?? "(none)"}`);
       page.shots.push(abs);
+      // What the shutter was ASKED for, so a suite can assert the format was
+      // stated rather than left to the file name.
+      page.shotOptions.push(options);
       // A REAL SHUTTER LEAVES A FILE. The recorder writes to a temp name in the
       // resolved directory and renames it into place, so a stub that writes
       // nothing is not standing in for a shutter at all.
@@ -704,6 +708,43 @@ describe("a parent swapped DURING the capture fails closed", () => {
       });
       expect(record.screenshot).toBe("test-results/run/x.png");
       expect(readdirSync(join(root, "test-results", "run"))).toEqual(["x.png"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SHUTTER IS AN IMAGE WRITER. It infers its format from the file name, so
+// the exclusive random temp file must still LOOK like an image — an
+// extensionless temp path made the real producer fail outright with
+// `unsupported mime type "null"`. Belt and braces: the name keeps the
+// extension AND the format is stated explicitly.
+// ---------------------------------------------------------------------------
+describe("the temp file is still an image, by name and by declaration", () => {
+  it("the shutter is handed a .png temp path and an explicit type", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-type-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/shot.png" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shots).toHaveLength(1);
+      const handed = page.shots[0];
+      // It is the TEMP name — random, hidden, and still a .png.
+      expect(handed.endsWith(".png")).toBe(true);
+      expect(basename(handed)).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.png$/);
+      expect(page.shotOptions[0].type).toBe("png");
+      // ...and the file that survives is the real name, with nothing beside it.
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["shot.png"]);
+      expect(readFileSync(join(root, "test-results", "run", "shot.png"))).toEqual(BYTES);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

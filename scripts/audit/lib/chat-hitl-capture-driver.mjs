@@ -198,9 +198,13 @@ export function playwrightPage(page) {
      * so every capture round written before this argument existed frames
      * exactly as it did.
      */
-    screenshot: async (absPath, { framing = "page" } = {}) => {
-      mkdirSync(dirname(absPath), { recursive: true });
-      await page.screenshot({ path: absPath, fullPage: framing !== "window" });
+    screenshot: async (absPath, { framing = "page", type = "png" } = {}) => {
+      // NO `mkdir` HERE. The recorder has already created and RESOLVED this
+      // directory component by component inside the capture root; a recursive
+      // mkdir at the last moment would be a second, unchecked way to make
+      // directories — the exact pattern the resolved path exists to prevent.
+      // The format is passed explicitly so it never depends on the file name.
+      await page.screenshot({ path: absPath, fullPage: framing !== "window", type });
     },
   };
 }

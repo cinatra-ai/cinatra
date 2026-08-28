@@ -14,6 +14,7 @@ import {
   existsSync,
   linkSync,
   mkdtempSync,
+  readdirSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -40,6 +41,7 @@ import {
   validateCaptureIndex,
   validateCaptureRecord,
   CAPTURE_OUTPUT_ROOT,
+  captureImageType,
   createCaptureTempFile,
   prepareCaptureTarget,
   recheckCaptureParent,
@@ -1508,5 +1510,96 @@ describe("an injected pinned reader is honoured only under the flag", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// A REJECTED WRITE MUST NOT HAVE BUILT ANYTHING. `mkdir -p` walks the path
+// itself and walks straight THROUGH a symlinked intermediate, so the recursive
+// form created `/outside/new` and the check afterwards then — correctly, and
+// too late — refused the capture. The refusal was never the problem; the
+// directory this function had already made outside the root was.
+// ---------------------------------------------------------------------------
+describe("preparing a target creates nothing outside the capture root", () => {
+  it("a pre-existing symlinked intermediate is refused with NOTHING created through it", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-nomkdir-"));
+    try {
+      mkdirSync(join(root, "test-results"), { recursive: true });
+      const outside = join(root, "outside");
+      mkdirSync(outside, { recursive: true });
+      symlinkSync(outside, join(root, "test-results", "sneaky"), "dir");
+
+      const got = prepareCaptureTarget("test-results/sneaky/new/shot.png", { repoRoot: root });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/parent-is-symlink");
+      // THE ASSERTION THAT MATTERS: the outside directory is untouched.
+      expect(readdirSync(outside)).toEqual([]);
+      expect(existsSync(join(outside, "new"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a FILE where a directory component belongs is refused, and not clobbered", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-file-seg-"));
+    try {
+      mkdirSync(join(root, "test-results"), { recursive: true });
+      writeFileSync(join(root, "test-results", "notadir"), "I AM A FILE");
+      const got = prepareCaptureTarget("test-results/notadir/deeper/shot.png", { repoRoot: root });
+      expect(got.ok).toBe(false);
+      expect(got.code).toBe("capture/parent-not-a-directory");
+      expect(readFileSync(join(root, "test-results", "notadir"), "utf8")).toBe("I AM A FILE");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a deep honest path is built one component at a time", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-deep-walk-"));
+    try {
+      const got = prepareCaptureTarget("test-results/a/b/c/shot.png", { repoRoot: root });
+      expect(got.ok).toBe(true);
+      for (const d of ["a", join("a", "b"), join("a", "b", "c")]) {
+        expect(lstatSyncForTest(join(root, "test-results", d)).isDirectory()).toBe(true);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recursive mkdir is never used — a single component is created per step", () => {
+    // Proven by observation rather than by reading the source: every `mkdir`
+    // call is recorded, and none of them asks for `recursive`.
+    const root = mkdtempSync(join(tmpdir(), "prep-nonrecursive-"));
+    try {
+      const calls = [];
+      const got = prepareCaptureTarget("test-results/a/b/shot.png", {
+        repoRoot: root,
+        mkdir: (p, opts) => {
+          calls.push({ p, opts });
+          return mkdirSync(p, opts);
+        },
+      });
+      expect(got.ok).toBe(true);
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) expect(c.opts?.recursive).toBeFalsy();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the temp file keeps the final extension so an image writer can place it", () => {
+    const root = mkdtempSync(join(tmpdir(), "prep-tmpext-"));
+    try {
+      const t = prepareCaptureTarget("test-results/c/shot.png", { repoRoot: root });
+      const temp = createCaptureTempFile(t.parentReal, { extension: ".png" });
+      expect(temp.ok).toBe(true);
+      expect(temp.path.endsWith(".png")).toBe(true);
+      expect(captureImageType(temp.path)).toBe("png");
+      expect(captureImageType("/x/y/shot.jpeg")).toBe("jpeg");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -902,7 +902,11 @@ export function prepareCaptureTarget(rel, io) {
     lstat(rootAbs);
   } catch {
     try {
-      mkdir(rootAbs, { recursive: true });
+      // NON-RECURSIVE, like every other mkdir here: the capture root is one
+      // component under the repository root, and "this function never creates a
+      // path it did not examine" is a rule with no exceptions rather than a
+      // habit with one.
+      mkdir(rootAbs);
     } catch (err) {
       return {
         ok: false,
@@ -939,17 +943,64 @@ export function prepareCaptureTarget(rel, io) {
       detail: `"${rel}" is not under ${CAPTURE_OUTPUT_ROOT}`,
     };
   }
+  //    COMPONENT BY COMPONENT, AND NEVER RECURSIVELY. `mkdir -p` walks the path
+  //    itself, and it walks THROUGH a symlinked intermediate happily -- so
+  //    `sneaky -> /outside` with a target of `sneaky/new/shot.png` had
+  //    `/outside/new` created before the check below rejected the write. The
+  //    rejection was correct and the directory was still made, outside the root,
+  //    by this function. Each segment is therefore examined BEFORE it is
+  //    descended into: an existing one must already be a real directory, a
+  //    missing one is created singly and then re-examined.
   const sub = rel.slice(root.length + 1);
   const subDir = dirname(sub);
-  const parentInsideRoot = subDir === "." ? rootReal : join(rootReal, subDir);
-  try {
-    mkdir(parentInsideRoot, { recursive: true });
-  } catch (err) {
-    return {
-      ok: false,
-      code: "capture/parent-missing",
-      detail: `the directory holding "${rel}" could not be created: ${err.message}`,
-    };
+  let parentInsideRoot = rootReal;
+  if (subDir !== ".") {
+    for (const segment of subDir.split("/")) {
+      if (segment === "" || segment === ".") continue;
+      const next = join(parentInsideRoot, segment);
+      let st = null;
+      try {
+        st = lstat(next);
+      } catch {
+        st = null; // not there yet
+      }
+      if (!st) {
+        try {
+          mkdir(next); // ONE component, non-recursive
+        } catch (err) {
+          return {
+            ok: false,
+            code: "capture/parent-missing",
+            detail: `the directory holding "${rel}" could not be created: ${err.message}`,
+          };
+        }
+        try {
+          st = lstat(next);
+        } catch {
+          return {
+            ok: false,
+            code: "capture/parent-missing",
+            detail: `the directory holding "${rel}" could not be created`,
+          };
+        }
+      }
+      if (st.isSymbolicLink()) {
+        return {
+          ok: false,
+          code: "capture/parent-is-symlink",
+          detail: `"${segment}" on the way to "${rel}" is a symlink — a capture is written into ` +
+            "real directories inside the capture root, never through a link",
+        };
+      }
+      if (!st.isDirectory()) {
+        return {
+          ok: false,
+          code: "capture/parent-not-a-directory",
+          detail: `"${segment}" on the way to "${rel}" exists and is not a directory`,
+        };
+      }
+      parentInsideRoot = next;
+    }
   }
 
   // 3. RE-RESOLVE. `mkdir -p` is satisfied by an existing symlinked directory
@@ -1064,7 +1115,12 @@ export function createCaptureTempFile(parentReal, io = {}) {
   const open = io.open ?? openSync;
   const close = io.close ?? closeSync;
   const random = io.randomBytes ?? randomBytes;
-  const path = join(parentReal, `.capture-${random(12).toString("hex")}.tmp`);
+  // THE EXTENSION RIDES ALONG. An image writer infers its format from the file
+  // name, and a temp file with no extension made Playwright refuse the shutter
+  // outright (`unsupported mime type "null"`). The random part still carries
+  // the unguessability; the suffix only tells a writer what it is writing.
+  const extension = typeof io.extension === "string" ? io.extension : "";
+  const path = join(parentReal, `.capture-${random(12).toString("hex")}.tmp${extension}`);
   try {
     close(open(path, "wx"));
   } catch (err) {
@@ -1108,6 +1164,17 @@ export function tempFileViolation(tmpPath) {
     };
   }
   return null;
+}
+
+/**
+ * The image format a capture path names, stated EXPLICITLY to the shutter.
+ *
+ * Belt and braces with the temp file's extension: the extension keeps a writer
+ * that only looks at names happy, and this keeps the format correct even if the
+ * name ever stops carrying it.
+ */
+export function captureImageType(path) {
+  return /\.jpe?g$/i.test(path) ? "jpeg" : "png";
 }
 
 /** sha256 of a file, read from DISK -- never re-derived from the record. */

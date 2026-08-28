@@ -80,7 +80,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, rmSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 
 // THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
 // ratified and on main; a second hand-written copy of the same hosts, kinds,
@@ -105,6 +105,7 @@ import {
   isHistoricalPermalink,
   PINNED_ARTIFACT_ROOT,
   repoPathOf,
+  captureImageType,
   createCaptureTempFile,
   prepareCaptureTarget,
   recheckCaptureParent,
@@ -840,13 +841,21 @@ export async function observeCapture({
   if (beforeShutter) {
     throw new Error(`capture "${cell}" cannot be written: ${beforeShutter.detail}`);
   }
-  const temp = createCaptureTempFile(target.parentReal);
+  // The temp file keeps the FINAL extension: the shutter is an image writer and
+  // infers its format from the name, so an extensionless temp path made it
+  // refuse outright. The rename target keeps its real name.
+  const temp = createCaptureTempFile(target.parentReal, { extension: extname(abs) });
   if (!temp.ok) {
     throw new Error(`capture "${cell}" cannot be written: ${temp.detail}`);
   }
   const tmp = temp.path;
   try {
-    await page.screenshot(tmp, { framing: framing ?? "page" });
+    // ...and the format is stated EXPLICITLY as well, so it never depends on
+    // the name at all.
+    await page.screenshot(tmp, {
+      framing: framing ?? "page",
+      type: captureImageType(abs),
+    });
     const beforeRename = recheckCaptureParent(target);
     if (beforeRename) {
       throw new Error(`capture "${cell}" cannot be written: ${beforeRename.detail}`);
