@@ -138,3 +138,8 @@ Desktop.ini
 # Env files and secrets
 *.key
 .codex-verdicts/
+
+# proof artifacts never live in the checkout
+evidence/
+pr-evidence/
+verification/
