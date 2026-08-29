@@ -15,11 +15,11 @@
  *    unchanged in both themes.
  *
  * 2. The three defects each exist twice: once in the host at `src/`, once in
- *    the packages the app itself imports — `@cinatra-ai/design` ships the token
- *    layer to portable surfaces, and `@cinatra-ai/sdk-ui` ships the tab row and
- *    the popover and dropdown primitives that the connector setup pages and the
- *    prompt field render inside this same app shell. Fixing only the host copy
- *    leaves the reported defect on screen.
+ *    the packages the app itself imports — the design-tokens package ships the
+ *    token layer to portable surfaces, and the sdk-ui package ships the tab row
+ *    and the popover and dropdown primitives that the connector setup pages and
+ *    the prompt field render inside this same app shell. Fixing only the host
+ *    copy leaves the reported defect on screen.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
