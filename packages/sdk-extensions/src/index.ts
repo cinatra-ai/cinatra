@@ -838,3 +838,30 @@ export {
   type ExecutionEnvironmentManager,
   type ParseExecutionEnvironmentResult,
 } from "./execution-environment";
+
+// Extension-owned tables (cinatra#3031, epic #3023 W7; plan (C) 0.23/0.24) —
+// the declaration an extension writes, the prefix and role derived from its
+// name, and the fail-closed parser the host preflights with.
+export {
+  EXTENSION_TABLE_PREFIX,
+  PG_IDENTIFIER_MAX_BYTES,
+  DECLARED_COLUMN_TYPES,
+  DECLARED_COLUMN_DEFAULTS,
+  normalizeExtensionNameSegment,
+  extensionTablePrefix,
+  extensionDatabaseRoleName,
+  declaredTablePhysicalName,
+  declaredIndexPhysicalName,
+  parseDeclaredTables,
+  assertNoDeclaredTablePrefixCollision,
+} from "./manifest";
+export type {
+  DeclaredColumnType,
+  DeclaredColumnDefault,
+  DeclaredColumn,
+  DeclaredIndex,
+  DeclaredTable,
+  DeclaredColumnDeclaration,
+  DeclaredIndexDeclaration,
+  DeclaredTableDeclaration,
+} from "./manifest";

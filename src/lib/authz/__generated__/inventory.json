@@ -275,52 +275,52 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 280
+      "line": 301
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 265
+      "line": 286
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 460
+      "line": 481
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 412
+      "line": 433
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 393
+      "line": 414
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 376
+      "line": 397
     },
     {
       "primitiveName": "artifact_promote_request",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 484
+      "line": 505
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 321
+      "line": 342
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 351
+      "line": 372
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 303
+      "line": 324
     },
     {
       "primitiveName": "artifact_review_gate_render",
@@ -355,17 +355,17 @@
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 226
+      "line": 247
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 198
+      "line": 218
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 238
+      "line": 259
     },
     {
       "primitiveName": "assistant_send",
