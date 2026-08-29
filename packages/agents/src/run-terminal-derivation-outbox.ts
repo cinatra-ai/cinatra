@@ -34,12 +34,27 @@ import type { GuardedRunTx } from "./org-write-run-seam";
 export type EndNodeOutputCapture = {
   outputId: string;
   outputName: string;
-  source: "end_node_output" | "file";
+  source: "end_node_output";
   content: string;
   contentIsJson: boolean;
   contentHash: string;
   byteLength: number;
 };
+
+// cinatra#3030 (item 0.22). The FILE half of the same family, captured BY
+// REFERENCE. A file's bytes never ride the outbox row: "the pickup streams the
+// bytes once into the store", and the run folder is read where the pickup runs —
+// which is the point of handing the pickup over through this outbox at all.
+export type RunFileCapture = {
+  outputId: string;
+  outputName: string;
+  source: "file";
+  /** Path relative to the run's `outputs` folder, with `/` separators. */
+  relPath: string;
+  byteLength: number;
+};
+
+export type RunOutputCapture = EndNodeOutputCapture | RunFileCapture;
 
 export type DerivationOutboxCapture = {
   orgId: string;
@@ -49,9 +64,10 @@ export type DerivationOutboxCapture = {
   packageVersion: string | null;
   /** The run's runBy principal — the written artifacts' createdBy. */
   createdBy: string | null;
-  /** The default road's item family. Empty ⇒ the run made no document; the
-   *  pickup settles the row without writing anything. */
-  items: EndNodeOutputCapture[];
+  /** The default road's item family — end-node outputs AND emitted files. Empty
+   *  ⇒ the run made no document and left no file; the pickup settles the row
+   *  without writing anything. */
+  items: RunOutputCapture[];
 };
 
 /**

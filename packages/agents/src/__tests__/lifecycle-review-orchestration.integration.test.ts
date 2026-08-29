@@ -193,6 +193,123 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect((count.rows[0] as { n: number }).n).toBe(1);
   });
 
+  // -------------------------------------------------------------------------
+  // cinatra#3030 (epic #3023 W6; plan (C) item 0.30) — THE SATISFACTION RULE.
+  //
+  //   "the caller's own declared gate is recorded as the review of those
+  //    revisions, and the produced-output road, when it fires, resolves to that
+  //    gate instead of opening a second — a satisfaction rule keyed on the
+  //    artifact revision and the run"
+  //
+  // The events below carry the ORDINARY agent-produced origin on purpose: the
+  // rule only has to do anything when the road FIRES, which is the
+  // organisation-required / per-run-elevated case the item names. A
+  // live-generator origin is skipped by the policy before it ever gets here.
+  // -------------------------------------------------------------------------
+
+  /** Record the gate a mid-run append declared for one revision. */
+  async function declareGateFor(
+    ev: ArtifactProducedEvent,
+    appendingRunId: string,
+    reviewTaskId: string,
+  ) {
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_revision_review_satisfaction"
+         (org_id, artifact_id, representation_revision_id, run_id, review_task_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [ev.orgId, ev.artifactId, ev.representationRevisionId, appendingRunId, reviewTaskId],
+    );
+  }
+
+  it("SATISFACTION: a revision whose append declared a gate resolves TO that gate and opens no second one", async () => {
+    const ev = await produce("document");
+    const appendingRunId = ev.producerRunId!;
+    const declaredTaskId = `wayflow-declared-${randomUUID()}`;
+
+    // The run's OWN declared gate, already open over its own work.
+    const declared = await gateStore.emitArtifactReviewGate({
+      runId: appendingRunId,
+      orgId: ORG,
+      reviewTaskId: declaredTaskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: `rev-${randomUUID()}` }],
+    });
+    await declareGateFor(ev, appendingRunId, declaredTaskId);
+
+    await orch.sweepReviewOrchestration();
+
+    // NO second gate: the auto task id this event would otherwise have opened
+    // has no gate at all.
+    const autoTask = autoReviewTaskId(ev.eventId);
+    expect(await readGate(appendingRunId, autoTask)).toBeNull();
+
+    // The event is processed and LINKED to the declared gate — the effects-gating
+    // join now points at the review that actually governs this revision.
+    const row = await readEventRow(ev.eventId);
+    expect(row?.status).toBe("processed");
+    expect(row?.continuation_address).toBe(declared.gateId);
+
+    // "a satisfied gate never carries a second target": the declared gate's
+    // frozen target set is untouched by the satisfaction.
+    const gate = await readGate(appendingRunId, declaredTaskId);
+    expect(gate!.pinnedTargets).toHaveLength(1);
+    expect(gate!.pinnedTargets[0].representationRevisionId).not.toBe(ev.representationRevisionId);
+  });
+
+  it("SATISFACTION: a declared gate that has not been emitted yet leaves the event PENDING, and converges once it is", async () => {
+    const ev = await produce("document");
+    const appendingRunId = ev.producerRunId!;
+    const declaredTaskId = `wayflow-declared-${randomUUID()}`;
+    await declareGateFor(ev, appendingRunId, declaredTaskId);
+
+    await orch.sweepReviewOrchestration();
+
+    // Neither gated by a second gate nor silently dropped.
+    expect(await readGate(appendingRunId, autoReviewTaskId(ev.eventId))).toBeNull();
+    const pendingRow = await readEventRow(ev.eventId);
+    expect(pendingRow?.status).toBe("pending");
+    expect(pendingRow?.continuation_address).toBeNull();
+
+    // The declared gate arrives; the very next sweep converges on it.
+    const declared = await gateStore.emitArtifactReviewGate({
+      runId: appendingRunId,
+      orgId: ORG,
+      reviewTaskId: declaredTaskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: `rev-${randomUUID()}` }],
+    });
+    await orch.sweepReviewOrchestration();
+
+    const settled = await readEventRow(ev.eventId);
+    expect(settled?.status).toBe("processed");
+    expect(settled?.continuation_address).toBe(declared.gateId);
+    expect(await readGate(appendingRunId, autoReviewTaskId(ev.eventId))).toBeNull();
+  });
+
+  it("SATISFACTION: a declared task naming a gate of ANOTHER organisation is refused, and the revision gates normally", async () => {
+    const ev = await produce("document");
+    const appendingRunId = ev.producerRunId!;
+    const declaredTaskId = `wayflow-declared-${randomUUID()}`;
+    // A gate keyed on the SAME (run, task) but belonging to a different org —
+    // the review task id is caller-supplied at the append, so it is never
+    // honoured on its own word.
+    await gateStore.emitArtifactReviewGate({
+      runId: appendingRunId,
+      orgId: "org-3030-somebody-else",
+      reviewTaskId: declaredTaskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: `rev-${randomUUID()}` }],
+    });
+    await declareGateFor(ev, appendingRunId, declaredTaskId);
+
+    await orch.sweepReviewOrchestration();
+
+    // The ordinary road ran: this revision has its OWN gate, not the foreign one.
+    const autoTask = autoReviewTaskId(ev.eventId);
+    const own = await readGate(appendingRunId, autoTask);
+    expect(own).not.toBeNull();
+    const row = await readEventRow(ev.eventId);
+    expect(row?.status).toBe("processed");
+    expect(row?.continuation_address).toBe(own!.id);
+  });
+
   it("SURFACE: an auto-gate is consumed by the S12 review surface's read PORTS exactly like a flow-authored gate", async () => {
     // The S12 review surface renders a gate through two store ports: the PREPARATION
     // core's `readGatePinnedTargets` (pending + frozen targets) and the DECISION

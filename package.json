@@ -313,6 +313,7 @@
     "test:named-agent-start": "vitest run --config vitest/integration/2935.config.ts --no-coverage",
     "test:lifecycle-c-w3": "vitest run --config vitest/integration/3027.config.ts --no-coverage",
     "test:default-road": "vitest run --config vitest/integration/3029.config.ts --no-coverage",
+    "test:run-folder": "vitest run --config vitest/integration/3030.config.ts --no-coverage",
     "test:extension-tables": "vitest run --config vitest/integration/3031.config.ts --no-coverage",
     "test:widget-schedule-grant": "vitest run --config vitest/integration/3052.config.ts --no-coverage",
     "test:agent-ui-durable-resume": "vitest run --config vitest/integration/3067.config.ts --no-coverage",

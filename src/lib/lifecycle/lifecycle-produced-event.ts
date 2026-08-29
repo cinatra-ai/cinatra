@@ -45,12 +45,17 @@ export const PRODUCED_EVENT_KINDS: readonly ProducedEventKind[] = ["artifact_pro
 export type ProducedEventEmitter =
   | "createSemanticArtifact"
   | "dashboard_twin_writer"
-  | "object_cms_snapshot_capture";
+  | "object_cms_snapshot_capture"
+  | "artifact_revision_append";
 
 export const PRODUCED_EVENT_EMITTERS: readonly ProducedEventEmitter[] = [
   "createSemanticArtifact",
   "dashboard_twin_writer",
   "object_cms_snapshot_capture",
+  // cinatra#3030 (item 0.30): the mid-run revision append. A choke point of its
+  // own — the enumerated set is what makes the choke points auditable, so a new
+  // one is DECLARED here rather than smuggled under an existing name.
+  "artifact_revision_append",
 ] as const;
 
 const EMITTER_SET: ReadonlySet<string> = new Set(PRODUCED_EVENT_EMITTERS);

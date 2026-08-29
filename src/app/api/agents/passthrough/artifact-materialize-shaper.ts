@@ -16,8 +16,22 @@ export type ShapedArtifactMaterializeInput = {
   content: string;
   /** Text-authorable MIME declared by the node. */
   declaredMime: string;
-  /** Artifact title — explicit, never prompt-invented. */
-  title: string;
+  /** Artifact title — explicit, never prompt-invented. ABSENT on an append: a
+   *  revision of an existing artifact does not rename it. */
+  title?: string;
+  /**
+   * THE MID-RUN REVISION (cinatra#3030, item 0.30): "a mid-run write may name an
+   * existing artifact and append its next revision instead of creating a new one
+   * — a compare-and-set against the revision the caller read". Both fields
+   * together, or neither: an artifact without the base it was read at is exactly
+   * the lost update the compare-and-set exists to refuse.
+   */
+  artifactId?: string;
+  baseRepresentationRevisionId?: string;
+  /** The review task id of the gate THIS RUN declared, recorded as the review of
+   *  the appended revision so the produced-output road resolves to that gate
+   *  instead of opening a second (item 0.30). */
+  reviewTaskId?: string;
   /** The calling ApiNode's id — the idempotency-ledger output identity. */
   nodeId: string;
   /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
@@ -59,8 +73,30 @@ export function shapeArtifactMaterializeInput(
 ): ShapedArtifactMaterializeInput {
   const extension = requireNonEmptyString(raw, "extension");
   const declaredMime = requireNonEmptyString(raw, "declaredMime");
-  const title = requireNonEmptyString(raw, "title");
   const nodeId = requireNonEmptyString(raw, "node_id");
+
+  // THE APPEND (item 0.30). Naming an artifact WITHOUT the revision it was read
+  // at is refused here rather than downstream: a write that cannot say what it
+  // built on cannot be compare-and-set, and letting it through would make it a
+  // blind overwrite of whatever landed in between.
+  const hasArtifactId = raw.artifactId !== undefined;
+  const hasBase = raw.baseRepresentationRevisionId !== undefined;
+  if (hasArtifactId !== hasBase) {
+    throw new Error(
+      "artifact_materialize input.artifactId and input.baseRepresentationRevisionId are a pair: " +
+        "appending the next revision of an existing artifact names both, creating a new artifact names neither",
+    );
+  }
+  const artifactId = hasArtifactId ? requireNonEmptyString(raw, "artifactId") : undefined;
+  const baseRepresentationRevisionId = hasBase
+    ? requireNonEmptyString(raw, "baseRepresentationRevisionId")
+    : undefined;
+  let reviewTaskId: string | undefined;
+  if (raw.reviewTaskId !== undefined) {
+    reviewTaskId = requireNonEmptyString(raw, "reviewTaskId");
+  }
+  // A creation names the artifact; an append does not rename what it revises.
+  const title = artifactId === undefined ? requireNonEmptyString(raw, "title") : undefined;
 
   let objectTypeId: string | undefined;
   const objectTypeIdRaw = raw.objectTypeId;
@@ -127,5 +163,15 @@ export function shapeArtifactMaterializeInput(
     }
   }
 
-  return { extension, content, declaredMime, title, nodeId, ...(objectTypeId ? { objectTypeId } : {}) };
+  return {
+    extension,
+    content,
+    declaredMime,
+    nodeId,
+    ...(title !== undefined ? { title } : {}),
+    ...(objectTypeId ? { objectTypeId } : {}),
+    ...(artifactId !== undefined ? { artifactId } : {}),
+    ...(baseRepresentationRevisionId !== undefined ? { baseRepresentationRevisionId } : {}),
+    ...(reviewTaskId !== undefined ? { reviewTaskId } : {}),
+  };
 }

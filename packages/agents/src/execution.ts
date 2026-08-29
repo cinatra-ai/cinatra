@@ -25,7 +25,12 @@ import {
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 // The default road's document floor and item family (cinatra#3029, item 0.17).
-import { selectEndNodeOutputPickupItems } from "./end-node-output-pickup";
+// The file half is #3030's (item 0.22): the same module, the same family.
+import {
+  selectEndNodeOutputPickupItems,
+  selectRunFilePickupItems,
+  type RunFilePickupItem,
+} from "./end-node-output-pickup";
 import { isTriggerReleased } from "./trigger-gate";
 // cinatra#2523: the setup-success hand-off asks whether the user has already
 // answered "When should this run?". trigger-store is already in this module's
@@ -1859,14 +1864,51 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     endNodeOutputs,
     boundOutputNames,
   });
+  // THE FILE HALF (cinatra#3030, item 0.22): "at terminal success every file in
+  // the run's `outputs` folder is an output".
+  //
+  // The folder is HOST-side and lives with the process that runs the pickup, so
+  // this module never imports it. The boot phase `run-data-root-guard` registers
+  // the folder's lister into ONE global slot and the capture reads that slot —
+  // the same registered-runner road the lifecycle drains and the derivation
+  // runner already take, and for the same reason: an import edge from this
+  // runtime to the host's run-folder module would grow four route graphs the
+  // dev-perf ratchet locks. What is captured is a list of PATHS; the bytes stay
+  // on disk until the pickup streams them, so a worker's placement never
+  // matters.
+  const runOutputsLister = (
+    globalThis as {
+      __cinatraRunOutputsLister?: (input: {
+        orgId: string;
+        runId: string;
+      }) => Promise<Array<{ relPath: string; byteLength: number }>>;
+    }
+  ).__cinatraRunOutputsLister;
+  let runFileItems: RunFilePickupItem[] = [];
+  if (typeof runOutputsLister === "function") {
+    try {
+      runFileItems = selectRunFilePickupItems(
+        await runOutputsLister({ orgId: run.orgId, runId: run.id }),
+      );
+    } catch (err) {
+      // A folder that cannot be listed is a staging area that is not there. The
+      // run's end-node outputs still take their road, and the folder's own
+      // retention tier collects whatever was left behind.
+      console.warn(
+        `[default-road] could not list the outputs folder of run ${run.id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  const pickupItems = [...defaultRoadSelection.items, ...runFileItems];
   const derivationOutbox =
-    defaultRoadSelection.items.length > 0
+    pickupItems.length > 0
       ? {
           orgId: run.orgId,
           templateId: run.templateId,
           packageVersion: run.packageVersion,
           createdBy: run.runBy,
-          items: defaultRoadSelection.items,
+          items: pickupItems,
         }
       : undefined;
 

@@ -83,41 +83,185 @@ export const artifactOutputBindingSchema = z
           "objectTypeId must be a namespaced object type id (@scope/package:local-id)",
       })
       .optional(),
-    /** EndNode output name that carries the artifact CONTENT. */
-    contentFrom: z.string().min(1),
-    /** Static MIME. XOR `mimeFrom`. Must be text-authorable (v1). */
+    /** EndNode output name that carries the artifact CONTENT. One of the three
+     *  content sources (cinatra#3030, item 0.22 / 0.27). */
+    contentFrom: z.string().min(1).optional(),
+    /** ONE FILE of the run folder's outputs, by its path relative to that
+     *  folder — "bindings gain a file source beside the output source, so an
+     *  explicit dependency covers files too" (item 0.22). */
+    fileFrom: z.string().min(1).optional(),
+    /** A FILE PATTERN over the run folder's outputs. A pattern always fans out:
+     *  "the materializer writes one artifact per member or per matching file"
+     *  (item 0.27). `*` matches within one path segment, `**` across segments. */
+    filePattern: z.string().min(1).optional(),
+    /** "a binding may declare that its output is a list whose members are each
+     *  an artifact" (item 0.27). Only on an output content source — a file
+     *  pattern already fans out. */
+    membersAreArtifacts: z.boolean().optional(),
+    /** Static MIME. XOR `mimeFrom` on an output source; OPTIONAL on a file
+     *  source, where the detection ladder types the bytes (item 0.18). */
     declaredMime: z.string().min(1).optional(),
     /** EndNode output name that carries the MIME at run time. XOR `declaredMime`. */
     mimeFrom: z.string().min(1).optional(),
-    /** EndNode output name that carries the artifact TITLE. */
-    titleFrom: z.string().min(1),
+    /** EndNode output name that carries the artifact TITLE. Only on a
+     *  single-artifact output source: one output cannot title every member of a
+     *  fan-out, and a file has no end-node output to read a title from. */
+    titleFrom: z.string().min(1).optional(),
+    /** A field of each MEMBER carrying that member's title (item 0.27). */
+    titleFromMemberField: z.string().min(1).optional(),
+    /** "a title comes from [...] the first line of a text member — a new title
+     *  source the binding grammar gains" (item 0.27). */
+    titleFromFirstLine: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
-    const hasDeclared = value.declaredMime !== undefined;
-    const hasFrom = value.mimeFrom !== undefined;
-    if (hasDeclared === hasFrom) {
+    const fail = (message: string, path?: string[]): void => {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "exactly one of declaredMime / mimeFrom is required",
+        ...(path ? { path } : {}),
+        message,
       });
+    };
+
+    // ---- exactly one content source -----------------------------------
+    const sources = [value.contentFrom, value.fileFrom, value.filePattern].filter(
+      (v) => v !== undefined,
+    );
+    if (sources.length !== 1) {
+      fail(
+        "exactly one content source is required: contentFrom (an end-node output), " +
+          "fileFrom (one file of the run folder) or filePattern (a file pattern)",
+      );
+    }
+    const fileSourced = value.fileFrom !== undefined || value.filePattern !== undefined;
+
+    // ---- the fan-out ---------------------------------------------------
+    if (value.membersAreArtifacts === true && fileSourced) {
+      fail(
+        "membersAreArtifacts declares that an OUTPUT is a list of artifacts; a file " +
+          "pattern already fans out per matching file",
+        ["membersAreArtifacts"],
+      );
+    }
+
+    // ---- the title sources ---------------------------------------------
+    if (value.titleFrom !== undefined) {
+      if (fileSourced) {
+        fail(
+          "titleFrom names an end-node output; a file-sourced binding takes its title " +
+            "from the file name, or from titleFromFirstLine",
+          ["titleFrom"],
+        );
+      } else if (value.membersAreArtifacts === true) {
+        fail(
+          "titleFrom names ONE output and cannot title every member of a fan-out; use " +
+            "titleFromMemberField or titleFromFirstLine",
+          ["titleFrom"],
+        );
+      }
+    }
+    if (value.membersAreArtifacts === true) {
+      const memberTitles = [value.titleFromMemberField, value.titleFromFirstLine].filter(
+        (v) => v !== undefined,
+      );
+      if (memberTitles.length !== 1) {
+        fail(
+          "a fan-out needs exactly one per-member title source: titleFromMemberField or " +
+            "titleFromFirstLine",
+        );
+      }
+    } else if (!fileSourced) {
+      const titles = [value.titleFrom, value.titleFromFirstLine].filter(
+        (v) => v !== undefined,
+      );
+      if (titles.length !== 1) {
+        fail("exactly one of titleFrom / titleFromFirstLine is required");
+      }
+    }
+
+    // ---- the form -------------------------------------------------------
+    const hasDeclared = value.declaredMime !== undefined;
+    const hasFrom = value.mimeFrom !== undefined;
+    if (fileSourced) {
+      // A file source may leave the form to the detection ladder (item 0.18);
+      // declaring BOTH sources is still a contradiction.
+      if (hasDeclared && hasFrom) {
+        fail("at most one of declaredMime / mimeFrom");
+      }
+    } else if (hasDeclared === hasFrom) {
+      fail("exactly one of declaredMime / mimeFrom is required");
     }
     if (
       value.declaredMime !== undefined &&
       !ARTIFACT_BINDING_AUTHORABLE_MIMES.has(value.declaredMime)
     ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["declaredMime"],
-        message:
-          `declaredMime "${value.declaredMime}" is not text-authorable; allowed: ` +
+      fail(
+        `declaredMime "${value.declaredMime}" is not text-authorable; allowed: ` +
           `${[...ARTIFACT_BINDING_AUTHORABLE_MIMES].join(", ")} (binary artifacts ` +
           "use the upload/template paths)",
-      });
+        ["declaredMime"],
+      );
     }
   });
 
 export type ArtifactOutputBinding = z.infer<typeof artifactOutputBindingSchema>;
+
+/** Whether the binding's content source is the run folder (item 0.22). */
+export function isFileSourcedBinding(binding: ArtifactOutputBinding): boolean {
+  return binding.fileFrom !== undefined || binding.filePattern !== undefined;
+}
+
+/** Whether the binding writes ONE ARTIFACT PER MEMBER — a list output whose
+ *  members are each an artifact, or a file pattern (item 0.27). */
+export function isFanOutBinding(binding: ArtifactOutputBinding): boolean {
+  return binding.membersAreArtifacts === true || binding.filePattern !== undefined;
+}
+
+/**
+ * Match one run-folder path against a binding's file pattern. A pattern is NOT
+ * a shell language: `*` matches within one path segment, `**` matches across
+ * segments, `?` matches one character within a segment, and every other
+ * character — a dot included — is itself.
+ */
+export function fileMatchesBindingPattern(pattern: string, relPath: string): boolean {
+  let re = "";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        re += ".*";
+        i += 1;
+      } else {
+        re += "[^/]*";
+      }
+      continue;
+    }
+    if (ch === "?") {
+      re += "[^/]";
+      continue;
+    }
+    re += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`).test(relPath);
+}
+
+/** The first line of a text member, as its title: the heading and list marks a
+ *  first line carries are stripped, because they are the text's shape and never
+ *  part of what it is called (item 0.27). */
+export function firstLineTitle(text: string): string {
+  const first = text.split(/\r?\n/, 1)[0] ?? "";
+  return first
+    .replace(/^\s*#{1,6}\s+/, "")
+    .replace(/^\s*[-*+]\s+/, "")
+    .replace(/^\s*>\s+/, "")
+    .trim();
+}
+
+/** The title of a file nothing declared a title for: its own name (item 0.27). */
+export function fileNameTitle(relPath: string): string {
+  const parts = relPath.split("/");
+  return parts[parts.length - 1] ?? relPath;
+}
 
 /**
  * A `cinatra.produces` entry — structural mirror of `@cinatra-ai/objects`
@@ -245,14 +389,16 @@ export function collectArtifactBindingsFromOasDocument(
       }
       const binding = parsed.data;
 
+      // A FILE-SOURCED binding names no end-node output for its content or its
+      // title (item 0.22): the file is the content and the file name is the
+      // title, so only the fields that ARE present are resolved against the
+      // node's outputs.
       let referenceError = false;
-      for (const [field, ref] of [
-        ["contentFrom", binding.contentFrom],
-        ["titleFrom", binding.titleFrom],
-        ...(binding.mimeFrom !== undefined
-          ? ([["mimeFrom", binding.mimeFrom]] as const)
-          : []),
-      ] as ReadonlyArray<readonly [string, string]>) {
+      const namedOutputs: Array<readonly [string, string]> = [];
+      if (binding.contentFrom !== undefined) namedOutputs.push(["contentFrom", binding.contentFrom]);
+      if (binding.titleFrom !== undefined) namedOutputs.push(["titleFrom", binding.titleFrom]);
+      if (binding.mimeFrom !== undefined) namedOutputs.push(["mimeFrom", binding.mimeFrom]);
+      for (const [field, ref] of namedOutputs) {
         if (!outputTitles.has(ref)) {
           errors.push(
             `${where}.${field}: "${ref}" does not name an output of EndNode ` +
