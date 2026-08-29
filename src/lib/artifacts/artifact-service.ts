@@ -754,7 +754,49 @@ export function readArtifactForDetail(input: {
   orgId: string | null;
   actor?: ActorContext;
 }): ArtifactDetailAccess {
-  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor);
+  return readArtifactAccess(input, { allowDeleted: false });
+}
+
+/**
+ * Resolve one artifact for the SETTLED, read-only review reading — the
+ * ARTIFACT-LEVEL half of enabler 0.9 of `PLAN: Agents Lifecycle (C)`
+ * (cinatra#3027 / epic #3023).
+ *
+ * IDENTICAL to {@link readArtifactForDetail} in every authorization respect: the
+ * same actor-scoped ownership filter and the same canonical `object.read`
+ * decision, so a caller who cannot read the row live cannot read it here either.
+ * ONE difference, and it is the enabler's whole sentence: a TOMBSTONED row still
+ * resolves — "a run- or gate-authorized historical reader reads exactly that
+ * pinned representation EVEN AFTER THE ARTIFACT IS TOMBSTONED; the ordinary
+ * artifact page stays live and latest."
+ *
+ * WHY IT HAS TO EXIST. The historical REVISION reader alone could not deliver
+ * the enabler: the live artifact read runs first and answers `not-found` for a
+ * tombstone, so the settled card floored at `unknown-or-tombstoned` before the
+ * revision reader was ever consulted. Both halves of the read go historical
+ * together or neither does.
+ *
+ * ONE CALLER: the review binder's settled reading, over a target the gate itself
+ * pinned. `allowDeleted` is the same option the byte routes' pin override
+ * already uses, under the same visibility check.
+ */
+export function readArtifactForSettledReview(input: {
+  artifactId: string;
+  orgId: string | null;
+  actor?: ActorContext;
+}): ArtifactDetailAccess {
+  return readArtifactAccess(input, { allowDeleted: true });
+}
+
+/** The shared body of the two readings above — one implementation, one place a
+ *  rung could be dropped. `allowDeleted` is the ONLY thing that varies. */
+function readArtifactAccess(
+  input: { artifactId: string; orgId: string | null; actor?: ActorContext },
+  options: { allowDeleted: boolean },
+): ArtifactDetailAccess {
+  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor, {
+    allowDeleted: options.allowDeleted,
+  });
   if (!rec) return { kind: "not-found" };
   ensureArtifactRegistry();
   if (!artifactObjectTypeIds().has(rec.type)) return { kind: "not-found" };
