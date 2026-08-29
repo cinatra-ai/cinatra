@@ -10,6 +10,7 @@ import {
   staleAllowlistEntries,
   staleBaselineEntries,
   FS_IMPORT_ALLOWLIST,
+  TEST_RUNNER_CONFIG_RE,
 } from "../extension-fs-import-ban.mjs";
 
 describe("isBannedFsSpecifier", () => {
@@ -194,5 +195,46 @@ describe("violationsOf with a baseline (temporary migration-debt ratchet)", () =
         "@cinatra-ai/apollo-connector::src/log-retention.ts",
       ]),
     );
+  });
+});
+
+describe("a test-runner config is out of scope (the same class as __tests__ and *.test.*)", () => {
+  it("recognises the vitest config and workspace file shapes, and nothing else", () => {
+    for (const name of [
+      "vitest.config.ts",
+      "vitest.config.mts",
+      "vitest.config.js",
+      "vitest.workspace.ts",
+    ]) {
+      expect(TEST_RUNNER_CONFIG_RE.test(name), name).toBe(true);
+    }
+    for (const name of ["vitest.setup.ts", "index.ts", "detail.tsx", "server.mjs", "next.config.ts"]) {
+      expect(TEST_RUNNER_CONFIG_RE.test(name), name).toBe(false);
+    }
+  });
+
+  it("does NOT report node:fs in an extension's vitest.config.ts, and STILL reports it in its source", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "fs-ban-cfg-"));
+    try {
+      const dir = path.join(root, "cinatra-ai", "example-artifact");
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(
+        path.join(dir, "vitest.config.ts"),
+        'import { readFileSync } from "node:fs";\nexport default {};\n',
+        "utf8",
+      );
+      const clean = scanExtensionsForFsImports([{ name: "@x/example-artifact", dir }]);
+      expect(clean).toEqual({});
+
+      await writeFile(
+        path.join(dir, "src", "detail.tsx"),
+        'import { readFileSync } from "node:fs";\nexport default function D() { return null; }\n',
+        "utf8",
+      );
+      const dirty = scanExtensionsForFsImports([{ name: "@x/example-artifact", dir }]);
+      expect(dirty).toEqual({ "@x/example-artifact": ["src/detail.tsx"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

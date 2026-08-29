@@ -24,6 +24,7 @@ import {
   buildGateSuggestions,
   canonicalFieldValue,
   gateSuggestionSnapshotHash,
+  snapshotSuggestions,
   verifyGateSuggestionSnapshotPayload,
   GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION,
   MAX_GATE_SUGGESTIONS,
@@ -148,7 +149,10 @@ describe("§VIII's before/after pair (cinatra#2852)", () => {
     }) };
     const verified = verifyGateSuggestionSnapshotPayload(rehashed);
     expect(verified).not.toBeNull();
-    expect(verified!.suggestions[0].before).toBeUndefined();
+    // Read through the accessor: the verifier now returns EITHER payload shape
+    // (enabler 0.15's multi-target payload beside the single-target one), and
+    // the accessor is what keeps one statement over both.
+    expect(snapshotSuggestions(verified!)[0]!.before).toBeUndefined();
   });
 });
 
