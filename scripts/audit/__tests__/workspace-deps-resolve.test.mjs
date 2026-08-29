@@ -7,6 +7,7 @@ import {
   parseWorkspaceGlobs,
   resolveWorkspaceTarget,
   findDanglingWorkspaceDeps,
+  declaredExtensionPackageNames,
 } from "../workspace-deps-resolve.mjs";
 
 test("parseWorkspaceGlobs extracts the packages list and stops at the next key", () => {
@@ -104,4 +105,52 @@ test("findDanglingWorkspaceDeps scans a nameless member and reports it by dir", 
   assert.equal(dangling.length, 1);
   assert.equal(dangling[0].member, "extensions/cinatra-ai/x-connector");
   assert.equal(dangling[0].target, "@cinatra-ai/gone");
+});
+
+test("declaredExtensionPackageNames strips the range from the root manifest's required universe", () => {
+  const names = declaredExtensionPackageNames({
+    cinatra: {
+      extensions: [
+        "@cinatra-ai/markdown-artifact@^0.1.0",
+        "@cinatra-ai/binary-artifact@^0.1.0",
+        "@cinatra-ai/text-artifact",
+        "plain-pkg@1.2.3",
+        "",
+        42,
+      ],
+    },
+  });
+  assert.deepEqual(
+    [...names].sort(),
+    [
+      "@cinatra-ai/binary-artifact",
+      "@cinatra-ai/markdown-artifact",
+      "@cinatra-ai/text-artifact",
+      "plain-pkg",
+    ],
+  );
+  assert.deepEqual([...declaredExtensionPackageNames({})], []);
+});
+
+test("a workspace: edge on a DECLARED companion extension is not dangling; an UNDECLARED one still is", () => {
+  const members = [
+    {
+      name: "cinatra",
+      dir: "/repo",
+      deps: {
+        dependencies: {
+          "@cinatra-ai/markdown-artifact": "workspace:*",
+          "@cinatra-ai/ghost-artifact": "workspace:*",
+        },
+      },
+    },
+  ];
+  const acquired = new Set(["@cinatra-ai/markdown-artifact"]);
+  const dangling = findDanglingWorkspaceDeps(members, acquired);
+  assert.equal(dangling.length, 1);
+  assert.equal(dangling[0].target, "@cinatra-ai/ghost-artifact");
+
+  // Without the declared set BOTH are dangling — the tolerance is the
+  // declaration, never the shape of the name.
+  assert.equal(findDanglingWorkspaceDeps(members).length, 2);
 });
