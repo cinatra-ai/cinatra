@@ -1360,7 +1360,7 @@ END $$`,
     // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
     // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
     // claim) SERIALIZES the decision across the one-shot job + reconciliation
-    // sweep. TWIN of core__0071 + core__0099 — the DDLs MUST stay identical
+    // sweep. TWIN of core__0071 + core__0100 — the DDLs MUST stay identical
     // (cinatra#3029: the RETIRED response-text columns are nullable; `items`
     // carries the default road's end-node-output family).
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (

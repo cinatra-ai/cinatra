@@ -1092,7 +1092,7 @@ export function runRecommendationOfferedSetSchemaQueries(schemaName: string): Qu
 // the ledger therefore moves the table out rather than growing that file.
 //
 // TWINS: migrations/core/core__0071 (the `derived_output` path value) and
-// migrations/core/core__0099 (the `default_road` path value, the two verdict
+// migrations/core/core__0100 (the `default_road` path value, the two verdict
 // columns, and the settings table). The DDLs MUST stay identical.
 // ---------------------------------------------------------------------------
 export function materializationLedgerSchemaQueries(
