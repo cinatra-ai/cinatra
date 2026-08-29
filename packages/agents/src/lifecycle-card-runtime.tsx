@@ -101,6 +101,15 @@ export const LIFECYCLE_HITL_SCREEN_SUBMIT_PATH =
 // Host declaration — absent means "no host", which means no card.
 // ---------------------------------------------------------------------------
 
+// Re-exported for the same stated reason `review-gate-card.tsx` re-exports
+// `LIFECYCLE_VIEW_SCHEMA_VERSION`: a host that declares a surface already imports
+// this module, and a SECOND import edge from a widely-reachable surface (the run
+// panel) into the protocol package widens that surface's reachable graph — the
+// route-graph ratchet measures it, and it measured +1 on four locked routes for
+// exactly this edge. The type is the protocol's; this is the door the hosts
+// already use.
+export type { LifecycleCardHost };
+
 const LifecycleCardSurfaceContext = createContext<LifecycleCardHost | null>(null);
 
 /**

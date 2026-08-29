@@ -123,6 +123,44 @@ export function reviewSettledCopy(
   }
 }
 
+/**
+ * THE GATE HEADER'S TITLE — ONE READING WITH THE LINE BENEATH IT (cinatra#3046).
+ *
+ * The card's header said "Review requested" in every state it can be drawn in,
+ * settled included. So a decided gate — the read-only history §I asks for, which
+ * "records how it was settled" — was topped by a request that had already been
+ * answered, with the answer written further down the card in a second voice.
+ * Measured on both palettes: the header stayed present-tense on every settled
+ * reading of the reshoot.
+ *
+ * The header and the settled line are ONE reading of one fact, so they are
+ * derived from one closed set here rather than written twice. `reviewSettledCopy`
+ * above keeps the line (the outcome, its decider and what it did); this gives the
+ * header the same outcome in the header's own register — no decider, no sentence,
+ * the two or three words a heading is. A gate with no outcome to name — pending,
+ * restricted, loading, and a settled gate whose disposition this build cannot
+ * read — keeps "Review requested" exactly as it was, because that IS still what
+ * that card says.
+ *
+ * The sibling leg that settles the card IN PLACE after a typed decision (pull
+ * request 3072) reads this same function, which is what keeps the header it
+ * re-draws and the line it re-draws from disagreeing about the same gate.
+ */
+export function reviewGateHeaderTitle(
+  outcome: ReviewSettledOutcome | null | undefined,
+): string {
+  switch (outcome) {
+    case "approved":
+      return "Review approved";
+    case "rejected":
+      return "Review rejected";
+    case "changes_requested":
+      return "Changes requested";
+    default:
+      return "Review requested";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Renderer provenance (§III) — the surface shows HOW each target was rendered.
 // The conformance anchor is derived from the OPAQUE mount kind, never a type id.
@@ -224,18 +262,70 @@ export function reviewTypeLabel(objectType: string): string {
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
-export function reviewTargetRowFacts(artifact: {
-  ownerLevel: string;
-  visibility: string;
-  mime: string;
-  updatedAt: string;
-}): string[] {
+export function reviewTargetRowFacts(
+  artifact: {
+    ownerLevel: string;
+    visibility: string;
+    mime: string;
+    updatedAt: string;
+  },
+  /** The instant to read `updatedAt` against. Injected so the reading is
+   *  testable; defaults to now, which is what every caller wants. */
+  now: Date = new Date(),
+): string[] {
   return [
     `Ownership: ${artifact.ownerLevel}`,
     `Visibility: ${artifact.visibility}`,
     artifact.mime,
-    `updated ${artifact.updatedAt}`,
+    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
+    // writes "updated 8 min ago"; the decided target printed the stored column
+    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
+    // is a machine's reading of the same fact and is not what §IV draws. One
+    // formatter does it, for this line and for the header row facts the sibling
+    // leg (pull request 3058) draws from the same projection, so the two surfaces
+    // cannot render one column two ways.
+    `updated ${relativeInstant(artifact.updatedAt, now)}`,
   ];
+}
+
+/** How the drawn readings step, longest first. Minutes are the drawing's own
+ *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
+ *  read as "10080 min ago". */
+const RELATIVE_INSTANT_RUNGS: ReadonlyArray<{ ms: number; unit: string }> = [
+  { ms: 86_400_000, unit: "d" },
+  { ms: 3_600_000, unit: "h" },
+  { ms: 60_000, unit: "min" },
+];
+
+/**
+ * ONE relative reading of one instant (cinatra#3046).
+ *
+ * §IV's row facts end in a relative time — "updated 8 min ago" — and the app had
+ * no shared formatter for one at all: four private copies live in four unrelated
+ * packages, and the review target had none, so it printed the raw ISO instant
+ * with its milliseconds. This is the one the review surface reads through, and
+ * the one the sibling leg's header row facts read through, so the finding is
+ * closed in one place rather than in two that can drift.
+ *
+ * A VALUE THAT IS NOT AN INSTANT IS RETURNED UNTOUCHED. The projection this
+ * serves is display facts, every one of them nullable and some of them already
+ * humanized upstream; a formatter that mangles what it cannot parse would turn a
+ * fact it does not understand into a wrong one. Not knowing is answered by
+ * saying exactly what it was given.
+ *
+ * A FUTURE INSTANT READS AS "just now" rather than as a negative age: clocks
+ * disagree by seconds across a store and a browser, and "updated in -3 min" is a
+ * bug report, not a reading.
+ */
+export function relativeInstant(value: string, now: Date = new Date()): string {
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return value;
+  const elapsed = now.getTime() - at;
+  if (elapsed < 60_000) return "just now";
+  for (const rung of RELATIVE_INSTANT_RUNGS) {
+    if (elapsed >= rung.ms) return `${Math.floor(elapsed / rung.ms)} ${rung.unit} ago`;
+  }
+  return "just now";
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,

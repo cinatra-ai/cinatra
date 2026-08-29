@@ -50,7 +50,50 @@ export function buildRunStepperSteps(
       stepNumber: s.stepNumber,
       xRenderer: s.xRenderer,
       childAgentPackageName: s.childAgent?.packageName,
-      label: s.name ?? s.description ?? `Step ${s.stepNumber}`,
+      label: runStepLabel(s),
       _policyDescription: s.description ?? null,
     }));
+}
+
+/**
+ * THE RAIL NAMES THE STEP, NOT ITS POSITION (cinatra#3046).
+ *
+ * The ratified drawing's run surface is explicit that "a step rail down the left
+ * names the run's ordered steps". This projection named a step three ways and
+ * the third was not a name at all: with no `name` and no `description` on the
+ * policy step, the rail drew `Step 1` — the ordinal it is already drawing beside
+ * the label, printed twice, once as the numeral and once as the words. Measured
+ * on both palettes of the reshoot: the run page's rail named its work step
+ * `Step 1`.
+ *
+ * SO THE STEP'S OWN NAME IS ASKED FOR ONE RUNG FURTHER DOWN before the ordinal
+ * is accepted as one. A step that delegates to a child agent IS that agent's
+ * step, and the package it names is a fact about the step rather than a label
+ * invented for it — so it is humanized into the rail's register the same way the
+ * surface humanizes every other identifier it draws: the npm scope dropped, the
+ * separators spaced, the first letter raised. Nothing else about the package is
+ * read, and a package whose name is empty after that is not a name.
+ *
+ * THE ORDINAL STAYS AS THE LAST RUNG, honestly. A step with no name, no
+ * description and no child agent has nothing to be called, and inventing a word
+ * for it would be worse than the numeral: the numeral is at least true.
+ */
+export function runStepLabel(step: RunStepperPolicyStep): string {
+  const named = step.name?.trim() || step.description?.trim();
+  if (named) return named;
+  const fromChild = childAgentStepName(step.childAgent?.packageName);
+  if (fromChild) return fromChild;
+  return `Step ${step.stepNumber}`;
+}
+
+/** A child agent's package name, in the rail's register. `null` when there is
+ *  nothing left to read after the scope is dropped. */
+function childAgentStepName(packageName: string | undefined): string | null {
+  if (!packageName) return null;
+  const bare = packageName.includes("/")
+    ? packageName.slice(packageName.lastIndexOf("/") + 1)
+    : packageName;
+  const words = bare.replace(/[-_.]+/g, " ").trim();
+  if (words.length === 0) return null;
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }

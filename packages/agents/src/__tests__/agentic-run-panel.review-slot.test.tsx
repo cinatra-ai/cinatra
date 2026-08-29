@@ -248,8 +248,15 @@ describe("while the agent works, the card is the placeholder", () => {
       // The spinning icon: the design system's own spinner, by its animation
       // class, inside the placeholder.
       expect(placeholder.querySelector("svg.animate-spin")).not.toBeNull();
-      // The empty review screen it stands in for.
-      expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).not.toBeNull();
+      // The empty review screen it stands in for — the FRAME, and nothing in it.
+      // The bar skeleton that used to be asserted here is gone (cinatra#3046):
+      // §II draws the frame and the spinner only, and a skeleton is a report of
+      // a result the placeholder is defined by not reporting. Pinned in full in
+      // `review-gate-placeholder-drawing.test.tsx`.
+      expect(
+        placeholder.querySelector('[data-conformance-id="review-gate-placeholder-frame"]'),
+      ).not.toBeNull();
+      expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).toBeNull();
       // A card, and it is the WORKING reading of the one slot.
       expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
         "working",

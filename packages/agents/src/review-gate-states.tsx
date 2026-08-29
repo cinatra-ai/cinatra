@@ -193,7 +193,23 @@ export function ReviewGatePlaceholder() {
           <LoadingSpinner className="size-4" />
         </span>
       </div>
-      <ReviewGateLoading />
+      {/* THE FRAME, AND NOTHING IN IT (cinatra#3046).
+          §II draws two things here and names the second by what it is not: "the
+          card frame, and a spinning icon … It names no status, reports no result
+          and draws nothing to press." The bar skeleton that used to stand here
+          was the shipped `ReviewGateLoading` motif, borrowed because the box
+          looked empty without it — and a skeleton is a REPORT: five bars in the
+          shape of a header and a body say the review has arrived and is being
+          painted, which is exactly the claim about progress the placeholder is
+          defined by not making. It was carried as a stated deviation on the
+          first graded round and is closed here rather than restated.
+          The empty frame IS the drawing: the box the review screen will fill,
+          with the spinner above it and nothing else in it. */}
+      <div
+        data-conformance-id="review-gate-placeholder-frame"
+        aria-hidden="true"
+        className="h-24 w-full rounded-control border border-line bg-surface-strong"
+      />
     </div>
   );
 }

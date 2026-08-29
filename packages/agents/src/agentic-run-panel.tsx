@@ -44,6 +44,7 @@ import {
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  type LifecycleCardHost,
   useRunReviewSlot,
   type RunReviewSlot,
   type RunReviewSlotReader,
@@ -73,6 +74,7 @@ import {
 import {
   applyJustSubmittedSuppression,
   mapInterruptToHitlContext,
+  resolveRunSurfaceStatus,
   resolveStreamFirst,
   runStatusBadgeLabel,
   statusBadgeVariant,
@@ -429,6 +431,45 @@ export function AgenticRunPanel({
   // (SSE owns status/error); they retain their initial values and serve as the
   // independent guard for the polling useEffect firing condition.
   const [pollStatus, setPollStatus] = useState(initialStatus);
+  // THE RUN ROW'S OWN STATUS, ALWAYS RECORDED (cinatra#3046).
+  //
+  // `pollStatus` is deliberately NOT written while the stream is enabled — the
+  // stream is ahead of the poll for a run that is executing, and letting the tick
+  // write the status behind it would flicker the badge backwards. That was the
+  // whole story until cinatra#3007 gave a run a way to stop WITHOUT announcing
+  // it: a run parked on its produced output's review reaches no terminal status,
+  // so it emits no RUN_FINISHED, so the stream's last word stays `running` for
+  // as long as the park lasts and nothing on this surface can ever learn
+  // otherwise.
+  //
+  // So the tick records what the ROW says, on every tick, on both transports —
+  // and `resolveRunSurfaceStatus` decides when that reading may overrule a mute
+  // stream. This state feeds nothing else: the badge, the gate and the slot all
+  // read the resolved `status` below, exactly as they did.
+  const [rowStatus, setRowStatus] = useState<string | null>(null);
+  // AND THE PARK IS READ OFF THE SAME SNAPSHOT AS THE STATUS (cinatra#3046).
+  //
+  // The park was read only from the slot hook, which asks the run's seed route on
+  // its OWN schedule — a second read, taken at a different moment from the one
+  // that carried the status and the interrupt. So there is a window, and it is
+  // the exact window that puts a dead control back on screen: the tick lands
+  // `pending_approval` together with the run's last ANSWERED question, the slot
+  // has not re-read yet and still says "not parked", and for that beat the panel
+  // reads a review park as an unanswered one and redraws the question with a live
+  // Continue — the very defect the park's third fact exists to close.
+  //
+  // The seed route composes the status, the interrupt and this park from ONE row
+  // read and says so in its own words ("This body serves ONE snapshot of the
+  // run"). Recording it here from that same response is taking the route at its
+  // word instead of re-deriving the pair from two.
+  //
+  // EITHER READING IS ENOUGH, and that direction is deliberate. The two can only
+  // disagree while one of them is in flight, and the two ways to be wrong are not
+  // symmetric: holding the placeholder a beat too long costs a beat, and drawing
+  // a resumed question's Continue costs a press that resumes a gate the worker
+  // finished with. `isPendingApproval` still bounds both — a released run has
+  // left the parked status and neither reading is consulted.
+  const [rowProducedReviewPark, setRowProducedReviewPark] = useState(false);
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   // Seeded from the server when the caller already derived the gate (see
@@ -658,7 +699,16 @@ export function AgenticRunPanel({
 
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
-  const status = resolveStreamFirst(streamEnabled, streamResult.status, pollStatus);
+  // THE STATUS THIS SURFACE DRAWS (cinatra#3046). Stream-first, as it always
+  // was, except where the stream cannot speak again and the row can say so — a
+  // run parked on its own produced output's review, and the terminal statuses a
+  // park is released into. See `resolveRunSurfaceStatus` for the full rule.
+  const status = resolveRunSurfaceStatus({
+    streamEnabled,
+    streamedStatus: streamResult.status,
+    polledStatus: pollStatus,
+    rowStatus,
+  });
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
   // External A2A runs (helloworld-style peers) emit
@@ -734,7 +784,8 @@ export function AgenticRunPanel({
   // the parked status when the next look lands.
   // -------------------------------------------------------------------------
   const parkedOnProducedReview =
-    isPendingApproval && reviewSlot.producedReviewPark === true;
+    isPendingApproval &&
+    (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
 
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -1132,6 +1183,26 @@ export function AgenticRunPanel({
           outcome = { kind: "transport_failed", reason };
         } else {
           const s = snapshot as TaskSnapshot;
+          // THE ROW'S STATUS, ON THIS TRANSPORT TOO (cinatra#3046).
+          //
+          // This is the branch a run dispatched from a conversation actually
+          // takes: the chat card seeds `taskId` off the row for every A2A run,
+          // so recording the row only on the no-task fallback below would have
+          // left the ONE surface the defect was measured on exactly as it was.
+          // Nothing is derived here - `cinatraStatus` IS the row's status
+          // ("authoritative run.status from DB", `a2a-actions.ts`), read off
+          // the same snapshot that carried the messages and the interrupt.
+          //
+          // Recorded on EVERY tick, whatever is driving the badge; the guard
+          // below is unchanged, because `resolveRunSurfaceStatus` - not this
+          // write - is what decides when the row may overrule a mute stream.
+          //
+          // The park's third fact cannot ride this snapshot (`TaskSnapshot`
+          // carries no gate reading, and putting the gate store on every route
+          // that reaches the A2A actions is a bigger change than this leg
+          // owns), so on this transport the park keeps coming from the slot's
+          // own read - which now runs, because the status finally moves.
+          setRowStatus(s.cinatraStatus);
           // When stream is enabled: poll updates messages + HITL only; SSE owns status/error.
           // When stream is disabled: poll updates everything.
           if (!streamEnabled) {
@@ -1158,6 +1229,14 @@ export function AgenticRunPanel({
           };
         } else {
           const data = (await response.json()) as RunPollResponse;
+          // The ROW's status, recorded whichever transport is driving the badge
+          // (cinatra#3046). Never used directly — `resolveRunSurfaceStatus` is
+          // the only reader, and it takes it only where the stream is provably
+          // mute.
+          if (typeof data?.status === "string") setRowStatus(data.status);
+          if (data?.reviewGate !== undefined) {
+            setRowProducedReviewPark(Boolean(data.reviewGate?.producedReviewPark));
+          }
           if (!streamEnabled) {
             if (data?.status) {
               setPollStatus(data.status);
@@ -1663,6 +1742,35 @@ export function AgenticRunPanel({
   // already records the widget's run panel as blocked pending that work.
   const widgetHostedPanel = ambientLifecycleHost === "site_widget";
   //
+  // THE HOST THIS CARD DECLARES IS THE SURFACE IT IS ON (cinatra#3046).
+  //
+  // This panel mounts inside two different surfaces and declared `run_card` on
+  // both. On the run page that is the truth. Inside a chat transcript it is not:
+  // the card is drawn in the conversation, on the `chat_thread` host the column
+  // around it already declared, and the review card sitting there announced
+  // itself as the run page's card.
+  //
+  // IT IS NOT A COSMETIC LABEL. `data-lifecycle-card-host` is the fact every
+  // reader of these cards keys on — the per-host frame the one renderer picks,
+  // the host-parity cells the recorder admits or refuses, and the plan's own
+  // host table, whose re-ratification note says this gate reads the transcript's
+  // composition on `chat_thread` and the run card's on `run_card`. Measured: the
+  // recorder REFUSED the conversation's settled review for
+  // `[data-lifecycle-card-host="chat_thread"]` — "the record observed 0" —
+  // because the card under the reader's eyes was declaring the other host.
+  //
+  // ONLY THE COOKIE CONVERSATION HOST IS TAKEN UP HERE. `site_widget` is a
+  // broker host: the runtime accepts it only with a credential and refuses it
+  // with an ambient cookie, so declaring it from this mount without carrying the
+  // reader's own proof down would mount no host at all — worse than the wrong
+  // one. Passing that proof is the sibling change to this same line (pull
+  // request 3058, `host={reviewCardOnWidget ? "site_widget" : "run_card"}` with
+  // the ambient `auth` and `frame`); this one widens the cookie side and leaves
+  // the widget side exactly as it found it, so the two compose rather than
+  // collide.
+  const cardSurfaceHost: LifecycleCardHost =
+    ambientLifecycleHost === "chat_thread" ? "chat_thread" : "run_card";
+  //
   // AND A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW DRAWS IT HERE (cinatra#3046),
   // which is the reading this slot was missing. It is the same swap the finished
   // run gets and it is the one the drawing at the contract's pin describes — "the
@@ -1717,7 +1825,7 @@ export function AgenticRunPanel({
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
   const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host={cardSurfaceHost}>
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",

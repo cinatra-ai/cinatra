@@ -28,6 +28,21 @@
 // the redraw had to move exactly the states that carry suggestions and no
 // others, and that is what the regeneration diff showed.
 
+// TWELVE ENTRIES WERE REGENERATED ON PURPOSE (cinatra#3046). §I asks a resolved
+// gate to stay as read-only history that "records how it was settled", and the
+// header said "Review requested" on every settled reading — the request, still
+// present tense, over the outcome written further down the card in a second
+// voice. The header now reads the outcome through `reviewGateHeaderTitle`, the
+// same closed set the settled line reads, so the two cannot drift.
+//
+// THE REGENERATION DIFF IS THE PROOF, and it is what a change of WORDS should
+// look like: exactly the three outcome-bearing readings — `settled-approved`,
+// `settled-rejected`, `settled-approved-no-decider` — on each of the four hosts,
+// with the only difference in each being the header's own words. The other 32
+// entries, the outcome-LESS `settled` among them, are byte-identical to what was
+// committed: that reading really does still say "Review requested", because it
+// cannot say what the decision was.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
