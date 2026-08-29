@@ -1069,10 +1069,27 @@ describe("the manifest to capture-index binding", () => {
     // the widget and the review page — which is exactly what a PENDING capture
     // of this kind is required to show, so it is the field the capture gate
     // must stay in step with.
+    //
+    // THE TWO LISTS ARE APART, ON PURPOSE, AND THAT IS PINNED RATHER THAN
+    // TOLERATED (cinatra#3062). They stopped answering for the same thing: this
+    // table describes ONE host — the chat — which draws §V's checklist and
+    // decides with the Continue beneath the list; the capture vocabulary grades
+    // the PICTURES ON FILE, every one of which was measured against the three
+    // per-chip affordances, and every anchor it names must be asserted by every
+    // record, so adding a fourth would refuse 34 truthful records that cannot be
+    // re-measured without re-taking the photographs.
+    //
+    // SO BOTH ARE SPELLED OUT EXACTLY, and the pin is what closes the debt: the
+    // capture leg makes the group per-host at the same moment it re-shoots the
+    // cells for the three checklist hosts, and this assertion is what tells it
+    // to record that here instead of letting the two drift apart quietly.
     const row = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "recommendation_hold");
-    for (const action of KIND_REQUIRED_ACTIONS.recommendation_hold) {
-      expect(row.decisionControls).toContain(action);
-    }
+    expect(row.decisionControls).toEqual(["[data-skills-step-continue]"]);
+    expect(KIND_REQUIRED_ACTIONS.recommendation_hold).toEqual([
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ]);
     // …and the owner anchor is still asserted, as the thing it actually is:
     // the one anchor the owner draws wherever it draws.
     expect(row.ownerAnchors).toEqual(['[data-conformance-id="run-chip-row"]']);

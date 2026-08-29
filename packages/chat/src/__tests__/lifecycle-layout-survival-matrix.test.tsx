@@ -649,35 +649,43 @@ describe("the matrix is not satisfied by drawing a card unconditionally", () => 
 // mount the S9h contract measures.
 //
 // THE CONTROLS THIS DRIVES ARE THE SHIPPED ONES, not names the card once used.
-// §V's redraw moved the decision OFF the row and ONTO EACH CHIP:
-// `packages/agents/src/run-recommendation-chip-row.tsx` draws Confirm, Adjust
-// and Skip per skill, and the two contracts that identify this card name the
-// same three `[data-skill-action]` values —
-// `scripts/ci/lib/capture-record-contract.mjs` and
-// `src/lib/lifecycle/held-turn-card-contract.ts`. The row-level
-// `confirm-run-recommendation` / `skip-run-recommendation` pair this block was
-// first written against is drawn by NOTHING now, so asserting it would measure
-// a card that no longer exists. All three are asserted, each scoped to the
-// offered skill's OWN chip, and each checked for operability exactly as the
-// review arm above checks its own three.
+// §V draws this card as a CHECKLIST on the conversation hosts (cinatra#3062):
+// one pill per skill with a checkbox in front of its label, and ONE Continue
+// beneath the list — "The reader sets the boxes and presses Continue beneath the
+// list … and the whole row is answered at once, every box together."
+// `src/lib/lifecycle/held-turn-card-contract.ts` names the Continue as this
+// host's decision act. The CAPTURE vocabulary in
+// `scripts/ci/lib/capture-record-contract.mjs` does NOT grade by it yet and is
+// not claimed to: it still names the three per-chip affordances, because every
+// anchor it names must be asserted by every record on file and a fourth member
+// would refuse 34 truthful records nobody can re-measure without re-taking the
+// photographs. That contract carries the debt in its own words and the capture
+// leg closes it by making the group per-host as those cells are re-shot; this
+// block grades the RUNNING card, which is a different question.
+// Both the box and the Continue are asserted here, and each is
+// checked for operability exactly as the review arm above checks its own
+// controls — a control that is present but disabled is not a slot the card can
+// be operated in, which is the whole claim of this block.
 
-/** The one skill the held fixture offers — the chip these controls belong to. */
+/** The one skill the held fixture offers — the pill these controls belong to. */
 const HELD_SKILL_ID = "skill-a";
 
-/** The card's own decision controls, as the SHIPPED §V chip-row draws them. */
-const CHIP_ACTIONS = ["confirm", "adjust", "skip"] as const;
+/** The card's own decision controls, as the SHIPPED §V checklist draws them. */
+const CHECKLIST_CONTROLS = ["box", "continue"] as const;
 
-/** That skill's chip control for one of the three affordances. */
-function chipControl(row: HTMLElement, action: string): HTMLButtonElement | null {
+/** The offered skill's own box, or the row's one Continue. */
+function chipControl(row: HTMLElement, control: string): HTMLButtonElement | null {
   return row.querySelector<HTMLButtonElement>(
-    `[data-skill-action="${action}"][data-skill-id="${HELD_SKILL_ID}"]`,
+    control === "box"
+      ? `[data-skills-step-checkbox][data-skill-id="${HELD_SKILL_ID}"]`
+      : "[data-skills-step-continue]",
   );
 }
 
 describe("the slot that survives is one the real held card can be operated in", () => {
   for (const layout of LAYOUTS) {
     for (const outcome of OUTCOMES) {
-      it(`recommendation_hold · ${layout} · ${outcome}: the chip's Confirm, Adjust and Skip are live in the surviving slot`, async () => {
+      it(`recommendation_hold · ${layout} · ${outcome}: the pill's box and the row's Continue are live in the surviving slot`, async () => {
         holdStateMock.mockImplementation(async () => ({
           state: "held",
           agentPackageName: "@cinatra-ai/proof-agent",
@@ -722,19 +730,15 @@ describe("the slot that survives is one the real held card can be operated in", 
           return el!;
         });
         const cell = `recommendation_hold · ${layout} · ${outcome}`;
-        for (const action of CHIP_ACTIONS) {
-          const control = chipControl(row, action);
-          expect(
-            control,
-            `${cell}: no ${action} control on the offered skill's chip`,
-          ).not.toBeNull();
-          expect(control!.disabled, `${cell}: ${action} is present but not operable`).toBe(false);
+        for (const control of CHECKLIST_CONTROLS) {
+          const el = chipControl(row, control);
+          expect(el, `${cell}: no ${control} control on the surviving row`).not.toBeNull();
+          expect(el!.disabled, `${cell}: ${control} is present but not operable`).toBe(false);
         }
-        // Driving the row's OWN release. The shipped row releases once EVERY
-        // chip is decided (the whole-row release deviation named in the chip
-        // row) — the fixture offers one skill, so confirming its chip is the
-        // whole row, and the hold is released exactly once.
-        fireEvent.click(chipControl(row, "confirm")!);
+        // Driving the row's OWN release. The checklist answers the whole row in
+        // one act — the fixture's one skill is recommended, so its box is
+        // already ticked, and Continue releases the hold exactly once.
+        fireEvent.click(chipControl(row, "continue")!);
         await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
       });
     }

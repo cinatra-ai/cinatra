@@ -109,8 +109,15 @@ const OFFERED = [
 async function mountRow() {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+  // THE HOST THAT STILL DRAWS §V's PER-CHIP ROW (cinatra#3062). What this file
+  // pins — a refused confirm draws the server's reason in place and leaves every
+  // control operable — is a property of the chip row, and the chip row is drawn
+  // on the review page's gate region now that the run page (cinatra#3047) and
+  // the two conversation hosts (cinatra#3062) take §V's checklist reading. The
+  // conversation's own refusal reading is pinned on its own hosts, in
+  // `skills-card-on-the-conversation-hosts.test.tsx`.
   return render(
-    <LifecycleCardSurfaceProvider host="chat_thread">
+    <LifecycleCardSurfaceProvider host="page_gate_region">
       <RunRecommendationChipRow
         runId="run-2906"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -172,8 +179,10 @@ describe("cinatra#2906 AC-5 — a refused confirm draws the reason in place", ()
 
     const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
     const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+    // Driven on the host that still draws the per-chip row (cinatra#3062) — see
+    // the note on `mountRow` above.
     render(
-      <LifecycleCardSurfaceProvider host="chat_thread">
+      <LifecycleCardSurfaceProvider host="page_gate_region">
         <RunRecommendationChipRow
           runId="run-2906"
           agentPackageName="@cinatra-test/hold-fixture-agent"

@@ -22,9 +22,9 @@
 //   4. checked maps to CONFIRMED and unchecked to SKIPPED when the step is
 //      submitted, and no `adjusted` mark can be produced from this screen;
 //   5. the SETTLED reading is the same pills with the box read-only;
-//   6. and the conversation host is untouched — it still draws the three
-//      affordances and no checkbox (review point E gives the chat and the
-//      widget their own issue).
+//   6. and the ONE host this reading has not reached — the review page's gate
+//      region — still draws the three affordances and no checkbox (cinatra#3062
+//      moved the chat and the widget; the gate region is in neither issue).
 //
 // Run:
 //   cd packages/agents && npx vitest run \
@@ -303,19 +303,16 @@ describe("the settled Skills step on the run page", () => {
   });
 });
 
-describe("every other host is untouched (review point E)", () => {
-  // THE TWO COOKIE HOSTS, one per line, because this IS the record of which
-  // hosts were driven: the conversation and the review page's gate region.
+describe("the one host this reading has not reached", () => {
+  // NAMED DEVIATION (cinatra#3062): §IX rules the same card onto every host, and
+  // the review page's gate region is in neither cinatra#3047's scope nor
+  // cinatra#3062's. It keeps the reading it draws today, and that is recorded
+  // here as a driven fact rather than as an assumption.
   //
-  // THE WIDGET IS NOT DRIVEN HERE, and the reason is a property of the product
-  // rather than a gap: `site_widget` is not a cookie host, so the surface
-  // provider refuses to mount it without a credential declaration and the card
-  // reads and decides through the broker instead. Driving it needs that
-  // declaration and a stub for both broker routes, which
-  // `recommendation-hold-card.test.tsx` already carries — and its per-host arm
-  // asserts the same reading, for all four hosts, through each host's own
-  // transport.
-  it.each(["chat_thread", "page_gate_region"] as const)(
+  // THE CHAT AND THE WIDGET ARE NO LONGER IN THIS LIST — they draw the checklist
+  // now, through their own transports, which
+  // `skills-card-on-the-conversation-hosts.test.tsx` drives host by host.
+  it.each(["page_gate_region"] as const)(
     "keeps the three affordances on %s, and draws no checkbox and no Continue",
     async (host) => {
       holdStateMock.mockResolvedValue(HELD);

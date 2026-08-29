@@ -17,8 +17,10 @@
 //      clear — no outcome panel, no outcome word, no decider name;
 //   3. a settled skip that recorded NO evidence at all still draws the row on
 //      the run page rather than the panel;
-//   4. and the conversation keeps the outcome panel it draws today, decider name
-//      and all, because review point E is a separate change.
+//   4. and the ONE host still drawing §V's chip row — the review page's gate
+//      region — keeps the outcome panel, decider name and all (cinatra#3062
+//      moved the chat and the widget onto the reading above; the gate region is
+//      in neither issue's scope).
 //
 // Run:
 //   cd packages/agents && npx vitest run \
@@ -117,7 +119,7 @@ const continueButton = (c: HTMLElement) =>
 const outcomePanel = (c: HTMLElement) =>
   c.querySelector<HTMLElement>("[data-recommendation-outcome-panel]");
 
-function mountCard(host: "run_card" | "chat_thread") {
+function mountCard(host: "run_card" | "chat_thread" | "page_gate_region") {
   return render(
     <LifecycleCardSurfaceProvider host={host}>
       <RecommendationHoldCard runId={RUN_ID} agentPackageName={PKG} wireRef={null} />
@@ -125,7 +127,7 @@ function mountCard(host: "run_card" | "chat_thread") {
   );
 }
 
-function mountRow(host: "run_card" | "chat_thread", decision: RunRecommendationDecision) {
+function mountRow(host: "run_card" | "chat_thread" | "page_gate_region", decision: RunRecommendationDecision) {
   return render(
     <LifecycleCardSurfaceProvider host={host}>
       <RunRecommendationChipRow
@@ -210,9 +212,23 @@ describe("the settled all-clear reading on the run page", () => {
   });
 });
 
-describe("the conversation keeps today's reading", () => {
-  it("still draws the outcome panel, and still names the decider on it", () => {
-    const { container } = mountRow("chat_thread", SETTLED_NO_EVIDENCE);
+describe("the conversation takes the same all-clear reading (cinatra#3062)", () => {
+  it("draws no outcome panel and names no decider in the chat", () => {
+    // §V: "A row with every box clear is still the whole card. There is nothing
+    // to skip and nothing that means skip … Nothing is summarised above the row,
+    // and no panel stands in for it."
+    const { container } = mountRow("chat_thread", SETTLED_ALL_CLEAR);
+    expect(outcomePanel(container)).toBeNull();
+    expect(container.textContent).not.toContain("Skipped");
+    expect(boxes(container)).toHaveLength(2);
+    for (const box of boxes(container)) expect(box.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+describe("the one host still drawing the outcome panel", () => {
+  it("still draws it, and still names the decider on it", () => {
+    // NAMED DEVIATION — see `chipRowDrawsSkillChecklist`.
+    const { container } = mountRow("page_gate_region", SETTLED_NO_EVIDENCE);
     const panel = outcomePanel(container);
     expect(panel).not.toBeNull();
     expect(panel!.getAttribute("data-recommendation-outcome")).toBe("skipped");

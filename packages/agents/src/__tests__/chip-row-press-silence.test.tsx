@@ -102,7 +102,14 @@ async function mountRow() {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   const out = render(
-    <LifecycleCardSurfaceProvider host="chat_thread">
+    // THE HOST THAT STILL DRAWS §V's PER-CHIP ROW (cinatra#3062). This file is
+    // about pressing a CHIP — the refusal a chip press draws, and the batch of
+    // chip presses that must release exactly once. The run page moved to the
+    // checklist with cinatra#3047 and the two conversation hosts moved with
+    // cinatra#3062, so the review page's gate region is where those presses
+    // exist to be made. The behaviour pinned is unchanged; only the host it is
+    // driven on is.
+    <LifecycleCardSurfaceProvider host="page_gate_region">
       <RunRecommendationChipRow
         runId="run-2905"
         agentPackageName="@cinatra-test/hold-fixture-agent"

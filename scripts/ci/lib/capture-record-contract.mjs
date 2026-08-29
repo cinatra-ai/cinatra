@@ -177,6 +177,23 @@ export const CARD_KINDS = {
     // row-level Confirm/Skip pair the previous selectors named no longer exists.
     // A pending capture owes at least one of the three; a decided capture owes
     // the absence of all three, which is exactly what a settled row draws.
+    //
+    // OWED, AND LEFT ALONE ON THIS BRANCH (cinatra#3047, then cinatra#3062).
+    // Three of the four hosts draw §V's CHECKLIST now — the run page, the chat
+    // and the widget — whose one decision act is the Continue beneath the list,
+    // while the review page's gate region still draws these three. So this list
+    // is the vocabulary of the pictures ON FILE rather than of every reading the
+    // tree draws, and moving it is not a free edit: every anchor named here must
+    // be ASSERTED by every record of this kind, so a fourth member would refuse
+    // 34 truthful records that were measured before it existed — records nobody
+    // can re-measure without re-taking the photographs.
+    //
+    // WHAT CLOSES IT is the capture leg, in one change: the group becomes
+    // per-host (the Continue on the three checklist hosts, these three on the
+    // gate region) at the same moment the cells for those hosts are RE-SHOT
+    // against the reading they now draw. The anchor contract records the same
+    // debt in its own words, and `chat-hitl-capture-index.test.mjs` pins both
+    // lists exactly so this cannot close quietly or drift apart.
     decisionControls: [
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',

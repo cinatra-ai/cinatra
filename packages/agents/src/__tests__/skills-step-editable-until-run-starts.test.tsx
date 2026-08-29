@@ -126,7 +126,7 @@ function settled(runStarted: boolean | undefined) {
   };
 }
 
-function mount(host: "run_card" | "chat_thread") {
+function mount(host: "run_card" | "chat_thread" | "page_gate_region") {
   return render(
     <LifecycleCardSurfaceProvider host={host}>
       <RecommendationHoldCard runId={RUN_ID} agentPackageName={PKG} wireRef={null} />
@@ -295,10 +295,37 @@ describe("the settled Skills step ONCE the run has started", () => {
   });
 });
 
-describe("the conversation is untouched by any of it", () => {
-  it("keeps its own settled chips, with no checkbox and no Continue", async () => {
+describe("the conversation takes the SAME reading (cinatra#3062)", () => {
+  it("keeps the chat's settled step editable while the run has not started", async () => {
+    // §V, at the contract's pin: "For as long as the run has not started, a
+    // reader who comes back to the Skills step is shown the same pills with the
+    // boxes still able to take a change and Continue still beneath them." The
+    // boundary is the ONE shipped predicate, so the chat cannot disagree with
+    // the run page about when a run has started.
     holdStateMock.mockResolvedValue(settled(false));
     const { container } = mount("chat_thread");
+    await waitFor(() => expect(row(container)).not.toBeNull());
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    expect(boxes(container).length).toBeGreaterThan(0);
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+    expect(continueButton(container)).not.toBeNull();
+  });
+
+  it("freezes it once the run has started, with no Continue left", async () => {
+    holdStateMock.mockResolvedValue(settled(true));
+    const { container } = mount("chat_thread");
+    await waitFor(() => expect(row(container)).not.toBeNull());
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("false");
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(true);
+    expect(continueButton(container)).toBeNull();
+  });
+});
+
+describe("the one host this reading has not reached", () => {
+  it("keeps its own settled chips on the review page's gate region", async () => {
+    // NAMED DEVIATION — see `chipRowDrawsSkillChecklist`.
+    holdStateMock.mockResolvedValue(settled(false));
+    const { container } = mount("page_gate_region");
     await waitFor(() => expect(row(container)).not.toBeNull());
     expect(boxes(container)).toHaveLength(0);
     expect(continueButton(container)).toBeNull();

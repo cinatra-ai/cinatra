@@ -167,17 +167,15 @@ async function mountCard(props: {
       wireRef={props.wireRef ?? null}
     />
   );
-  // THE DEFAULT HOST IS THE CONVERSATION (cinatra#3047, review points C and E).
+  // THE DEFAULT HOST IS THE REVIEW PAGE'S GATE REGION (cinatra#3062).
   //
-  // It was `run_card`, and every §V arm in this file was therefore driven on the
-  // run page. The run page no longer draws §V's chip-row: its Skills step draws
-  // a checkbox per pill and one Continue beneath the list, which is pinned in
-  // `skills-step-checkbox-pills.test.tsx` and `skills-step-continue.test.tsx`.
-  // The chat, the widget and the review page keep the three per-chip affordances
-  // until review point E's own issue lands, so the drawing this file asserts is
-  // driven where it actually lives. Every arm that is about the RUN PAGE names
-  // `run_card` explicitly, and reads the same as it did.
-  const host = props.host === undefined ? "chat_thread" : props.host;
+  // It was `run_card` until cinatra#3047 moved the run page to the Skills step,
+  // and `chat_thread` until this change moved the two conversation hosts with
+  // it. `page_gate_region` is the ONE host still drawing §V's per-chip chip-row,
+  // so the arms in this file that assert that drawing are driven where it
+  // actually lives — the alternative is asserting a drawing no host has. Every
+  // arm about the checklist hosts names its host explicitly.
+  const host = props.host === undefined ? "page_gate_region" : props.host;
   return render(
     host === null ? (
       card
@@ -560,9 +558,12 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
       expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
       expect(root.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
       expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      // THE READING THIS HOST DRAWS (cinatra#3062): §V's checkbox row and its
+      // one Continue, and no per-pill affordance at all.
+      expect(root.getAttribute("data-run-recommendation-reading")).toBe("skills-checklist");
+      expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+      expect(root.querySelector("[data-skills-step-checkbox]")).not.toBeNull();
+      expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
 
       // …AND THE OUTGOING REQUEST IS ASSERTED BESIDE IT, which is what stops
       // this pin from becoming the mirror of the one it replaces: a card that
@@ -583,17 +584,27 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     }
   });
 
-  it("draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone", async () => {
+  it("draws IDENTICALLY on the two conversation hosts — the per-surface matrix is gone", async () => {
     // The removed rule said "a widget visitor never shapes a run's skills", and
     // it made this kind FALSE on `site_widget` in a presence table. The table is
     // gone: what a host draws is no longer a property of which host it is. The
     // widget's own remaining gate is the credential guard above, not a matrix.
+    //
+    // RE-AIMED AT THE TWO CONVERSATION HOSTS (cinatra#3062), which is where the
+    // claim is now measurable byte for byte: `/chat` and the site widget are ONE
+    // column drawing ONE reading through two transports, and §IX's "it is the
+    // same card wherever it appears" is exactly the property this compares.
+    // NAMED DEVIATION: `page_gate_region` still draws the per-chip row this
+    // issue does not move, so it is asserted for PRESENCE below rather than
+    // folded into the byte comparison — an equality that quietly dropped a host
+    // would be worse than one that names why it is out.
     holdStateMock.mockImplementation(async () => HELD);
-    const widget = await mountCard({ wireRef: "hold-ref-1", host: "page_gate_region" });
-    await act(async () => {
-      await Promise.resolve();
+    const chat = await mountCard({ wireRef: "hold-ref-1", host: "chat_thread" });
+    await waitFor(() => {
+      if (!chat.container.querySelector("[data-run-recommendation-chip-row]")) {
+        throw new Error("the chat host drew no card");
+      }
     });
-    expect(holdStateMock).toHaveBeenCalled();
     // React mints a fresh `useId` per mount, so the two renders differ in their
     // generated ARIA ids. Normalising them is what makes "the same drawing" a
     // byte comparison instead of a spot check.
@@ -605,43 +616,78 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     // shipped). That is not the thing this pin guards. The guarantee here is
     // that what a host DRAWS — its content, its affordances, its state — is not
     // a property of which host it is, so the label is normalised and everything
-    // else still compares byte for byte, including all three chip actions.
+    // else still compares byte for byte, including the boxes and the Continue.
     const stripGeneratedIds = (html: string) =>
       html
-        .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
+        // EVERY MINTED ID, not only the ones the vendored primitive mints: the
+        // pill's own label id is `useId`-derived too (cinatra#3062), and two
+        // mounts never mint the same one.
+        .replaceAll(/_r_[0-9a-z]+_/g, "_r_ID_")
         .replaceAll(/data-lifecycle-card-host="[a-z_]+"/g, 'data-lifecycle-card-host="HOST"')
         // The chat host also stamps its own evidence marker on the same root —
         // again an identity, not a drawing. Normalised for the same reason, and
         // asserted explicitly below so its presence is still pinned.
         .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
-    const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
-    expect(widgetHtml).not.toBe("");
-    // REDRAWN (cinatra#2841): the decision affordances are PER CHIP now — the
-    // row-level pair this used to name does not exist on any host.
-    expect(widgetHtml).toContain('data-action="confirm-skill -> confirmed"');
-    expect(widgetHtml).toContain('data-action="adjust-skill -> adjusted"');
-    expect(widgetHtml).toContain('data-action="skip-skill -> skipped"');
-    expect(widgetHtml).not.toContain("confirm-run-recommendation");
-    expect(widgetHtml).not.toContain("skip-run-recommendation");
+    const chatHtml = stripGeneratedIds(chat.container.innerHTML);
+    expect(chatHtml).not.toBe("");
+    // §V at the contract's pin: a checkbox in front of each label, one Continue
+    // beneath the list, and nothing to press on a pill.
+    expect(chatHtml).toContain("data-skills-step-checkbox");
+    expect(chatHtml).toContain("data-skills-step-continue");
+    expect(chatHtml).not.toContain("data-skill-action");
+    expect(chatHtml).not.toContain("confirm-run-recommendation");
+    expect(chatHtml).not.toContain("skip-run-recommendation");
     // The label is normalised above, so assert it is REALLY there and really
     // host-correct on each mount — otherwise the normalisation could hide a
     // missing or wrong identity.
-    expect(widget.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
-      ?.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
+    expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    // The chat mount's evidence marker rides that same root.
+    expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
 
     cleanup();
     holdStateMock.mockClear();
-    const chat = await mountCard({ wireRef: "hold-ref-1", host: "chat_thread" });
-    await act(async () => {
-      await Promise.resolve();
+
+    // THE WIDGET ARM, THROUGH ITS OWN TRANSPORT — the whole point of comparing
+    // these two: the drawing must not depend on which road the answer came by.
+    const broker = installBrokerStub({ hold: () => HELD });
+    try {
+      const widget = await mountCard({
+        wireRef: "hold-ref-1",
+        host: "site_widget",
+        auth: WIDGET_DECLARATION,
+      });
+      await waitFor(() => {
+        if (!widget.container.querySelector("[data-run-recommendation-chip-row]")) {
+          throw new Error("the widget host drew no card");
+        }
+      });
+      expect(widget.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+        ?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+      // …and only the chat arm carries the transcript's marker.
+      expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
+      expect(stripGeneratedIds(widget.container.innerHTML)).toBe(chatHtml);
+      expect(holdStateMock).not.toHaveBeenCalled();
+    } finally {
+      broker.restore();
+    }
+
+    cleanup();
+    holdStateMock.mockClear();
+    holdStateMock.mockImplementation(async () => HELD);
+
+    // THE NAMED DEVIATION, measured rather than described: the review page's
+    // gate region draws the card — presence is not a per-surface matter — and it
+    // draws the reading this issue does not move.
+    const gate = await mountCard({ wireRef: "hold-ref-1", host: "page_gate_region" });
+    await waitFor(() => {
+      if (!gate.container.querySelector("[data-run-recommendation-chip-row]")) {
+        throw new Error("the review page's gate region drew no card");
+      }
     });
-    expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
-      ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
-    // The chat mount's evidence marker rides that same root, and no other host
-    // carries it.
-    expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
-    expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
-    expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
+    expect(gate.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
+    expect(gate.container.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
   });
 
   it("draws nothing before the first authorized resolve answers", async () => {
@@ -731,13 +777,13 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
       // the host being driven rather than a constant the test supplied.
       expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
       expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-      // THE AFFORDANCES ARE READ PER HOST (cinatra#3047). The run page's Skills
-      // step decides with a checkbox per pill and one Continue; the conversation
-      // keeps §V's three per-chip affordances. Both are a decision the reader can
-      // take on the row, which is what this count is about — and asserting the
-      // wrong set for the host would be asserting a drawing that host does not
-      // have.
-      if (host === "run_card") {
+      // THE AFFORDANCES ARE READ PER HOST (cinatra#3047, then cinatra#3062), and
+      // WHICH reading a host draws is asked of the SHIPPED PREDICATE rather than
+      // of a list copied into this file — a copy is exactly how a suite comes to
+      // assert a drawing its host does not have. The checklist hosts decide with
+      // a checkbox per pill and one Continue; the host that is not moved yet
+      // keeps §V's three per-chip affordances.
+      if (chipRowDrawsSkillChecklist(host)) {
         expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
         expect(root.querySelector("[data-skills-step-checkbox]")).not.toBeNull();
         expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
@@ -800,8 +846,8 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
         expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
         expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
         expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-        // Per host — see the same reading in the arm above (cinatra#3047).
-        if (host === "run_card") {
+        // Per host, through the shipped predicate — see the arm above.
+        if (chipRowDrawsSkillChecklist(host)) {
           expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
           expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
         } else {
@@ -860,7 +906,32 @@ const HELD_THREE: HoldState = {
   canDecide: true,
 };
 
+// WHICH READING A HOST DRAWS is imported, never restated: a second copy of the
+// host list in a suite is a copy that can disagree with the shipped one.
+import { chipRowDrawsSkillChecklist } from "../run-recommendation-chip-row";
+
 const chips = () => [...document.querySelectorAll("[data-recommendation-chip]")];
+/** The checklist hosts decide with ONE control; this presses it. */
+const pressContinue = async () => {
+  const btn = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+  if (!btn) throw new Error("no Continue beneath the skills list");
+  await act(async () => {
+    btn.click();
+    await Promise.resolve();
+  });
+};
+/** Clear every box — the all-clear answer §V draws. */
+const clearEveryBox = async () => {
+  for (const box of [
+    ...document.querySelectorAll<HTMLButtonElement>("[data-skills-step-checkbox]"),
+  ]) {
+    if (box.getAttribute("aria-checked") !== "true") continue;
+    await act(async () => {
+      box.click();
+      await Promise.resolve();
+    });
+  }
+};
 const chipFor = (skillId: string) =>
   document.querySelector(`[data-recommendation-chip][data-skill-id="${skillId}"]`);
 const press = async (skillId: string, action: "confirm" | "adjust" | "skip") => {
@@ -1523,9 +1594,10 @@ describe("§V on a credential-declaring host — the broker carries the decision
       });
       await waitFor(() => expect(chips()).toHaveLength(3));
 
-      await press("skill-enrich", "confirm");
-      await press("skill-draft", "confirm");
-      await press("skill-send", "confirm");
+      // ONE CONTROL, EVERY BOX (cinatra#3062). The widget draws §V's checklist,
+      // so the decision is taken the way the drawing takes it — the boxes as the
+      // scorer left them, and Continue beneath the list.
+      await pressContinue();
 
       const decisions = await waitFor(() => {
         const found = broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH);
@@ -1568,9 +1640,11 @@ describe("§V on a credential-declaring host — the broker carries the decision
       });
       await waitFor(() => expect(chips()).toHaveLength(3));
 
-      await press("skill-enrich", "skip");
-      await press("skill-draft", "skip");
-      await press("skill-send", "skip");
+      // §V: "clearing every box and pressing Continue is an ordinary answer to
+      // the same question, and the run goes ahead with no recommended skill
+      // applied" — which is the shipped SKIP, taken through the one control.
+      await clearEveryBox();
+      await pressContinue();
 
       const decisions = await waitFor(() => {
         const found = broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH);
@@ -1635,9 +1709,7 @@ describe("§V on a credential-declaring host — the broker carries the decision
       await mountCard({ wireRef: "hold-ref-3", host: "site_widget", auth: rotating });
       await waitFor(() => expect(chips()).toHaveLength(3));
 
-      await press("skill-enrich", "confirm");
-      await press("skill-draft", "confirm");
-      await press("skill-send", "confirm");
+      await pressContinue();
       // The first release is refused: the row stays live, nothing settled.
       await waitFor(() => {
         if (broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH).length < 1) {
@@ -1647,7 +1719,14 @@ describe("§V on a credential-declaring host — the broker carries the decision
       expect(chips()).toHaveLength(3);
 
       // Press again — the same mounted card, the same submitter, a second call.
-      await press("skill-enrich", "confirm");
+      // A REFUSED release leaves the step decidable, which is what makes the
+      // second press possible at all (cinatra#3047's `releasedRef` is cleared
+      // only by a refusal).
+      await waitFor(() => {
+        const btn = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+        if (!btn || btn.disabled) throw new Error("the refused step never became decidable again");
+      });
+      await pressContinue();
       await waitFor(() => {
         if (broker.callsTo(LIFECYCLE_RECOMMENDATION_DECIDE_PATH).length < 2) {
           throw new Error("the retry never reached the broker");
@@ -1743,9 +1822,10 @@ describe("§V on a credential-declaring host — the broker carries the decision
       });
       expect(root.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
       expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      // The reading comes back too, not just the card (cinatra#3062).
+      expect(root.querySelector("[data-skills-step-checkbox]")).not.toBeNull();
+      expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
+      expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
       // The second mount asked the authority for itself — a card that re-drew
       // from a cached answer would prove nothing about a reloaded frame.
       expect(

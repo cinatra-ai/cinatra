@@ -137,7 +137,13 @@ describe("the live pill's label", () => {
     // ONE LINE: the name and the byline share one inline wrapper that does not wrap.
     const line = vendor.parentElement!;
     expect(line.className).toContain("whitespace-nowrap");
-    expect(line.querySelector(`#skills-step-label-${CSS.escape(REAL_SKILL_ID)}`)).not.toBeNull();
+    // The label's id is minted per pill (cinatra#3062) — a transcript can draw
+    // two cards offering the same skill — so it is read off the box that names
+    // it rather than spelled from the skill id.
+    const labelId = document
+      .querySelector("[data-skills-step-checkbox]")!
+      .getAttribute("aria-labelledby")!;
+    expect(line.querySelector(`#${CSS.escape(labelId)}`)).not.toBeNull();
   });
 
   it("keeps the checkbox's accessible name the skill's NAME, not the byline", () => {

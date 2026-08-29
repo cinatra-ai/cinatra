@@ -103,7 +103,16 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
-async function renderRow(decision: Decision, host: "site_widget" | "run_card" = "site_widget") {
+// THE HOST THIS FILE DRIVES (cinatra#3062). It pins §V's SETTLED CHIP row —
+// one chip per skill the hold asked about, each stating what it recorded — and
+// that row is drawn on the review page's gate region now that the run page
+// (cinatra#3047) and the two conversation hosts (cinatra#3062) take §V's
+// checklist reading. The rule itself is host-independent and is asserted as a
+// pure function below; what moved is the host the DOM half is read on.
+async function renderRow(
+  decision: Decision,
+  host: "page_gate_region" | "site_widget" | "run_card" = "page_gate_region",
+) {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   const out = render(
@@ -217,7 +226,7 @@ describe("§V settled — one chip per skill the hold asked about (cinatra#2790)
     const root = container.querySelector("[data-run-recommendation-chip-row]")!;
     expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(root.getAttribute("data-lifecycle-card-state")).toBe("decided");
-    expect(root.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+    expect(root.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
     expect(root.hasAttribute("data-can-decide")).toBe(false);
   });
 });
