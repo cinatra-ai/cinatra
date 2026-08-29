@@ -1224,11 +1224,34 @@ describe("re-activation migration pass — the host re-runs the SAME chain throu
         return { ranNames, direction: "up" as const, faked: false };
       };
 
-      const first = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { run: run as never });
+      // cinatra#3031 (plan (C) 0.23): the host now puts the extension’s role
+      // and declared tables in place under the HOST credential BEFORE any
+      // extension statement exists as a possibility. That step is a second
+      // injected dependency of the same entry point, so this no-DB unit half
+      // doubles it exactly as it doubles the runner — the assertions below
+      // (ledger-keyed dedupe, identical runner contract) are unchanged.
+      const ensureCalls: Array<Record<string, unknown>> = [];
+      const ensureDatabaseObjects = async (input: Record<string, unknown>) => {
+        ensureCalls.push(input);
+      };
+
+      const first = await applyExtensionMigrationsFromStore(
+        { storeDir: CONSUMER_DIR },
+        { run: run as never, ensureDatabaseObjects: ensureDatabaseObjects as never },
+      );
       expect(first.applied).toEqual([MODULE_NAME]);
 
-      const second = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { run: run as never });
+      const second = await applyExtensionMigrationsFromStore(
+        { storeDir: CONSUMER_DIR },
+        { run: run as never, ensureDatabaseObjects: ensureDatabaseObjects as never },
+      );
       expect(second.applied, "no new applies on the idempotent re-activation").toEqual([]);
+
+      // Both passes go through the host-credential step first, under the SAME
+      // derived role — a re-activation never re-derives a different one.
+      expect(ensureCalls).toHaveLength(2);
+      expect(ensureCalls[0].roleName).toBe("ext_cinatra_ai_notes_connector");
+      expect(ensureCalls[1].roleName).toBe(ensureCalls[0].roleName);
 
       // Both passes hit the SAME runner contract: same dir, same namespace, up.
       expect(calls).toHaveLength(2);
