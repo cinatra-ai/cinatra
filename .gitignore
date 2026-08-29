@@ -143,3 +143,11 @@ Desktop.ini
 # ignored by the branch that removes the tracked evidence/ tree)
 verification/
 docs/internals/proofs/
+
+# --- development artifacts never live in the checkout (tree-hygiene gate rules) ---
+# Enforced for the org by scripts/ci/product-tree-hygiene.mjs (gates.yml).
+evidence/2824-s9k/.run/
+.pytest_cache/
+/verification/
+proofs/
+proof/
