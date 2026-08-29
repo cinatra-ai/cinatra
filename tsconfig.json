@@ -65,6 +65,7 @@
       "@cinatra-ai/workflows/integration/register-object-types": ["./packages/workflows/src/integration/register-object-types.ts"],
       "@cinatra-ai/agents": ["./packages/agents/src/index.ts"],
       "@cinatra-ai/agents/materialize-agent-package": ["./packages/agents/src/materialize-agent-package.ts"],
+      "@cinatra-ai/agents/run-artifact-list": ["./packages/agents/src/run-artifact-list.ts"],
       "@cinatra-ai/agents/builtin-assistant-template": ["./packages/agents/src/builtin-assistant-template.ts"],
       "@cinatra-ai/agents/run-recommendation-card": ["./packages/agents/src/run-recommendation-chip-row.tsx"],
       "@cinatra-ai/agents/agent-hitl-screen-card": ["./packages/agents/src/agent-hitl-screen-card.tsx"],

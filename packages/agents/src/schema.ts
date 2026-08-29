@@ -1153,12 +1153,21 @@ export const agentRunOutputDerivations = cinatraSchema.table("agent_run_output_d
   templateId:     text("template_id").notNull(),
   packageVersion: text("package_version"),
   createdBy:      text("created_by"),
-  // The captured final-output snapshot (the run's last-agent-message text, or
-  // its JSON serialization) + a flag recording whether it parsed as JSON.
-  content:        text("content").notNull(),
+  // RETIRED with cinatra#3029 (item 0.17): the captured final-response-text
+  // snapshot. A row captured BEFORE that slice still carries it, and the drain
+  // settles exactly such a row without writing an artifact — response text
+  // takes no road. Every row captured after it leaves these NULL and carries
+  // `items` instead.
+  content:        text("content"),
   contentIsJson:  boolean("content_is_json").notNull().default(false),
-  // sha256(content) — the derived_output ledger dedupe component.
-  contentHash:    text("content_hash").notNull(),
+  contentHash:    text("content_hash"),
+  // The default road's capture (cinatra#3029): the FAMILY of end-node outputs
+  // at or above the one-kilobyte document floor, each with its serialised
+  // value, its reserved ledger id and its hash — written transaction-locally
+  // inside the terminal transition, exactly where the single final-text
+  // snapshot used to sit. Shape: `EndNodeOutputCapture` in
+  // ./run-terminal-derivation-outbox.
+  items:          jsonb("items").$type<unknown[] | null>(),
   // pending | deriving | done | no_match | no_produces
   status:         text("status").notNull().default("pending"),
   attempts:       integer("attempts").notNull().default(0),

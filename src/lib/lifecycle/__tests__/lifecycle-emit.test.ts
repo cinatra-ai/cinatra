@@ -59,8 +59,9 @@ describe("buildProducedEventInsertOp — op shape", () => {
     const op = buildProducedEventInsertOp("cinatra", base);
     expect(op.text).toContain(`"cinatra"."artifact_produced_outbox"`);
     expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
-    // 11 bound params ($1..$11); continuation_address + status are SQL literals.
-    expect(op.values).toHaveLength(11);
+    // 13 bound params ($1..$13); continuation_address + status are SQL literals.
+    // $12/$13 are the producing extension and its pinned version (cinatra#3029).
+    expect(op.values).toHaveLength(13);
     expect(op.values[0]).toBe(
       producedEventId("art-1", "rev-1", "artifact_produced"),
     );
@@ -79,6 +80,24 @@ describe("buildProducedEventInsertOp — op shape", () => {
     const op = buildProducedEventInsertOp("cinatra", base);
     expect(op.values[9]).toBe("none");
     expect(op.values[10]).toBe("async_effects_gated");
+  });
+
+  it("records the PRODUCING EXTENSION and its pinned version when supplied, and NULL when not", () => {
+    // cinatra#3029 (plan §8.2): the produced event "gains the producing
+    // extension and its pinned version beside the run". An emitter that cannot
+    // name one records NULL rather than a guess.
+    const bare = buildProducedEventInsertOp("cinatra", base);
+    expect(bare.values[11]).toBeNull();
+    expect(bare.values[12]).toBeNull();
+    const named = buildProducedEventInsertOp("cinatra", {
+      ...base,
+      producingExtension: "@cinatra-ai/text-artifact",
+      producingExtensionVersion: "0.1.0",
+    });
+    expect(named.text).toContain("producing_extension");
+    expect(named.text).toContain("producing_extension_version");
+    expect(named.values[11]).toBe("@cinatra-ai/text-artifact");
+    expect(named.values[12]).toBe("0.1.0");
   });
 
   it("carries producer provenance (run + agent) when supplied", () => {

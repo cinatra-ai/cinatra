@@ -40,8 +40,31 @@ export type MaterializationPath =
   | "materialize_tool"
   | "llm_emit"
   // cinatra#1893 (epic #1883 A5): the post-terminal derivation job's path — the
-  // produces-scoped capture of an UNBOUND run's final output.
-  | "derived_output";
+  // produces-scoped capture of an UNBOUND run's final output. RETIRED as a
+  // WRITING path by cinatra#3029 (item 0.17); the value stays in the vocabulary
+  // because rows written by it are still readable.
+  | "derived_output"
+  // cinatra#3029 (epic #3023 W5): the DEFAULT ROAD. One row per end-node output
+  // at or above the document floor that no binding named, under the reserved
+  // `cinatra:run-output:<name>` id family, carrying the rung that decided the
+  // form and the verdict it decided on.
+  | "default_road";
+
+/**
+ * The default road's verdict, as it lands on the ledger row (plan §8.2: "the
+ * rung that decided the form and the verdict it decided on — the detected form,
+ * the model's answer and confidence where the model rung ran"). Structurally
+ * `DetectionVerdict` from ./output-detection-ladder; typed loosely here so the
+ * ledger stays a data module with no dependency on the ladder.
+ */
+export type MaterializationDecidedVerdict = {
+  form: string;
+  rung: string;
+  reason: string;
+  modelAnswer?: string;
+  confidence?: number;
+  modelSkipped?: string;
+};
 
 export type MaterializationClaim =
   | {
@@ -95,14 +118,20 @@ export async function claimMaterialization(input: {
   path: MaterializationPath;
   extension: string;
   contentHash: string;
+  /** The default road's ladder verdict (cinatra#3029). Written on the CLAIM, so
+   *  it is on the row even when the write that follows never commits — the rung
+   *  that decided is a fact about the decision, not about the artifact. */
+  decidedRung?: string;
+  decidedVerdict?: MaterializationDecidedVerdict;
 }): Promise<MaterializationClaim> {
   ensurePostgresSchema();
   const s = schema();
   const id = randomUUID();
   const inserted = await pool().query(
     `INSERT INTO "${s}"."artifact_materializations"
-   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed')
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+    decided_rung, decided_verdict)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10)
  ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
  RETURNING id`,
     [
@@ -114,6 +143,8 @@ export async function claimMaterialization(input: {
       input.path,
       input.extension,
       input.contentHash,
+      input.decidedRung ?? null,
+      input.decidedVerdict ? JSON.stringify(input.decidedVerdict) : null,
     ],
   );
   if (inserted.rows.length > 0) {
@@ -332,4 +363,77 @@ export async function recordLlmEmitMaterialization(input: {
       input.representationRevisionId,
     ],
   );
+}
+
+/**
+ * Finalize a claim against an artifact that ALREADY exists — the same-bytes
+ * case of the default road (plan §3: "Two outputs with the same bytes in one
+ * run are one artifact with two ledger rows"). The first item writes its
+ * artifact through the write path and finalizes inside that write's Tx2; every
+ * later item with the same content hash claims its OWN reserved ledger id and
+ * points it at the first item's refs through this call. Phase-guarded, so a
+ * concurrent driver that finalized first simply wins and this returns false.
+ */
+export async function finalizeMaterializationAgainstExistingArtifact(input: {
+  orgId: string;
+  ledgerId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `UPDATE "${s}"."artifact_materializations"
+        SET phase = 'finalized', artifact_id = $3, representation_revision_id = $4
+      WHERE id = $1 AND org_id = $2 AND phase = 'claimed'
+      RETURNING id`,
+    [input.ledgerId, input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  return res.rows.length === 1;
+}
+
+/**
+ * Every FINALIZED materialization of one run, newest last — the read behind the
+ * run page's "what this run made" list (plan §6 step 6; issue #3002's artifact
+ * half). Org-scoped; the caller has already proved the person may read the run.
+ */
+export async function listFinalizedMaterializationsForRun(input: {
+  orgId: string;
+  runId: string;
+}): Promise<
+  Array<{
+    ledgerId: string;
+    outputId: string;
+    path: string;
+    extension: string;
+    artifactId: string;
+    representationRevisionId: string;
+    decidedRung: string | null;
+    decidedVerdict: MaterializationDecidedVerdict | null;
+  }>
+> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT id, output_id, path, extension, artifact_id, representation_revision_id,
+            decided_rung, decided_verdict
+       FROM "${s}"."artifact_materializations"
+      WHERE run_id = $1 AND org_id = $2 AND phase = 'finalized'
+        AND artifact_id IS NOT NULL AND representation_revision_id IS NOT NULL
+      ORDER BY created_at ASC, id ASC`,
+    [input.runId, input.orgId],
+  );
+  return res.rows.map((row: Record<string, unknown>) => ({
+    ledgerId: String(row.id),
+    outputId: String(row.output_id),
+    path: String(row.path),
+    extension: String(row.extension),
+    artifactId: String(row.artifact_id),
+    representationRevisionId: String(row.representation_revision_id),
+    decidedRung: row.decided_rung == null ? null : String(row.decided_rung),
+    decidedVerdict:
+      row.decided_verdict == null
+        ? null
+        : (row.decided_verdict as MaterializationDecidedVerdict),
+  }));
 }

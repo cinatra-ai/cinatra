@@ -61,6 +61,14 @@ export interface BuildProducedEventInsertInput {
    * decision 3); a per-flow opt-in passes `checkpointed`. */
   continuationMode?: ContinuationMode;
   eventKind?: ProducedEventKind;
+  /** The PRODUCING EXTENSION and its PINNED VERSION, beside the run
+   *  (cinatra#3029, plan §8.2: the produced event "gains the producing
+   *  extension and its pinned version beside the run, for a mid-run write made
+   *  by an embedded agent: the datum the repair road of the sibling plan
+   *  reads"). Omitted ⇒ NULL — an emitter that cannot name one records nothing
+   *  rather than a guess. */
+  producingExtension?: string | null;
+  producingExtensionVersion?: string | null;
 }
 
 /**
@@ -81,10 +89,12 @@ export function buildProducedEventInsertOp(
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
    producer_run_id, producer_agent_id, origin_kind, destination_class,
-   continuation_mode, continuation_address, status)
+   continuation_mode, continuation_address, status,
+   producing_extension, producing_extension_version)
 VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
         $7::text, $8::text, $9::text, $10::text,
-        $11::text, NULL, 'pending')
+        $11::text, NULL, 'pending',
+        $12::text, $13::text)
 ON CONFLICT (event_id) DO NOTHING`,
     values: [
       eventId,
@@ -98,6 +108,8 @@ ON CONFLICT (event_id) DO NOTHING`,
       lifecycleOriginKind(input.originKind),
       input.destinationClass ?? "none",
       input.continuationMode ?? "async_effects_gated",
+      input.producingExtension ?? null,
+      input.producingExtensionVersion ?? null,
     ],
   };
 }

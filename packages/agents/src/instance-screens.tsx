@@ -27,6 +27,8 @@ import {
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
+import { RunMadePanel } from "./run-made-panel";
+import { readRunArtifactRecords } from "@/lib/artifacts/run-artifact-records";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
@@ -879,6 +881,19 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  // THE RUN'S OWN RECORD (cinatra#3029, epic #3023 W5; §6 step 6, and the
+  // ratified drawing's section on the run's last step). "A finished run says
+  // what it made": the rail's last entry and its panel exist only for a run that
+  // has FINISHED, and an EMPTY list is a READING ("this run wrote no artifact and
+  // used none"), not an absent entry.
+  //
+  // The read is the materialization ledger's finalized rows plus the run's
+  // context selections, so a row appears because the work REACHED AN ARTIFACT —
+  // on any road, not only the default one.
+  const runMadeRecords =
+    run && isTerminalRunStatus(run.status)
+      ? await readRunArtifactRecords({ orgId: run.orgId, runId: run.id }).catch(() => [])
+      : [];
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -936,6 +951,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             reviewTaskId: gateTaskById.get(v.gateId)!,
             outcome: v.outcome,
           })),
+        runMade:
+          run && isTerminalRunStatus(run.status)
+            ? { runId: run.id, artifactCount: runMadeRecords.length }
+            : null,
         lifecycleDecisions: railLifecycleDecisions.map((d) => ({
           eventId: d.eventId,
           artifactId: d.artifactId,
@@ -1274,6 +1293,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   parked before this page is served, and the confirm/skip taken IN
                   the row is the only transition out of it (which also fires
                   `router.refresh()`, re-rendering this tree). */}
+              {/* "What this run made" — the panel of the rail's LAST entry
+                  (cinatra#3029). Drawn only for a finished run; its own EMPTY
+                  reading covers a run that kept nothing, so it is never an empty
+                  panel. Every row is a pointer into the artifact's own page. */}
+              {run && isTerminalRunStatus(run.status) ? (
+                <RunMadePanel records={runMadeRecords} />
+              ) : null}
               {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the

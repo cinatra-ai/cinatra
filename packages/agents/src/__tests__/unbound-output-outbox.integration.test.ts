@@ -104,11 +104,26 @@ async function seedRunningRun(input?: {
 async function readOutbox(runId: string) {
   const res = await client.query(
     `SELECT run_id, org_id, template_id, package_version, created_by, content,
-            content_is_json, content_hash, status, attempts
+            content_is_json, content_hash, items, status, attempts
        FROM "${q(TEST_SCHEMA)}"."agent_run_output_derivations" WHERE run_id = $1`,
     [runId],
   );
   return res.rows as Array<Record<string, unknown>>;
+}
+
+/** One default-road item, shaped as the terminal capture writes it
+ *  (cinatra#3029: the run's end-node outputs at or above the document floor,
+ *  not the retired response-text snapshot). */
+function item(outputName: string, content: string, contentIsJson = false) {
+  return {
+    outputId: `cinatra:run-output:${outputName}`,
+    outputName,
+    source: "end_node_output" as const,
+    content,
+    contentIsJson,
+    contentHash: sha(content),
+    byteLength: Buffer.byteLength(content, "utf8"),
+  };
 }
 
 async function readRunStatus(runId: string): Promise<string | null> {
@@ -226,9 +241,7 @@ describe.skipIf(!HAS_DB)(
           templateId,
           packageVersion: "1.2.3",
           createdBy: RUN_OWNER,
-          content,
-          contentIsJson: true,
-          contentHash: sha(content),
+          items: [item("draft", content, true)],
         },
       });
 
@@ -241,9 +254,11 @@ describe.skipIf(!HAS_DB)(
       expect(row.template_id).toBe(templateId);
       expect(row.package_version).toBe("1.2.3");
       expect(row.created_by).toBe(RUN_OWNER);
-      expect(row.content).toBe(content);
-      expect(row.content_is_json).toBe(true);
-      expect(row.content_hash).toBe(sha(content));
+      // The RETIRED response-text columns stay NULL; the capture is the item
+      // family (cinatra#3029, item 0.17).
+      expect(row.content).toBeNull();
+      expect(row.content_hash).toBeNull();
+      expect(row.items).toEqual([item("draft", content, true)]);
       expect(row.attempts).toBe(0);
     });
 
@@ -257,9 +272,7 @@ describe.skipIf(!HAS_DB)(
           templateId,
           packageVersion: null,
           createdBy: null,
-          content: first,
-          contentIsJson: false,
-          contentHash: sha(first),
+          items: [item("draft", first)],
         },
       });
       // Simulate a stop/retry re-drive that also wins a (fresh) legal terminal
@@ -277,16 +290,14 @@ describe.skipIf(!HAS_DB)(
           templateId,
           packageVersion: null,
           createdBy: null,
-          content: second,
-          contentIsJson: false,
-          contentHash: sha(second),
+          items: [item("draft", second)],
         },
       });
 
       const rows = await readOutbox(runId);
       expect(rows).toHaveLength(1);
-      expect(rows[0].content).toBe(first); // the FIRST capture is preserved
-      expect(rows[0].content_hash).toBe(sha(first));
+      // the FIRST capture is preserved
+      expect(rows[0].items).toEqual([item("draft", first)]);
     });
 
     it("a LOST terminal CAS (stale from) writes NEITHER the status flip NOR an outbox row", async () => {
@@ -305,9 +316,7 @@ describe.skipIf(!HAS_DB)(
             templateId,
             packageVersion: null,
             createdBy: null,
-            content: "lost race",
-            contentIsJson: false,
-            contentHash: sha("lost race"),
+            items: [item("draft", "lost race")],
           },
         });
       } catch (err) {
@@ -332,9 +341,7 @@ describe.skipIf(!HAS_DB)(
             templateId,
             packageVersion: null,
             createdBy: null,
-            content: "x",
-            contentIsJson: false,
-            contentHash: sha("x"),
+            items: [item("draft", "x")],
           },
         });
       } catch (err) {

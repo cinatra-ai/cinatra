@@ -3355,7 +3355,8 @@ jobs:
       # its Conformance block says the epic's gates stay green through every
       # wave. FOUR of the plan's own proof tiers did neither:
       # `test:lifecycle-moment` (W2a, cinatra#2928), `test:lent-action-grant`
-      # (W5a, cinatra#2932), `test:named-agent-start` (W5d, cinatra#2935) and
+      # (W5a, cinatra#2932), `test:named-agent-start` (W5d, cinatra#2935),
+      # `test:default-road` (cinatra#3029, epic #3023 W5) and
       # `test:run-window` (W5b, cinatra#2933) are root package scripts that NO
       # workflow invoked, so each could regress without reddening a single check
       # — the same vacuity class the wired `test:async-notification-seam` tier
@@ -3459,6 +3460,11 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
         shell: bash
         run: pnpm test:run-window
+
+      - name: The default road — real-DB tier (cinatra#3029, epic #3023 W5)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:default-road
 
       # cinatra#2936 (epic #2926 W6). Plan (B) section 6, Conformance, verbatim:
       # "The lifecycle-screens epic's own gates — the one-card gate, the

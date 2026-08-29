@@ -24,6 +24,8 @@ import {
   WAYFLOW_UNDICI_TIMEOUT_MS,
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
+// The default road's document floor and item family (cinatra#3029, item 0.17).
+import { selectEndNodeOutputPickupItems } from "./end-node-output-pickup";
 import { isTriggerReleased } from "./trigger-gate";
 // cinatra#2523: the setup-success hand-off asks whether the user has already
 // answered "When should this run?". trigger-store is already in this module's
@@ -1831,28 +1833,40 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     (outcome) => outcome.ok !== true,
   );
 
-  // Unbound-output capture (cinatra#1893, epic #1883 A5). The derivation-outbox
-  // row is written ATOMICALLY with the terminal CAS + snapshot below — a
-  // transaction-local capture only (produces/binding discovery is the derivation
-  // job's concern, NOT a registry read in this hot completion path). Captured for
-  // EVERY non-empty WayFlow terminal-success run; the job later types it against
-  // the agent's validated `produces` or emits an advisory. Empty output ⇒ nothing
-  // to capture (no row, no advisory). File-part outputs + the external-A2A
-  // completion branch are explicit v1 deferrals (this is the internal WayFlow
-  // success path only).
-  // Only a genuine terminal SUCCESS captures an unbound-output row (the meta
-  // key is legal for `to === "completed"` only). The #2486 failure branch below
-  // therefore neither captures nor enqueues.
+  // The DEFAULT ROAD's capture (cinatra#3029, epic #3023 W5; item 0.17).
+  //
+  // WHAT CHANGED HERE. This used to capture the run's final RESPONSE TEXT as one
+  // row, for a job that typed it against the agent's `produces` or advised that
+  // the output was "not captured". Response text is not an output (§2, §3) and
+  // takes no road, so it is no longer captured at all. What is captured instead
+  // is the FAMILY of END-NODE OUTPUTS at or above the one-kilobyte document
+  // floor that no declared binding already names — the outputs a person could
+  // open tomorrow. Below the floor an end-node value is a control datum and
+  // takes no road; the floor is measured on the SERIALISED value and recorded.
+  //
+  // Still a purely TRANSACTION-LOCAL capture: no registry read on this hot
+  // completion path (the per-output ladder is the pickup's concern), written
+  // ATOMICALLY with the terminal CAS + snapshot below. The FILE half of item
+  // 0.17 ("once per emitted file") is #3030's (W6).
+  //
+  // Only a genuine terminal SUCCESS captures a row (the meta key is legal for
+  // `to === "completed"` only). The #2486 failure branch below therefore
+  // neither captures nor enqueues.
+  const boundOutputNames = artifactMaterializations
+    .map((outcome) => outcome.outputId)
+    .filter((id): id is string => typeof id === "string");
+  const defaultRoadSelection = selectEndNodeOutputPickupItems({
+    endNodeOutputs,
+    boundOutputNames,
+  });
   const derivationOutbox =
-    finalText.length > 0
+    defaultRoadSelection.items.length > 0
       ? {
           orgId: run.orgId,
           templateId: run.templateId,
           packageVersion: run.packageVersion,
           createdBy: run.runBy,
-          content: finalText,
-          contentIsJson: finalOutputIsJson,
-          contentHash: createHash("sha256").update(finalText, "utf8").digest("hex"),
+          items: defaultRoadSelection.items,
         }
       : undefined;
 
@@ -1943,8 +1957,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
 
   if (!transitioned) return;
 
-  // Unbound-output derivation (cinatra#1893): the outbox row committed with the
-  // terminal transition above; enqueue the one-shot derivation job best-effort.
+  // The default road's pickup (cinatra#3029): the outbox row committed with the
+  // terminal transition above; enqueue the one-shot pickup job best-effort.
   // A failed enqueue never destabilizes the completed run — the durable outbox
   // row + the reconciliation sweep guarantee eventual derivation. Only when a row
   // was actually captured (non-empty output).

@@ -27,6 +27,7 @@ import {
 import { isArtifactExtensionWriteAllowed } from "./artifact-extension-access";
 import {
   claimMaterialization,
+  type MaterializationDecidedVerdict,
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
@@ -432,12 +433,16 @@ export async function writeClaimedArtifact(input: {
   orgId: string;
   createdBy: string | null;
   /** Ledger identity: the EndNode output name (bindings), the node id (tool), or
-   *  the reserved `derived_output` sentinel (cinatra#1893 unbound-output job). */
+   *  a member of the reserved `cinatra:run-output:<name>` family (the default
+   *  road, cinatra#3029). */
   outputId: string;
-  /** The calling node id, or null on the `derived_output` path (no node). */
+  /** The calling node id, or null on the post-terminal paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output";
+  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
   extension: string;
+  /** The PINNED version of `extension`, recorded on the produced event beside
+   *  the run (cinatra#3029, plan §8.2). */
+  extensionVersion?: string | null;
   title: string;
   mime: string;
   content: string;
@@ -450,6 +455,12 @@ export async function writeClaimedArtifact(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   /** Per-path wording for the accepts-mismatch error message. */
   mimeDescription: string;
+  /** The DEFAULT ROAD's detection verdict (cinatra#3029, plan §8.2): the rung
+   *  that decided the form, and the verdict it decided on. Written on the
+   *  ledger CLAIM, so the decision is recorded even when the write that follows
+   *  never commits. Absent on every declarative path — no ladder ran there. */
+  decidedRung?: string;
+  decidedVerdict?: MaterializationDecidedVerdict;
   /** OPTIONAL extra Tx2 queries composed into the SAME transaction as the
    *  artifact write + the ledger finalize (cinatra#1893). The derived_output
    *  path passes its token-guarded outbox `done`-settle here so the settle and
@@ -497,6 +508,8 @@ export async function writeClaimedArtifact(input: {
     path: input.path,
     extension: input.extension,
     contentHash,
+    decidedRung: input.decidedRung,
+    decidedVerdict: input.decidedVerdict,
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -553,6 +566,9 @@ export async function writeClaimedArtifact(input: {
       // scoped to THIS extension (multi-produce agents must not stamp
       // every declared type onto every output).
       producerAssertionExtension: input.extension,
+      // cinatra#3029 (plan §8.2): the produced event records the producing
+      // extension AND its pinned version beside the run.
+      producerAssertionExtensionVersion: input.extensionVersion ?? null,
       skipFallbackClassification: true,
       additionalTx2Queries: (ids) => [
         buildFinalizeMaterializationQuery({

@@ -66,7 +66,11 @@ export type RailSource =
   | "stepResult"
   | "gate"
   | "verification"
-  | "lifecycleDecision";
+  | "lifecycleDecision"
+  // cinatra#3029 (epic #3023 W5) — the run's OWN RECORD: the rail's last entry,
+  // whose page lists what the run made. It is not a step the run executed, so it
+  // dedupes with nothing and always trails.
+  | "runMade";
 
 /** A rail entry's lifecycle state, derived purely from the merged evidence.
  * `skipped` is a TERMINAL, non-blocking state: the lifecycle policy deliberately
@@ -80,11 +84,17 @@ export interface RunStepRailEntry {
   key: string;
   /** Sort position (see ORDERING). */
   ordinal: number;
-  kind: "step" | "gate" | "verification" | "lifecycleDecision";
+  kind: "step" | "gate" | "verification" | "lifecycleDecision" | "runMade";
   label: string;
   status: RailStatus;
   /** The union of contributing sources (sorted, stable). */
   sources: RailSource[];
+  /** Present iff kind==="runMade" (cinatra#3029): the run's own record — how many
+   * artifacts its page will list. Zero is a READING ("this run wrote no artifact
+   * and used none"), never an absent entry. */
+  runMade?: {
+    artifactCount: number;
+  };
   /** Present iff kind==="gate": the linkage the rail entry deep-links into the
    * relocated review surface with, plus the read-only-history discriminator. */
   gate?: {
@@ -199,6 +209,9 @@ export interface BuildRunStepRailInput {
    * SKIPPED / PENDING one — and a fired one whose gate is missing — becomes its
    * own entry carrying the lattice reason. */
   lifecycleDecisions?: readonly RailLifecycleDecision[];
+  /** The run's OWN RECORD, for the rail's LAST entry (cinatra#3029). Absent on a
+   * run that has not finished — "a finished run says what it made". */
+  runMade?: RailRunMadeMarker | null;
 }
 
 export interface RunStepRail {
@@ -232,12 +245,22 @@ function gateTime(v: string | number | Date): number {
  * Merge the three step sources + the run's gates into ONE ordered rail per the
  * contract documented at the top of this file. Pure and deterministic.
  */
+/** The run's own record, for the rail's LAST entry (cinatra#3029). Present on a
+ *  run that has FINISHED — the drawing's reading is "a finished run says what it
+ *  made", so an in-flight run has no such entry. `artifactCount` is 0 for the
+ *  empty reading, which is a reading and not an absence. */
+export type RailRunMadeMarker = {
+  runId: string;
+  artifactCount: number;
+};
+
 export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   const templateSteps = input.templateSteps ?? [];
   const submissions = input.submissions ?? [];
   const messages = input.messages ?? [];
   const stepResults = input.stepResults ?? [];
   const gates = input.gates ?? [];
+  const runMade = input.runMade ?? null;
 
   // key → { entry, sources set } accumulator so dedup is order-independent.
   const byKey = new Map<string, { entry: RunStepRailEntry; sources: Set<RailSource> }>();
@@ -480,6 +503,31 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         e.lifecycleDecision = s.lifecycleDecision;
       });
     });
+  }
+
+  // (+) THE RUN'S OWN RECORD (cinatra#3029, epic #3023 W5). "A finished run says
+  //     what it made. The rail's last entry is the run's own record, and its page
+  //     lists the run's work." It carries no gate, no submission and no step
+  //     result, so it dedupes with nothing; it takes the ordinal AFTER everything
+  //     already on the rail, which is what makes it the LAST entry however the
+  //     spine was merged. Its status is `resolved` — terminal history, never the
+  //     "you are here" anchor of a run that has already finished.
+  if (runMade) {
+    let maxOrdinal = 0;
+    for (const { entry } of byKey.values()) maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
+    const key = `runMade:${runMade.runId}`;
+    upsert(
+      key,
+      () => ({
+        key,
+        ordinal: maxOrdinal + 1,
+        kind: "runMade" as const,
+        label: "Done",
+        status: "resolved" as RailStatus,
+        runMade: { artifactCount: runMade.artifactCount },
+      }),
+      "runMade",
+    );
   }
 
   // Finalize: attach sorted source unions, then total-order sort.

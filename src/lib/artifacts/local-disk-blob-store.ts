@@ -174,9 +174,16 @@ function absFor(storageKey: string): string {
   return abs;
 }
 
+// THE DETECTION LADDER'S SIGNATURE RUNG (cinatra#3029, item 0.18: "the bytes'
+// signature, which the store's sniffer already reads for images, pdf, zip and
+// office, audio and video"). EXPORTED, unchanged, rather than moved to a leaf of
+// its own: the store's routes are route-graph-ratcheted and a new module on this
+// graph would grow four locked routes by one, so the pickup imports the sniffer
+// from its existing home and runs the SAME function over its own copy of a
+// value. One home, two callers.
 // Minimal dependency-free magic-byte sniff (no new deps per repo constraint).
 // Common types only; unknown → declaredMime (if safe) → octet-stream.
-function sniffMime(head: Uint8Array, declaredRaw?: string): string {
+export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   const b = head;
   // CANONICALIZE the declared MIME up front: strip parameters (`; charset=…`),
   // trim, and lowercase. The stored/detected MIME must be canonical — the preview

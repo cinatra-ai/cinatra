@@ -31,7 +31,7 @@ import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publica
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
-import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries, suggestionDecisionCasSchemaQueries, agentRunHitlGatesSchemaQueries, runRecommendationSkipsSchemaQueries, runRecommendationOfferedSetSchemaQueries, artifactReviewFormProvenanceSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { materializationLedgerSchemaQueries, artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries, suggestionDecisionCasSchemaQueries, agentRunHitlGatesSchemaQueries, runRecommendationSkipsSchemaQueries, runRecommendationOfferedSetSchemaQueries, artifactReviewFormProvenanceSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1360,16 +1360,19 @@ END $$`,
     // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
     // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
     // claim) SERIALIZES the decision across the one-shot job + reconciliation
-    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
+    // sweep. TWIN of core__0071 + core__0098 — the DDLs MUST stay identical
+    // (cinatra#3029: the RETIRED response-text columns are nullable; `items`
+    // carries the default road's end-node-output family).
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (
       run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
       org_id text NOT NULL,
       template_id text NOT NULL,
       package_version text,
       created_by text,
-      content text NOT NULL,
+      content text,
       content_is_json boolean NOT NULL DEFAULT false,
-      content_hash text NOT NULL,
+      content_hash text,
+      items jsonb,
       status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
       attempts integer NOT NULL DEFAULT 0,
       lease_token text,
@@ -1990,42 +1993,7 @@ $body$` },
     // table + CHECK guards + binding-basis columns/indexes + the frozen
     // trigger. Existing deployments also converge via migration core__0036.
     ...semanticAssertionSchemaQueries(schemaName),
-    // ---- artifact_materializations idempotency ledger (cinatra#923) ----
-
-    // Claim-then-write-then-finalize journal for declarative artifact
-    // materialization (the install-op-journal shape). One row per attempted
-    // materialization; the 4-part unique key is the RETRY-idempotency
-    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
-    // hits the same key, reads the finalized row's refs and returns them
-    // instead of writing a second artifact. `phase` transitions
-    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
-    // artifact write — no window in which a committed artifact is invisible
-    // to the ledger). An unfinalized (crashed) claim is re-used by the next
-    // re-drive.
-    //
-    // `output_id` identity per path: the EndNode output name for
-    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
-    // the authoring step id for `llm_emit` provenance rows (unique per emit,
-    // so legitimately distinct same-byte emits never collide on the key).
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
-  id                          text PRIMARY KEY,
-  org_id                      text NOT NULL,
-  run_id                      text NOT NULL,
-  output_id                   text NOT NULL,
-  node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
-  extension                   text NOT NULL,
-  content_hash                text NOT NULL,
-  artifact_id                 text,
-  representation_revision_id  text,
-  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
-  created_at                  timestamptz NOT NULL DEFAULT now()
-)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
-    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
-    // declarative rows of one run by extension + content hash.
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
+    ...materializationLedgerSchemaQueries(schemaName),
     // ---- run_context_selections audit table ----
     // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#1430
     // vertical slice; extract-leaf pattern — an EXISTING drizzle-store import,
