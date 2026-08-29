@@ -62,6 +62,11 @@ jobs:
         run: |
           if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
             base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
           elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             base="${{ github.event.before }}"
           else
@@ -117,6 +122,11 @@ jobs:
         run: |
           if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
             base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
           elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             base="${{ github.event.before }}"
           else
@@ -225,3 +235,58 @@ jobs:
           src/components/extensions/__tests__/installed-extension-card.test.tsx
           src/components/extensions/__tests__/agent-card-vendor.test.ts
           scripts/audit/__tests__/vendor-byline-scan.test.mjs
+
+  # Every pinned design conformance manifest still matches the one that is
+  # published. Its OWN job, not a step in `gates`: `gates` is a required
+  # context, and cinatra#3057 lands this warn-first — a red here must be
+  # VISIBLE without blocking anything until a separate PR adds this job's
+  # context to .github/branch-protections.json (rollout step b). Pure node,
+  # no dependency install, so it costs a runner slot and nothing else.
+  design-pin-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the trigger rule diffs the touched paths (and the
+          # CHANGED PIN ENTRIES) against the PR base.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # On a pull request / merge group the checker is red only for the pins
+      # whose mapped paths this diff touched; every other non-match outcome is
+      # a warning annotation and the job exits 0. On a push to main and on
+      # dispatch, any non-match outcome is red. See
+      # docs/internals/contracts/design-conformance-pin-drift.md.
+      - name: Design Conformance Pin Drift
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # Validate the base resolves to a commit. When it points at a commit
+          # not present in the fetched history, the three-dot diff has no shared
+          # anchor and the touched-path set is meaningless. The sibling ratchet
+          # gates fall back to HEAD there, which self-compares to an EMPTY diff
+          # — the fail-OPEN direction for this check, because an empty diff
+          # adopts no pin and every drift degrades to a warning. So this one
+          # goes the other way: the base is cleared, and the checker treats an
+          # absent base as EVERY pin touched. A fetch-depth misconfiguration
+          # therefore over-reports rather than hiding an adopting PR.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            echo "::notice::diff base '${base}' did not resolve — treating every pin as touched (fail-closed)"
+            base=""
+          fi
+          export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
+          node scripts/ci/design-pin-drift.mjs --github-annotations
