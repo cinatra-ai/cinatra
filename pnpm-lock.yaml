@@ -36,6 +36,12 @@ importers:
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:packages/agents
+      '@cinatra-ai/audio-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/audio-artifact
+      '@cinatra-ai/binary-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/binary-artifact
       '@cinatra-ai/connectors':
         specifier: workspace:*
         version: link:packages/connectors
@@ -45,15 +51,27 @@ importers:
       '@cinatra-ai/dashboards':
         specifier: workspace:*
         version: link:packages/dashboards
+      '@cinatra-ai/document-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/document-artifact
       '@cinatra-ai/errors':
         specifier: workspace:*
         version: link:packages/errors
       '@cinatra-ai/google-oauth-connection':
         specifier: workspace:*
         version: link:packages/google-oauth-connection
+      '@cinatra-ai/image-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/image-artifact
+      '@cinatra-ai/json-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/json-artifact
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:packages/llm
+      '@cinatra-ai/markdown-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/markdown-artifact
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
@@ -63,6 +81,9 @@ importers:
       '@cinatra-ai/notifications':
         specifier: workspace:*
         version: link:packages/notifications
+      '@cinatra-ai/pdf-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/pdf-artifact
       '@cinatra-ai/permissions':
         specifier: workspace:*
         version: link:packages/permissions
@@ -81,9 +102,18 @@ importers:
       '@cinatra-ai/streams':
         specifier: workspace:*
         version: link:packages/streams
+      '@cinatra-ai/text-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/text-artifact
+      '@cinatra-ai/video-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/video-artifact
       '@cinatra-ai/webhooks':
         specifier: workspace:*
         version: link:packages/webhooks
+      '@cinatra-ai/zip-artifact':
+        specifier: workspace:*
+        version: link:extensions/cinatra-ai/zip-artifact
       '@daveyplate/better-auth-ui':
         specifier: ^3.4.0
         version: 3.4.0(acfab9161e68325153aa8227ca677eac)
@@ -511,6 +541,39 @@ importers:
         version: 5.9.3
 
   extensions/cinatra-ai/audio-artifact:
+    devDependencies:
+      '@testing-library/dom':
+        specifier: ^10.4.0
+        version: 10.4.1
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)(terser@5.48.0)
+
+  extensions/cinatra-ai/binary-artifact:
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -1262,6 +1325,43 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+
+  extensions/cinatra-ai/markdown-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+    devDependencies:
+      '@testing-library/dom':
+        specifier: ^10.4.0
+        version: 10.4.1
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)(terser@5.48.0)
 
   extensions/cinatra-ai/marketing-icp-artifact:
     dependencies:

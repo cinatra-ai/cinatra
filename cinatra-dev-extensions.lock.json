@@ -115,7 +115,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "83c3025e149c923bc4e82eddceaad30c5e524296"
+      "resolvedSha": "cfc6ba434b31ecf874e3f32e4f7f0bf813ca7157"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
