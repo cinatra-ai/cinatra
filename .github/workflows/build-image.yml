@@ -3472,6 +3472,20 @@ jobs:
         shell: bash
         run: pnpm test:lifecycle-c-w3
 
+      # cinatra#3031 (epic #3023 W7). Same reasoning as the four tiers above,
+      # and the same harness: this tier's three suites need the postgres:18 this
+      # job already runs, because everything W7 claims is a claim about what the
+      # DATABASE does — a declared table under the extension's prefix, a
+      # migration touching another table refused by the server itself, a role
+      # that reaches its own rows and nothing else, and a keyset cursor that
+      # neither drops nor repeats a row. A tier of this shape joins CI only when
+      # somebody adds a step, so here it is, next to its siblings, watched by
+      # direction 4 of scripts/audit/ci-pinned-tests-exist.mjs.
+      - name: Extension tables, data tool and artifact reads — real-DB tier (cinatra#3031, W7)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:extension-tables
+
       # cinatra#3052 — the widget schedule grant's own real-DB tier, wired in
       # the SAME change that adds it, beside the four tiers above and for the
       # reason the block above records: a root config that no workflow invokes

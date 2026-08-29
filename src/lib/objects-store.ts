@@ -519,6 +519,13 @@ export type ListObjectsFilter = {
   // Candidates from project Q or ambient are dropped. This intersection is
   // the non-bypassable canonical filter.
   projectId?: string | null;
+  // cinatra#3031 (epic #3023 W7, plan (C) 0.26): the KEYSET a cursor rides on.
+  // The listing's order is `created_at DESC, id DESC`, so "the page after this
+  // row" is `(created_at, id) < (cursor.createdAt, cursor.id)` — one indexable
+  // comparison, no OFFSET, and no row dropped or repeated when a write lands
+  // between two pages. Placed with the other narrowing clauses, BEFORE the
+  // per-actor ownership filter, so it can only ever narrow the read.
+  before?: { createdAt: string; id: string };
   // cinatra#1456: indexed equality filters over the JSONB `data` column, used
   // by the email correlation query seam (thread / campaign / contact views) so
   // those reads are a server-side indexed lookup, never a client-side scan.
@@ -723,6 +730,13 @@ export function listObjectsByFilter(
     pIdx += 1;
   }
 
+  // cinatra#3031: the cursor keyset. Same placement rule — it narrows only.
+  if (filter.before) {
+    where.push(`(created_at, id) < ($${pIdx}::timestamptz, $${pIdx + 1})`);
+    values.push(filter.before.createdAt, filter.before.id);
+    pIdx += 2;
+  }
+
   // cinatra#1456: indexed `data->>'<key>' = $n` correlation filters. Runs
   // BEFORE the per-actor ownership filter so it intersects with org/type/
   // sealed-room and cannot widen the read. Keys are allow-listed + pattern-
@@ -762,7 +776,11 @@ export function listObjectsByFilter(
   const orderBy =
     filter.ids && filter.ids.length > 0
       ? "" // caller preserves Graphiti rank
-      : `ORDER BY created_at DESC`;
+      // cinatra#3031: `id DESC` is a TIE-BREAK, not a new order — two rows
+      // sharing a `created_at` had no defined order between them before, and a
+      // cursor needs one or a page boundary that lands inside a tie drops or
+      // repeats a row.
+      : `ORDER BY created_at DESC, id DESC`;
   const limitClause = filter.limit
     ? `LIMIT ${Math.min(filter.limit, 1000)}`
     : "LIMIT 100";
