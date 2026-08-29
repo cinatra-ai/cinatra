@@ -577,6 +577,13 @@ export function ReviewGateCard({
     ref: view.ref,
     enabled: present,
     reloadToken,
+    // A REVIEW GATE IS SETTLED BY WHOEVER REACHES IT FIRST (cinatra#3051), and
+    // that is routinely not the reader of this column: the same gate is drawn in
+    // the run page, in the chat thread and in every third-party page the widget
+    // is open on. Mount and focus are both events about THIS reader, so a column
+    // nobody touches was never told, and held a live decision bar on a gate the
+    // store had already closed. This is the opt-in that makes it look.
+    keepLookingWhileOpen: true,
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
 
@@ -616,10 +623,38 @@ export function ReviewGateCard({
     scheme: LifecycleColorScheme | null;
     islandSrc: string | null;
     askedFor: LifecycleColorScheme | null | undefined;
-  }>({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+    /** The `reloadToken` the held address was adopted under — see below. */
+    token: number;
+  }>({
+    scheme: cardColorScheme,
+    islandSrc: liveIslandSrc,
+    askedFor: undefined,
+    token: reloadToken,
+  });
   const heldCredential = islandCredentialFrom(islandAddress.islandSrc, view.ref);
-  if (liveCredential !== null && liveCredential !== heldCredential) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  // A FRESH GRANT IS ADOPTED ONLY WHEN THIS CARD ASKED FOR ONE (cinatra#3051).
+  //
+  // Every resolve mints a new island credential, so "the answer carried a
+  // credential I am not already holding" is true of EVERY answer — it was a
+  // usable signal only while the card resolved on mount and focus alone. Now
+  // that a pending card keeps looking on its own cadence (see
+  // `keepLookingWhileOpen` above), adopting on that signal would rewrite `src`
+  // every few seconds, and `ReviewTargetIsland` keys the iframe on `src`: the
+  // frame would remount before it could ever finish painting, which is exactly
+  // the blank island this file's own note warns about one screen up.
+  //
+  // The card asked when it bumped `reloadToken` — the retry and the palette
+  // repaint both go through `refresh()` — or when it is holding no address at
+  // all. A background look changes the STATE the card draws and never the
+  // address it draws it at.
+  const askedForThisAddress = heldCredential === null || islandAddress.token !== reloadToken;
+  if (liveCredential !== null && liveCredential !== heldCredential && askedForThisAddress) {
+    setIslandAddress({
+      scheme: cardColorScheme,
+      islandSrc: liveIslandSrc,
+      askedFor: undefined,
+      token: reloadToken,
+    });
   } else if (islandAddress.scheme === cardColorScheme) {
     // Nothing is outstanding — the frame is already in the host's palette. Drop
     // any standing request, so a reader who returns to a palette whose ask went
@@ -628,7 +663,12 @@ export function ReviewGateCard({
       setIslandAddress({ ...islandAddress, askedFor: undefined });
     }
   } else if (heldCredential === null && liveCredential === null) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+    setIslandAddress({
+      scheme: cardColorScheme,
+      islandSrc: liveIslandSrc,
+      askedFor: undefined,
+      token: reloadToken,
+    });
   } else if (islandAddress.askedFor !== cardColorScheme) {
     setIslandAddress({ ...islandAddress, askedFor: cardColorScheme });
     refresh();
@@ -1766,6 +1806,24 @@ function IslandLoadingSkeleton({ rows }: { rows: readonly ReviewTargetRow[] }): 
  * NEVER BLANK, EVEN WITH NO ROWS. An answer that carried no rows still draws the
  * floor — one sanitized `package · slot · reason` line — because "no rows" is
  * exactly the state a blank panel would be indistinguishable from.
+ *
+ * AND NEVER HEADERLESS, EVEN WITH NO ROWS (cinatra#3051, third capture). The
+ * first version of this drew the floor ALONE when the answer carried no rows,
+ * on the reading that "no row means no header to draw". Measured on the real
+ * surface, that reading was wrong twice over. It is wrong about how often it
+ * happens: the server races the gate's target read against a two-second
+ * deadline (`REVIEW_TARGET_ROWS_DEADLINE_MS`) and answers with no rows whenever
+ * it loses, which on the widget's slower path is the ordinary first answer, not
+ * a rare one. And it is wrong about what to do then: for the twenty seconds
+ * before the island painted, the reader was offered Approve and Reject over a
+ * panel that named nothing at all.
+ *
+ * So the header is STRUCTURAL — it is present in every state this overlay
+ * draws — while its FACTS are not invented. With no rows it says exactly that:
+ * a header marked `data-review-target-header-pending`, naming the reading and
+ * nothing else. The moment an answer carries rows, the same header carries their
+ * facts. The reader is never asked to decide in front of an unnamed panel, and
+ * is never shown a fact the answer did not contain.
  */
 function ReviewTargetRows({
   rows,
@@ -1777,7 +1835,14 @@ function ReviewTargetRows({
   return (
     <div data-review-target-reading={reason} className="space-y-3">
       {rows.length === 0 ? (
-        <ReviewTargetFloorLine packageName={null} reason={reason} />
+        <div data-review-target-header="" data-review-target-header-pending="">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-sans text-sm font-bold text-foreground">
+              {REVIEW_TARGET_UNNAMED_TITLE}
+            </span>
+          </div>
+          <ReviewTargetFloorLine packageName={null} reason={reason} />
+        </div>
       ) : (
         rows.map((row) => (
           <div
@@ -1847,6 +1912,11 @@ function ReviewTargetFloorLine({
 
 /** The one slot a review target is ever mounted in this release (§III). */
 const REVIEW_TARGET_SLOT = "detail";
+
+/** What the header says while the answer has not yet named the target. It names
+ *  the READING — never a guess at the artifact — so the panel is identified
+ *  without a fact being invented for it. */
+const REVIEW_TARGET_UNNAMED_TITLE = "Review target";
 
 /**
  * The island's past-the-bound presentation (cinatra#2713) — reuses

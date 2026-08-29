@@ -749,6 +749,61 @@ export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * How many further looks a card that is KEEPING LOOKING may take, and how far
+ * apart. Same shape, and the same reasoning, as the run review slot's reader
+ * further down this file: brisk while the answer is likely seconds away, wider
+ * once it plainly is not, and a COUNT that ends it either way.
+ *
+ * At this cadence the belt is reached after roughly eight and a half minutes of
+ * an uninterrupted open page. That is the bound on the LOOKING, not on the
+ * card: `focus` still refreshes it afterwards, which is the same backstop every
+ * lifecycle card has always had.
+ */
+const RESOLVE_POLL_LIMIT = 60;
+
+function resolvePollDelay(reads: number): number {
+  if (reads < 5) return 2000;
+  if (reads < 15) return 5000;
+  return 10_000;
+}
+
+/**
+ * The readings a further look could not improve on.
+ *
+ * `settled` is the obvious one: a resolved gate does not un-resolve. `absent`
+ * and `advisory` join it because BOTH draw no card at all — `absent` is every
+ * denial path's answer and a ref that does not resolve, `advisory` is not a
+ * review state — so a card holding either is invisible, and an invisible card
+ * that keeps asking is pure cost. A reading that arrives at one of these is
+ * where the looking stops; `focus` remains the backstop for the rare read whose
+ * standing genuinely changes underneath it.
+ */
+const TERMINAL_RESOLVE_READINGS: ReadonlySet<unknown> = new Set([
+  "settled",
+  "absent",
+  "advisory",
+]);
+
+/**
+ * Is this answer still OPEN — that is, could the server's next answer differ?
+ *
+ * NO ANSWER AT ALL IS OPEN, and that is load-bearing: a refused request leaves
+ * the answer null (a 401 on a widget whose bearer has aged out, a 5xx, a body
+ * that did not parse), and that is exactly the state a further look exists to
+ * climb out of.
+ *
+ * Written against the answer's shape rather than a kind-specific type so a card
+ * kind that carries no state at all simply never polls, instead of polling on a
+ * field this cannot read.
+ */
+function resolveAnswerIsStillOpen(envelope: unknown): boolean {
+  if (envelope === null || typeof envelope !== "object") return true;
+  const state = (envelope as { state?: unknown }).state;
+  if (state === null || typeof state !== "object") return false;
+  return !TERMINAL_RESOLVE_READINGS.has((state as { state?: unknown }).state);
+}
+
+/**
  * Resolve the authoritative ANSWER for one lifecycle ref: the state ladder and
  * the body this kind is authorized to carry. Returns `null` until the first
  * resolve completes — the caller renders nothing while it is null.
@@ -772,14 +827,28 @@ export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
  * decision lands, or when the reader presses the §IV "no longer open" Refresh,
  * the card bumps the token and the SAME identity is re-resolved through the
  * same monotonic-request guard.
+ *
+ * `keepLookingWhileOpen` (cinatra#3051) adds a BOUNDED poll for as long as the
+ * reading is still open. It is OPT-IN, and deliberately so: mount + focus is the
+ * right shape for a card whose answer only ever changes because the reader
+ * themself changed it, and every card that had that shape keeps it byte for
+ * byte. It is wrong for a gate that ANOTHER PERSON, on another page, can settle
+ * out from under this one — see the effect below for the measurement.
  */
 export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(params: {
   viewType: K;
   ref: string;
   enabled: boolean;
   reloadToken?: number;
+  keepLookingWhileOpen?: boolean;
 }): LifecycleResolveAnswerFor<K> | null {
-  const { viewType, ref, enabled, reloadToken = 0 } = params;
+  const {
+    viewType,
+    ref,
+    enabled,
+    reloadToken = 0,
+    keepLookingWhileOpen = false,
+  } = params;
   // The host's credential declaration (cinatra#2577). Read here so the resolve
   // callback closes over ONE value; a host that declares none keeps S1's exact
   // same-origin cookie request.
@@ -869,6 +938,74 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
       window.removeEventListener("focus", onFocus);
     };
   }, [enabled, resolve, reloadToken]);
+
+  // ---------------------------------------------------------------------
+  // AND IT KEEPS LOOKING WHILE THE READING IS OPEN (cinatra#3051).
+  //
+  // THE MEASUREMENT. Two third-party pages open on one review gate. Approve was
+  // pressed in one; the gate row resolved and that column settled from its own
+  // decide answer. SIX MINUTES LATER the other column still drew a pending card
+  // with a live decision bar — a terminal control offered on a gate the store
+  // had already closed — and only settled when the page was reloaded.
+  //
+  // WHY MOUNT + FOCUS COULD NOT SEE IT. Both are events about THIS reader: one
+  // says "you arrived", the other "you came back". Neither fires for a page that
+  // is simply sitting open while somebody ELSE decides, which is the ordinary
+  // shape of a gate two people can reach.
+  //
+  // THE BOUND, AND WHY IT IS NOT A HEARTBEAT. The cadence backs off exactly as
+  // the run's review-slot reader below does, and the COUNT is the belt that ends
+  // it — a page left open all day does not poll all day. Focus remains the
+  // backstop past the bound. And a SETTLED reading stops it outright: a terminal
+  // answer cannot change, so looking again could only ever cost.
+  const openReading = resolveAnswerIsStillOpen(
+    resolved !== null && resolved.identity === identity ? resolved.envelope : null,
+  );
+  const pollGeneration = `${identity}\u0000${reloadToken}`;
+  const pollReadsRef = useRef({ generation: pollGeneration, reads: 0 });
+  if (pollReadsRef.current.generation !== pollGeneration) {
+    pollReadsRef.current = { generation: pollGeneration, reads: 0 };
+  }
+  // THE LINK THAT KEEPS THE CHAIN WHOLE.
+  //
+  // Each look re-arms the next one by CHANGING SOMETHING THIS EFFECT DEPENDS ON.
+  // Re-arming off `resolved` alone was a chain with a break in it: a look that
+  // does not reach state — a non-2xx, a body that did not parse, an offline
+  // moment — left every dependency exactly as it was, so no further look was
+  // ever armed and the column stayed pending for the rest of the page's life,
+  // which is the very defect this poll exists to close. So a completed look
+  // announces itself here whatever it answered, and the belt (not the answer)
+  // is what ends the looking.
+  const [pollTick, setPollTick] = useState(0);
+  useEffect(() => {
+    if (!enabled || !keepLookingWhileOpen || !openReading) return;
+    const counter = pollReadsRef.current;
+    if (counter.reads >= RESOLVE_POLL_LIMIT) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      counter.reads += 1;
+      void resolve(controller.signal).finally(() => {
+        // Not after an abort: the cleanup that aborted has already re-armed
+        // this effect, and a tick on top of it would arm a second timer.
+        if (!controller.signal.aborted) setPollTick((tick) => tick + 1);
+      });
+    }, resolvePollDelay(counter.reads));
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // This is a chain of single timeouts, never a standing interval that could
+    // outlive its own card: exactly one further look is armed per completed
+    // look, and only while the reading is still open and the belt still holds.
+  }, [
+    enabled,
+    keepLookingWhileOpen,
+    openReading,
+    resolve,
+    reloadToken,
+    resolved,
+    pollTick,
+  ]);
 
   return resolved !== null && resolved.identity === identity ? resolved.envelope : null;
 }

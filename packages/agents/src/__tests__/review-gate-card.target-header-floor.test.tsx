@@ -267,10 +267,27 @@ describe("past the island's bound, the panel still names its target", () => {
 describe("never blank", () => {
   it("draws the §V line even when the answer carried no rows at all", async () => {
     const root = await renderOn("site_widget", { targets: null });
-    expect(header(root), "no row means no header to draw").toBeNull();
     const line = floor(root);
-    expect(line, "but the floor is never absent").not.toBeNull();
+    expect(line, "the floor is never absent").not.toBeNull();
     expect(line!.textContent).toBe('slot "detail" · reason "preview-loading"');
+  });
+
+  // REVERSED BY MEASUREMENT (cinatra#3051, third capture). This pin used to read
+  // "no row means no header to draw", and the third capture showed what that
+  // cost on the real surface: at the card's first render inside a third-party
+  // application the island had timed out, the answer carried no rows, and the
+  // reader was offered Approve and Reject for twenty seconds over a panel that
+  // named nothing. The header is STRUCTURAL now — present in every state the
+  // card's own overlay draws — while its facts are still never invented. See
+  // `review-gate-card.header-at-first-paint.test.tsx` for the full contract.
+  it("still names the panel when the answer carried no rows", async () => {
+    const root = await renderOn("site_widget", { targets: null });
+    const named = header(root);
+    expect(named, "the panel is named even before its facts arrive").not.toBeNull();
+    expect(
+      named!.getAttribute("data-review-target-header-pending"),
+      "and it says openly that they have not",
+    ).toBe("");
   });
 
   it("names a target by its id when the artifact could not be read", async () => {
