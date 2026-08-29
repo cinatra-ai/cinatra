@@ -97,13 +97,29 @@ import { RunSurfaceRail } from "./run-surface-rail";
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
 // answer (`instance-screens-client-boundary.test.ts`).
-import type { RunStepSelection, RunSurfaceRailStep } from "./run-surface-rail-step";
+import type {
+  RunInputStepKey,
+  RunStepSelection,
+  RunSurfaceRailStep,
+} from "./run-surface-rail-step";
 import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-steps";
 // The labels come from a module with NO "use client" directive, deliberately:
 // this screen is a server component, and a constant imported from the rail's own
 // client module reaches it as a client reference whose `.schedule` reads
 // `undefined` rather than the label (cinatra#2970).
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
+import { buildRunInputRailSteps } from "./run-input-rail-steps";
+import {
+  buildRunInputSteps,
+  openRunInputStepKey,
+  runAtInputMoment,
+  runCarriesInputSteps,
+} from "./run-input-steps";
+// THE SCHEMA THE SETUP LOOP ACTUALLY ASKS FROM (cinatra#3068 convergence). A
+// stored `input_schema: {}` is resolved from the installed agent's OAS at
+// execution time, so a screen reading the stored one alone would name no input
+// step for exactly the agents whose form is nevertheless asked.
+import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { readRunTriggerByRunId } from "./trigger-store";
 // Did a confirmed conversation proposal create this run? The one fact the
 // schedule-step picker below cannot read off the trigger row itself.
@@ -561,7 +577,18 @@ export function runDetailInitialStep(params: {
   recommendationHeld: boolean;
   hasScheduleStep: boolean;
   hasExecution: boolean;
+  /**
+   * THE RUN'S OWN INPUT FORM, WHERE ONE IS BEING ASKED (cinatra#3068).
+   *
+   * It heads the ladder because it heads the rail: a run standing at its input
+   * form is standing at the step the drawing highlights, and the form is that
+   * step's screen. `null` — which is every moment no form is open, including a
+   * run that has not been dispatched yet — leaves the S9d/S9f ladder below
+   * exactly as it was.
+   */
+  openInputStepKey?: RunInputStepKey | null;
 }): RunStepSelection {
+  if (params.openInputStepKey) return params.openInputStepKey;
   if (params.hasRecommendationStep && params.recommendationHeld) return "recommendation";
   if (
     runDetailOpensOnSchedule({
@@ -858,6 +885,44 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     ? await deriveRunHitlContext(run, { template }).catch(() => null)
     : null;
 
+  // ── THE RUN'S OWN INPUT STEPS (cinatra#3068) ─────────────────────────────
+  //
+  // The first step a person meets on this page is the agent's own input form,
+  // and it was the ONE moment of the run that did not read as a step: it was
+  // drawn inside a step-less "Agentic Run Progress" panel with no step list
+  // beside it, while every later moment is an entry in the rail with its own
+  // screen in the detail column. The forms are named here, from the template's
+  // declared inputs and what the run already carries — the same walk the setup
+  // loop makes — so the rail can carry them from this page's FIRST render.
+  //
+  // WHICH form is open is the run's own answer, and the discriminator is the
+  // interrupt rather than the status: a setup-loop pause and a mid-run review
+  // gate are both `pending_approval`.
+  //
+  // THE RESOLVED SCHEMA, not the stored one: `execution.ts` walks
+  // `resolveTemplateInputSchema(template)`, which derives the fields from the
+  // installed agent's OAS when the row's own schema is empty. Reading
+  // `template.inputSchema` here would name no step for precisely the agents
+  // whose form the loop still asks (cinatra#3068 convergence).
+  const resolvedInputSchema = await resolveTemplateInputSchema(template);
+  const atInputMoment = runAtInputMoment({
+    runStatus: run?.status ?? null,
+    interruptReviewTaskId: initialHitlContext?.reviewTaskId ?? null,
+  });
+  const runInputSteps = buildRunInputSteps({
+    required: resolvedInputSchema.required,
+    properties: resolvedInputSchema.properties,
+    inputParams,
+    atInputMoment,
+  });
+  // AND ONLY WHILE THE RUN IS AT ITS INPUT. Once every form is answered the run
+  // has left its first step behind and this rail is the schedule /
+  // recommendation / review rail it has always been — and a run that never
+  // answered its form but failed, was cancelled, or is paused at a mid-run
+  // review gate is not at its input either, so it keeps the surface it had.
+  const inputStepsInRail = runCarriesInputSteps(runInputSteps, atInputMoment);
+  const openInputStepKey = openRunInputStepKey(runInputSteps);
+
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
   // pending_input runs skip auto-naming to avoid wasting numbered slots.
@@ -1090,6 +1155,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
   // show, and plan (A) §7.2 step 5 forbids showing one with the schedule.
   const initialStep = runDetailInitialStep({
+    openInputStepKey,
     hasRecommendationStep,
     recommendationHeld,
     hasScheduleStep: scheduleRailRef !== null,
@@ -1168,89 +1234,17 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   />
                 </LifecycleCardSurfaceProvider>
               ) : null;
-              // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
-              // them: the recommendation at the trigger position (plan (A) §6.2
-              // — "the top entry on the step rail, ahead of the work steps it
-              // would authorize"), then the schedule "above '1 Review'" (§7.2
-              // step 5). Built before the rail below, because the rail renumbers
-              // around however many there are.
-              const railSteps: RunSurfaceRailStep[] = [];
-              if (hasRecommendationStep) {
-                railSteps.push({
-                  key: "recommendation",
-                  row: (
-                    <RecommendationRailStepRow
-                      displayStep={railSteps.length + 1}
-                      settled={recommendationEntry === "settled"}
-                    />
-                  ),
-                  // THE SAME MOUNT the run detail draws below — not a second
-                  // one. Only one of the two slots is ever rendered, so the chip
-                  // row the step opens is the chip row this screen hosts. It is
-                  // handed over BARE: the card is the whole surface of this step
-                  // (§V — "the row is the whole card"), and a wrapper would be a
-                  // new anchor on a surface whose closed set is ratified.
-                  //
-                  // It is NULL on the branch whose panel draws the card —
-                  // there `recommendationCardNode` is null because this screen
-                  // mounts no card at all — so that step opens nothing, the run
-                  // detail stays as this screen composed it, and the decided
-                  // summary the row stands for is the one already in that panel
-                  // (`RunSurfaceRailStep.surface`). On every other branch this
-                  // IS the surface, settled or live alike.
-                  surface: recommendationCardNode,
-                });
-              }
-              if (scheduleRailRef) {
-                railSteps.push({
-                  key: "schedule",
-                  row: (
-                    <ScheduleRailStepRow host="run_card" displayStep={railSteps.length + 1} />
-                  ),
-                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
-                  // — "The run page's prompt window shows below the scheduler"
-                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
-                  // none: the plan names the run page.
-                  surface: (
-                    <ScheduleStepSurface
-                      host="run_card"
-                      cardRef={scheduleRailRef}
-                      promptWindowTemplateId={template.id}
-                      // cinatra#2933 -- the window under this scheduler is the
-                      // RUN's conversation, gated on the run's own access.
-                      runId={run?.id ?? null}
-                      canRespondInWindow={canRespondInWindow}
-                    />
-                  ),
-                });
-              }
-              // The page's OWN rail rows. The gate rows above are drawn by
-              // their own step components rather than by this rail, because the
-              // live orchestrator column is the rail on the flow branch
-              // (`screenHostsStepRail`) and the plan puts both gate steps above
-              // the run's steps on every branch — not only the one where the
-              // server-rendered rail happens to draw.
-              const railDraws = screenDrawsPageRail({
-                runStatus: run.status,
-                railEntryCount: rail.entries.length,
-                gateStepCount: railSteps.length,
-                panel: runDetailPanel,
-                stepperStepCount: stepperSteps.length,
-              });
-              const railNode = railDraws ? (
-                <RunStepRailPanel
-                  entries={rail.entries}
-                  activeOrdinal={rail.activeOrdinal}
-                  reviewHrefBase={reviewHrefBase}
-                  stepOffset={railSteps.length}
-                />
-              ) : null;
               // A COLUMN with a GAP, not a margin on the row above. The card
               // below resolves its own state on the client and renders NO DOM at
               // all when there is no hold — the overwhelmingly common case — so a
               // wrapper carrying `mb-4` would leave a 1rem hole above the panel on
               // every ordinary run. A flex gap only ever applies BETWEEN rendered
               // children, which is the spacing that was actually meant.
+              // THE RUN DETAIL, COMPOSED BEFORE THE RAIL (cinatra#3068).
+              // The rail's own steps are asked whether they can be opened, and
+              // that question is answered against the run detail they fall back
+              // to — so the detail has to exist before the steps are built. It
+              // reads nothing from them, so the move is an ordering only.
               const detailNode = (
                 <>
               {/* Run-start recommendation hold, through the ONE card
@@ -1378,6 +1372,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // instead of being drawn by a second column beside it.
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
+                    inputStepInRail={inputStepsInRail}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -1413,11 +1408,98 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     initialStreamedText={run.streamedText ?? ""}
                     initialHitlContext={initialHitlContext}
                     initialReviewGate={initialReviewGate}
+                    inputStepInRail={inputStepsInRail}
                   />
                 )
               )}
                 </>
               );
+              // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
+              // them: the recommendation at the trigger position (plan (A) §6.2
+              // — "the top entry on the step rail, ahead of the work steps it
+              // would authorize"), then the schedule "above '1 Review'" (§7.2
+              // step 5). Built before the rail below, because the rail renumbers
+              // around however many there are.
+              const railSteps: RunSurfaceRailStep[] = [];
+              // AND THE RUN'S OWN INPUT FORMS AHEAD OF BOTH (cinatra#3068).
+              // The input form is the first step a person meets on this page,
+              // so it is the rail's first entry — one per form the agent asks,
+              // in the order it asks them. Each opens the run detail beside it,
+              // where the panel draws the form itself; a form the run has not
+              // reached yet is drawn muted and opens nothing.
+              if (inputStepsInRail) {
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
+              }
+              if (hasRecommendationStep) {
+                railSteps.push({
+                  key: "recommendation",
+                  row: (
+                    <RecommendationRailStepRow
+                      displayStep={railSteps.length + 1}
+                      settled={recommendationEntry === "settled"}
+                    />
+                  ),
+                  // THE SAME MOUNT the run detail draws below — not a second
+                  // one. Only one of the two slots is ever rendered, so the chip
+                  // row the step opens is the chip row this screen hosts. It is
+                  // handed over BARE: the card is the whole surface of this step
+                  // (§V — "the row is the whole card"), and a wrapper would be a
+                  // new anchor on a surface whose closed set is ratified.
+                  //
+                  // It is NULL on the branch whose panel draws the card —
+                  // there `recommendationCardNode` is null because this screen
+                  // mounts no card at all — so that step opens nothing, the run
+                  // detail stays as this screen composed it, and the decided
+                  // summary the row stands for is the one already in that panel
+                  // (`RunSurfaceRailStep.surface`). On every other branch this
+                  // IS the surface, settled or live alike.
+                  surface: recommendationCardNode,
+                });
+              }
+              if (scheduleRailRef) {
+                railSteps.push({
+                  key: "schedule",
+                  row: (
+                    <ScheduleRailStepRow host="run_card" displayStep={railSteps.length + 1} />
+                  ),
+                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
+                  // — "The run page's prompt window shows below the scheduler"
+                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
+                  // none: the plan names the run page.
+                  surface: (
+                    <ScheduleStepSurface
+                      host="run_card"
+                      cardRef={scheduleRailRef}
+                      promptWindowTemplateId={template.id}
+                      // cinatra#2933 -- the window under this scheduler is the
+                      // RUN's conversation, gated on the run's own access.
+                      runId={run?.id ?? null}
+                      canRespondInWindow={canRespondInWindow}
+                    />
+                  ),
+                });
+              }
+              // The page's OWN rail rows. The gate rows above are drawn by
+              // their own step components rather than by this rail, because the
+              // live orchestrator column is the rail on the flow branch
+              // (`screenHostsStepRail`) and the plan puts both gate steps above
+              // the run's steps on every branch — not only the one where the
+              // server-rendered rail happens to draw.
+              const railDraws = screenDrawsPageRail({
+                runStatus: run.status,
+                railEntryCount: rail.entries.length,
+                gateStepCount: railSteps.length,
+                panel: runDetailPanel,
+                stepperStepCount: stepperSteps.length,
+              });
+              const railNode = railDraws ? (
+                <RunStepRailPanel
+                  entries={rail.entries}
+                  activeOrdinal={rail.activeOrdinal}
+                  reviewHrefBase={reviewHrefBase}
+                  stepOffset={railSteps.length}
+                />
+              ) : null;
               // THE TWO COLUMNS. With a gate step, the frame owns them: the
               // steps head the rail and they open ON THE RIGHT, in the run
               // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,

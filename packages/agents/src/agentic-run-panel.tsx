@@ -201,6 +201,21 @@ type AgenticRunPanelProps = {
    */
   initialHitlContext?: HitlContext | null;
   /**
+   * DOES THE PAGE'S RAIL ALREADY CARRY THE RUN'S INPUT STEP? (cinatra#3068)
+   *
+   * The run page drew this panel's "Agentic Run Progress" heading, with its
+   * "Awaiting input" badge, over the agent's own input form — the first thing a
+   * person meets, before anything has run — while every later moment of the
+   * same run read as a step: an entry in the rail, the step's own screen in the
+   * detail column. When the screen has given that moment its own rail entry,
+   * the heading retires: the rail names the step, and this panel draws the form
+   * it has always drawn.
+   *
+   * Absent ⇒ the heading and its badge are drawn exactly as before, which keeps
+   * the chat thread's run card — a host with no rail beside it — unchanged.
+   */
+  inputStepInRail?: boolean;
+  /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
    *
@@ -411,6 +426,7 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  inputStepInRail = false,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -1686,6 +1702,11 @@ export function AgenticRunPanel({
   return (
     <>
     <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
+      {/* THE HEADING RETIRES FOR THE RUN'S FIRST STEP (cinatra#3068): the rail
+          beside this column names that step and the form below is its screen,
+          so a progress heading over a run that has produced no progress is the
+          one reading this surface must not make. Every other host keeps it. */}
+      {inputStepInRail ? null : (
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
         <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">
@@ -1695,6 +1716,7 @@ export function AgenticRunPanel({
           <span>{runStatusBadgeLabel(status, statedWaitDescriptor)}</span>
         </Badge>
       </div>
+      )}
 
       {/* The run-start recommendation hold, through the ONE card (cinatra#2568
           AC-5). The panel's DIRECT chip-row mount — and the local hold state it

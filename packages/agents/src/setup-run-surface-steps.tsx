@@ -25,11 +25,21 @@ import { RunSurfaceRailRow } from "./run-surface-rail";
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 import {
   isRunSurfaceStepSelectable,
+  type RunSurfaceRailLabelledKey,
   type RunSurfaceRailStep,
 } from "./run-surface-rail-step";
 
-/** A setup step as the screen describes it: everything but its row. */
-export type SetupRailStep = Omit<RunSurfaceRailStep, "row">;
+/**
+ * A setup step as the screen describes it: everything but its row.
+ *
+ * Its key is one of the three the rail NAMES, because this builder labels each
+ * row from `RUN_SURFACE_RAIL_LABELS`. The run page's own input steps carry
+ * their form's declared title instead and are built by
+ * `run-input-rail-steps.tsx` (cinatra#3068).
+ */
+export type SetupRailStep = Omit<RunSurfaceRailStep, "row" | "key"> & {
+  key: RunSurfaceRailLabelledKey;
+};
 
 /**
  * The same steps, each with the row the rail draws for it.
