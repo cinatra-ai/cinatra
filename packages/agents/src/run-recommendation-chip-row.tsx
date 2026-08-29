@@ -1967,6 +1967,7 @@ export function RecommendationHoldCard({
   agentPackageName,
   wireRef,
   onStateChange,
+  initialState = null,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
@@ -1994,6 +1995,29 @@ export function RecommendationHoldCard({
    * Hosts with no stream pass `null` and still get mount/focus/decision resolves.
    */
   wireRef?: string | null;
+  /**
+   * THE HOST'S OWN READING, RESOLVED BEFORE THE FIRST PAINT (cinatra#3047,
+   * review point C — the re-shoot round).
+   *
+   * WHAT WAS WRONG WITHOUT IT. Everything this card drew came from one client
+   * round trip made after hydration, and until that answer landed the card drew
+   * NO DOM AT ALL (the two returns below). For a LIVE hold that is right — there
+   * is nothing to say about a question whose offer has not been read. For a
+   * SETTLED step it is not: the run's answer is already on file, the host that
+   * mounted this card read the same run's rows to know the step is settled at
+   * all, and a step drawn only after a round trip is a step drawn NEVER when
+   * that round trip does not land. That is what the re-shoot photographed —
+   * a settled Skills step over an empty detail column — and the frame around it
+   * cannot catch it, because a surface that is an ELEMENT is a non-null value
+   * however the component later resolves (`run-surface-rail-step.ts`).
+   *
+   * So a host that has already resolved this run's state SERVER-SIDE hands it
+   * over, and the card draws it immediately. It is a READING, not an override:
+   * the card still resolves for itself, and the moment its own answer lands
+   * that answer wins — same run, fresher reading. A host with nothing to hand
+   * over passes nothing and is unchanged.
+   */
+  initialState?: RunRecommendationHoldState | null;
 }): ReactElement | null {
   // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
   // it — the per-surface matrix that withheld this card from the widget is gone.
@@ -2033,14 +2057,31 @@ export function RecommendationHoldCard({
     reloadToken,
     auth,
   });
-  const state = resolution.state;
+  // WHAT THE CARD DRAWS: its own answer where it has one, the host's server-side
+  // reading until then. `resolution.state` is non-null only on `answered`, so
+  // the fallback covers exactly the two readings that drew nothing before — the
+  // resolve still in flight, and the resolve that gave up.
+  const state = resolution.state ?? initialState;
 
   // A surface with NO declared host never asks, so its reading is not "waiting"
   // — nothing is coming. Saying so is what stops a host that withholds on
   // `resolving` from withholding for ever on a surface this card never reads on.
-  const published: RunRecommendationHoldResolution = present
-    ? resolution
-    : RECOMMENDATION_UNREADABLE;
+  //
+  // AND WHAT IT PUBLISHES IS WHAT IT DRAWS. A host's own reading is an answer
+  // about this run — it was resolved by the same core, through the same access
+  // door — so publishing "still resolving" while drawing that answer would put
+  // the card's two statements about one run in contradiction, which is the
+  // seam this card exists to close. A host that hands over nothing publishes
+  // exactly what it always did.
+  const published: RunRecommendationHoldResolution = useMemo(
+    () =>
+      !present
+        ? RECOMMENDATION_UNREADABLE
+        : resolution.phase !== "answered" && initialState !== null
+          ? { phase: "answered", state: initialState }
+          : resolution,
+    [present, resolution, initialState],
+  );
 
   // Published on every change, and only on a change. `onStateChange` is in the
   // dependency list, so a caller passing a fresh closure every render is told

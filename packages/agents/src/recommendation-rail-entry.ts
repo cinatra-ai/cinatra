@@ -116,8 +116,22 @@ export function recommendationRailStepOpens(params: {
   /** Did this run's own evidence record an answer? `recommendationDecidedForRun`
    *  is the one definition; omit it to leave the status-only reading. */
   decided?: boolean;
+  /**
+   * THE READING ITSELF, WHERE THE CALLER HAS IT (cinatra#3047, convergence).
+   *
+   * Everything above is a PROXY for "will the card draw?". A caller that has
+   * already resolved the settled reading server-side does not need a proxy: a
+   * reading of `none` is the card's own answer that it will draw no DOM, and a
+   * `released` park can carry one — a hold released with no selection and no
+   * skip on file resolves to `none`, and the status-only answer opens that step
+   * over an empty column. Pass `true` ONLY for a reading that answered `none`;
+   * a reading that failed to resolve states nothing here, because a failed read
+   * is not an empty decision and the card's own read may still answer.
+   */
+  settledReadingIsEmpty?: boolean;
 }): boolean {
   if (params.entry === "live") return true;
   if (params.entry !== "settled") return false;
+  if (params.settledReadingIsEmpty === true) return false;
   return params.parkStatus === "released" || params.decided === true;
 }
