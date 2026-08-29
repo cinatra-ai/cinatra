@@ -445,8 +445,16 @@ export type ComposerFocusStore = {
    * LATEST registration owns the action, so a re-registering card replaces its
    * own closure rather than accumulating stale ones.
    */
-  registerEligible: (ref: string, comment: ComposerCommentAction) => () => void;
-  /** The comment path of an eligible gate, or `undefined` if it is not one. */
+  registerEligible: (ref: string, comment?: ComposerCommentAction) => () => void;
+  /**
+   * The comment path of an eligible gate, or `undefined` if it is not one.
+   *
+   * `undefined` is now TWO answers rather than one, and the difference does not
+   * matter to any caller: the ref is not eligible at all, or it is eligible and
+   * its card has no comment road. A schedule card is the second — its typed road
+   * is the server's grant, not a comment — and the one consumer of this lookup
+   * already refuses an absent action rather than inventing one.
+   */
   getCommentAction: (ref: string) => ComposerCommentAction | undefined;
   /** The reader chose this card. */
   focus: (ref: string) => void;
@@ -455,7 +463,7 @@ export type ComposerFocusStore = {
 };
 
 export function createComposerFocusStore(): ComposerFocusStore {
-  const entries = new Map<string, { count: number; comment: ComposerCommentAction }>();
+  const entries = new Map<string, { count: number; comment?: ComposerCommentAction }>();
   let focused: string | null = null;
   let released = false;
   // Cached because `useSyncExternalStore` compares snapshots by identity: a
@@ -545,6 +553,107 @@ export function useComposerFocusStore(): ComposerFocusStore | null {
   return useContext(ComposerFocusContext);
 }
 
+// ---------------------------------------------------------------------------
+// THE SETTLE BUS (cinatra#2853, the picture leg).
+//
+// THE DEFECT IT CLOSES. A card re-resolved on mount and on window focus, and on
+// nothing else. So a decision taken through the card's OWN button settled it —
+// the button calls `refresh()` — while a decision taken any other way in the
+// same page session did not: the gate was resolved, the person was answered in
+// the conversation, and the card underneath kept drawing `pending` with its
+// terminal Approve and Reject still pressable until the thread was re-opened.
+// Plan (A) §4.1 is explicit that the card "says in place what it did"; a card
+// still offering a decision over a resolved gate says the opposite.
+//
+// WHAT IT IS. One announcement — "this ref has been decided" — and a per-ref
+// counter every mounted card for that ref folds into its reload token. It
+// carries NO state about the decision: what settled the gate is the server's
+// answer, and the card re-reads it under the reader's own access exactly as it
+// does on mount. The bus can therefore only ever cost a re-resolve, which is
+// why nothing that publishes on it needs to be trusted.
+//
+// WHO ANNOUNCES. Two roads, and the card takes whichever arrives first:
+//   · THE DECIDE'S OWN RESULT — the conversation announces the refs a message
+//     carried a grant for once that turn has finished, because the one thing
+//     that could have pressed them is that message's own single-use grant;
+//   · THE GATE ROW — the conversation's registry of open gates announces a card
+//     whose gate has closed underneath it.
+// A card's own button announces too, so a gate drawn twice (a run card and a
+// thread card for one run) settles in both places rather than in the one that
+// was pressed.
+// ---------------------------------------------------------------------------
+
+/** Announce and observe "this card has been decided" within one page session. */
+export type LifecycleCardSettleBus = {
+  subscribe: (listener: () => void) => () => void;
+  /** How many times this ref has been announced. Compared BY VALUE. */
+  settledAt: (ref: string) => number;
+  /** Say that this ref has been decided. Costs the mounted cards a re-resolve. */
+  announceSettled: (ref: string) => void;
+};
+
+export function createLifecycleCardSettleBus(): LifecycleCardSettleBus {
+  const generations = new Map<string, number>();
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    settledAt(ref) {
+      return generations.get(ref) ?? 0;
+    },
+    announceSettled(ref) {
+      // An empty ref is not an address. Announcing one would bump every card
+      // that asked about the empty string, which is none of them today and is
+      // not a behaviour worth leaving available.
+      if (typeof ref !== "string" || ref.length === 0) return;
+      generations.set(ref, (generations.get(ref) ?? 0) + 1);
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+const LifecycleCardSettleContext = createContext<LifecycleCardSettleBus | null>(null);
+
+/**
+ * Declare that this subtree's cards may be told a decision landed. Mounted by
+ * the conversation around the transcript, for the same reason the composer
+ * binding is: the fact belongs to the pair, not to one card. A surface that
+ * declares none keeps the mount-and-focus behaviour it has always had.
+ */
+export function LifecycleCardSettleProvider({
+  bus,
+  children,
+}: {
+  bus: LifecycleCardSettleBus;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <LifecycleCardSettleContext.Provider value={bus}>{children}</LifecycleCardSettleContext.Provider>
+  );
+}
+
+export function useLifecycleCardSettleBus(): LifecycleCardSettleBus | null {
+  return useContext(LifecycleCardSettleContext);
+}
+
+const zeroGeneration = (): number => 0;
+
+/**
+ * The settle generation for one ref — a number to fold into a reload token.
+ *
+ * Zero, always, with no provider: a surface that declares no bus keeps exactly
+ * the resolve cadence it had before this existed.
+ */
+export function useLifecycleCardSettleSignal(ref: string): number {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.settledAt(ref) : 0), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, zeroGeneration);
+}
+
 const NOOP_UNSUBSCRIBE = (): void => {};
 const noopSubscribe = (): (() => void) => NOOP_UNSUBSCRIBE;
 const emptySnapshot = (): ComposerFocusSnapshot => EMPTY_FOCUS_SNAPSHOT;
@@ -598,7 +707,16 @@ export type ComposerFocusBinding = {
 export function useComposerFocusBinding(params: {
   ref: string;
   eligible: boolean;
-  comment: ComposerCommentAction;
+  /**
+   * This card's own comment path, where it HAS one.
+   *
+   * Omitted by every card whose typed road is not a comment (cinatra#2853, the
+   * picture leg). Binding is what puts a card's ref in the claim the send
+   * carries, and until this parameter was optional only the review card could
+   * ever be in it — which is why a typed change to a schedule reached the
+   * producer and drew a second card instead of acting on the bound one.
+   */
+  comment?: ComposerCommentAction;
 }): ComposerFocusBinding {
   const { ref, eligible, comment } = params;
   const store = useComposerFocusStore();
@@ -606,13 +724,19 @@ export function useComposerFocusBinding(params: {
   const commentRef = useRef(comment);
   commentRef.current = comment;
   const stableComment = useCallback<ComposerCommentAction>(
-    (text) => commentRef.current(text),
+    (text) => commentRef.current!(text),
     [],
   );
+  // WHETHER there is a comment road, never WHICH one. A card that declares none
+  // registers `undefined`, so the lookup keeps answering "not a comment gate"
+  // for it rather than handing back a closure that would refuse on call; and
+  // depending on the BOOLEAN keeps the effect off the closure identity, which is
+  // the render loop the stable delegator above exists to prevent.
+  const hasComment = comment !== undefined;
   useEffect(() => {
     if (!store || !eligible) return;
-    return store.registerEligible(ref, stableComment);
-  }, [store, eligible, ref, stableComment]);
+    return store.registerEligible(ref, hasComment ? stableComment : undefined);
+  }, [store, eligible, ref, hasComment, stableComment]);
   const target = resolveComposerTarget(snapshot);
   const bound = target.kind === "target" && target.ref === ref;
   // The press is a TOGGLE on the binding as the reader sees it, not on the

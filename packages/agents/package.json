@@ -89,6 +89,8 @@
     "./trigger-service": "./src/trigger-service.ts",
     "./trigger-schedule-propose": "./src/trigger-schedule-propose.ts",
     "./trigger-recurrence": "./src/trigger-recurrence.ts",
+    "./trigger-duration-estimate": "./src/trigger-duration-estimate.ts",
+    "./trigger-duration-copy": "./src/trigger-duration-copy.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",

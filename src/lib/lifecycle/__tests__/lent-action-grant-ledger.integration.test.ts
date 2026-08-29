@@ -320,6 +320,42 @@ maybe("the lent-action grant ledger, on a real Postgres", () => {
     expect((await spend("db-9", "u1", "o1", "fp9", "comment")).ok).toBe(false);
   });
 
+  it("a typed SCHEDULE ADJUST is one grant, spent ONCE — cinatra#2853, the picture leg", async () => {
+    // THE ROAD THE PICTURES FOUND UNREACHABLE. A person typed "make it 8 in the
+    // morning on weekdays" at a live schedule card and no grant was minted at
+    // all, because the card never registered itself as bindable; the assistant
+    // called the producer again and drew a SECOND proposal underneath the first.
+    // With the card in the claim, the send mints the schedule card's own
+    // `adjust` — and the ledger's whole promise is what this pins: ONE row per
+    // message, spendable ONCE, against THIS card and no other.
+    const g = {
+      jti: "db-10", orgId: "o1", userId: "u1", messageId: "m10",
+      fp: "fp-schedule-card", control: "adjust",
+      text: "make it 8 in the morning on weekdays", expiresAt: nowSec() + 600,
+    };
+    await record(g);
+
+    // ONE MESSAGE, ONE GRANT: a second mint for the same message writes no
+    // second spendable row, so a turn cannot adjust twice.
+    await record({ ...g, jti: "db-10b", fp: "fp-schedule-card", control: "adjust" });
+    expect((await spend("db-10b", "u1", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
+
+    // It is THIS card's grant: another card's fingerprint takes nothing, and
+    // the taking does not burn the row.
+    expect((await spend("db-10", "u1", "o1", "fp-a-second-proposal", "adjust")).ok).toBe(false);
+    // And another person's spend takes nothing either.
+    expect((await spend("db-10", "u2", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
+
+    // The adjust lands once, carrying the person's own words and nothing else.
+    expect(await spend("db-10", "u1", "o1", "fp-schedule-card", "adjust")).toEqual({
+      ok: true,
+      text: "make it 8 in the morning on weekdays",
+    });
+    // And there is no second decide in that message — which is what stops one
+    // typed change from becoming an adjust AND a confirm.
+    expect((await spend("db-10", "u1", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
+  });
+
   it("the PERSON'S OWN WORDS come back with the spend — the model supplies none", async () => {
     const g = {
       jti: "db-7", orgId: "o1", userId: "u1", messageId: "m7", fp: "fp7",

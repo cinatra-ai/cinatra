@@ -25,6 +25,7 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+import { durationCopy } from "./trigger-duration-copy";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
 // `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
@@ -106,18 +107,8 @@ export type TriggerScreenFormValues = FormValues;
 // Helpers
 // -----------------------------------------------------------------------------
 
-function formatRange(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} hr`;
-}
-
-function durationCopy(d: DurationEstimate | null): string {
-  if (!d) return "Unavailable.";
-  const min = formatRange(d.prepMinSeconds + d.gatedMinSeconds);
-  const max = formatRange(d.prepMaxSeconds + d.gatedMaxSeconds);
-  return `${min}–${max}.`;
-}
+// The wording is the LEAF's now (cinatra#2853, the picture leg): the schedule
+// card in a conversation draws the same row and must draw it the same way.
 
 /**
  * THE FORM'S INITIAL VALUES, FROM THE ROW THE RUNNER'S DECISION NAMED

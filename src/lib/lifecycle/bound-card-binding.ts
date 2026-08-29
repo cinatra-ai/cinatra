@@ -194,12 +194,21 @@ export type OpenCardCount = { readonly count: number; readonly complete: boolean
  *
  * Identifier-free on purpose — it is persisted into an LLM-visible transcript —
  * and it names the way OUT, because a refusal that does not is just a wall.
+ *
+ * BOTH WAYS OUT (cinatra#2853, the picture leg). Plan (A) 2.1 writes this
+ * refusal with TWO sentences after the count, and the second one was dropped:
+ * "To keep chatting normally, press that control twice on any one of them." A
+ * person whose message went nowhere has two things they may want — to reach one
+ * of the cards, or to stop being routed at a card at all — and the refusal that
+ * named only the first left the second one undiscoverable from the one place it
+ * is ever needed. It is restored verbatim and pinned by a test.
  */
 export function severalCardsWaitingRefusal(count: number): string {
   return (
     `${count} cards are waiting for you, so nothing was done to any of them. ` +
     `Choose the one you mean — press its “Reply from the chat box” control — and ` +
-    `say it again.`
+    `say it again. To keep chatting normally, press that control twice on any ` +
+    `one of them.`
   );
 }
 

@@ -185,9 +185,12 @@ import {
 } from "@/components/ui/select";
 
 import {
+  useComposerFocusBinding,
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useLifecycleCardSettleBus,
+  useLifecycleCardSettleSignal,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS, applyArmedScheduleFill } from "./trigger-recurrence";
@@ -403,16 +406,52 @@ export function ScheduleProposalCard({
   }
   const [reloadToken, setReloadToken] = useState(0);
 
+  // THE SAME-SESSION SETTLE (cinatra#2853, the picture leg) — the same seam the
+  // review card takes, on the ref this card is CURRENTLY drawn from, so an
+  // adjust that replaced the ref is answered about the proposal in front of the
+  // reader and not about the one it replaced.
+  const settleSignal = useLifecycleCardSettleSignal(liveRef);
+  const settleBus = useLifecycleCardSettleBus();
   const resolved = useLifecycleCardResolve({
     viewType: "trigger_schedule_proposal",
     ref: liveRef,
     enabled: present,
-    reloadToken,
+    reloadToken: reloadToken + settleSignal,
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  // ONE BINDING ROAD FOR EVERY LIFECYCLE CARD KIND (cinatra#2853, the picture
+  // leg; plan (A) §2.2 — "the prompt window acts on the ACTIVE card").
+  //
+  // THE DEFECT THIS CLOSES. The server road for a typed schedule change has been
+  // complete since this branch opened: the schedule card lends `adjust`, the
+  // grant carries it and the decide road presses it through the card's own
+  // entry. None of it was reachable, because the claim a send carries is built
+  // from the refs cards REGISTER, and only the review card registered. So a
+  // person who typed "make it 8 in the morning on weekdays" at a schedule card
+  // minted no grant at all; the assistant answered the only way left to it and
+  // called the PRODUCER again, drawing a SECOND proposal underneath the first
+  // and leaving the stale one live with its own Confirm.
+  //
+  // THE REF IS THE LIVE ONE, not the wire one: Adjust re-proposes and mints a
+  // new ref, and the card the reader is looking at after an adjust is the one a
+  // second message must reach.
+  //
+  // NO COMMENT ROAD, AND NO CHROME. This card has no comment path — its typed
+  // road is the grant the send mints — and §VI draws no pick control on it, so
+  // none is invented here. What that leaves is stated as a deviation: a lone
+  // schedule card binds with no press, exactly as a lone review does, and with a
+  // review card open beside it nothing routes and only the review card offers
+  // the control the refusal names.
+  const composerEligible =
+    state !== null &&
+    state.state === "pending" &&
+    state.canDecide &&
+    (body?.phase === "proposal" || body?.phase === "expired");
+  useComposerFocusBinding({ ref: liveRef, eligible: composerEligible });
 
   const decide = useCallback(
     async (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => {
@@ -429,9 +468,16 @@ export function ScheduleProposalCard({
       ) {
         refresh();
       }
+      // AND EVERY OTHER COPY OF THIS CARD, for the reason the review card states
+      // where it does the same: one proposal can be drawn on more than one
+      // surface in one page, and settling only the copy that was pressed leaves
+      // the others offering a decision that has already been taken.
+      if (outcome.kind !== "not-permitted" && outcome.kind !== "error") {
+        settleBus?.announceSettled(liveRef);
+      }
       return outcome;
     },
-    [liveRef, auth, refresh],
+    [liveRef, auth, refresh, settleBus],
   );
 
   if (!present || state === null || body === null) return null;
