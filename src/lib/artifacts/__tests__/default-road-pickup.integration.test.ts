@@ -392,12 +392,15 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     expect((ideas.decided_verdict as { form: string }).form).toBe("application/json");
     expect(await objectTypeOf(ideas.artifact_id!)).toBe(JSON_BASE);
 
-    // The produced event carries the producing extension and its pinned version.
+    // The produced event carries the producing extension — the base the ladder chose.
     const events = await producedEventsFor(runId);
     expect(events).toHaveLength(2);
     for (const e of events) {
-      expect(e.producing_extension_version).toBe("1.2.3");
       expect([TEXT_BASE_EXT, JSON_BASE_EXT]).toContain(e.producing_extension);
+      // The base the ladder chose is a different extension from the agent
+      // template, so its version is recorded as an honest NULL, never the
+      // template's pinned version.
+      expect(e.producing_extension_version).toBeNull();
     }
     expect(neverAsk).not.toHaveBeenCalled();
   });

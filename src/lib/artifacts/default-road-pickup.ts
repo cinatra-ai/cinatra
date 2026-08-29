@@ -436,7 +436,11 @@ export async function pickUpDefaultRoadItems(
       nodeId: null,
       path: "default_road",
       extension: target.extension,
-      extensionVersion: input.packageVersion,
+      // The producing extension here is the BASE the ladder chose, not the
+      // agent package, so the agent template's pinned version is not this
+      // extension's version. The column is nullable and NULL reads as "the
+      // emitter did not record one" — an honest absence, never a wrong value.
+      extensionVersion: null,
       title: `${input.templateName ?? "Agent"} — ${item.outputName}`,
       mime: verdict.form,
       content: item.content,
