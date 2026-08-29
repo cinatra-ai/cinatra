@@ -108,6 +108,10 @@ const maybe = DSN ? describe : describe.skip;
 const PERSON = { userId: "usr_realstore_1", orgId: "org_realstore_1" };
 const RUN = "w5c-armed-save-road";
 const REF = encodeScheduleRunRef({ runId: RUN })!;
+/** THE SAME FORM ON THE NEXT TURN. The reference is minted fresh every turn and
+ *  its encoding is randomised, so this is a DIFFERENT STRING addressing the same
+ *  run — which is exactly what the save arm is handed after a fill. */
+const REF_NEXT_TURN = encodeScheduleRunRef({ runId: RUN })!;
 
 const ACTOR: ReviewActorContext = {
   actor: { actorType: "human", source: "agent", userId: PERSON.userId, orgId: PERSON.orgId },
@@ -165,13 +169,13 @@ const BOOTSTRAP = [
 ];
 
 /** The person sends a message with the armed form bound. */
-function sendAs(messageId: string) {
+function sendAs(messageId: string, cardRef: string = REF) {
   grantSpent = false;
   const minted = mintLentActionGrant({
     userId: PERSON.userId,
     orgId: PERSON.orgId,
     messageId,
-    cardRef: REF,
+    cardRef,
     control: "save",
   });
   if (!minted) throw new Error("mint failed");
@@ -285,6 +289,60 @@ maybe("the armed-schedule change road, on a real database", () => {
         `row after ask ${i}`,
       ).toBe(`2026-09-${day}T10:30:00.000Z`);
     }
+  });
+
+  it("the next turn's reference is a DIFFERENT STRING — the placement is still found", async () => {
+    // WHAT THE PICTURES WOULD HAVE MEASURED AGAIN (convergence round 2,
+    // finding 1). The two turns of "place, then save" never hold the same ref
+    // string: the window mints one per turn and the encoding is randomised. A
+    // carry matched on the bytes finds nothing here, whatever the rows say.
+    expect(REF_NEXT_TURN).not.toBe(REF);
+    const resolve = vi.fn(async () => armedResolution("2026-09-01T09:00") as never);
+    await recordBoundScreenFill({
+      ref: REF,
+      values: { scheduledAt: "2026-09-04T08:15" },
+      actorCtx: ACTOR,
+      messageId: "turn_1",
+      deps: { resolve: resolve as never, surface: "armed-trigger" },
+    });
+
+    sendAs("turn_2", REF_NEXT_TURN);
+    const decide = decideAgainstTheStore();
+    const res = await handleLentAction(
+      { ref: REF_NEXT_TURN },
+      { resolve: resolve as never, resolveActor: (async () => ACTOR) as never, decideSchedule: decide as never },
+    );
+    expect((res.structuredContent as { ok: boolean }).ok).toBe(true);
+    expect((await readRunTriggerByRunId(RUN))!.scheduledAt!.toISOString()).toBe(
+      "2026-09-04T08:15:00.000Z",
+    );
+  });
+
+  it("a form whose own row cannot be read carries NOTHING", async () => {
+    // No boundary, no look-back: the alternative is re-applying a placement the
+    // person walked away from (convergence round 2, finding 2). The trigger row
+    // is deleted under the handler, which is what an unreadable row looks like
+    // from here.
+    const resolve = vi.fn(async () => armedResolution("2026-09-01T09:00") as never);
+    await recordBoundScreenFill({
+      ref: REF,
+      values: { scheduledAt: "2026-09-05T08:15" },
+      actorCtx: ACTOR,
+      messageId: "turn_1",
+      deps: { resolve: resolve as never, surface: "armed-trigger" },
+    });
+    await pool.query(`DELETE FROM ${T("agent_run_triggers")} WHERE run_id = $1`, [RUN]);
+
+    sendAs("turn_2");
+    const decide = decideAgainstTheStore();
+    const res = await handleLentAction(
+      { ref: REF },
+      { resolve: resolve as never, resolveActor: (async () => ACTOR) as never, decideSchedule: decide as never },
+    );
+    expect(decide).not.toHaveBeenCalled();
+    expect((res.structuredContent as { message: string }).message).toBe(
+      LENT_ACTION_NOTHING_PLACED_TO_SAVE,
+    );
   });
 
   it("a placement already saved is not re-applied by a later bare ask", async () => {

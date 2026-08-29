@@ -410,8 +410,13 @@ export async function readRunWindowFillsForMessage(
  *     save each other's rows. A row that names nobody (written before this was
  *     recorded) is carried only when it is THIS message's own, which is exactly
  *     what the message-scoped reader did with it before.
- *   · THE SAME FORM. `ref` is the screen's own reference, as above.
- *   · NOT ALREADY SAVED. `since` is the moment the form's own row was last
+ *   · THE SAME FORM — asked of the CALLER, not matched on the bytes. A
+ *     screen's reference is minted fresh on every turn and the armed
+ *     schedule's encoding is randomised, so one form has a different ref
+ *     string in the turn that placed the fill and in the turn that asks to
+ *     save it. `refMatches` is how the caller that knows the ref family says
+ *     whether two of them address one form (convergence round 2, finding 1).
+ *   · NOT ALREADY SAVED, AND FAIL-CLOSED. `since` is the moment the form's own row was last
  *     written — the trigger's `updated_at` — so a placement the person (or the
  *     form's own button) already saved is not re-applied over rows that have
  *     moved on since. Without it, a save asked for today would re-place a fill
@@ -419,7 +424,14 @@ export async function readRunWindowFillsForMessage(
  *
  * THIS MESSAGE'S OWN fills are always included, whatever `since` says: they are
  * newer than any write by construction, and that keeps the same-message road
- * byte-identical to what it was.
+ * byte-identical to what it was. They come LAST, after anything carried, so a
+ * field this turn placed wins over the same field placed earlier.
+ *
+ * WITHOUT A BOUNDARY, NOTHING IS CARRIED. When no `since` can be established —
+ * the form's row cannot be read, or the read throws — the look-back is dropped
+ * rather than run unbounded, and the turn answers "nothing placed" instead of
+ * re-applying a placement the person walked away from (convergence round 2,
+ * finding 2).
  */
 export async function readRunWindowPlacedFills(
   runId: string,
@@ -431,21 +443,68 @@ export async function readRunWindowPlacedFills(
     readonly placedBy?: string | null;
     /** The last time the form's own row was written. */
     readonly since?: Date | null;
+    /**
+     * The same answer, read only if a look-back is actually going to happen.
+     *
+     * It is a THUNK because the form's own row is a second query and a message
+     * that carries nothing does not need it. It is also the fail-closed arm: a
+     * reader that throws, or that cannot say when the row was last written,
+     * yields no boundary, and WITHOUT A BOUNDARY NOTHING IS CARRIED — an
+     * unbounded look-back would re-apply a placement abandoned weeks ago
+     * (convergence round 2, finding 2).
+     */
+    readonly resolveSince?: () => Promise<Date | null>;
+    /**
+     * IS THIS ROW'S REF THE SAME FORM AS `ref`? Defaults to string equality.
+     *
+     * IT HAS TO BE ASKABLE, because a screen reference is not a stable string.
+     * The armed schedule's ref is minted FRESH on every turn and its encoding
+     * is randomised, so the ref the fill row carries and the ref the next turn
+     * presents are different strings for one form — and a carry matched on the
+     * bytes finds nothing, which is the very defect this reader exists to close
+     * (convergence round 2, finding 1). The caller that knows the ref family
+     * decides identity; this leaf never decodes anything.
+     */
+    readonly refMatches?: (rowRef: string) => boolean;
   },
 ): Promise<RunWindowFill[]> {
+  const sameForm = opts.refMatches ?? ((rowRef: string) => rowRef === ref);
+  // ONE READ of the run's window, for both halves of the answer.
   const rows = await readRunWindowMessages(runId);
-  const out: RunWindowFill[] = [];
+  const onForm: RunWindowMessage[] = [];
   for (const row of rows) {
-    if (!row.fill || row.fill.ref !== ref) continue;
-    if (opts.messageId && row.messageId === opts.messageId) {
-      out.push(row.fill);
-      continue;
-    }
-    if (!opts.placedBy || row.placedBy !== opts.placedBy) continue;
-    if (opts.since && row.createdAt.getTime() < opts.since.getTime()) continue;
-    out.push(row.fill);
+    if (row.fill && sameForm(row.fill.ref)) onForm.push(row);
   }
-  return out;
+
+  const own: RunWindowFill[] = [];
+  for (const row of onForm) {
+    if (opts.messageId && row.messageId === opts.messageId) own.push(row.fill!);
+  }
+
+  // WHAT THE EARLIER TURNS LEFT ON THE SAME SCREEN, oldest first, and only
+  // then this message's own — so a field placed twice ends on its newest value,
+  // which is what the person is looking at.
+  const carried: RunWindowFill[] = [];
+  if (opts.placedBy) {
+    let since = opts.since ?? null;
+    if (!since && opts.resolveSince) {
+      since = await opts.resolveSince().catch(() => null);
+    }
+    if (since) {
+      const floor = since.getTime();
+      for (const row of onForm) {
+        if (opts.messageId && row.messageId === opts.messageId) continue;
+        if (row.placedBy !== opts.placedBy) continue;
+        // STRICTLY NEWER THAN THE WRITE. A row stamped at the same instant as
+        // the save is treated as saved, not as pending: the two clocks are not
+        // the same clock, and of the two ways to be wrong, re-applying a change
+        // the person already saved is the one they did not ask for.
+        if (row.createdAt.getTime() <= floor) continue;
+        carried.push(row.fill!);
+      }
+    }
+  }
+  return [...carried, ...own];
 }
 
 /**

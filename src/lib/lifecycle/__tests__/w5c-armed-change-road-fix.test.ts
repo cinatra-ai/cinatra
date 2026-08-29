@@ -61,21 +61,48 @@ vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
       .map((r) => r.fill as Fill | undefined)
       .filter((f): f is Fill => !!f && f.ref === ref),
   // THE READER THIS LEG ADDS: what is placed on that form and NOT YET SAVED.
+  // The MOCK mirrors the real reader's shape — the form asked of `refMatches`
+  // rather than matched on the bytes, the boundary resolved lazily and
+  // FAIL-CLOSED, carried rows strictly newer than the write, this message's own
+  // last. The reader itself is proven against a real database in
+  // `armed-schedule-save-road.integration.test.ts`; what is exercised here is
+  // the handler above it.
   readRunWindowPlacedFills: async (
     _runId: string,
     ref: string,
-    opts: { messageId: string; placedBy?: string | null; since?: Date | null },
-  ) =>
-    windowRows
-      .filter((r) => {
-        const fill = r.fill as Fill | undefined;
-        if (!fill || fill.ref !== ref) return false;
-        if (r.messageId === opts.messageId) return true;
-        if (!opts.placedBy || r.placedBy !== opts.placedBy) return false;
-        if (opts.since && (r.createdAt as Date) < opts.since) return false;
-        return true;
-      })
-      .map((r) => r.fill as Fill),
+    opts: {
+      messageId: string;
+      placedBy?: string | null;
+      since?: Date | null;
+      resolveSince?: () => Promise<Date | null>;
+      refMatches?: (rowRef: string) => boolean;
+    },
+  ) => {
+    const sameForm = opts.refMatches ?? ((rowRef: string) => rowRef === ref);
+    const onForm = windowRows.filter((r) => {
+      const fill = r.fill as { ref: string } | undefined;
+      return !!fill && sameForm(fill.ref);
+    });
+    const own = onForm.filter((r) => r.messageId === opts.messageId);
+    const carried: Array<Record<string, unknown>> = [];
+    if (opts.placedBy) {
+      let since = opts.since ?? null;
+      if (!since && opts.resolveSince) {
+        since = await opts.resolveSince().catch(() => null);
+      }
+      if (since) {
+        for (const r of onForm) {
+          if (r.messageId === opts.messageId) continue;
+          if (r.placedBy !== opts.placedBy) continue;
+          if ((r.createdAt as Date).getTime() <= since.getTime()) continue;
+          carried.push(r);
+        }
+      }
+    }
+    return [...carried, ...own].map(
+      (r) => r.fill as { ref: string; values: Record<string, unknown> },
+    );
+  },
   readRunWindowAttachmentsForMessage: async () => null,
 }));
 
@@ -143,6 +170,10 @@ const PERSON = { userId: "usr_1", orgId: "org_1" };
 const OTHER = { userId: "usr_2", orgId: "org_1" };
 const RUN = "run_armed_fix3";
 const REF = encodeScheduleRunRef({ runId: RUN })!;
+/** THE SAME FORM, ADDRESSED AGAIN. Every turn mints the armed form's reference
+ *  fresh and the encoding is randomised, so this is a DIFFERENT STRING for the
+ *  same run — which is what the road really sees on the turn after a fill. */
+const REF_NEXT_TURN = encodeScheduleRunRef({ runId: RUN })!;
 
 const ACTOR: ReviewActorContext = {
   actor: {
@@ -329,6 +360,95 @@ describe("a bare ask to save saves what the earlier turn placed", () => {
       selection: { ...ARMED.selection, weekdays: [2], hour: 9 },
       timezone: "Europe/Berlin",
     });
+  });
+
+  it("the form's reference is a DIFFERENT STRING next turn — the carry still finds it", async () => {
+    // THE DEFECT THIS PINS (convergence round 2, finding 1). Turn 1 records its
+    // fill under the reference IT was handed; turn 2 is handed a freshly minted
+    // one for the same run. Matched on the bytes, the placement is invisible and
+    // the person is told nothing was placed while they look at a full form.
+    expect(REF_NEXT_TURN).not.toBe(REF);
+    await placeOn("msg_1", { weekdays: [2], hour: 9 });
+    rowClock = new Date("2026-08-29T10:05:00.000Z");
+    grantSpent = false;
+    const minted = mintLentActionGrant({
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      messageId: "msg_2",
+      cardRef: REF_NEXT_TURN,
+      control: "save",
+    })!;
+    frame.store = {
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      lentActionGrant: minted.grant,
+    };
+    const res = await handleLentAction(
+      { ref: REF_NEXT_TURN },
+      {
+        resolve: resolveArmed as never,
+        resolveActor: resolveActor as never,
+        decideSchedule: decide as never,
+      },
+    );
+    expect((res.structuredContent as { ok: boolean }).ok).toBe(true);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect((decide.mock.calls[0]![0] as Record<string, unknown>).schedule).toEqual({
+      kind: "recurring",
+      selection: { ...ARMED.selection, weekdays: [2], hour: 9 },
+      timezone: "Europe/Berlin",
+    });
+  });
+
+  it("no readable boundary carries NOTHING — the look-back is never unbounded", async () => {
+    // The form's own row cannot be read, so "not already saved" has no meaning.
+    // Carrying everything would re-apply a placement the person walked away
+    // from; the turn answers what is true instead (convergence round 2, finding 2).
+    await placeOn("msg_1", { weekdays: [2], hour: 9 });
+    triggerRow.row = null;
+    rowClock = new Date("2026-08-29T10:05:00.000Z");
+    sendAs("msg_2");
+    const res = await handleLentAction(
+      { ref: REF },
+      {
+        resolve: resolveArmed as never,
+        resolveActor: resolveActor as never,
+        decideSchedule: decide as never,
+      },
+    );
+    expect(decide).not.toHaveBeenCalled();
+    expect((res.structuredContent as { message: string }).message).toBe(
+      LENT_ACTION_NOTHING_PLACED_TO_SAVE,
+    );
+  });
+
+  it("a placement stamped at the instant of the write counts as SAVED", async () => {
+    // Two clocks, not one: the row's stamp comes from the database and the
+    // form's from the application. On a tie the placement is treated as saved,
+    // because re-applying a change the person already saved is the outcome they
+    // did not ask for (convergence round 2, finding 2).
+    rowClock = new Date("2026-08-29T10:01:00.000Z");
+    await placeOn("msg_1", { weekdays: [2], hour: 9 });
+    triggerRow.row = {
+      runId: RUN,
+      triggerType: "recurring",
+      scheduledAt: null,
+      updatedAt: new Date("2026-08-29T10:01:00.000Z"),
+    };
+    rowClock = new Date("2026-08-29T10:05:00.000Z");
+    sendAs("msg_2");
+    const res = await handleLentAction(
+      { ref: REF },
+      {
+        resolve: resolveArmed as never,
+        resolveActor: resolveActor as never,
+        decideSchedule: decide as never,
+      },
+    );
+    expect(decide).not.toHaveBeenCalled();
+    expect((res.structuredContent as { message: string }).message).toBe(
+      LENT_ACTION_NOTHING_PLACED_TO_SAVE,
+    );
   });
 
   it("a fill ALREADY SAVED is not carried into a later bare ask", async () => {

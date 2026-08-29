@@ -142,6 +142,9 @@ import {
   controlsLentBy,
   resolveBoundReference,
 } from "@/lib/lifecycle/bound-reference-resolver";
+// THE REF DECODER, statically — and that costs no route budget: the resolver
+// above already puts this leaf on every graph this module is on.
+import { decodeScheduleRunRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   LENT_ACTION_CONTROLS,
   isLentActionControl,
@@ -188,6 +191,22 @@ export const LENT_ACTION_CARD_UNAVAILABLE =
  * It says what to do next, because there is something to do: the rows they can
  * see are theirs to place, and the form's own button is right there.
  */
+/**
+ * THE SAME TRUTH FOR THE WAITING SCREEN'S SUBMIT (convergence round 2, finding 4).
+ *
+ * That arm answered the fixed authorization sentence to a person whose screen
+ * had resolved, whose grant matched and whose Continue button was live in front
+ * of them — the same false reason the graded re-shoot caught on the form. WHAT
+ * IT MUST NOT CHANGE is the behaviour: a press with nothing placed in THIS
+ * message still presses nothing, because that is what keeps an induced bare
+ * press inert. Only the sentence changes, and it is reached after identity, the
+ * grant, the live card and what the card lends have all been checked, so it
+ * discloses nothing a caller could not already see.
+ */
+export const LENT_ACTION_NOTHING_PLACED_TO_SEND =
+  "Nothing has been placed in that screen to send, so nothing was submitted. " +
+  "Say what to put in its fields, or press the screen's own button yourself.";
+
 export const LENT_ACTION_NOTHING_PLACED_TO_SAVE =
   "Nothing has been placed in that form to save, so nothing was changed. " +
   "Describe the change first, or press Save changes on the form yourself.";
@@ -335,7 +354,13 @@ export async function handleLentAction(
     readonly readPlacedFills?: (
       runId: string,
       ref: string,
-      opts: { messageId: string; placedBy?: string | null; since?: Date | null },
+      opts: {
+        messageId: string;
+        placedBy?: string | null;
+        since?: Date | null;
+        resolveSince?: () => Promise<Date | null>;
+        refMatches?: (rowRef: string) => boolean;
+      },
     ) => Promise<{ ref: string; values: Record<string, unknown> }[]>;
     /** The form's own row, read for ONE field: when it was last written. */
     readonly readTrigger?: (runId: string) => Promise<{ updatedAt?: Date } | null>;
@@ -479,29 +504,45 @@ export async function handleLentAction(
     // written. Another person's placement is never carried, and a placement
     // that has already been saved is not re-applied over rows that moved on.
     //
-    // THE TRIGGER ROW IS READ ONLY WHEN IT IS NEEDED — a message that placed
-    // its own fill needs no look-back and pays no query for one.
-    const readers =
-      deps.readPlacedFills && deps.readTrigger ? null : await loadRunWindowFillReaders();
+    // THE FORM IS NAMED BY WHAT IT ADDRESSES, NOT BY ITS BYTES. The armed
+    // schedule's ref is minted fresh on every turn and its encoding is
+    // randomised, so the ref on the row the earlier turn placed and the ref
+    // this turn presents are DIFFERENT STRINGS for one form. Matching them on
+    // equality found nothing across turns and answered "nothing placed" to a
+    // person looking at a full form — the same lost turn in a new place
+    // (convergence round 2, finding 1). Two refs are the same form when one
+    // decodes, under the run-scoped schedule ref's own key, to the run this
+    // card resolved to; no other ref family decodes under that key, so nothing
+    // else on the run can be mistaken for this form.
+    //
+    // THE FORM'S OWN ROW IS READ ONLY IF A LOOK-BACK ACTUALLY HAPPENS, and a
+    // read that fails carries NOTHING rather than everything.
+    // WHAT THE CARRY COSTS, SAID PLAINLY AND NOT SMOOTHED OVER (convergence
+    // round 2, finding 3). Requiring the fill to come from THIS message was
+    // also what made an induced bare press do nothing at all: with nothing
+    // placed in the message, there was nothing for an induced call to commit.
+    // A carry re-opens that by exactly one step — a placement this person made
+    // and did not save can be committed by a later turn of theirs that a
+    // sentence in the run's own content induced. It cannot reach another
+    // person's placement, another form, or anything already saved, and it
+    // presses nothing the person had not already typed into their own form.
+    // The bound that remains is the ANSWER: what was saved is relayed back from
+    // the platform's own outcome, so an induced save is visible in the window
+    // the moment it happens, and the same form undoes it. Closing it properly
+    // means reading whether the sentence ASKED — the typed actions per card
+    // kind (cinatra#2853) — and not narrowing the road issue #2934 describes.
+    const readers = deps.readPlacedFills ? null : await loadRunWindowFillReaders();
     const readPlaced = deps.readPlacedFills ?? readers!.readRunWindowPlacedFills;
-    const own = await readPlaced(bound.runId, parsed.data.ref, {
+    const readTrigger = deps.readTrigger ?? (await loadRunTriggerReader());
+    const placed = await readPlaced(bound.runId, parsed.data.ref, {
       messageId: claims.messageId,
+      placedBy: frame.userId,
+      refMatches: (rowRef: string) =>
+        rowRef === parsed.data.ref ||
+        decodeScheduleRunRef(rowRef)?.runId === bound.runId,
+      resolveSince: async () => (await readTrigger(bound.runId))?.updatedAt ?? null,
     }).catch(() => [] as { ref: string; values: Record<string, unknown> }[]);
-    let placed = own;
-    if (placed.length === 0) {
-      const readTrigger = deps.readTrigger ?? (await loadRunTriggerReader());
-      // DEFENSIVELY, and that is not decoration: this read exists only to
-      // narrow the look-back, so a reader that throws — synchronously or not —
-      // must cost the narrowing and never the turn.
-      const trigger = await Promise.resolve()
-        .then(() => readTrigger(bound.runId))
-        .catch(() => null);
-      placed = await readPlaced(bound.runId, parsed.data.ref, {
-        messageId: claims.messageId,
-        placedBy: frame.userId,
-        since: trigger?.updatedAt ?? null,
-      }).catch(() => [] as { ref: string; values: Record<string, unknown> }[]);
-    }
+
     // AND A FORM WITH NOTHING PLACED SAYS SO, in its own words rather than in
     // the card's fixed authorization sentence. The card resolved, the predicate
     // above says it can still be saved, and this person holds the grant: none
@@ -623,7 +664,13 @@ export async function handleLentAction(
   //
   // The person presses the screen's own button for everything else, which is
   // what the refusal tells the assistant to say.
-  if (fills.length === 0) return refuseCardUnavailable();
+  if (fills.length === 0) {
+    return say({
+      ok: false,
+      outcome: { kind: "nothing-placed" },
+      message: LENT_ACTION_NOTHING_PLACED_TO_SEND,
+    });
+  }
 
   const attachments = await readAttachments(bound.runId, claims.messageId).catch(
     () => null,

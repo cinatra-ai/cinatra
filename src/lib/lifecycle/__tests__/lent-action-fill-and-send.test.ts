@@ -49,6 +49,7 @@ import { mintLentActionGrant } from "../lent-action-grant";
 import {
   LENT_ACTION_CARD_UNAVAILABLE,
   LENT_ACTION_NO_AUTHORITY,
+  LENT_ACTION_NOTHING_PLACED_TO_SEND,
   handleLentAction,
 } from "../lent-action-mcp";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
@@ -192,13 +193,25 @@ describe("nothing an unauthorised caller could learn has moved", () => {
     }
   });
 
-  it("a press with NOTHING filled in this message is still refused", async () => {
+  it("a press with NOTHING filled in this message is still refused — in TRUE words", async () => {
+    // THE BEHAVIOUR IS UNCHANGED and that is the point: an induced bare press
+    // still presses nothing. What changed is the SENTENCE. This person's screen
+    // resolved, their grant matched and their own button is live in front of
+    // them, so "that card is not available to you" was a reason they could
+    // disprove by looking at it (convergence round 2, finding 4). It is reached
+    // only after identity, the grant, the live card and what the card lends have
+    // all been checked, so it tells a caller nothing they could not already see.
     setFrame(grantFor());
     const out = await handleLentAction(
       { ref: REF },
       deps({ readFills: vi.fn(async () => []) }),
     );
-    expect(said(out)).toEqual({ ok: false, message: LENT_ACTION_CARD_UNAVAILABLE });
+    expect(said(out)).toEqual({
+      ok: false,
+      outcome: { kind: "nothing-placed" },
+      message: LENT_ACTION_NOTHING_PLACED_TO_SEND,
+    });
+    expect(said(out).message).not.toBe(LENT_ACTION_CARD_UNAVAILABLE);
     expect(approveScreen).not.toHaveBeenCalled();
   });
 
