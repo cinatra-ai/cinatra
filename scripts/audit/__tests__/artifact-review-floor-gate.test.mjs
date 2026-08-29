@@ -140,6 +140,40 @@ test("every generated build-map entry parses, with the fields the host projectio
   }
 });
 
+// ---------------------------------------------------------------------------
+// THE LIST-ROW SLOT IS A PER-EXTENSION OPTION, NEVER THIS GATE'S BUSINESS
+// (Lifecycle D W7, cinatra#3095 — plan §3.4 wave 7 item 1).
+//
+// An extension MAY declare `cinatra.artifact.ui.renderers.listRow`; the
+// generator then emits a `<pkg>::listRow` entry into the build map. This gate
+// reads that map to derive the review path's representation providers, so it
+// must PARSE the entry — and then ignore it: a list-row glyph is not a display,
+// so it neither covers a type nor binds a provider, and a claimant that ships
+// ONLY a list-row renderer still lands its declared forms on the fallback.
+// ---------------------------------------------------------------------------
+
+const LIST_ROW_MAP =
+  "export const GENERATED_ARTIFACT_RENDERERS: Record<string, GeneratedArtifactRendererEntry> = {\n" +
+  '  "@cinatra-ai/email-artifacts::listRow": { resolution: "guardedOptional", "packageName":"@cinatra-ai/email-artifacts","slot":"listRow","representations":[],"propsApiVersion":1, load: () => import("x") },\n' +
+  '  "@cinatra-ai/markdown-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/markdown-artifact","slot":"detail","representations":["text/markdown"],"propsApiVersion":1, load: () => import("y") },\n};';
+
+test("the generated-map reader PARSES a declared list-row entry (the slot is camel-cased)", () => {
+  const entries = readGeneratedRendererEntries(LIST_ROW_MAP);
+  const listRow = entries.find((e) => e.slot === "listRow");
+  assert.ok(listRow, "the listRow entry must parse — the slot is an option any extension may declare");
+  assert.equal(listRow.key, "@cinatra-ai/email-artifacts::listRow");
+  assert.equal(listRow.packageName, "@cinatra-ai/email-artifacts");
+  assert.deepEqual(listRow.representations, []);
+});
+
+test("a declared list-row entry binds NO representation provider (it is not a display)", () => {
+  const entries = readGeneratedRendererEntries(LIST_ROW_MAP);
+  const atListRow = boundRepresentationProviders(entries, ["text/markdown"], "listRow");
+  assert.equal(atListRow.size, 0, "the gate resolves at `detail`; a list-row entry binds nothing");
+  const atDetail = boundRepresentationProviders(entries, ["text/markdown"], "detail");
+  assert.deepEqual([...atDetail.keys()], ["text/markdown"]);
+});
+
 test("the generated-map reader REFUSES an entry it cannot parse", () => {
   const doctored =
     "export const GENERATED_ARTIFACT_RENDERERS: Record<string, GeneratedArtifactRendererEntry> = {\n" +
