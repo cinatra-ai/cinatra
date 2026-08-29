@@ -13,6 +13,9 @@
  *   - mixed-memberType lists render with the SAME affordances as
  *     contact-typed lists and produce the same onChange payload shape
  *     so the picker accepts both `contact` and `mixed` rows.
+ *   - the renderer THREADS `context.runId` into the loader (cinatra#3050) so
+ *     the lists are loaded with the RUN's access instead of a
+ *     platform-administrator session.
  */
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -50,7 +53,7 @@ function makeProps(
     error: null,
     label: "Pick a list",
     description: undefined,
-    context: { connectedApps: [] },
+    context: { connectedApps: [], runId: "run-1" },
     ...overrides,
   };
 }
@@ -216,5 +219,53 @@ describe("ListPickerRenderer", () => {
       listName: "Mixed Sample",
       memberCount: 5,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3050 — the renderer is the source of the run identity the loader
+// authorizes against. Without it the loader has nothing to authorize and the
+// old admin gate is the only thing left, which is what redirected a run's
+// non-administrator owner to `/not-authorized` at this step.
+// ---------------------------------------------------------------------------
+
+describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
+  it("passes context.runId to fetchAvailableLists", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    render(
+      <ListPickerRenderer
+        {...makeProps({ context: { connectedApps: [], runId: "run-abc" } })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
+    );
+    expect(actions.fetchAvailableLists).toHaveBeenCalledWith("run-abc");
+  });
+
+  it("re-loads when the run identity arrives after mount", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValue([]);
+    const { rerender } = render(
+      <ListPickerRenderer {...makeProps({ context: { connectedApps: [] } })} />,
+    );
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
+    );
+    // No run identity yet: the loader is still called, and refuses server-side
+    // with the hidden-run absence rather than being gated on a platform role.
+    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(1, "");
+
+    rerender(
+      <ListPickerRenderer
+        {...makeProps({ context: { connectedApps: [], runId: "run-late" } })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2),
+    );
+    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(2, "run-late");
   });
 });

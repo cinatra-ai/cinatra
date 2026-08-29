@@ -38,7 +38,19 @@
     "job-level `if:`, so both contexts always report and neither can hang a PR by",
     "never running. Adding a context here does NOT change the live protection:",
     "re-apply this file with the `gh api -X PUT` command at the top once this",
-    "merges, or the new requirement exists only on paper."
+    "merges, or the new requirement exists only on paper.",
+    "The `design-pin-drift` context is the design-pin-drift job in gates.yml",
+    "(cinatra#3057 rollout step b): its own job, not a step in `gates`, so it can",
+    "be listed as a separate required context. Its workflow triggers on every",
+    "pull_request, merge_group, push to main and workflow_dispatch with no paths",
+    "filter, so the context always reports and cannot hang a PR by never running.",
+    "Once required, a pull request touching none of the mapped paths in",
+    "scripts/ci/design-pin-drift.paths.json stays green (warning annotation, exit",
+    "0); a pull request touching a drifted pin's mapped paths goes red until that",
+    "pin is adopted. See docs/internals/contracts/design-conformance-pin-drift.md.",
+    "Adding a context here does NOT change the live protection: re-apply this file",
+    "with the `gh api -X PUT` command at the top once this merges, or the new",
+    "requirement exists only on paper."
   ],
   "required_status_checks": {
     "strict": false,
@@ -58,7 +70,8 @@
       "proof",
       "toast-banner-gate / toast-banner-gate",
       "gates",
-      "gates-pnpm"
+      "gates-pnpm",
+      "design-pin-drift"
     ]
   },
   "enforce_admins": false,
