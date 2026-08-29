@@ -74,6 +74,7 @@ const nextId = (p: string) => `${p}-${Date.now()}-${uniq++}`;
 let store: typeof import("@/lib/artifacts/representation-store");
 let audit: typeof import("@/lib/artifacts/artifact-edit-audit");
 let reader: typeof import("@/lib/artifacts/artifact-read");
+let ports: typeof import("@/lib/artifacts/artifact-edit-save-ports");
 let runPostgresQueriesAsync: typeof import("@/lib/postgres-async").runPostgresQueriesAsync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
 
@@ -173,6 +174,7 @@ beforeAll(async () => {
   store = await import("@/lib/artifacts/representation-store");
   audit = await import("@/lib/artifacts/artifact-edit-audit");
   reader = await import("@/lib/artifacts/artifact-read");
+  ports = await import("@/lib/artifacts/artifact-edit-save-ports");
 });
 
 afterAll(async () => {
@@ -414,5 +416,62 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the save with an expected base, 
     });
     expect(afterEdit).toEqual(pinned);
     expect(store.listRepresentations(ORG, seeded.artifactId)[0].id).toBe(seeded.revisionId);
+  });
+});
+
+/**
+ * THE BASE-REVISION READ, against the real objects table.
+ *
+ * `readLatest` answers "does this artifact exist, in this organization, and is
+ * it not tombstoned" through the objects substrate's own accessor rather than a
+ * raw join of its own. Only a real database can show that the substrate read
+ * carries the SAME two conditions the join carried: a tombstoned artifact and a
+ * foreign organization's artifact must both come back with NO latest revision,
+ * so the save road refuses before it ever names a base.
+ */
+describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the base-revision read is scoped by the objects substrate", () => {
+  const readLatest = (orgId: string, artifactId: string) =>
+    ports
+      .artifactEditSavePorts({
+        actor: {} as never,
+        orgId,
+        artifactId,
+      })
+      .readLatest({ orgId, artifactId });
+
+  it("reads the latest revision while the artifact lives, and NOTHING once it is tombstoned", async () => {
+    const seeded = await seedArtifact();
+
+    const live = await readLatest(ORG, seeded.artifactId);
+    expect(live?.revisionId).toBe(seeded.revisionId);
+    expect(live?.revision).toBe(1);
+
+    await sql(
+      `UPDATE "${S()}"."objects" SET deleted_at = now() WHERE id = $1 AND org_id = $2`,
+      [seeded.artifactId, ORG],
+    );
+
+    // The representation rows are untouched — the refusal comes from the
+    // artifact's own row being tombstoned, exactly as the removed join required.
+    const reps = await sql(
+      `SELECT id FROM "${S()}"."representation" WHERE org_id=$1 AND artifact_id=$2`,
+      [ORG, seeded.artifactId],
+    );
+    expect(reps.rows.length).toBe(1);
+
+    expect(await readLatest(ORG, seeded.artifactId)).toBeNull();
+  });
+
+  it("reads NOTHING for an artifact that belongs to another organization", async () => {
+    const foreign = await seedArtifact(OTHER_ORG);
+
+    expect((await readLatest(OTHER_ORG, foreign.artifactId))?.revisionId).toBe(
+      foreign.revisionId,
+    );
+    expect(await readLatest(ORG, foreign.artifactId)).toBeNull();
+  });
+
+  it("reads NOTHING for an artifact that does not exist at all", async () => {
+    expect(await readLatest(ORG, nextId("art-absent"))).toBeNull();
   });
 });

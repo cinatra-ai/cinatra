@@ -20,6 +20,7 @@ import { ARTIFACT_CONTENT_CHANNEL_CAPS } from "@cinatra-ai/sdk-extensions/artifa
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import { getObjectById } from "@/lib/objects-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { requireAccess } from "@/lib/authz/require-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -67,12 +68,25 @@ export function artifactEditMayWrite(input: {
   };
 }
 
-/** The artifact's latest revision, with the form and mime the substrate holds. */
+/**
+ * The artifact's latest revision, with the form and mime the substrate holds.
+ *
+ * THE ARTIFACT'S OWN ROW IS READ THROUGH THE OBJECTS SUBSTRATE, never through
+ * this file's SQL. `getObjectById` is the canonical accessor the artifacts
+ * substrate beside this file already reads with (`artifact-service.ts`), and it
+ * carries exactly the two conditions this read needs — the organization scope
+ * and `deleted_at IS NULL` — so a deleted or foreign artifact has no latest
+ * revision here. No actor is passed: the ownership filter is deliberately NOT
+ * applied, because the write-rights question is already answered by `mayWrite`
+ * on the artifact permission road, and narrowing this read would answer that
+ * question a second time in a different vocabulary.
+ */
 async function readLatest(input: {
   orgId: string;
   artifactId: string;
 }): Promise<ArtifactEditLatest | null> {
   ensurePostgresSchema();
+  if (!getObjectById(input.artifactId, { orgId: input.orgId })) return null;
   const schema = schemaId();
   const [res] = await runPostgresQueriesAsync({
     connectionString: getPostgresConnectionString(),
@@ -81,8 +95,7 @@ async function readLatest(input: {
         text: `SELECT rep.id, rep.revision, rep.resource_id, rep.form, r.mime
 FROM "${schema}"."representation" rep
 JOIN "${schema}"."resource" r ON r.id = rep.resource_id AND r.org_id = rep.org_id
-JOIN "${schema}"."objects" o ON o.id = rep.artifact_id AND o.org_id = rep.org_id
-WHERE rep.org_id = $1 AND rep.artifact_id = $2 AND o.deleted_at IS NULL
+WHERE rep.org_id = $1 AND rep.artifact_id = $2
 ORDER BY rep.revision DESC
 LIMIT 1`,
         values: [input.orgId, input.artifactId],
