@@ -519,9 +519,22 @@ describe("widget-mcp-actor-token — the lifecycle-read grant (S8d)", () => {
       const payload = decodePayload(issueWidgetMcpActorToken(input));
       expect("lcr" in payload).toBe(false);
     }
-    expect(issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: false })).toBe(
-      issueWidgetMcpActorToken(WIDGET_INPUT),
-    );
+    // The byte-equality below is asserted under a FROZEN clock. Every token is
+    // stamped `iat`/`exp` from `Date.now()`, so two issuances that straddle a
+    // second boundary differ by one second on those two claims alone and the
+    // comparison would fail for a reason that has nothing to do with the grant.
+    // Freezing the clock across both issuances makes the property hold by
+    // construction: the ONLY thing that can differ between the two tokens is a
+    // claim the absent grant added, which is exactly what this asserts.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      expect(issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: false })).toBe(
+        issueWidgetMcpActorToken(WIDGET_INPUT),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("round-trips the grant through verify", () => {

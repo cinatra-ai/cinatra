@@ -47,6 +47,7 @@ import type {
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { RunScheduleTab } from "../run-schedule-tab";
+import { SAVE_SCHEDULE_REFUSALS } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -177,20 +178,39 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     expect(isDisabled(container.querySelector('[data-field="schedule-run-at"]'))).toBe(true);
     // "no controls at all" — not a disabled Save changes, not a disabled
     // Cancel schedule: the floor is not drawn.
-    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
-    expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    // The floor STAYS, dead, with the reason on it (cinatra#2934; plan (A)
+    // §7.2) — and the reason for this state is the schedule's own wording, a
+    // one-off that has already run.
+    expect(
+      container
+        .querySelector('[data-conformance-id="schedule-proposal-floor"]')!
+        .getAttribute("data-schedule-changeable"),
+    ).toBe("false");
+    expect(
+      (container.querySelector('[data-action="save-schedule-changes"]') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
   });
 
-  it("a recurring schedule CANCELLED after a fire: the rows read-only, no controls, and no way to arm another", async () => {
+  it("a recurring schedule CANCELLED after a fire: the rows read-only, a dead floor, and no way to arm another", async () => {
     const container = await surfaceWithRows(
       settledBody({ stopped: true, canSave: false, canCancel: false }),
     );
 
     expect(container.querySelectorAll('[data-schedule-option]')).toHaveLength(3);
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
-    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
-    expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-conformance-id="schedule-proposal-floor"]')!
+        .getAttribute("data-schedule-changeable"),
+    ).toBe("false");
+    expect(
+      (container.querySelector('[data-action="save-schedule-changes"]') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
     // The three-option form that STARTS a schedule does not take this
     // surface's place — the run is over, so there is nothing here that arms.

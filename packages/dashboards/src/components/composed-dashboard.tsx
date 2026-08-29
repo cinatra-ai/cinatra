@@ -45,6 +45,11 @@ import {
   useDashboardContext,
 } from "drizzle-cube/client";
 
+import {
+  ReadOnlyComposedDashboard,
+  ReadOnlySinglePortlet,
+} from "@cinatra-ai/sdk-dashboard/components";
+
 import { CinatraDashboardToolbar } from "./cinatra-dashboard-toolbar";
 import { DashboardEmptyState } from "./dashboard-empty-state";
 import { useDashboardFilterBarVisible } from "./dashboard-filter-bar-visibility";
@@ -86,7 +91,20 @@ function DashboardFilterBarSlot() {
 export type ComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
   "children" | "dashboardModes" | "hideToolbar"
->;
+> & {
+  /**
+   * Draw the READ-ONLY composition instead of the editing one (enabler 0.11 of
+   * `PLAN: Agents Lifecycle (C)`, cinatra#3027).
+   *
+   * It does not disable this composition's affordances — it delegates to the
+   * PROMOTED SDK composition, the same component an extension display imports
+   * from `@cinatra-ai/sdk-dashboard/components`. That is the whole point of the
+   * enabler: "both the host page and the extension consume the same
+   * composition", so a read-only dashboard cannot look one way here and another
+   * way inside a card.
+   */
+  readOnly?: boolean;
+};
 
 /**
  * Body of the composition, mounted INSIDE `<DashboardProvider>` so it can read
@@ -109,8 +127,14 @@ function ComposedDashboardBody() {
   );
 }
 
-export function ComposedDashboard(props: ComposedDashboardProps) {
+export function ComposedDashboard({ readOnly, ...props }: ComposedDashboardProps) {
   const { dashboardModes } = useCubeFeatures();
+
+  // THE PROMOTED COMPOSITION, CALLED RATHER THAN COPIED (enabler 0.11). A second
+  // read-only assembly here is precisely the drift this enabler removes.
+  if (readOnly) {
+    return <ReadOnlyComposedDashboard {...props} />;
+  }
 
   return (
     <DashboardProvider {...props} dashboardModes={dashboardModes}>
@@ -120,3 +144,11 @@ export function ComposedDashboard(props: ComposedDashboardProps) {
     </DashboardProvider>
   );
 }
+
+/**
+ * ONE portlet of a dashboard configuration, read-only — re-exported from the
+ * host package so a host surface and an extension display name the SAME
+ * component (enabler 0.11). It is not re-implemented here; this is the promoted
+ * SDK composition under the host's own roof.
+ */
+export { ReadOnlySinglePortlet };

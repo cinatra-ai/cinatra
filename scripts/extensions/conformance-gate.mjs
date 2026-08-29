@@ -594,12 +594,282 @@ function checkArtifactUi(pkgDir, pkg, rules) {
   return findings;
 }
 
+// THE PACKAGING RULE (cinatra#3025, plan `PLAN: Agents Lifecycle (C)` §4.1
+// item 0.8 / §8.5): "every artifact extension declares its display through its
+// own `exports`". A renderer entry that is only a deep INTERNAL source path
+// (`@vendor/pkg/src/renderers/detail`) cannot be imported by a consumer at all
+// unless the host keeps a hand-maintained per-extension path alias alive — "a
+// host edit per extension is exactly the coupling the program removes". So the
+// display must sit at a declared, literal `exports` subpath, and the host
+// imports the bare specifier the package publishes.
+//
+// SCOPE: artifact-kind packages only (`checkArtifactUi` runs under
+// `kind === "artifact"`). The aliases that AGENT extensions use for their form
+// field renderers are untouched by this rule, exactly as item 0.8 says — agent
+// extensions are deliberately excluded from the workspace and cannot resolve a
+// bare specifier.
+//
+// SELECTION, NOT PRESENCE. Node resolves a subpath to exactly ONE target: the
+// first matching key of an ORDERED conditions object, the first valid entry of
+// a fallback array. A check that merely asked "does some leaf under this
+// subpath name the renderer" would pass
+// `{"./renderers/detail": {"default": "./src/index.ts", "types": "./src/detail.tsx"}}`,
+// whose bare import resolves to index.ts. So the gate SIMULATES the host's own
+// resolution (`selectExportTargets` below) and requires the display to be the
+// only thing that resolution can land on, and to be guaranteed to land at all.
+//
+// AT THE GENERATOR'S KEY. The manifest generator already derives ONE key from
+// the renderer entry — the entry minus its source extension — and refuses to
+// generate unless a tsconfig alias or that exact `exports` key resolves it. The
+// gate checks the SAME key, so a package that passes here still generates once
+// item 0.8 deletes the aliases; accepting any other subpath would not.
+
+/** True for an `exports` node that is a CONDITIONS object (`{ import, default }`)
+ * rather than a subpath map — Node's own rule: a subpath map's keys all start
+ * with ".". An empty object is neither and carries no target. */
+function isExportsConditionsObject(node) {
+  if (node === null || typeof node !== "object" || Array.isArray(node)) return false;
+  const keys = Object.keys(node);
+  return keys.length > 0 && !keys.some((k) => k.startsWith("."));
+}
+
+/** TypeScript's DECLARATION conditions — `types` and its versioned
+ * `types@{selector}` form. They name declarations, never the module a consumer
+ * executes, so they take no part in runtime selection. */
+function isDeclarationOnlyCondition(key) {
+  return key === "types" || key.startsWith("types@");
+}
+
+/** Conditions the host's resolution can never take. The generated build map
+ * emits `import()` (scripts/extensions/generate-extension-manifest.mjs), and
+ * `import` and `require` are mutually exclusive, so a subpath reachable only
+ * through `require` is not importable by the host at all. */
+function isImportUnreachableCondition(key) {
+  return key === "require";
+}
+
+/** A stand-in for a target Node would reject outright. It is not a string, so
+ * it can never resolve to the display, which is exactly the effect wanted. */
+const INVALID_PACKAGE_TARGET = Object.freeze({ invalidPackageTarget: true });
+
+/** Conditions that ALWAYS match an import-side resolution. Node takes the FIRST
+ * matching key, so every later key of the same conditions object is
+ * unreachable once one of these is reached. */
+function isAlwaysMatchedCondition(key) {
+  return key === "import" || key === "default";
+}
+
+/** Resolve an `exports` target to the package-relative file it names, using the
+ * SAME resolution the entry check uses (an extension-less target resolves
+ * through the source-extension candidates), or null. */
+function resolveExportTargetFile(pkgDir, target) {
+  if (typeof target !== "string" || !isUiEntryContained(target)) return null;
+  const rel = target.replace(/^\.\//, "");
+  if (existsSync(join(pkgDir, rel))) return rel;
+  return candidateFile(pkgDir, rel.replace(/\.[^./]+$/, ""));
+}
+
+/** Walk an `exports` subpath value the way NODE resolves it, and report:
+ *   `targets`    — every target the host could end up selecting;
+ *   `guaranteed` — whether selection is certain to land on one of them.
+ *
+ * Node takes ONE target: the first matching condition key in DECLARATION ORDER,
+ * or the first valid entry of a fallback array. So:
+ *  - declaration-only and import-unreachable conditions are skipped outright;
+ *  - reaching an always-matched condition (`import`, `default`) whose value
+ *    always resolves ENDS the walk — later keys cannot be selected, which is why
+ *    `{ "default": <display>, "node": <other> }` is conformant while the reverse
+ *    order is not; an always-matched branch that resolves nowhere does NOT end
+ *    it, because Node falls through to the next key;
+ *  - any other condition (`node`, `browser`, a custom one) MIGHT match, so its
+ *    target joins the candidate set and the walk continues;
+ *  - a conditions object with no always-matched branch is NOT guaranteed to
+ *    resolve at all (a `require`-only or custom-condition-only subpath is not
+ *    importable), and a `null` target is a deliberately BLOCKED subpath.
+ * Depth-capped: a malformed manifest must produce a finding, never a hang. */
+function selectExportTargets(pkgDir, node, depth = 0) {
+  if (depth > 8) return { targets: [], guaranteed: false };
+  if (node === null) return { targets: [null], guaranteed: false };
+  if (typeof node === "string") return { targets: [node], guaranteed: true };
+  if (Array.isArray(node)) {
+    // A fallback array resolves to the first target Node can USE. Node walks
+    // past a malformed entry, a `null` entry, and a branch that yields nothing
+    // — but NOT past a well-formed target whose file happens to be missing:
+    // that one is selected and the import then fails. Testing existence here
+    // would wrongly pass `["./src/missing.tsx", "./src/detail.tsx"]`; skipping
+    // nulls is what keeps `[null, "./src/detail.tsx"]` conformant.
+    const fallbackTargets = [];
+    let fallbackGuaranteed = false;
+    for (const entry of node) {
+      if (entry === null) continue;
+      if (typeof entry === "string" && !isUiEntryContained(entry)) continue;
+      const selected = selectExportTargets(pkgDir, entry, depth + 1);
+      fallbackTargets.push(...selected.targets);
+      if (selected.guaranteed) {
+        // This entry always resolves, so nothing after it is reachable.
+        fallbackGuaranteed = true;
+        break;
+      }
+      // This entry MIGHT be skipped (a conditions branch that need not match),
+      // so a later entry can still be the one selected: keep both in the
+      // candidate set and walk on. `[{ node: X }, X]` selects X either way and
+      // is conformant; `[{ node: Y }, X]` could select either and is not.
+    }
+    return { targets: fallbackTargets, guaranteed: fallbackGuaranteed };
+  }
+  // An invalid package target (a number, a boolean) is not "no target": Node
+  // THROWS when it selects one. Carry it so it can never resolve, rather than
+  // letting a later branch stand in for it.
+  if (typeof node !== "object") return { targets: [node], guaranteed: false };
+  if (Object.keys(node).some((k) => /^\d+$/.test(k))) {
+    // Node rejects a numeric key in a conditions object as an invalid package
+    // configuration and throws — the object publishes nothing, however good its
+    // other branches look.
+    return { targets: [INVALID_PACKAGE_TARGET], guaranteed: false };
+  }
+  const targets = [];
+  let guaranteed = false;
+  for (const [condition, value] of Object.entries(node)) {
+    if (isDeclarationOnlyCondition(condition)) continue;
+    if (isImportUnreachableCondition(condition)) continue;
+    const r = selectExportTargets(pkgDir, value, depth + 1);
+    targets.push(...r.targets);
+    if (isAlwaysMatchedCondition(condition) && r.guaranteed) {
+      // The condition matches AND its value always resolves, so every later key
+      // is unreachable. When the value does NOT always resolve — an `import`
+      // branch that is itself a `require`-only object, say — Node falls through
+      // to the next key, and so does this walk.
+      guaranteed = true;
+      break;
+    }
+  }
+  return { targets, guaranteed };
+}
+
+/** An `exports` key a consumer can actually import: "." or a contained "./…".
+ * A key such as ".not-a-subpath" or "./../x" names no importable specifier, so
+ * it can never publish the display however it resolves on disk. Kept SEPARATE
+ * from the shape classification below, which counts every dot-prefixed key to
+ * decide whether the map is a subpath map at all. */
+function isImportableSubpathKey(key) {
+  return key === "." || isUiEntryContained(key);
+}
+
+/** Read the package's `exports` field the way Node does:
+ *   "absent"   — no map at all;
+ *   "sugar"    — a string / array / conditions object: the "." subpath alone;
+ *   "subpaths" — a subpath map (every key starts with ".");
+ *   "mixed"    — an object mixing subpath keys with condition keys, which Node
+ *                REJECTS outright; the map is unusable and is reported as such
+ *                rather than half-read.
+ * PATTERN subpaths (any key containing "*") are excluded from the map: the gate
+ * must be able to name the exact specifier the host will import, and a pattern
+ * makes that specifier a function of the package's internal path — the coupling
+ * item 0.8 removes. A pattern is therefore not a declaration OF THIS DISPLAY,
+ * however narrow it is. */
+function readExportsField(pkgDir, exportsField) {
+  if (exportsField === undefined || exportsField === null) {
+    return { kind: "absent", map: new Map(), offending: [] };
+  }
+  if (
+    typeof exportsField === "string" ||
+    Array.isArray(exportsField) ||
+    isExportsConditionsObject(exportsField)
+  ) {
+    return {
+      kind: "sugar",
+      map: new Map([[".", selectExportTargets(pkgDir, exportsField)]]),
+      offending: [],
+    };
+  }
+  if (typeof exportsField !== "object") {
+    return { kind: "absent", map: new Map(), offending: [] };
+  }
+  const keys = Object.keys(exportsField);
+  const dotted = keys.filter((k) => k.startsWith("."));
+  if (dotted.length > 0 && dotted.length !== keys.length) {
+    return { kind: "mixed", map: new Map(), offending: keys.filter((k) => !k.startsWith(".")) };
+  }
+  const map = new Map();
+  for (const [subpath, node] of Object.entries(exportsField)) {
+    if (subpath.includes("*")) continue; // pattern — see above
+    if (!isImportableSubpathKey(subpath)) continue; // names no importable specifier
+    map.set(subpath, selectExportTargets(pkgDir, node));
+  }
+  return { kind: "subpaths", map, offending: [] };
+}
+
+/** The `exports` key the HOST'S GENERATOR derives for a renderer entry: the
+ * entry path minus its source extension. This is not a choice the gate makes —
+ * scripts/extensions/generate-extension-manifest.mjs computes exactly this key
+ * (`importSubpath` / `exportsKey`) and refuses to generate when neither a
+ * tsconfig path alias nor `package.json exports[<key>]` resolves it. The gate
+ * is that check's PUBLISH-TIME MIRROR: it refuses at publish what generation
+ * would refuse at build, minus the per-extension alias escape hatch item 0.8
+ * deletes. Accepting some OTHER subpath would pass a package here that breaks
+ * generation the moment its alias goes.
+ *
+ * `generatorResolvesEntryFile` above mirrors the generator's own, NARROWER entry
+ * candidates — the literal path, then `.ts`, then `.tsx`. The gate's general
+ * `candidateFile` strips any extension and tries the whole source-extension set,
+ * so an entry `./src/detail.js` backed by `src/detail.ts` resolves there and not
+ * in the generator; the packaging rule asks the generator's question. */
+function generatorResolvesEntryFile(pkgDir, entry) {
+  const rel = entry.replace(/^\.\//, "");
+  for (const candidate of [rel, `${rel}.ts`, `${rel}.tsx`]) {
+    if (existsSync(join(pkgDir, candidate))) return candidate;
+  }
+  return null;
+}
+
+function generatorExportsKeyForEntry(entry) {
+  const rel = entry.replace(/^\.\//, "");
+  return `./${rel.replace(/\.(ts|tsx)$/, "")}`;
+}
+
+/** Whether the package publishes `resolvedRel` AT THE GENERATOR'S KEY. A subpath
+ * publishes the display only when its resolution is GUARANTEED to land
+ * somewhere, lands on at least one target, and every target it could land on is
+ * this module — if two branches disagree, WHICH module draws the artifact is a
+ * function of the consumer's condition set, and that is not a declaration. */
+function publishesDisplayAtGeneratorKey(pkgDir, exportedSubpaths, entry, resolvedRel) {
+  // The generator must be able to resolve the entry FILE at all, by its own
+  // candidate list — otherwise generation throws whatever the exports say.
+  if (generatorResolvesEntryFile(pkgDir, entry) !== resolvedRel) return null;
+  const key = generatorExportsKeyForEntry(entry);
+  const selection = exportedSubpaths.get(key);
+  if (!selection) return null;
+  // POLICY, stated rather than simulated: the display must be reachable under a
+  // PORTABLE always-matched condition (`import` or `default`). A branch behind
+  // `node` alone would resolve for today's server-only build map and for nobody
+  // else, and the same package must draw the artifact for every consumer of
+  // that map.
+  if (!selection.guaranteed) return null;
+  if (selection.targets.length === 0) return null;
+  if (!selection.targets.every((t) => resolveExportTargetFile(pkgDir, t) === resolvedRel)) {
+    return null;
+  }
+  return key;
+}
+
 // Per-slot renderer checks (cinatra#1621), extracted so the registryItems
 // addition (cinatra#1623) keeps `checkArtifactUi` linear. Only runs when
 // `renderers` is a valid non-empty slot map.
 function checkArtifactUiRenderers(pkgDir, pkg, renderers, rules) {
   const findings = [];
   const file = "package.json";
+  // THE PACKAGING RULE (cinatra#3025, item 0.8): read once per package.
+  const exportsInfo = readExportsField(pkgDir, pkg.exports);
+  if (exportsInfo.kind === "mixed") {
+    findings.push({
+      rule: "manifest.artifact-ui-exports-invalid",
+      file,
+      detail:
+        `package.json "exports" mixes subpath keys with condition key(s) [${exportsInfo.offending.join(", ")}] — ` +
+        `Node REJECTS such a map outright, so nothing it appears to publish resolves. Declare one shape: a subpath ` +
+        `map whose keys all start with "." (conditions go INSIDE a subpath's value).`,
+    });
+  }
   for (const [slot, renderer] of Object.entries(renderers)) {
     const at = `cinatra.artifact.ui.renderers.${slot}`;
     if (!rules.artifactUiSlots.has(slot)) {
@@ -650,6 +920,40 @@ function checkArtifactUiRenderers(pkgDir, pkg, renderers, rules) {
           file,
           detail: `${at}.entry "${renderer.entry}" resolves outside the published "files" allowlist — it would not ship in the package tarball.`,
         });
+      }
+      // THE PACKAGING RULE (cinatra#3025, item 0.8). Only asked of an entry
+      // that RESOLVED — an unresolved entry already carries its own finding and
+      // one defect must not raise two.
+      if (
+        resolved &&
+        exportsInfo.kind !== "mixed" &&
+        publishesDisplayAtGeneratorKey(pkgDir, exportsInfo.map, renderer.entry, resolved) === null
+      ) {
+        if (exportsInfo.kind === "absent") {
+          findings.push({
+            rule: "manifest.artifact-ui-exports-missing",
+            file,
+            detail:
+              `${at} declares a display but the package declares NO "exports" subpath map — an artifact extension ` +
+              `publishes its display through its OWN exports, so a consumer imports ` +
+              `"${pkg.name}/${generatorExportsKeyForEntry(renderer.entry).slice(2)}" rather than a deep internal path the ` +
+              `host has to keep alive with a per-extension alias. Add ` +
+              `"exports": { "${generatorExportsKeyForEntry(renderer.entry)}": "${renderer.entry}" }.`,
+          });
+        } else {
+          findings.push({
+            rule: "manifest.artifact-ui-entry-not-exported",
+            file,
+            detail:
+              `${at}.entry "${renderer.entry}" is not published at "${generatorExportsKeyForEntry(renderer.entry)}" — ` +
+              `the exact key the manifest generator derives from the entry and demands (literal subpaths declared: ` +
+              `${[...exportsInfo.map.keys()].join(", ") || "none"}). A PATTERN subpath ("./*", "./renderers/*") does not ` +
+              `count, because the specifier it yields is a function of the package's internal path rather than a ` +
+              `declaration of this display; the key's target must resolve to this module under a portable ` +
+              `always-matched condition ("import" or "default"), and every branch it could select must be this module. ` +
+              `Add "exports": { "${generatorExportsKeyForEntry(renderer.entry)}": "${renderer.entry}" }.`,
+          });
+        }
       }
     }
     if (

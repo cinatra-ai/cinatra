@@ -686,6 +686,42 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  // Layer 4c: the PROMOTED READ-ONLY COMPOSITION alone (enabler 0.11 of
+  // `PLAN: Agents Lifecycle (C)`, cinatra#3027). Layer 3 says drizzle-cube/client
+  // stays banned inside sdk-dashboard because "rendering belongs to
+  // packages/dashboards" — which was true while every consumer of a dashboard
+  // composition lived in this repository. The enabler is precisely that one of
+  // them no longer does: "a host composition an extension display needs is
+  // promoted into an SDK surface an extension may depend on … and both the host
+  // page and the extension consume the same composition". An extension cannot
+  // import `@cinatra-ai/dashboards`, so the promoted composition has to live in a
+  // package an extension may depend on, and it has to mount the grid it is a
+  // composition OF.
+  //
+  // SINGLE FILE, by name, on the Layer-4b precedent: the rest of sdk-dashboard
+  // keeps the ban untouched, so this widening cannot spread by accident — a
+  // second promoted composition is a second named line here and a second review.
+  // The file mounts the provider and the grid surface and NOTHING that can
+  // write; the enabler's own acceptance test asserts that.
+  {
+    files: ["packages/sdk-dashboard/src/components/read-only-composition.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...DRIZZLE_CUBE_NON_CLIENT_BAN,
+            ...RADIX_BAN,
+            ...UI_LIB_BAN,
+            ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
+          ],
+        },
+      ],
+      "no-restricted-syntax": ["error", ...TYPE_BANS, ...DYNAMIC_BANS_L4],
+    },
+  },
   // Layer 5: inside the vendored shadcn primitives — Radix is ALLOWED
   // (shadcn primitives are built on Radix). Everything else stays banned.
   {

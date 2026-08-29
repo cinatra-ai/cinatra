@@ -26,6 +26,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { ScheduleStepSurface } from "../schedule-rail-step";
+import { SAVE_SCHEDULE_REFUSALS } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -138,18 +139,25 @@ describe("the run page's schedule step, on a run that no proposal created", () =
     expect(control(container, "cancel-trigger-schedule")).toBeTruthy();
   });
 
-  it("a fired one-off: the rows read-only, and no controls at all", async () => {
+  // A SCHEDULE THAT IS OVER IS DRAWN WHOLE AND DEAD, not withdrawn
+  // (cinatra#2934; plan (A) §7.2): the floor stays, says on itself that the
+  // schedule can no longer be changed, and carries the reason.
+  it("a fired one-off: the rows read-only, the floor dead, the reason on it", async () => {
     const { container } = mountStep(ONE_OFF_FIRED);
     await waitFor(() => expect(rows(container)).toBeTruthy());
-    expect(floor(container)).toBeNull();
-    expect(control(container, "save-schedule-changes")).toBeNull();
+    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("false");
+    expect(
+      (control(container, "save-schedule-changes") as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(control(container, "cancel-trigger-schedule")).toBeNull();
+    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
   });
 
   it("a recurring schedule cancelled after a fire: the same ending, on this surface too", async () => {
     const { container } = mountStep(RECURRING_CANCELLED);
     await waitFor(() => expect(rows(container)).toBeTruthy());
-    expect(floor(container)).toBeNull();
+    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("false");
+    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     expect(container.textContent).not.toContain("Trigger configuration");
     expect(container.textContent).not.toContain("Cancel trigger");
   });

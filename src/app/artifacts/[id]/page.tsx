@@ -43,7 +43,10 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
-import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  absentArtifactContent,
+  buildArtifactRendererProps,
+} from "@/lib/artifacts/artifact-renderer-props";
 
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
@@ -185,6 +188,11 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     representation: revisionId ? { revisionId, mime } : null,
     previewHref,
     downloadHref,
+    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
+    // wired to it yet — "each a contract defined here and wired for its
+    // consumers in the sibling plan" — so it says so, by name, instead of
+    // letting an absent projection read as a wired one that found nothing.
+    content: absentArtifactContent(revisionId ?? null),
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.

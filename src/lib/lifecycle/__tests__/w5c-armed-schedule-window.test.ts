@@ -41,6 +41,49 @@ vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
       .filter((r) => r.messageId === messageId)
       .map((r) => r.fill as { ref: string; values: Record<string, unknown> } | undefined)
       .filter((f): f is { ref: string; values: Record<string, unknown> } => !!f && f.ref === ref),
+  // THE READER THIS LEG ADDS: what is placed on that form and NOT YET SAVED.
+  // The MOCK mirrors the real reader's shape — the form asked of `refMatches`
+  // rather than matched on the bytes, the boundary resolved lazily and
+  // FAIL-CLOSED, carried rows strictly newer than the write, this message's own
+  // last. The reader itself is proven against a real database in
+  // `armed-schedule-save-road.integration.test.ts`; what is exercised here is
+  // the handler above it.
+  readRunWindowPlacedFills: async (
+    _runId: string,
+    ref: string,
+    opts: {
+      messageId: string;
+      placedBy?: string | null;
+      since?: Date | null;
+      resolveSince?: () => Promise<Date | null>;
+      refMatches?: (rowRef: string) => boolean;
+    },
+  ) => {
+    const sameForm = opts.refMatches ?? ((rowRef: string) => rowRef === ref);
+    const onForm = windowRows.filter((r) => {
+      const fill = r.fill as { ref: string } | undefined;
+      return !!fill && sameForm(fill.ref);
+    });
+    const own = onForm.filter((r) => r.messageId === opts.messageId);
+    const carried: Array<Record<string, unknown>> = [];
+    if (opts.placedBy) {
+      let since = opts.since ?? null;
+      if (!since && opts.resolveSince) {
+        since = await opts.resolveSince().catch(() => null);
+      }
+      if (since) {
+        for (const r of onForm) {
+          if (r.messageId === opts.messageId) continue;
+          if (r.placedBy !== opts.placedBy) continue;
+          if ((r.createdAt as Date).getTime() <= since.getTime()) continue;
+          carried.push(r);
+        }
+      }
+    }
+    return [...carried, ...own].map(
+      (r) => r.fill as { ref: string; values: Record<string, unknown> },
+    );
+  },
   readRunWindowAttachmentsForMessage: async () => null,
 }));
 

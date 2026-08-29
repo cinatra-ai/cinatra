@@ -579,3 +579,94 @@ export function applyArmedScheduleFill(
     current.kind === "recurring" ? current.selection : { ...DEFAULT_RECURRING_CONFIG };
   return { kind: "recurring", selection: coerceSelection(base, values), timezone };
 }
+
+// ---------------------------------------------------------------------------
+// AND THE SENTENCES A SCHEDULE THAT CANNOT BE CHANGED IS EXPLAINED WITH
+// (cinatra#2934, the armed-schedule change road).
+//
+// WHY THEY LIVE HERE, of all places. They were declared beside the write guard
+// that chooses between them, which is where the CHOICE belongs — but the card
+// now has to DRAW one: plan (A) §7.2 requires a schedule that has fired to
+// answer that it can no longer be changed, with the form locked, rather than to
+// withdraw its floor and say nothing. The card is a client component, and
+// pulling the trigger service into it would pull the store, the scheduler and
+// the whole write perimeter onto every surface that draws a schedule.
+//
+// THIS MODULE IS ALREADY BOTH SIDES' — it is the one place that says what a
+// placed value does to a §VI selection, imported by the card and by the service
+// alike, and it imports nothing itself. Putting the strings here is therefore
+// ONE definition with no new module on anybody's graph (the four locked routes
+// carry a first-party budget; a leaf of their own would have cost each of them
+// one). `trigger-service.ts` re-exports the table under its own name, so every
+// existing reader keeps its import.
+// ---------------------------------------------------------------------------
+
+/** What the card says when the schedule can no longer be changed. Reader-facing
+ *  copy: it names the state and what to do instead, exactly as the immediate
+ *  ladder's refusals do. */
+export const SAVE_SCHEDULE_REFUSALS = {
+  noTrigger:
+    "There is no armed schedule on this run to change.",
+  released:
+    "This trigger has already been released — its steps are eligible now, so there is no schedule left to change.",
+  firedOneOff:
+    "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
+  immediate:
+    "\u201cRun right after setup\u201d starts the run now rather than scheduling it, so it is not a change you can save here. Set a time or a recurrence instead.",
+  /**
+   * The schedule is still being INSTALLED (cinatra#2934, the armed-trigger
+   * tab's window). The write guard below deliberately says nothing about this
+   * state — the installer exposes a schedule to the scheduler BEFORE it marks
+   * the intent done, so refusing a write on it would take away an operation the
+   * server is still granting. `canSaveInstalled` DOES withhold **Save changes**
+   * for it, so a surface that has to explain a withheld control needs the
+   * sentence, and it belongs in this table with the others rather than in a
+   * second one.
+   */
+  arming:
+    "This schedule is still being installed, so it can't be changed yet. Try again in a moment.",
+  /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
+  stopped:
+    "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
+  /** cinatra#3004 — a schedule that is OVER, asked to be REMOVED rather than
+   *  changed. The row is the record of the ending, so it stays. */
+  overCannotRemove:
+    "This run's schedule is over, so it can't be changed or removed. Start a new run to schedule it again.",
+  /** The prior scheduler would not cancel, so the replacement was NOT installed
+   *  — the schedule the reader is looking at is still the live one. */
+  cancelFailed:
+    "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
+  /** cinatra#2981 — another writer (a **Cancel schedule**, or another save)
+   *  held the trigger claim for longer than this call would wait. Nothing was
+   *  written, so the reader's schedule is exactly as they left it. */
+  busy:
+    "Something else is changing this schedule right now. Nothing was changed — please try again in a moment.",
+} as const;
+
+/**
+ * WHICH OF THOSE SENTENCES A CARD THAT IS OVER DRAWS (cinatra#2934; plan (A)
+ * §7.2 — "once a run set to Run right after setup or Schedule for later has
+ * fired, its schedule cannot be changed any more").
+ *
+ * WHY THE CARD CHOOSES RATHER THAN RELAYING THE GUARD'S CHOICE. The write guard
+ * asks a TRIGGER ROW and answers with the first refusal that row earns, in the
+ * order that keeps the write safe — a released stamp is its second question, so
+ * a one-off that has fired comes back as `released`, whose wording is about the
+ * trigger and its held steps. The card is not explaining a refused write; it is
+ * explaining, to the person looking at the form, why the form is locked. So it
+ * names the state THEY can see, from this same table: a one-off that has run, a
+ * schedule that was stopped, or a run whose schedule is simply over. Both sides
+ * refuse, both sides draw from one table, and neither invents a sentence.
+ *
+ * ITS WORDING IS THE SCHEDULE'S, THROUGHOUT — no reading here says "trigger",
+ * which is the surface rule the agent page's own suite pins.
+ */
+export function frozenScheduleReason(input: {
+  readonly triggerType?: string | null;
+  readonly stopped?: boolean;
+  readonly released?: boolean;
+}): string {
+  if (input.stopped) return SAVE_SCHEDULE_REFUSALS.stopped;
+  if (input.triggerType === "scheduled") return SAVE_SCHEDULE_REFUSALS.firedOneOff;
+  return SAVE_SCHEDULE_REFUSALS.overCannotRemove;
+}

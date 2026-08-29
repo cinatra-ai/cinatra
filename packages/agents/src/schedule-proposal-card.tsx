@@ -194,7 +194,14 @@ import {
   useLifecycleCardSettleSignal,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
-import { WEEKDAY_LABELS, applyArmedScheduleFill } from "./trigger-recurrence";
+import {
+  WEEKDAY_LABELS,
+  applyArmedScheduleFill,
+  // The SERVER'S OWN sentences for a schedule that can no longer be changed
+  // (cinatra#2934), from the leaf both sides already share — so this card draws
+  // the words the write guard answers with and no second wording exists.
+  frozenScheduleReason,
+} from "./trigger-recurrence";
 
 /**
  * A FILL THE WINDOW UNDER THIS CARD PLACED (cinatra#2934, the armed-trigger
@@ -827,10 +834,24 @@ function SettledPhase({
   // this run's, so the stamp says nothing about whether it has fired. Its
   // firing is `canCancel`'s business, read server-side off the tick's own stamp.
   //
-  // A FROZEN CARD DRAWS NO FLOOR AT ALL: not a disabled Save changes, and not a
-  // disabled Cancel schedule either. There is nothing left to change or stop,
-  // and a control that exists only to refuse is the card offering what the plan
-  // withdrew. The rows simply stand.
+  // A FROZEN CARD DRAWS ITS FLOOR **DEAD**, AND SAYS WHY (cinatra#2934, the
+  // armed-schedule change road) — the reversal of this card's own earlier
+  // reading, which drew no floor at all.
+  //
+  // WHAT THAT READING COST, measured rather than argued. The graded re-shoot
+  // photographed a fired one-off: rows locked, no floor, and — because both
+  // surfaces measure the window's state off that floor — no window, no composer
+  // and no sentence anywhere on the screen. The reader was told nothing rather
+  // than told why, which is the one thing plan (A) §7.2 asks this state to do:
+  // a schedule that has fired "cannot be changed any more", and a surface a
+  // reader may see but not act on shows the card whole with its actions
+  // disabled and the reason on screen.
+  //
+  // SO THE FLOOR STAYS AND IS DEAD: **Save changes** disabled, no Cancel
+  // schedule (there is nothing left to stop), and the SERVER'S OWN sentence for
+  // this state beside it — from the one table the write guard chooses from, so
+  // the card and the write cannot word one state two ways. `data-schedule-  // changeable` on the floor is what the surfaces read now, because the floor
+  // being THERE no longer means the schedule can be changed.
   //
   // WHAT THIS DELIBERATELY DOES NOT CATCH. A one-off whose moment has passed
   // while the release job has not drained yet has NOT fired — its gate is still
@@ -845,6 +866,16 @@ function SettledPhase({
   // would leave the floor standing on a schedule that had already run.
   const frozen =
     (body.triggerType !== "recurring" && body.released) || body.stopped === true;
+
+  // WHY IT IS FROZEN, IN THE SERVER'S OWN WORDS — the same table
+  // `saveScheduleGuardRefusal` chooses from, and in the same order it asks:
+  // a stopped schedule first, then a released one. Never a wording of this
+  // card's own.
+  const frozenReason = frozenScheduleReason({
+    triggerType: body.triggerType,
+    stopped: body.stopped === true,
+    released: body.released === true,
+  });
 
   const act = async (op: "cancel") => {
     setRefusal(null);
@@ -928,9 +959,28 @@ function SettledPhase({
         durationCopy={null}
       />
 
-      {frozen ? null : (
+      {frozen ? (
         <div
           data-conformance-id="schedule-proposal-floor"
+          data-schedule-changeable="false"
+          className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
+        >
+          <p
+            data-conformance-id="schedule-proposal-refusal"
+            role="status"
+            className="mr-auto text-sm text-muted-foreground"
+          >
+            {frozenReason}
+          </p>
+          <Button type="button" size="sm" data-action="save-schedule-changes" disabled>
+            <Check aria-hidden="true" className="size-3.5" />
+            Save changes
+          </Button>
+        </div>
+      ) : (
+        <div
+          data-conformance-id="schedule-proposal-floor"
+          data-schedule-changeable="true"
           className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
         >
           {refusal ? (

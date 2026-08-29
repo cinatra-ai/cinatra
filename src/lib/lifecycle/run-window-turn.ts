@@ -633,6 +633,7 @@ export async function runWindowTurn(
           fill: null,
           attachments: null,
           messageId,
+          placedBy: null,
           createdAt: new Date(),
         },
       ];

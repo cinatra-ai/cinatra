@@ -682,33 +682,17 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
       await dispatchAutoGateOpen({ runId, reviewTaskId: plan.reviewTaskId });
     }
     // cinatra#2570 (epic #2564 S6a) — the auditor's gate-bound SUGGESTION
-    // producer. This is the choke point the successor store was always missing:
-    // a gate has just frozen its targets, so there is exactly one revision to
-    // propose against and exactly one row to bind to. Only on a genuinely NEW
-    // emit — a re-sweep must never re-derive a snapshot against a gate a
-    // reviewer may already be reading.
-    //
-    // Best-effort in the same sense as the core-analysis lane at the
-    // verification write: dynamically imported so the producer's graph stays off
-    // this module's static surface, and every outcome (including a refusal) is a
-    // value the lane returns rather than an exception this sweep could die on.
+    // producer, now resolving the projector BY KIND (enabler 0.15 of
+    // `PLAN: Agents Lifecycle (C)`, cinatra#3028, closing cinatra#2950). This is
+    // the choke point the successor store was always missing: a gate has just
+    // frozen its targets, so there is exactly one set to propose against and
+    // exactly one row to bind to. Only on a genuinely NEW emit — a re-sweep must
+    // never re-derive a snapshot against a gate a reviewer may already be
+    // reading.
     if (!emitted.idempotent) {
-      try {
-        const { produceSuggestionsForNewGate } = await import(
-          "./lifecycle-suggestion-producer-lane"
-        );
-        await produceSuggestionsForNewGate({
-          gateId: emitted.gateId,
-          orgId: row.orgId,
-          target: {
-            artifactId: row.artifactId,
-            representationRevisionId: row.representationRevisionId,
-          },
-        });
-      } catch {
-        // swallowed — a suggestion is an aid to the reviewer, never a condition
-        // of the gate existing.
-      }
+      await produceSuggestionsForPinnedTargets(emitted.gateId, row.orgId, [
+        { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId },
+      ]);
     }
   } catch (err) {
     // A pin-conflict means a DIFFERENT gate already occupies (run, task) — an
@@ -775,6 +759,58 @@ export interface ReviewOrchestrationSweepSummary {
    * pass (each may fan into several ≤50-target partition gates, counted in
    * `gatesCreated`). Zero when every pending event is a single-artifact production. */
   batchesCoalesced: number;
+}
+
+/**
+ * Run the kind-resolved suggestion producer over a gate's pinned targets
+ * (enabler 0.15 of `PLAN: Agents Lifecycle (C)`, cinatra#3028).
+ *
+ * ONE helper, called from BOTH gate-creation paths, because the plan's sentence
+ * is "on the single-artifact path and the batch path alike" and two call sites
+ * with two shapes is how they drifted apart in the first place (cinatra#2950).
+ *
+ * The KIND is read here — the artifact's own object type — because that is the
+ * only place both paths already hold the organization and the target set. A row
+ * whose type cannot be read yields the empty kind, which resolves to no
+ * projector and is recorded as such rather than guessed at.
+ *
+ * BEST-EFFORT BY CONSTRUCTION, exactly as before: dynamically imported so the
+ * producer's graph stays off this module's static surface, every lane outcome is
+ * a value, and the catch is the backstop — a suggestion is an aid to the
+ * reviewer, never a condition of the gate existing.
+ */
+async function produceSuggestionsForPinnedTargets(
+  gateId: string,
+  orgId: string,
+  targets: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>,
+): Promise<void> {
+  if (targets.length === 0) return;
+  try {
+    const artifactIds = [...new Set(targets.map((t) => t.artifactId))];
+    const rows = await db
+      .select({ id: objectsRef.id, type: objectsRef.type })
+      .from(objectsRef)
+      .where(and(eq(objectsRef.orgId, orgId), inArray(objectsRef.id, artifactIds)));
+    const kindById = new Map(rows.map((r) => [r.id, String(r.type ?? "")]));
+
+    const { produceSuggestionsForGateTargets } = await import(
+      "./lifecycle-suggestion-producer-lane"
+    );
+    await produceSuggestionsForGateTargets({
+      gateId,
+      orgId,
+      targets: targets.map((t) => ({
+        target: {
+          artifactId: t.artifactId,
+          representationRevisionId: t.representationRevisionId,
+        },
+        kind: kindById.get(t.artifactId) ?? "",
+      })),
+    });
+  } catch {
+    // swallowed — a suggestion is an aid to the reviewer, never a condition of
+    // the gate existing.
+  }
 }
 
 function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationSweepSummary): void {
@@ -1144,6 +1180,16 @@ async function orchestrateProducedBatch(
     // so the review the notification points at exists.
     if (!gateIdempotent) {
       await dispatchAutoGateOpen({ runId, reviewTaskId });
+      // ENABLER 0.15 — "the host resolves it by kind when it opens a gate — on
+      // the single-artifact path AND THE BATCH PATH ALIKE". cinatra#2950's
+      // measured defect was precisely that this path "does not invoke the
+      // suggestion lane at all", so a run that produced several artifacts at
+      // once opened its gates with no suggestion snapshot at all — and the
+      // producer's single-target snapshot would have made a second target return
+      // `already-bound` even if it had. The snapshot is multi-target, so the
+      // WHOLE partition is offered at once and the batch decision stays one
+      // all-or-nothing boundary.
+      await produceSuggestionsForPinnedTargets(gateId, orgId, partition);
     }
 
     const members = partition

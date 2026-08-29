@@ -741,6 +741,28 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // read that throws for a non-member, after the named run has been proved to
       // belong to the same org and to be readable by the same subject.
       "src/lib/test-support/lifecycle-seed-drivers.ts",
+      // cinatra#3028 (epic #3023, lifecycle-c W4) — the TYPED PROMOTION ROAD's
+      // retype. A DESIGN EVENT, so state it.
+      //
+      // WHY IT NEEDS THIS WRITER: the road promotes a matched base-typed upload
+      // into the matching extension's own type. That is a type change on an
+      // existing row — an application-visible mutation — so it belongs in the
+      // row's own history with a change event and a Graphiti outbox row, and the
+      // canonical writer is the only road that commits those alongside it. The
+      // alternative the gate exists to prevent is exactly what the first draft
+      // did: a raw compare-and-set UPDATE with no history at all.
+      //
+      // WHAT BOUNDS IT: the call is UPDATE-ONLY (`expectedBaseVersion` is always
+      // the version the road just read, never null), `reversible-internal`, and
+      // it writes back the row's own data unchanged — only `type` moves, and the
+      // target type is the extension's own, resolved from the registry, never
+      // caller-supplied. It is reached from ONE surface, the artifact library's
+      // §VI.1 Confirm, which mints the authority through
+      // `verifySessionAuthority` (a live membership read that throws for a
+      // non-member) after its own `object.update` gate on the acting user, and
+      // only when the matcher has already asserted the extension at its own
+      // declared threshold. A named import, not a namespace one.
+      "src/lib/artifacts/typed-promotion-store.ts",
     ],
   },
   {

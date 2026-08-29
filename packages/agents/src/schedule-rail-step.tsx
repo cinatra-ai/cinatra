@@ -172,12 +172,29 @@ export function ScheduleRailStepRow({
 export type ScheduleSurfaceReading = {
   /** The card produced DOM: there IS a scheduler on this surface. */
   drawn: boolean;
-  /** The card drew its controls floor: the schedule can still be changed. */
+  /** The card's own floor says the schedule can still be changed. */
   changeable: boolean;
 };
 
 /** The card's controls floor, by the conformance id the renderer gives it. */
 const SCHEDULE_FLOOR_SELECTOR = '[data-conformance-id="schedule-proposal-floor"]';
+
+/**
+ * The floor's OWN answer to "can this schedule still be changed"
+ * (cinatra#2934, the armed-schedule change road).
+ *
+ * THE PRESENCE OF THE FLOOR USED TO BE THE ANSWER, and that stopped being true
+ * when a schedule that is over began drawing its floor DEAD — with Save changes
+ * disabled and the reason on it — instead of drawing nothing (plan (A) §7.2;
+ * the reversal of cinatra#3004's withdrawal). Reading presence alone would now
+ * report a fired one-off as changeable and put a live composer under a locked
+ * form, which is the opposite mistake.
+ *
+ * A floor that does not carry the attribute at all is read as changeable, which
+ * is exactly what presence meant before: the reading never gets stricter than
+ * the card it is measuring.
+ */
+const SCHEDULE_CHANGEABLE_ATTR = "data-schedule-changeable";
 
 export function useScheduleSurfaceReading(
   host: HTMLElement | null,
@@ -193,7 +210,9 @@ export function useScheduleSurfaceReading(
     }
     const read = () => {
       const drawn = host.childElementCount > 0;
-      const changeable = drawn && host.querySelector(SCHEDULE_FLOOR_SELECTOR) !== null;
+      const floor = drawn ? host.querySelector(SCHEDULE_FLOOR_SELECTOR) : null;
+      const changeable =
+        floor !== null && floor.getAttribute(SCHEDULE_CHANGEABLE_ATTR) !== "false";
       // Same object identity while nothing moved: this runs on every mutation
       // inside the card, and a fresh object each time would re-render the
       // surface on every keystroke in the form below it.
@@ -283,11 +302,14 @@ export function ScheduleStepSurface({
           nothing for a run its resolver answers `absent` for; a window alone in
           that empty column would be a prompt about a form that is not there.
 
-          AND IT FOLLOWS THAT FORM'S STATE (cinatra#3004). The window invites
-          the reader to ask for edits to the fields above it, so once those
-          fields are a reading nobody can change — a fired one-off, a recurring
-          schedule cancelled after a fire — the invitation is one this surface
-          cannot keep, and it is withdrawn rather than drawn dead. */}
+          AND IT FOLLOWS THAT FORM'S STATE (cinatra#3004, as amended by
+          cinatra#2934). The window invites the reader to ask for edits to the
+          fields above it, so once those fields are a reading nobody can change
+          — a fired one-off, a recurring schedule cancelled after a fire — the
+          invitation is one this surface cannot keep. The INVITATION is
+          withdrawn; the WINDOW is not. Plan (A) §7.2 asks this state to say
+          that the schedule can no longer be changed, so the window stays and
+          answers, and only the box to type in goes. */}
       {promptWindowTemplateId && scheduler.drawn ? (
         <SchedulePromptWindow
           templateId={promptWindowTemplateId}

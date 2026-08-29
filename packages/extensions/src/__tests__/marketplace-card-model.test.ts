@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 import { carryManifestDisplayName } from "@cinatra-ai/agents/verdaccio/client";
+// cinatra#2944: the RUN GATE's own verdict function — the card's install truth
+// is proven against the same rule the gate refuses runs with, never a restated copy.
+import {
+  resolveAgentRunAvailability,
+  type AgentCatalogView,
+} from "@cinatra-ai/agents/runtime-install-gate";
 import {
   catalogEntryToCardData,
   resolveCardDisplayName,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
+  applyRunGateInstallTruth,
   workspaceReachLabel,
   resolveCardPriceLabel,
   resolveCardIconChain,
@@ -849,5 +856,112 @@ describe("cinatra#2698 — the workspace-reach CTA", () => {
     expect(
       resolveMarketplaceCardCta(listing, undefined, true, "compatible"),
     ).toEqual({ state: "install", disabled: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2944 — the browse card's install state follows the run gate's truth.
+//
+// The template-derived install map grandfathers a catalog package with NO
+// canonical installed row to "installed", while the run gate proves the same
+// package NOT installed (a `guardedOptional` catalog record with no canonical
+// row). The two surfaces are reconciled by feeding the GATE's own verdict —
+// `resolveAgentRunAvailability`, imported here rather than restated — into the
+// map before the CTA is resolved.
+// ---------------------------------------------------------------------------
+describe("applyRunGateInstallTruth (cinatra#2944)", () => {
+  const PACKAGE = "@cinatra-ai/blog-draft-writer-agent";
+
+  /** The exact record shape from the issue: a catalog-governed opt-in package. */
+  const catalog = {
+    [PACKAGE]: {
+      packageName: PACKAGE,
+      kind: "agent",
+      version: "0.3.0",
+      resolution: "guardedOptional",
+      dependencies: [],
+      displayName: "Blog Draft Writer",
+    },
+  } as unknown as AgentCatalogView;
+
+  /** The gate's verdict for this package at a given canonical status. */
+  function availability(effectiveStatus: "active" | "archived" | undefined) {
+    return new Map([
+      [
+        PACKAGE,
+        resolveAgentRunAvailability({
+          packageName: PACKAGE,
+          effectiveStatus,
+          templateVersion: "0.3.0",
+          catalog,
+          statusOf: () => undefined,
+          isBlockingEdge: () => false,
+        }),
+      ],
+    ]);
+  }
+
+  function templateDerivedMap() {
+    return new Map<
+      string,
+      { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+    >([[PACKAGE, { version: "0.3.0", isArchived: false }]]);
+  }
+
+  it("offers the install control for a guardedOptional package with zero installed rows", () => {
+    // The gate refuses the run of this package as "not-installed".
+    expect(availability(undefined).get(PACKAGE)).toEqual({
+      state: "not-installed",
+      displayName: "Blog Draft Writer",
+    });
+
+    const installedVersionByName = templateDerivedMap();
+    applyRunGateInstallTruth(installedVersionByName, availability(undefined));
+
+    expect(installedVersionByName.has(PACKAGE)).toBe(false);
+    expect(
+      resolveMarketplaceCardCta(
+        { packageVersion: "0.3.0" } as MarketplaceCardData,
+        installedVersionByName.get(PACKAGE),
+        true,
+        "compatible",
+      ),
+    ).toEqual({ state: "install", disabled: false });
+  });
+
+  it("keeps Installed when a canonical installed row is present", () => {
+    expect(availability("active").get(PACKAGE)).toEqual({ state: "runnable" });
+
+    const installedVersionByName = templateDerivedMap();
+    applyRunGateInstallTruth(installedVersionByName, availability("active"));
+
+    expect(installedVersionByName.get(PACKAGE)).toEqual({ version: "0.3.0", isArchived: false });
+    expect(
+      resolveMarketplaceCardCta(
+        { packageVersion: "0.3.0" } as MarketplaceCardData,
+        installedVersionByName.get(PACKAGE),
+        true,
+        "compatible",
+      ),
+    ).toEqual({ state: "installed" });
+  });
+
+  it("leaves an archived row alone (the gate proves archived, not absent)", () => {
+    expect(availability("archived").get(PACKAGE)).toEqual({ state: "archived" });
+
+    const installedVersionByName = new Map<
+      string,
+      { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+    >([[PACKAGE, { version: "0.3.0", isArchived: true }]]);
+    applyRunGateInstallTruth(installedVersionByName, availability("archived"));
+
+    expect(
+      resolveMarketplaceCardCta(
+        { packageVersion: "0.3.0" } as MarketplaceCardData,
+        installedVersionByName.get(PACKAGE),
+        true,
+        "compatible",
+      ),
+    ).toEqual({ state: "restore" });
   });
 });
