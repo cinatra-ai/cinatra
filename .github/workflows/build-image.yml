@@ -1103,6 +1103,23 @@ jobs:
           fi
           exit 0
 
+      # cinatra#3067 — the AG-UI durable-resume tier, wired HERE because this is
+      # where a real Redis already runs: the `redis:8` service declared above,
+      # health-checked, with REDIS_URL set at job level so this step cannot read
+      # an unset value. The tier is a ROOT config (vitest/integration/3067.config.ts),
+      # so this step runs from the repository root and carries NO
+      # `working-directory:` — unlike the two packages/agents steps above.
+      # BLOCKING on purpose: scripts/audit/ci-pinned-tests-exist.mjs direction 4
+      # credits a tier only to a step that can turn a check red, and the defect
+      # class this suite measures — a durable log that replays out of order, or
+      # a resume cursor that loses or repeats a frame — is silent everywhere
+      # else. The script name is written BARE, with no forwarded argument, which
+      # is what that gate credits.
+      - name: AG-UI durable-resume — real-Redis tier (cinatra#3067)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:agent-ui-durable-resume
+
       # Always — even when a step above failed or the job was cancelled — so a
       # red run does not leak a running container into the runner's teardown.
       # The VM is ephemeral and this would cost nothing either way, but a
