@@ -162,6 +162,13 @@ export async function handleBoundScreenFill(
       }),
   });
   if (outcome.kind === "unavailable") return refuse();
+  if (outcome.kind === "not-editable") {
+    // NOT a refusal either, and for the same reason `no-fields` is not: every
+    // gate passed and the person is looking at this form. The platform's own
+    // sentence is relayed word for word (cinatra#2996), so what they read is why
+    // their schedule did not move — not a line that could mean anything.
+    return say({ ok: false, placed: [], message: outcome.message });
+  }
   if (outcome.kind === "no-fields") {
     // NOT a refusal: the screen is there and the person may fill it — nothing
     // asked for was one of its fields. Saying which fields it HAS is what lets

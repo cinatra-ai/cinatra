@@ -312,7 +312,11 @@ export async function resolveBoundCard(input: {
   // gates, so consulting it here would refuse every schedule screen too.
   if (
     chosen.resolution.kind === "hitl_screen" ||
-    chosen.resolution.kind === "schedule_form"
+    chosen.resolution.kind === "schedule_form" ||
+    // THE ARMED FORM BINDS ON THE SAME TERMS (cinatra#2934): the page claims
+    // nothing for it either — the server minted its ref from the run the box
+    // sits under — and the counter enumerates review gates only.
+    chosen.resolution.kind === "armed_schedule_form"
   ) {
     return {
       kind: "bound",
@@ -472,6 +476,18 @@ export function primaryControlFor(
   // and the fill an induced press would have to make first appears in the
   // person's own fields, in front of them, before anything is sent.
   if (resolution.kind === "hitl_screen") return "submit";
+  // AN ARMED SCHEDULE'S FORM MINTS `save`, on exactly the same terms
+  // (cinatra#2934, the armed-trigger tab). Issue 2934's own acceptance — "an
+  // armed one-off changed before firing and refused after" — needs the second
+  // half of the plan's sentence to work on this surface too, and the same four
+  // bounds hold: the grant is minted only for a message the PERSON sent with
+  // that form bound, it names one control, it lives two minutes, it is spent
+  // once, and the press runs the card's own actor-checked save — whose guard is
+  // asked before the write and again inside it. WHAT IS SAVED is the rows the
+  // person's own form was shown holding, read back on the server from the fill
+  // row; the model supplies none of it, and the handler REFUSES a save unless
+  // this message also placed a fill on that form.
+  if (resolution.kind === "armed_schedule_form") return "save";
   return null;
 }
 

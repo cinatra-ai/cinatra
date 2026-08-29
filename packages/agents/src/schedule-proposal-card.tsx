@@ -151,7 +151,14 @@
 // already have.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { CalendarClock, Check, Repeat, Zap } from "lucide-react";
 
 import type {
@@ -183,7 +190,21 @@ import {
   useLifecycleCardResolve,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
-import { WEEKDAY_LABELS } from "./trigger-recurrence";
+import { WEEKDAY_LABELS, applyArmedScheduleFill } from "./trigger-recurrence";
+
+/**
+ * A FILL THE WINDOW UNDER THIS CARD PLACED (cinatra#2934, the armed-trigger
+ * tab).
+ *
+ * THE OBJECT IS THE TURN. Its host mints a NEW one per accepted turn and never
+ * mutates it, so the same values placed twice are two fills and the rows move
+ * both times. It carries no timestamp: a clock reading is not an identity — two
+ * turns landing in one millisecond would read as one and the second change
+ * would be silently dropped.
+ */
+export type ArmedScheduleFill = {
+  readonly values: Record<string, unknown>;
+};
 
 /** The one decision entry — the SAME endpoint the review card's floor posts to
  *  (`src/app/api/lifecycle-views/decide/route.ts`), branched by kind. §VI's card
@@ -350,8 +371,18 @@ export async function adjustAndConfirmSchedule(input: {
  */
 export function ScheduleProposalCard({
   view,
+  armedFill = null,
 }: {
   view: { viewType: "trigger_schedule_proposal"; schemaVersion: number; ref: string };
+  /**
+   * WHAT THE PROMPT WINDOW UNDER THIS CARD PLACED IN ITS ROWS (cinatra#2934).
+   *
+   * The window is a SIBLING of this card, not a child of it, so a fill reaches
+   * the rows the only way it can: through the host that draws both. It moves the
+   * SETTLED phase's draft and nothing else — a proposal's rows are the
+   * conversation's, and a frozen card has no draft at all.
+   */
+  armedFill?: ArmedScheduleFill | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
@@ -440,7 +471,7 @@ export function ScheduleProposalCard({
         }}
       />
     ) : (
-      <SettledPhase body={body} host={host} onDecide={decide} />
+      <SettledPhase body={body} host={host} onDecide={decide} armedFill={armedFill} />
     );
 
   return (
@@ -638,10 +669,12 @@ function SettledPhase({
   body,
   host,
   onDecide,
+  armedFill = null,
 }: {
   body: TriggerScheduleProposalSettledView;
   host: LifecycleCardHost;
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  armedFill?: ArmedScheduleFill | null;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState<null | "save" | "cancel">(null);
@@ -661,6 +694,29 @@ function SettledPhase({
     () => JSON.stringify(draft) !== JSON.stringify(body.schedule),
     [draft, body.schedule],
   );
+
+  // A DESCRIBED CHANGE MOVES THESE ROWS (cinatra#2934, the armed-trigger tab).
+  //
+  // It is written into `draft` — the SAME state every control on this card
+  // writes — through `applyArmedScheduleFill`, the one function that says what a
+  // placed value does to a selection, so a change typed into the window under
+  // this card and the same change made with the mouse leave the form in the same
+  // place. Nothing is saved by it: **Save changes** lights up because the draft
+  // now differs from what is armed, and the person presses it.
+  //
+  // THE TURN IS THE KEY, and the turn is the FILL OBJECT ITSELF: the same values
+  // placed twice are two turns and must move the rows twice. Applied in an effect rather than during
+  // render because it is an event from a sibling, and only while the card can
+  // still be changed — a frozen card draws the server's schedule and keeps no
+  // draft at all.
+  const appliedFill = useRef<ArmedScheduleFill | null>(null);
+  useEffect(() => {
+    if (!armedFill || !body.canSave) return;
+    if (appliedFill.current === armedFill) return;
+    appliedFill.current = armedFill;
+    setSaved(false);
+    setDraft((prev) => applyArmedScheduleFill(prev, armedFill.values));
+  }, [armedFill, body.canSave]);
 
   // WHEN THE SCHEDULER STOPS BEING EDITABLE (plan (A) §7.2 and §7.4 as-designed
   // step 6, both as amended 2026-08-25 — cinatra#2972).

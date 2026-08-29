@@ -1505,6 +1505,18 @@ export const SAVE_SCHEDULE_REFUSALS = {
     "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
   immediate:
     "\u201cRun right after setup\u201d starts the run now rather than scheduling it, so it is not a change you can save here. Set a time or a recurrence instead.",
+  /**
+   * The schedule is still being INSTALLED (cinatra#2934, the armed-trigger
+   * tab's window). The write guard below deliberately says nothing about this
+   * state — the installer exposes a schedule to the scheduler BEFORE it marks
+   * the intent done, so refusing a write on it would take away an operation the
+   * server is still granting. `canSaveInstalled` DOES withhold **Save changes**
+   * for it, so a surface that has to explain a withheld control needs the
+   * sentence, and it belongs in this table with the others rather than in a
+   * second one.
+   */
+  arming:
+    "This schedule is still being installed, so it can't be changed yet. Try again in a moment.",
   /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
   stopped:
     "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
@@ -1564,6 +1576,29 @@ function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null 
     return SAVE_SCHEDULE_REFUSALS.firedOneOff;
   }
   return null;
+}
+
+/**
+ * WHY THIS ARMED SCHEDULE CANNOT BE CHANGED RIGHT NOW — in words, for a surface
+ * that has to say it (cinatra#2934, the armed-trigger tab's window).
+ *
+ * NOT A SECOND PREDICATE, AND THAT IS THE WHOLE POINT. It is the guard above —
+ * the one function `updateRunTriggerScheduleForActor` asks before it delegates
+ * and again inside the setter — plus the ONE state that guard deliberately
+ * leaves alone: a trigger still arming, which **Save changes** is withheld for
+ * (`canSaveInstalled`) while the write is still granted. So the window's answer
+ * and the write's answer are the same answer, and the parity is pinned by a
+ * table test rather than by two functions agreeing on purpose.
+ *
+ * `null` means "this schedule can still be changed" — the same reading
+ * `canSaveInstalled` returns `true` for.
+ */
+export function saveScheduleRefusalFor(input: {
+  readonly trigger: TriggerRecord | null;
+  readonly arming: boolean;
+}): string | null {
+  if (input.arming) return SAVE_SCHEDULE_REFUSALS.arming;
+  return saveScheduleGuardRefusal(input.trigger);
 }
 
 export async function updateRunTriggerScheduleForActor(

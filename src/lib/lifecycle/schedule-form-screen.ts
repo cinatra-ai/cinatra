@@ -52,6 +52,18 @@ import type { TriggerRecord } from "@cinatra-ai/agents/trigger-store";
 export const SCHEDULE_FORM_X_RENDERER = "schedule-form";
 
 /**
+ * The ARMED form's own renderer name (cinatra#2934, the armed-trigger tab).
+ *
+ * The same rows, drawn by a different component in a different state:
+ * `ScheduleProposalCard`'s settled phase rather than `TriggerScreenClient`. The
+ * bound screen's `xRenderer` is its IDENTITY, so the two readings of the
+ * scheduler form carry two names — which is what lets a fixture, a window and a
+ * frame say which of them is on the page — while sharing one declaration of what
+ * the rows ARE (below).
+ */
+export const ARMED_SCHEDULE_FORM_X_RENDERER = "armed-schedule-form";
+
+/**
  * The scheduler form's own rows.
  *
  * WHAT IS HERE IS WHAT THE PERSON SEES. The three rows the plan names — when the
@@ -155,6 +167,21 @@ export function scheduleFormSchema(): Record<string, unknown> {
       },
     },
   };
+}
+
+/**
+ * The ARMED scheduler form's rows (cinatra#2934, the armed-trigger tab).
+ *
+ * THE SAME CLOSED SET, DELIBERATELY. The armed card draws the same three option
+ * rows as the scheduling step — plan (A) §7.2, "the same card, with the same
+ * option rows, now shows the armed schedule" — so a second schema would be a
+ * second vocabulary for one form. `immediate` STAYS in the set because the row
+ * is drawn and pressable; the SAVE refuses it in the server's own words
+ * (`SAVE_SCHEDULE_REFUSALS.immediate`), which is exactly what the form's own
+ * button does with it.
+ */
+export function armedScheduleFormSchema(): Record<string, unknown> {
+  return scheduleFormSchema();
 }
 
 /** The rows this screen draws, in the order it draws them. */

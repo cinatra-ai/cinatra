@@ -178,12 +178,14 @@ describe("a file attached beside a message still reaches the run", () => {
 // ---------------------------------------------------------------------------
 // THE WINDOW IS THE SCREEN'S — the server binds it, the page claims nothing.
 // ---------------------------------------------------------------------------
-// AMENDED (cinatra#2934, repaired after the picture leg). The SCHEDULE screen
-// left this set: the surface in front of the person there is the scheduler form,
-// not the run's waiting screen, and binding the run's HITL gate row to it
-// offered the setup step's fields on a screen that draws none of them. The three
-// that remain are unchanged, the ARMED-trigger tab deliberately among them —
-// the armed form is cinatra#2788's and is not built here.
+// AMENDED TWICE (cinatra#2934). First the SCHEDULE screen left this set: the
+// surface in front of the person there is the scheduler form, not the run's
+// waiting screen, and binding the run's HITL gate row to it offered the setup
+// step's fields on a screen that draws none of them. Then the ARMED-TRIGGER tab
+// left it for exactly the same reason, on the maintainer's reading of this pull
+// request's Deviation 1 — its window sits under the ARMED scheduler form, which
+// is a bound screen of its own that lends a fill and the card's own **Save
+// changes**. TWO windows remain under the run's own waiting screen.
 describe("the windows under the run's own waiting screen are bound to it", () => {
   it("the turn names the run and the server mints the screen's ref", () => {
     const turn = read("src/lib/lifecycle/run-window-turn.ts");
@@ -199,13 +201,67 @@ describe("the windows under the run's own waiting screen are bound to it", () =>
     const turn = read("src/lib/lifecycle/run-window-turn.ts");
     expect(turn).toContain("encodeScheduleFormRef");
     const resolver = read("src/lib/lifecycle/bound-reference-resolver.ts");
-    // The form's rows are DECLARED by their own module, and the card lends a
-    // fill and nothing else — the person presses the form's own button.
+    // The form's rows are DECLARED by their own module, and the UNARMED card
+    // lends a fill and nothing else — the person presses the form's own button.
     expect(resolver).toContain("scheduleFormSchema");
     expect(resolver).toContain('if (resolution.kind === "schedule_form") return ["fill"];');
-    // And the lent action refuses anything that is not a waiting screen.
+    // And the lent action still refuses a resume for anything that is not a
+    // waiting screen.
     const action = read("src/lib/lifecycle/lent-action-mcp.ts");
     expect(action).toContain('if (bound.kind !== "hitl_screen") return refuseCardUnavailable();');
+  });
+
+  it("the ARMED-trigger tab is bound to the armed form, which lends its Save changes", () => {
+    // The turn mints the card's OWN run-scoped ref for that surface.
+    const turn = read("src/lib/lifecycle/run-window-turn.ts");
+    expect(turn).toContain("encodeScheduleRunRef");
+    expect(turn).toContain('if (surface === "armed-trigger") {');
+    // The resolver reads `canSave` from the SAME call the card resolves through
+    // — never a second rule of its own.
+    const resolver = read("src/lib/lifecycle/bound-reference-resolver.ts");
+    expect(resolver).toContain("resolveProposalForRun");
+    // The placement rule lives in the recurrence VOCABULARY, so no new module
+    // lands on any of the four routes carrying locked graph budgets.
+    expect(resolver).toContain('from "@cinatra-ai/agents/trigger-recurrence"');
+    expect(resolver).toContain("saveScheduleRefusalFor");
+    expect(resolver).toContain(
+      'if (resolution.kind === "armed_schedule_form") return ["fill", "save"];',
+    );
+    // Named in prose, never CALLED here: the boolean arrives from the card's
+    // own resolve, so there is no second computation of it to drift.
+    expect(resolver).not.toMatch(/canSaveInstalled\(\{/);
+    // And the save goes down the button's own road, not a second one.
+    const action = read("src/lib/lifecycle/lent-action-mcp.ts");
+    expect(action).toContain("decideTriggerScheduleProposal");
+    expect(action).toContain('op: "save"');
+    // Named in prose as the guard the card's own save delegates to — never
+    // reached around it from here.
+    expect(action).not.toMatch(/await updateRunTriggerScheduleForActor\(/);
+    expect(action).not.toContain('import("@cinatra-ai/agents/trigger-service")');
+    // The window itself is no longer inert: the turn's own fill reaches the
+    // rows above it, and a turn that PRESSED re-draws the card instead.
+    const win = read("packages/agents/src/schedule-prompt-window.tsx");
+    expect(win).toContain("await sendRunWindowTurn(prompt)");
+    expect(win).toContain("effect.fill");
+    expect(win).toContain("effect.acted");
+    expect(win).not.toContain("IT CHANGES NOTHING BY ITSELF");
+  });
+
+  it("the fill's TURN is the fill itself, never a clock reading", () => {
+    // convergence round 2, finding 4. Two turns landing inside one millisecond
+    // would read as one turn if the key were a timestamp, and the second
+    // described change would be dropped without a word. Both hosts mint a NEW
+    // fill object per accepted turn and the card compares the object.
+    for (const host of [
+      "packages/agents/src/run-schedule-tab.tsx",
+      "packages/agents/src/schedule-rail-step.tsx",
+    ]) {
+      const src = read(host);
+      expect(src, `${host} keys the fill by a clock reading`).not.toContain("Date.now()");
+      expect(src).toContain("setArmedFill({ values })");
+    }
+    const card = read("packages/agents/src/schedule-proposal-card.tsx");
+    expect(card).toContain("if (appliedFill.current === armedFill) return;");
   });
 
   it("the chat page names the run its composer sits under", () => {

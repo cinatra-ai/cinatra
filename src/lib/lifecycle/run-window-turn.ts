@@ -55,7 +55,7 @@ import { getAuthSession, resolveUserContextForUserId } from "@/lib/auth-session"
 // window is typed in by people who hold their access through a TEAM or a
 // PROJECT grant as often as by an owner, and hand-built hints would deny them.
 import { resolveBoundTurnActor } from "./bound-turn-actor";
-import { encodeScheduleFormRef } from "./lifecycle-card-ref";
+import { encodeScheduleFormRef, encodeScheduleRunRef } from "./lifecycle-card-ref";
 
 // THE ASSISTANT RUNTIME IS REACHED LAZILY, and that is load-bearing rather
 // than a style choice. `canRespondInRunWindow` below is called by the SERVER
@@ -237,10 +237,15 @@ function boundedClaim(
  *   · the SCHEDULE screen binds the SCHEDULER FORM, whose ref this mints from
  *     the run the box sits under, server-side, exactly as a parked screen's is
  *     minted; it lends a fill and no press at all;
+ *   · the ARMED-TRIGGER tab — and the run page's schedule STEP, which mounts the
+ *     same window — binds the ARMED scheduler form, addressed by the RUN-SCOPED
+ *     schedule ref its own card is already drawn from, so the box and the form
+ *     it is about name one thing. It lends a fill AND the card's own Save
+ *     changes, which is the second half of the plan's sentence
+ *     (cinatra#2934, the armed-trigger tab — this pull request's Deviation 1,
+ *     closed);
  *   · every other window sits under the run's own waiting screen and names the
- *     RUN, so the binder mints that screen's ref. The ARMED-trigger tab is
- *     deliberately among them and unchanged: the armed form is cinatra#2788's
- *     and is not built here.
+ *     RUN, so the binder mints that screen's ref.
  *
  * PURE and exported so the reading is one readable line under test rather than a
  * condition buried in a turn.
@@ -250,10 +255,16 @@ export function boundScreenClaimForSurface(
   runId: string,
   mintScheduleFormRef: (runId: string) => string | null = (id) =>
     encodeScheduleFormRef({ runId: id }),
+  mintArmedScheduleRef: (runId: string) => string | null = (id) =>
+    encodeScheduleRunRef({ runId: id }),
 ): { readonly screenRunIds: readonly string[]; readonly candidateRefs: readonly string[] } {
   if (surface === "review") return { screenRunIds: [], candidateRefs: [] };
   if (surface === "schedule") {
     const ref = mintScheduleFormRef(runId);
+    return { screenRunIds: [], candidateRefs: ref ? [ref] : [] };
+  }
+  if (surface === "armed-trigger") {
+    const ref = mintArmedScheduleRef(runId);
     return { screenRunIds: [], candidateRefs: ref ? [ref] : [] };
   }
   return { screenRunIds: [runId], candidateRefs: [] };

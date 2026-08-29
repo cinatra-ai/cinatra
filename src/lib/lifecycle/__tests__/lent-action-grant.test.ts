@@ -82,7 +82,16 @@ describe("the grant names the person, the message, the card and ONE control", ()
   });
 
   it("the PRESSABLE vocabulary is exactly the buttons a card draws", () => {
-    expect([...LENT_ACTION_CONTROLS]).toEqual(["comment", "approve", "reject", "submit"]);
+    // `save` joined it with the ARMED scheduler form (cinatra#2934, the
+    // armed-trigger tab): it IS a button that card draws, and the plan puts it
+    // on the ask road — "one road for the press and for the ask".
+    expect([...LENT_ACTION_CONTROLS]).toEqual([
+      "comment",
+      "approve",
+      "reject",
+      "submit",
+      "save",
+    ]);
     expect(isLentActionControl("fill")).toBe(false);
     expect(isLentActionControl("approve")).toBe(true);
   });
