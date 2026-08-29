@@ -3486,6 +3486,21 @@ jobs:
         shell: bash
         run: pnpm test:extension-tables
 
+      # cinatra#3028 (lifecycle-c W4) — the object-backed contract (enabler 0.13)
+      # and the typed promotion road (enabler 0.14) against a real database. The
+      # unit tier proves what each road DECIDES against substituted ports; what
+      # only Postgres can show is that the mint's produced event commits inside
+      # the capture's own transaction and survives the outbox's emitter CHECK,
+      # that the guard keeps a reuse from emitting, and that the promotion's
+      # compare-and-set retypes while the appended revision shares the base
+      # revision's resource and the append-only trigger leaves the history alone.
+      # Wired here on arrival, by the same convention as the tiers above, so it
+      # cannot join the class of root tiers that run nowhere.
+      - name: Object-backed contract + typed promotion — real-DB tier (cinatra#3028, lifecycle-c W4)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-c-w4
+
       # cinatra#3052 — the widget schedule grant's own real-DB tier, wired in
       # the SAME change that adds it, beside the four tiers above and for the
       # reason the block above records: a root config that no workflow invokes

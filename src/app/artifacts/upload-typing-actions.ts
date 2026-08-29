@@ -164,7 +164,23 @@ export async function listInstalledTypesForArtifact(
 }
 
 export type AssertMeaningResult =
-  | { ok: true }
+  | {
+      ok: true;
+      /**
+       * THE TYPED PROMOTION ROAD's outcome (enabler 0.14 of `PLAN: Agents
+       * Lifecycle (C)`, cinatra#3028), when the confirmed extension is one the
+       * MATCHER associated with this row.
+       *
+       * Reported, never silent, and never a condition of the confirmation:
+       * writing the person's meaning is the thing they asked for, and a
+       * promotion that could not run must say WHY rather than leave the surface
+       * claiming a retype that did not happen. Absent when nothing about this
+       * row was promotable.
+       */
+      promotion?:
+        | { promoted: true; toType: string; representationRevisionId: string; revision: number }
+        | { promoted: false; reason: string };
+    }
   | {
       ok: false;
       reason: "auth-required" | "not-found" | "denied" | "invalid-type" | "blocked";
@@ -245,8 +261,95 @@ export async function assertUploadMeaning(input: {
       message: "A higher-ranked meaning already applies to this artifact.",
     };
   }
+
+  // THE TYPED PROMOTION ROAD (enabler 0.14). The plan: "a matched base-type row
+  // — an upload the matcher associated with an extension — is promoted into that
+  // extension's own type as a new revision sharing the content, ON THE MATCHER'S
+  // ASSERTION AT ITS THRESHOLD AND WITH THE PERSON'S CONFIRMATION WHERE THE
+  // PRODUCT ALREADY ASKS FOR ONE."
+  //
+  // THIS IS THAT PLACE, and deliberately the only one: §VI.1's Confirm is where
+  // the product already asks. No new confirmation surface is invented, and the
+  // person's meaning assertion is written FIRST — the promotion rides a
+  // confirmation that has already landed, so a promotion that refuses leaves the
+  // meaning they chose intact.
+  const promotion = await promoteOnConfirmedMeaning({
+    orgId,
+    artifactId: input.artifactId,
+    extension: input.extension,
+    principalId: actor.principalId ?? null,
+  });
+
   revalidatePath("/artifacts");
-  return { ok: true };
+  return promotion ? { ok: true, promotion } : { ok: true };
+}
+
+/**
+ * Run the typed promotion road for a confirmation, or say why it did not run.
+ *
+ * Returns NULL when the road does not apply at all — the extension declares no
+ * type of its own, so there is nothing to promote INTO and nothing worth
+ * reporting on the surface. Every other outcome is reported: a refusal names its
+ * reason, so "I confirmed and nothing was retyped" is answerable.
+ *
+ * BEST-EFFORT AROUND AN INFRASTRUCTURE FAILURE ONLY. A thrown store error is
+ * reported as a refusal rather than failing the confirmation the person already
+ * completed; a business refusal is a value from the road itself.
+ */
+async function promoteOnConfirmedMeaning(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  principalId: string | null;
+}): Promise<Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null> {
+  try {
+    const { matcherManifestRegistry, objectTypeRegistry } = await import(
+      "@cinatra-ai/objects/registry"
+    );
+    // THE EXTENSION'S OWN TYPE: the one artifact type its package defines. A
+    // package that defines none is a pure matcher pack — the road does not
+    // apply. A package that defines SEVERAL cannot be resolved from a
+    // package-keyed confirmation, so it is left alone rather than guessed at.
+    const owned = objectTypeRegistry
+      .getTypesForPackage(input.extension)
+      .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
+      .filter((t) => t.def?.isArtifact != null);
+    if (owned.length !== 1) return null;
+    const ownType = owned[0]!;
+    const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
+
+    // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
+    // the matcher itself resolved it from — never a default invented here. A
+    // package with no matcher declaration never matched this row, so the road
+    // refuses on the missing assertion rather than on a fabricated threshold.
+    const entry = matcherManifestRegistry
+      .list()
+      .find((e) => e.packageName === input.extension);
+    if (!entry) return null;
+
+    const { promoteMatchedArtifactType } = await import(
+      "@/lib/artifacts/typed-promotion-store"
+    );
+    const outcome = promoteMatchedArtifactType({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      extension: input.extension,
+      ownType: { typeId: ownType.typeId, acceptsMimes },
+      threshold: entry.matcherConfidenceThreshold,
+      confirmed: true,
+      createdBy: input.principalId,
+    });
+    return outcome.ok
+      ? {
+          promoted: true,
+          toType: outcome.toType,
+          representationRevisionId: outcome.representationRevisionId,
+          revision: outcome.revision,
+        }
+      : { promoted: false, reason: outcome.reason };
+  } catch {
+    return { promoted: false, reason: "promotion-unavailable" };
+  }
 }
 
 /**

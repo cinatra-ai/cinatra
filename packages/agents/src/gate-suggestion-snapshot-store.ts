@@ -71,6 +71,8 @@ import {
 } from "./schema";
 import { reviewTargetKey } from "@/lib/artifacts/artifact-review-target";
 import {
+  snapshotSuggestions,
+  snapshotTargetPayloads,
   verifyGateSuggestionSnapshotPayload,
   type GateSuggestionSnapshotPayload,
 } from "@/lib/lifecycle/lifecycle-suggestion-producer";
@@ -116,7 +118,7 @@ export async function writeGateSuggestionSnapshot(input: {
 }): Promise<WriteGateSuggestionSnapshotOutcome> {
   const verified = verifyGateSuggestionSnapshotPayload(input.payload);
   if (!verified) return { status: "refused", reason: "hash-unverified" };
-  if (verified.suggestions.length === 0) {
+  if (snapshotSuggestions(verified).length === 0) {
     return { status: "refused", reason: "empty-snapshot" };
   }
 
@@ -140,13 +142,22 @@ export async function writeGateSuggestionSnapshot(input: {
       return { status: "refused", reason: "gate-unavailable" };
     }
 
-    // 2. GATE-BOUND: the snapshot's target must be one the gate FROZE.
+    // 2. GATE-BOUND: EVERY target the payload carries must be one the gate
+    //    FROZE. A multi-target snapshot (enabler 0.15) holds one payload per
+    //    pinned target, so the check is over the whole set — one target the gate
+    //    never pinned would smuggle a proposal about a revision nobody is
+    //    reviewing into a set the reviewer treats as this gate's.
     const pinned = (gate.pinnedTargets as PinnedReviewTargetRow[]) ?? [];
-    const wanted = reviewTargetKey({
-      artifactId: verified.target.artifactId,
-      representationRevisionId: verified.target.representationRevisionId,
-    });
-    if (!pinned.some((t) => reviewTargetKey(t) === wanted)) {
+    const pinnedKeys = new Set(pinned.map((t) => reviewTargetKey(t)));
+    const allPinned = snapshotTargetPayloads(verified).every((entry) =>
+      pinnedKeys.has(
+        reviewTargetKey({
+          artifactId: entry.target.artifactId,
+          representationRevisionId: entry.target.representationRevisionId,
+        }),
+      ),
+    );
+    if (!allPinned) {
       return { status: "refused", reason: "target-not-pinned" };
     }
 

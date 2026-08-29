@@ -1558,7 +1558,13 @@ const LEGACY_PERSISTENCE_PROSE_TOKENS = [
  */
 export function scanOasForArtifactParityFindings(
   parsed: Record<string, unknown>,
-  opts?: { produces?: readonly string[] | null },
+  opts?: {
+    produces?: readonly string[] | null;
+    /** The sibling package.json `cinatra.dependsOn` artifact-extension ids —
+     *  the second half of "neither declares nor depends on" (enabler 0.16).
+     *  Null/undefined ⇒ unknown. */
+    dependsOn?: readonly string[] | null;
+  },
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   const produces = opts?.produces ?? null;
@@ -1617,6 +1623,15 @@ export function scanOasForArtifactParityFindings(
   // depth, and prose can live in any prompt field.
   findings.push(...scanRiskClassMislabels(parsed));
   findings.push(...scanLegacyPersistenceProse(parsed));
+
+  // OAS-RUNTIME-013 — a step that saves a type the agent neither declares nor
+  // depends on (enabler 0.16 of `PLAN: Agents Lifecycle (C)`).
+  findings.push(
+    ...scanOasForUndeclaredTypeSaves(parsed, {
+      produces,
+      dependsOn: opts?.dependsOn ?? null,
+    }),
+  );
 
   return findings;
 }
@@ -1774,4 +1789,106 @@ function walkKeyedStrings(
       walkKeyedStrings(v, visit, k, `${path}.${k}`);
     }
   }
+}
+
+// ===========================================================================
+// OAS-RUNTIME-013 — THE COMPILER HALF OF THE UNOWNED-TYPE REFUSAL
+// (enabler 0.16 of `PLAN: Agents Lifecycle (C)`, cinatra#3028 / epic #3023).
+//
+// THE PLAN'S SENTENCE, VERBATIM: "the compiler flags an agent whose steps save
+// to a type it neither declares nor depends on — the dynamic-type namespace
+// resolves nowhere by design."
+//
+// WHY IT READS THE NODE'S WHOLE BODY. A passthrough save names its type in one
+// of several places — a `data.typeHint`, a `data.type`, an input default, a
+// nested body field — and pyagentspec walks all of them alike. Scanning the
+// SERIALIZED node body (the same text the placeholder inference already reads)
+// plus the declared input defaults finds a literal type id wherever the author
+// put it, and a templated type (`{{ ... }}`) yields no literal, so nothing is
+// invented for it.
+//
+// WARNING-ONLY, like every other finding on this advisory surface: the surface's
+// own hard invariant (`/api/oas-lint/scan-all` re-stamps to a blocker-authorized
+// source) is that nothing here blocks a publish. The plan's gates land in warn
+// mode and turn blocking with the fleet's declarations wave; this finding is
+// counted, not enforced, on exactly that schedule.
+// ===========================================================================
+
+/** A namespaced object-type id literal (`@scope/pkg:local`). The same grammar
+ *  `OBJECT_TYPE_NAMESPACE_RE` states, applied as a scanner over free text. */
+const OBJECT_TYPE_ID_LITERAL_RE = /@[\w-]+\/[\w-]+:[\w-]+/g;
+
+/** The defining extension package of a namespaced object-type id. */
+function definerOfTypeId(typeId: string): string | null {
+  const colon = typeId.lastIndexOf(":");
+  return colon > 0 ? typeId.slice(0, colon) : null;
+}
+
+/** The two permanently-tombstoned dynamic prefixes, restated as a local
+ *  predicate so this scanner stays free of the objects package's graph. */
+function isDynamicNamespaceTypeId(typeId: string): boolean {
+  return typeId.startsWith("@dynamic/types:") || typeId.startsWith("@cinatra-ai/dynamic:");
+}
+
+/**
+ * Flag every passthrough write step that names an object type the agent neither
+ * declares as produced nor declares a dependency on.
+ *
+ * `produces` and `dependsOn` are the agent's own two declarations. When BOTH are
+ * unknown (null), the scan says nothing: there is no declaration to measure the
+ * save against, and inventing one would flag every agent in the fleet.
+ */
+export function scanOasForUndeclaredTypeSaves(
+  parsed: Record<string, unknown>,
+  opts?: { produces?: readonly string[] | null; dependsOn?: readonly string[] | null },
+): ReviewFinding[] {
+  const produces = opts?.produces ?? null;
+  const dependsOn = opts?.dependsOn ?? null;
+  if (produces === null && dependsOn === null) return [];
+  const declared = new Set<string>([...(produces ?? []), ...(dependsOn ?? [])]);
+
+  const findings: ReviewFinding[] = [];
+  for (const flow of iterFlowComponents(parsed)) {
+    for (const node of flow.apiNodes) {
+      if (node.url === null || !node.url.includes(AGENTS_PASSTHROUGH_URL_MARKER)) continue;
+      if (node.tool === null || !ARTIFACT_PARITY_WRITE_TOOLS.has(node.tool)) continue;
+
+      const haystacks = [node.placeholderSourceText];
+      for (const value of node.inputDefaults.values()) {
+        if (typeof value === "string") haystacks.push(value);
+      }
+      const seen = new Set<string>();
+      for (const text of haystacks) {
+        OBJECT_TYPE_ID_LITERAL_RE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = OBJECT_TYPE_ID_LITERAL_RE.exec(text)) !== null) {
+          const typeId = m[0];
+          if (seen.has(typeId)) continue;
+          seen.add(typeId);
+          const definer = definerOfTypeId(typeId);
+          if (definer !== null && declared.has(definer)) continue;
+          const reason = isDynamicNamespaceTypeId(typeId)
+            ? "dynamic-namespace"
+            : "undeclared-definer";
+          findings.push({
+            code: "OAS-RUNTIME-013",
+            severity: "warning",
+            message:
+              `Step "${node.id}" (tool "${node.tool}") saves object type "${typeId}", which this ` +
+              `agent neither declares in cinatra.produces nor depends on (reason: ${reason}). ` +
+              (reason === "dynamic-namespace"
+                ? `The dynamic-type namespace resolves to no extension by design, so the save is ` +
+                  `refused at the write boundary with that reason. Save to a type an installed ` +
+                  `artifact extension declares, or stop persisting the value — a projection is a ` +
+                  `deterministic, non-persisting step.`
+                : `Declare "${definer ?? typeId}" in cinatra.produces or as an artifact dependency, ` +
+                  `or save to a type this agent already declares.`),
+            location: `$referenced_components.${node.id} (Flow "${flow.flowId}")`,
+            source: "deterministic",
+          });
+        }
+      }
+    }
+  }
+  return findings;
 }
