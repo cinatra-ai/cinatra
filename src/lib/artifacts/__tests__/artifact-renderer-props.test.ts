@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 import {
+  absentArtifactContent,
   buildArtifactRendererProps,
   assertSerializableRendererProps,
   ARTIFACT_RENDERER_PROPS_API_VERSION,
@@ -79,6 +80,7 @@ describe("buildArtifactRendererProps", () => {
       representation: { revisionId: "rev_1", mime: "application/pdf" },
       previewHref: "/api/artifacts/art_1/versions/rev_1/preview",
       downloadHref: "/api/artifacts/art_1/versions/rev_1/content",
+      content: absentArtifactContent(null),
     });
     expect(props.propsApiVersion).toBe(ARTIFACT_RENDERER_PROPS_API_VERSION);
     expect(props.artifact).toMatchObject({
@@ -111,6 +113,7 @@ describe("buildArtifactRendererProps", () => {
       representation: null,
       previewHref: null,
       downloadHref: null,
+      content: absentArtifactContent(null),
     });
     expect(props.identity).toEqual({ kind: "no-primary", extension: null });
     expect(props.representation).toBeNull();
@@ -122,6 +125,7 @@ describe("buildArtifactRendererProps", () => {
       representation: { revisionId: "rev_1", mime: "application/pdf" },
       previewHref: "/p",
       downloadHref: "/d",
+      content: absentArtifactContent(null),
     });
     expect(() => assertSerializableRendererProps(props)).not.toThrow();
     expect(JSON.parse(JSON.stringify(props))).toEqual(props);
@@ -149,6 +153,7 @@ describe("SDK re-export parity (cinatra#1627 AC3)", () => {
       representation: { revisionId: "rev_1", mime: "application/pdf" },
       previewHref: "/p",
       downloadHref: "/d",
+      content: absentArtifactContent(null),
     });
     // Compile-time: the value the host builds satisfies the type an extension
     // renderer imported from the SDK expects.

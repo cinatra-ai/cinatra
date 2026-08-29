@@ -398,7 +398,7 @@ const ISLAND_HEIGHT_EXPANDED = 760;
 // ladder above does not know about, because it lives entirely inside the
 // `pending`/`restricted` branch that already decided to draw the island. A
 // bare `<iframe>` left that window painting the page's own white, which is
-// what the 333 proof round photographed (evidence/2674-s8e V5 vs V6) and what
+// what the 333 proof round photographed (the S8e round, V5 vs V6) and what
 // this fixes.
 // ---------------------------------------------------------------------------
 

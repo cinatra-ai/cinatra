@@ -1066,3 +1066,21 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Claude Code (claude-sonnet-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 66fc6f485b95e68d173921f18a414828f2e307c9```
+
+## Correction for `dd736768963bc418907337d52f5ce1dc9ecf597b`
+
+chore(hygiene): proof artifacts leave the tree (PR #3059).
+
+The squash merged a branch that was two commits behind `main`, so the landed tree was
+not the reviewed head's tree and the post-merge gate reported `tree-mismatch`. The
+trailers were well-formed and truthful; the binding to the landed tree is re-asserted
+by this correction, cut from `main` at the corrected commit itself. The change is
+untouched — this corrects the RECORD only. Record: `records/attribution/attr-correction-dd736768.md`.
+
+```
+Gate-suite: cinatra-core@2026.08.4
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: dd736768963bc418907337d52f5ce1dc9ecf597b
+```

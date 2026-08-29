@@ -58,7 +58,7 @@
 // WHY IT IS A SUBPROCESS rather than part of the Playwright setup project: these
 // writers are `server-only`, so they resolve only under `--conditions=react-server`.
 // The setup project shells out to this file, which is the same shape the S9b
-// evidence round used (`evidence/2786-s9b-chat-thread-held/drivers/00-fixtures.mts`).
+// evidence round used (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2786-s9b-chat-thread-held/drivers/00-fixtures.mts`).
 //
 // NO REAL CREDENTIAL IS READ, USED OR STORED. The OpenAI row is a PRESENCE
 // placeholder: generation is served by `CINATRA_TEST_LLM_PROVIDER=scripted`, and

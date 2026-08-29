@@ -25,6 +25,7 @@ import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 import { loadArtifactRenderer } from "@/lib/artifacts/artifact-renderer-loader";
 import {
   ARTIFACT_RENDERER_PROPS_API_VERSION,
+  absentArtifactContent,
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 import {
@@ -97,6 +98,10 @@ export async function LibraryRowGlyph({
           representation: null,
           previewHref: null,
           downloadHref: null,
+          // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). A LIST GLYPH draws
+          // no content by design — it has no representation either — so the
+          // named absence is not "unwired" here, it is the truthful answer.
+          content: absentArtifactContent(null),
         });
         const { Component } = result;
         extensionGlyph = <Component {...props} />;

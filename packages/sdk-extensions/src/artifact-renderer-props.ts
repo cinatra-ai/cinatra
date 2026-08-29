@@ -24,6 +24,8 @@
 // mutual-assignability test keeps the two in lockstep, so a field added on
 // either side that is not mirrored fails the host typecheck.
 
+import type { ArtifactContentProjection } from "./artifact-content-channel";
+
 /**
  * The props-contract ABI version this leaf describes. A renderer declares the
  * `propsApiVersion` it expects in its `cinatra.artifact.ui` manifest entry; the
@@ -93,4 +95,14 @@ export interface ArtifactRendererProps {
     download: string | null;
     openInSource: string | null;
   };
+  /**
+   * THE VERSIONED SERVER CONTENT CHANNEL (enabler 0.3 of
+   * `PLAN: Agents Lifecycle (C)`).
+   *
+   * The discriminated content projection, read from the PINNED revision on the
+   * server. A display switches on `content.kind` and never fetches; `none` is a
+   * first-class answer with a named reason. Capped per content class by the
+   * host, which asserts the cap before this snapshot crosses to a renderer.
+   */
+  content: ArtifactContentProjection;
 }

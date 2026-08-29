@@ -1,0 +1,53 @@
+{
+  "$comment": "Capture receipt for the frozen published conformance manifests beside it. Every body in this directory is the VERBATIM response served at the url below on fetchedAt; nothing was reformatted. Re-derive any row with: curl -sS <url> | shasum -a 256. A row that no longer matches the live response is NOT a reason to edit this receipt: it is the drift this gate exists to report, and it moves only with the pin it belongs to.",
+  "fetchedAt": "2026-08-28",
+  "command": "curl -sS <url> -o <file>",
+  "publishedBaseUrl": "https://docs.cinatra.ai/references/design/conformance/",
+  "manifests": [
+    {
+      "file": "app.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app.json",
+      "httpStatus": 200,
+      "byteLength": 589,
+      "sha256": "379e7673771e6f582626057201425e325cf684d578b5bfdc9e7d4e5511e6a215",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:3d63418e9c8cef191a1a7a4c1ef43b842fe2ec5ef4db288fb616e4e436d5eb13"
+    },
+    {
+      "file": "app-components.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-components.json",
+      "httpStatus": 200,
+      "byteLength": 1211,
+      "sha256": "52615494243bb89764809afd8c8b8033b4722c0a1d1b6726452787973b490ecd",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:617b86b316e3835c385ebb86e10ba250c6db03c486d3d0b9eccfcdcb780a476c"
+    },
+    {
+      "file": "app-extensions.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-extensions.json",
+      "httpStatus": 200,
+      "byteLength": 3849,
+      "sha256": "9513577bfe20c16af19d93d2000bc7da3bf91aba1fea48e6301cd0b8e27a02b9",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:60465f0e227f0308c18a215c9a2d14c95efda2f064800a2c4c59c729491b019b"
+    },
+    {
+      "file": "app-connectors.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-connectors.json",
+      "httpStatus": 200,
+      "byteLength": 3690,
+      "sha256": "be135a4a4e8d5bf8ae3aaa9afad238cef5050864c4b874f07428f39cb683f223",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:a7b53676fceb18aed9d3b3991f45824627e1d5ea373b7f48b03926ebe822cd47"
+    },
+    {
+      "file": "app-notifications.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-notifications.json",
+      "httpStatus": 200,
+      "byteLength": 2621,
+      "sha256": "1538d3091aa1e752730d48d2123d4d58bc1a0d90e181bd4c746c44708ed44e11",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:e27b22817cac8b427e150739674caa0fa4d96bb9fa46a7b846ff46261cb95790"
+    }
+  ]
+}

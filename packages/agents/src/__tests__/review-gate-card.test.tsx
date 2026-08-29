@@ -389,7 +389,7 @@ describe("§III the target island", () => {
   // cinatra#2713 — the island's OWN load state: loading / loaded / timed-out.
   // The outer §IV "pending" resolve above is already settled by this point;
   // these tests are about the SEPARATE window before the iframe's own `load`
-  // event, which used to paint a blank white box (evidence/2674-s8e V5).
+  // event, which used to paint a blank white box (the S8e proof round, V5).
   // ---------------------------------------------------------------------
 
   /**

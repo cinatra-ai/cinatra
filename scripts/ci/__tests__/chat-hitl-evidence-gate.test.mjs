@@ -120,14 +120,14 @@ describe("partitionFindings — grandfathering by identity", () => {
   // from the live list made these tests pass only while debt existed — i.e. the
   // mechanism went untested exactly when the list was clean, which is the state
   // it is supposed to be in.
-  const KNOWN = "evidence/unbound-cell:X1__review-card__chat_thread__pending";
+  const KNOWN = "capture/unbound-cell:X1__review-card__chat_thread__pending";
   const POLICY_WITH_DEBT = {
     ...POLICY,
     knownFindings: [KNOWN],
     knownFindingNotes: { [KNOWN]: "a fixture entry, cleared by nothing" },
   };
   const findings = [
-    { key: KNOWN, code: "evidence/unbound-cell", detail: "" },
+    { key: KNOWN, code: "capture/unbound-cell", detail: "" },
     { key: "pointer-text:src/new.ts:10", code: "pointer-text", detail: "" },
   ];
 
@@ -249,9 +249,9 @@ beforeAll(() => {
     fixturePolicyPath,
     JSON.stringify({
       ...POLICY,
-      knownFindings: ["evidence/unbound-cell:X1__review-card__chat_thread__pending"],
+      knownFindings: ["capture/unbound-cell:X1__review-card__chat_thread__pending"],
       knownFindingNotes: {
-        "evidence/unbound-cell:X1__review-card__chat_thread__pending": "fixture",
+        "capture/unbound-cell:X1__review-card__chat_thread__pending": "fixture",
       },
     }),
   );
@@ -279,7 +279,7 @@ beforeAll(() => {
           proofs: [
             // Deliberately NOT one of the grandfathered cell names: this
             // fixture is the NEW claim a new branch makes, which must fail.
-            { file: "evidence/x/README.md", testName: "X9__review-card__chat_thread__pending.png" },
+            { file: "test-results/x/README.md", testName: "X9__review-card__chat_thread__pending.png" },
           ],
         },
       ],
@@ -307,7 +307,7 @@ describe("runGate over a fixture tree", () => {
     expect(result.exitCode).toBe(1);
     const codes = result.failing.map((f) => f.code);
     expect(codes).toContain("pointer-text");
-    expect(codes).toContain("evidence/unbound-cell");
+    expect(codes).toContain("capture/unbound-cell");
     expect(result.failing.find((f) => f.code === "pointer-text").detail).toMatch(
       /held-answer\.ts/,
     );
@@ -338,7 +338,7 @@ describe("runGate over a fixture tree", () => {
       },
     });
     expect(result.grandfathered.map((f) => f.code)).toContain(
-      "evidence/unbound-cell",
+      "capture/unbound-cell",
     );
     expect(result.failing.map((f) => f.code)).toEqual(["pointer-text"]);
   });
