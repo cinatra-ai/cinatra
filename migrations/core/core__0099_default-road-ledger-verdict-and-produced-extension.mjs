@@ -1,4 +1,4 @@
-// core__0098 — the default road's data (cinatra#3029, epic #3023 W5).
+// core__0099 — the default road's data (cinatra#3029, epic #3023 W5).
 //
 // The operator-upgrade twin of four fresh-install bootstrap edits landing in the
 // SAME pull request:
@@ -51,7 +51,7 @@
 // WIDENING, and two DROP NOT NULLs. Nothing is rewritten, nothing is deleted,
 // and every value the old constraints admitted is still admitted.
 //
-// SEQ 0098 — strictly greater than the max shipped seq on the base branch
+// SEQ 0099 — strictly greater than the max shipped seq on the base branch
 // (core__0097 artifact-review-audit-first-party-renderer-kind). migrations/**
 // is HIGH-RISK: owner approval required; the lane never merges.
 //
@@ -130,7 +130,7 @@ export function down(pgm) {
     DO $dr_path_down$
     BEGIN
       IF EXISTS (SELECT 1 FROM artifact_materializations WHERE path = 'default_road') THEN
-        RAISE NOTICE 'core__0098 down(): default_road ledger rows exist; leaving artifact_materializations_path_check widened. Archive/migrate those rows manually to narrow it.';
+        RAISE NOTICE 'core__0099 down(): default_road ledger rows exist; leaving artifact_materializations_path_check widened. Archive/migrate those rows manually to narrow it.';
       ELSE
         ALTER TABLE artifact_materializations DROP CONSTRAINT IF EXISTS artifact_materializations_path_check;
         ALTER TABLE artifact_materializations
