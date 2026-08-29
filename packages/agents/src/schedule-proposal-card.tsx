@@ -659,6 +659,9 @@ function SettledPhase({
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
+  // THE CARD'S OWN READING OF WHAT IS ARMED — the schedule `draft` started from
+  // and the ONE thing an edit is measured against (cinatra#3053).
+  const [baseline, setBaseline] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState<null | "save" | "cancel">(null);
   const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -672,9 +675,30 @@ function SettledPhase({
   // label; its one control is **Cancel schedule** … there is no Run now".
   const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
 
+  // AN EDIT IS THE READER'S, AND THE THREAD DOES NOT GET A VOTE (cinatra#3053).
+  //
+  // This used to read `draft` against `body.schedule` — a PROP the conversation
+  // refreshes underneath a card that is never remounted. `useLifecycleCardResolve`
+  // re-reads on the window `focus` event, which is THREAD-WIDE: every mounted
+  // lifecycle card shares it, so a SECOND run dispatched into the same thread
+  // re-resolved this settled card too. And a re-resolve does not have to answer
+  // byte-alike for one unchanged armed schedule — `selectionsFromInstalled`
+  // re-derives a one-off's `runAt` off the clock whenever the installed row
+  // carries no instant. So a benign refresh moved `body.schedule` out from under
+  // a `draft` seeded once at mount, `edited` went true with nothing touched, and
+  // an untouched card drew **Save changes** at full strength: the card claiming
+  // unsaved changes the reader never made.
+  //
+  // The comparison is now against the card's OWN baseline: the reading this card
+  // opened on, moved by ONE thing only — this card's own landed save. Nothing
+  // that merely arrives in the thread can reach it, and a refresh is not allowed
+  // to rewrite the rows under the reader either: the draft is left exactly where
+  // it was, as it always has been on this phase, so a re-derived read-back can
+  // neither invent an edit nor churn a run time the reader is looking at
+  // (cinatra#3053 convergence).
   const edited = useMemo(
-    () => JSON.stringify(draft) !== JSON.stringify(body.schedule),
-    [draft, body.schedule],
+    () => JSON.stringify(draft) !== JSON.stringify(baseline),
+    [draft, baseline],
   );
 
   // WHEN THE SCHEDULER STOPS BEING EDITABLE (plan (A) §7.2 and §7.4 as-designed
@@ -739,8 +763,13 @@ function SettledPhase({
     setPending("save");
     const outcome = await onDecide("save", draft);
     setPending(null);
-    if (outcome.kind === "saved") setSaved(true);
-    else if (outcome.kind === "not-permitted" || outcome.kind === "error") {
+    if (outcome.kind === "saved") {
+      setSaved(true);
+      // WHAT WAS SAVED IS WHAT IS ARMED. The re-resolve confirms it, but the
+      // baseline moves here so the control goes quiet the moment the save lands
+      // rather than waiting on a read that may answer with a re-derived field.
+      setBaseline(draft);
+    } else if (outcome.kind === "not-permitted" || outcome.kind === "error") {
       setRefusal(outcome.message);
     }
   };
