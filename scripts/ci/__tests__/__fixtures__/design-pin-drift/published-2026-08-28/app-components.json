@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-components.html",
+  "contentHash": "sha256:617b86b316e3835c385ebb86e10ba250c6db03c486d3d0b9eccfcdcb780a476c",
+  "surfaces": [
+    {
+      "id": "breadcrumb-entity-resolution",
+      "fields": [
+        {
+          "field": "crumb-label",
+          "source": "entity.displayName"
+        },
+        {
+          "field": "crumb-placeholder",
+          "source": "entity.id"
+        }
+      ],
+      "actions": [
+        {
+          "action": "visit-unauthorized",
+          "outcome": "resolved-names-cleared"
+        }
+      ],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "scheduling-step",
+      "fields": [],
+      "actions": [
+        {
+          "action": "schedule",
+          "outcome": "armed"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "scheduling-step-configured",
+      "fields": [],
+      "actions": [
+        {
+          "action": "save-schedule",
+          "outcome": "rearmed"
+        },
+        {
+          "action": "cancel-schedule",
+          "outcome": "stopped"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    }
+  ]
+}
