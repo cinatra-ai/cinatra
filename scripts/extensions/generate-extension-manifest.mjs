@@ -1617,6 +1617,46 @@ export function agentRendererComponentHostResolvable(tsconfigText, specifier, ex
 // probe and its tests.
 export { readDeclaredExtensionUniverse, assertDeclarationShapes };
 
+/**
+ * The PACKAGING RULE for an artifact extension's display (item 0.8 of
+ * `PLAN: Agents Lifecycle (C)`): "every artifact extension declares its display
+ * through its own `exports`, the generator requires it for artifact extensions,
+ * and the thirteen hand-maintained display aliases are deleted".
+ *
+ * So the package's own `exports` entry is REQUIRED and a host-owned tsconfig
+ * path alias is NOT an accepted substitute for it — an alias standing in for
+ * the packaging is exactly the host-edit-per-extension coupling the item
+ * removes. The alias survives only as a RESOLUTION ROAD, for a package the host
+ * deliberately does not depend on (the guarded-optional road); a package the
+ * host depends on resolves the ordinary way, through node_modules.
+ *
+ * Split out of buildManifest so the rule is directly testable on fixtures.
+ */
+export function assertArtifactRendererPackaging({
+  packageName,
+  slot,
+  specifier,
+  exportsKey,
+  hasExportsEntry,
+  hasAliasRoad,
+  hasDependencyEdge,
+}) {
+  if (!hasExportsEntry) {
+    throw new Error(
+      `[extension-manifest] ${packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" is not ` +
+        `published by its own package (no package.json exports["${exportsKey}"]) — an artifact extension declares ` +
+        `its display through its own exports; a host tsconfig.json path alias is not an accepted substitute`,
+    );
+  }
+  if (!hasAliasRoad && !hasDependencyEdge) {
+    throw new Error(
+      `[extension-manifest] ${packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" has no ` +
+        `resolution road (no root dependency edge on ${packageName}, no tsconfig.json path alias) — ` +
+        `the generated literal import would fail at runtime`,
+    );
+  }
+}
+
 export async function buildManifest() {
   const inv = await buildInventory();
   // Generator-owned presence classification (cinatra#7): `"required"` =
@@ -2286,9 +2326,11 @@ export async function buildManifest() {
   // connector-setup-pages literal-import pattern), keyed `<pkg>::<slot>`. STAGED
   // + INERT: no bundled artifact declares `ui` yet (the companion-repo kind gate
   // rejects it until S3), so the emitted map is `{}` on day one. FAIL-CLOSED
-  // like the streams collection: validate the entry resolves to a real,
-  // importable module (tsconfig alias OR package.json exports) so the generated
-  // literal import can never fail at runtime; a runtime-installed claimant that
+  // like the streams collection, and — since item 0.8 of `PLAN: Agents Lifecycle
+  // (C)` — under the PACKAGING RULE: the package's own `exports` entry is
+  // REQUIRED, and a host path alias is no longer an accepted substitute for it;
+  // an alias may only supply the resolution road for a package the host does not
+  // depend on. See assertArtifactRendererPackaging. A runtime-installed claimant that
   // is absent from the build is the host's "requires rebuild" degrade, not a
   // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
   // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
@@ -2326,13 +2368,17 @@ export async function buildManifest() {
         const specifier = `${r.packageName}/${importSubpath}`;
         const exportsKey = `./${importSubpath}`;
         const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
-        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
-          throw new Error(
-            `[extension-manifest] ${r.packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" is not ` +
-              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
-              `the generated literal import would fail at runtime`,
-          );
-        }
+        assertArtifactRendererPackaging({
+          packageName: r.packageName,
+          slot,
+          specifier,
+          exportsKey,
+          hasExportsEntry,
+          hasAliasRoad: tsconfigText.includes(JSON.stringify(specifier)),
+          hasDependencyEdge: Boolean(
+            rootPkg?.dependencies?.[r.packageName] ?? rootPkg?.devDependencies?.[r.packageName],
+          ),
+        });
         const representations = Array.isArray(renderer.representations)
           ? renderer.representations.filter((m) => typeof m === "string")
           : [];
