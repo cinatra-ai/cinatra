@@ -37,16 +37,16 @@ export function RunMadePanel({ records }: { records: readonly RunArtifactRecord[
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-medium text-foreground">{row.title}</span>
-                  <span className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                  <span className="rounded border border-border px-1.5 py-0.5 text-badge-xs text-muted-foreground">
                     {row.typeBadge}
                   </span>
                   {row.usedMark ? (
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-badge-xs text-muted-foreground">
                       Used
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                <div className="mt-0.5 truncate font-mono text-badge-xs text-muted-foreground">
                   {row.detail}
                 </div>
               </div>
