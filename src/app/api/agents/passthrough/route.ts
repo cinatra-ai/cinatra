@@ -31,6 +31,7 @@ import {
   isRunScopedPersistTool,
   enforceAnsweredGateProvenance,
 } from "./answered-gate-provenance";
+import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -97,6 +98,13 @@ const ALLOWED_TOOLS = new Set([
   // the operator's reviewed (kept) recipient set onto the run's own recipients
   // bundle object. Same run-bound-frame trust model as the drafts primitive.
   "email_outreach_recipients_update",
+  // W7's extension-scoped tools (cinatra#3031, epic #3023; plan (C) 0.25/0.26).
+  // NOT MCP primitives: each is dispatched below under a scope DERIVED FROM THE
+  // RUN — the extension-data tool to the calling extension's declared tables,
+  // the three artifact reads to the types it declares as artifact dependencies.
+  // Admitted by name and by scope, never by wildcard, and audited with the
+  // calling extension (plan §8.7).
+  ...EXTENSION_SCOPED_TOOLS,
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -447,6 +455,30 @@ export async function POST(req: Request): Promise<Response> {
         representationRevisionId: outcome.representationRevisionId,
         deduped: outcome.deduped,
       };
+    } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
+      // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
+      // bindBridgeRunId above — its template package and the version the run is
+      // pinned to — never from the request body, which is what makes the
+      // admission an extension's own and not a bridge-token holder's choice.
+      // Dynamic import keeps the artifact + extension-table stack out of this
+      // route's static module graph (same posture as artifact_materialize).
+      const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+      const outcome = await dispatchExtensionScopedTool({
+        tool,
+        input,
+        run: {
+          id: run.id,
+          orgId: run.orgId,
+          runBy: run.runBy ?? null,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion ?? null,
+        },
+        actor: alsActorContext,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+      }
+      result = outcome.result;
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];

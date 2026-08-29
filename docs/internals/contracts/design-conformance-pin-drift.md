@@ -121,19 +121,23 @@ adoption, never the whole of it.
 
 ## Rollout state
 
-**Not yet a required check.** cinatra#3057 lands in two parts:
+**Required.** cinatra#3057 landed in two parts:
 
-- **(a) this page's state.** The job runs on every pull request, on
-  `merge_group`, on every push to `main` and on dispatch — its own job, not a
-  step in `gates`, because `gates` is a required context and a red here has to
-  be visible without blocking anything yet. The first `main` run is expected red
-  with five drifts. Nothing is blocked by it: no context for it is listed in
-  `.github/branch-protections.json`, and the PR that adds this job deliberately
-  does not add one.
-- **(b) the follow-up.** Once the exact check name has been observed on a real
-  run, a separate PR adds that context to `.github/branch-protections.json` and
-  applies the live protection from that file. Both PRs touch `.github/**` and
-  follow the high-risk path. cinatra#3057 closes after (b), not before.
+- **(a) the job.** The job runs on every pull request, on `merge_group`, on
+  every push to `main` and on dispatch — its own job, not a step in `gates`,
+  because `gates` is a required context and a red here had to be visible
+  without blocking anything until (b) landed. The first `main` run came back
+  red with five drifts (see Known drifts below).
+- **(b) the requirement.** `design-pin-drift` is now listed in
+  `.github/branch-protections.json`'s required contexts, and mirrored in
+  `scripts/ci/merge-group-coverage-guard.mjs`. That file is a declaration: the
+  live protection changes when it is re-applied with the `gh api -X PUT`
+  command at the top of it, which happens once this merges. From then on: a
+  pull request touching
+  none of the mapped paths in `scripts/ci/design-pin-drift.paths.json` stays
+  green (a warning annotation, exit `0`); a pull request touching a drifted
+  pin's mapped paths goes red until that pin is adopted. cinatra#3057 closes
+  with this PR.
 
 ## Known drifts
 

@@ -828,11 +828,10 @@ describe("criteria 5 and 6 — the constants the docs page and the follow-up dep
     for (const id of ALL_IDS) expect(doc, id).toContain(id);
   });
 
-  it("this PR does not add a branch-protection context (rollout step b is a separate PR)", () => {
-    const protections = readFileSync(
-      path.join(REPO_ROOT, ".github/branch-protections.json"),
-      "utf8",
+  it("rollout step (b): the branch-protection contexts list design-pin-drift", () => {
+    const protections = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, ".github/branch-protections.json"), "utf8"),
     );
-    expect(protections).not.toContain("design-pin-drift");
+    expect(protections.required_status_checks.contexts).toContain("design-pin-drift");
   });
 });

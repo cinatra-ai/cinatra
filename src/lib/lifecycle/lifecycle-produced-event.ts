@@ -45,12 +45,29 @@ export const PRODUCED_EVENT_KINDS: readonly ProducedEventKind[] = ["artifact_pro
 export type ProducedEventEmitter =
   | "createSemanticArtifact"
   | "dashboard_twin_writer"
-  | "object_cms_snapshot_capture";
+  | "object_cms_snapshot_capture"
+  /**
+   * THE OBJECT-BACKED CONTRACT'S MINT (enabler 0.13 of `PLAN: Agents Lifecycle
+   * (C)`, cinatra#3028 / epic #3023).
+   *
+   * §3, verbatim: "Minting the snapshot is what makes a row reviewable, and the
+   * produced event is emitted AT THE MINT, never at the raw row write." The raw
+   * typed-object writes stay the road matrix's one "no" row on purpose — an
+   * object-backed row is not reviewable until a snapshot revision exists, so an
+   * event at the row write would name a revision that is not there.
+   *
+   * SEPARATE from `object_cms_snapshot_capture`, which is the CMS staged
+   * write's own emitter over a captured remote page. Two roads, two emitters:
+   * the closed set is the audit surface, and one emitter standing for both
+   * would make "which road produced this" unanswerable.
+   */
+  | "object_snapshot_mint";
 
 export const PRODUCED_EVENT_EMITTERS: readonly ProducedEventEmitter[] = [
   "createSemanticArtifact",
   "dashboard_twin_writer",
   "object_cms_snapshot_capture",
+  "object_snapshot_mint",
 ] as const;
 
 const EMITTER_SET: ReadonlySet<string> = new Set(PRODUCED_EVENT_EMITTERS);
