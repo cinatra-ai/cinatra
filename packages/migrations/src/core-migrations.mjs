@@ -574,7 +574,12 @@ const TRANSACTION_CONTROL = new Set([
  */
 export function classifyExtensionMigrationStatement(sql, { ledger, pendingNames }) {
   const text = String(sql ?? "").trim();
-  const bare = text.replace(/;+$/, "").trim();
+  // Strip trailing statement separators without a quantified regex against
+  // uncontrolled input (CodeQL js/polynomial-redos): a bounded loop is linear
+  // and behaves identically to the /;+$/ it replaces.
+  let bare = text;
+  while (bare.endsWith(";")) bare = bare.slice(0, -1);
+  bare = bare.trim();
   // A statement that carries a SECOND statement is the extension's, whatever
   // its first word is: the host side of this classifier must never run text it
   // has not matched in full.

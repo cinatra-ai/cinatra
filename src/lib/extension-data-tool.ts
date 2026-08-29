@@ -75,6 +75,20 @@ export class ExtensionDataRefusal extends Error {
 const qi = (id: string) => `"${id.replaceAll('"', '""')}"`;
 
 /**
+ * Validate a database role/identifier is exactly what
+ * `extensionDatabaseRoleName` derives (lowercase ASCII, digits, underscore) —
+ * belt-and-suspenders on top of `qi`'s quoting, since `SET LOCAL ROLE` cannot
+ * be parameterized like an ordinary value.
+ */
+const SAFE_ROLE_IDENTIFIER_RE = /^[a-z0-9_]+$/;
+function assertSafeRoleIdentifier(id: string): string {
+  if (!SAFE_ROLE_IDENTIFIER_RE.test(id)) {
+    throw new Error(`[extension-data-tool] refused: "${id}" is not a safe role identifier`);
+  }
+  return id;
+}
+
+/**
  * Compile ONE request into ONE parameterized statement. Pure: what an extension
  * can make the database do is readable here rather than only in a log.
  */
@@ -247,7 +261,7 @@ export async function executeExtensionDataStatement(input: {
   const { client, compiled } = input;
   await client.query("BEGIN");
   try {
-    await client.query(`SET LOCAL ROLE ${qi(input.roleName)}`);
+    await client.query(`SET LOCAL ROLE ${qi(assertSafeRoleIdentifier(input.roleName))}`);
     const res = await client.query(compiled.text, compiled.values);
     await client.query("COMMIT");
     return {
