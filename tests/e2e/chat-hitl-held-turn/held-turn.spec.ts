@@ -64,7 +64,7 @@
  *
  *   pnpm test:e2e:chat-hitl-held-turn
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIResponse, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
@@ -104,6 +104,11 @@ import {
   readSelectedSkillRevisions,
   waitFor,
 } from "./probes";
+import {
+  bootWindowRemainingMs,
+  handshakeFailureFrom,
+  retryWhileRouteMissing,
+} from "./route-readiness";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
@@ -483,12 +488,118 @@ async function expectDuplicateDispatchWouldBeSeen(runId: string): Promise<void> 
   ).toBe(1);
 }
 
+/**
+ * THE STREAM HANDSHAKE, AND WHY THE CARD PROBE COULD NOT SEE IT FAIL.
+ *
+ * `/chat` negotiates the S1 stream contract before it will put a turn on the wire
+ * (`negotiateAssistantChatContract`), and that negotiation fails CLOSED: there is
+ * no legacy wire to fall back to, so a failed handshake means NO TURN, no dispatch,
+ * no run, and therefore no card — ever. It is reported through `console.error`
+ * ("[chat] AG-UI stream handshake request failed: …") and NOTHING about it reaches
+ * the transcript, which is the only thing `waitForHeldCard` reads. So on the run
+ * that saw that handshake answered 404 about two minutes after boot, the probe
+ * could do nothing but wait out its whole 900 000 ms cold-compile budget and then
+ * report "no held card" — true, useless, and pointing at the card.
+ *
+ * Two things change that, and they are deliberately separate:
+ *
+ *   1. `installHandshakeBootWindowRetry` — a 404 on that route during the boot
+ *      window is RETRIED, in the same bounded back-off the setup uses, so the
+ *      compile race is absorbed rather than reported. Test-only, at the network
+ *      seam: the shipped client is not touched, and nothing about the negotiation
+ *      it performs changes.
+ *   2. `watchHandshakeFailures` — the console line is kept, so a handshake that
+ *      fails for ANY OTHER reason ends the wait immediately, quoting the browser's
+ *      own words. That is the difference between "a 404 with another cause" being
+ *      reported as itself and being reported as a fifteen-minute timeout.
+ */
+const HANDSHAKE_BOOT_WINDOW_MS = 60_000;
+const HANDSHAKE_ROUTE = "**/api/assistants/chat/capabilities";
+const HANDSHAKE_FAILURE_LINES = new WeakMap<Page, string[]>();
+
+/** Keep every console line that reports a failed handshake — and only those, so a
+ *  fifteen-minute turn does not accumulate a dev server's whole console. */
+function watchHandshakeFailures(page: Page): void {
+  const lines: string[] = [];
+  HANDSHAKE_FAILURE_LINES.set(page, lines);
+  page.on("console", (message) => {
+    const text = message.text();
+    if (handshakeFailureFrom([text])) lines.push(text);
+  });
+}
+
+/** The first handshake failure this page reported, or `null`. */
+function handshakeFailure(page: Page): string | null {
+  return handshakeFailureFrom(HANDSHAKE_FAILURE_LINES.get(page) ?? []);
+}
+
+async function installHandshakeBootWindowRetry(page: Page): Promise<void> {
+  // THE WINDOW IS MEASURED FROM THE INSTALL, not from each request. The second
+  // turn happens many minutes after boot; giving it another full window would
+  // delay a genuine late 404 by the whole bound before reporting it — the exact
+  // "reported as a timeout instead of as itself" fault this change exists to end.
+  const installedAt = Date.now();
+  await page.route(HANDSHAKE_ROUTE, async (route) => {
+    // Only the first-party POST handshake. The GET advertisement belongs to the
+    // cross-origin embed and is none of this flow's business.
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const windowMs = bootWindowRemainingMs(installedAt, Date.now(), HANDSHAKE_BOOT_WINDOW_MS);
+    if (windowMs <= 0) {
+      // Past the boot window: no interception at all, the answer is the answer.
+      await route.fallback();
+      return;
+    }
+    let outcome;
+    try {
+      outcome = await retryWhileRouteMissing<APIResponse>(
+        async (_attemptIndex, remainingMs) => {
+          // The rest of the window is the request's own timeout (never 0, which
+          // Playwright reads as "no timeout"), so the window bounds the wall clock.
+          const response = await route.fetch({ timeout: remainingMs });
+          return { status: response.status(), value: response };
+        },
+        {
+          timeoutMs: windowMs,
+          onRetry: ({ attempts, delayMs }) =>
+            console.log(
+              `[S9k] the stream handshake answered 404 (attempt ${attempts}) — the dev runtime ` +
+                `has not compiled /api/assistants/chat/capabilities yet; retrying in ${delayMs}ms`,
+            ),
+        },
+      );
+    } catch {
+      // A TRANSPORT fault is not a 404 and is not retried — the request fails now,
+      // exactly as it did before this interceptor existed.
+      await route.abort();
+      return;
+    }
+    // The LAST answer is served through, 404 or not: past the bound this is a real
+    // answer the client must see, and the fail-fast below reports what it was.
+    if (outcome.value) await route.fulfill({ response: outcome.value });
+    else await route.abort();
+  });
+}
+
 /** Wait until a HELD card is on screen, then return the anchors it published. */
 async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAnchors> {
   let last: CardAnchors | null = null;
   await waitFor(
     "the §V recommendation_hold card to render in the transcript in state 'held'",
     async () => {
+      // FAIL FAST ON A FAILED HANDSHAKE. It never reaches the transcript, so this
+      // is checked first and separately: without it the only report available is
+      // the full cold-compile budget expiring against a card that could not come.
+      const handshake = handshakeFailure(page);
+      if (handshake) {
+        throw new Error(
+          "the chat stream handshake FAILED, so the turn was never put on the wire — no run was " +
+            `created, and no hold and no card could follow. The browser reported: ${handshake}. ` +
+            "This is a transport fault, not a card fault.",
+        );
+      }
       const transcript = await page
         .locator(CONVERSATION_LIST)
         .innerText()
@@ -696,6 +807,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   page,
 }, testInfo) => {
   const records: Array<Record<string, unknown>> = [];
+
+  // Before the first navigation, so no handshake can happen unwatched or unretried.
+  watchHandshakeFailures(page);
+  await installHandshakeBootWindowRetry(page);
 
   // ══ TURN 1 — dispatch → hold → CONFIRM ═══════════════════════════════════
   const threadUrl = await freshThread(page);
