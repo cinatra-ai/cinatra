@@ -49,10 +49,18 @@ export const ARTIFACT_CONTENT_CHANNEL_CAPS = Object.freeze({
   configuration: 128 * 1024,
   /** Remote-content types — the versioned page projection. */
   page: 64 * 1024,
+  /**
+   * OBJECT-BACKED types — the entry's own structured data (enabler 0.13). The
+   * same ceiling the snapshot mint already enforces on the normalized row
+   * (`SNAPSHOT_MAX_BYTES`), so a row that CAN be snapshotted can always be
+   * projected: a display would otherwise be told "over-cap" about work the
+   * reviewer is holding a decision on.
+   */
+  object: 256 * 1024,
 } as const);
 
-/** The three content classes, plus the absence that is not one. */
-export type ArtifactContentClass = "text" | "configuration" | "page";
+/** The four content classes, plus the absence that is not one. */
+export type ArtifactContentClass = "text" | "configuration" | "page" | "object";
 
 /** Why a projection carries no content. Named, never blank. */
 export type ArtifactContentAbsence =
@@ -124,6 +132,71 @@ export type ArtifactContentProjection =
       pageVersion: number;
       /** The captured page fields, as plain JSON data. Never a live fetch. */
       page: unknown;
+      byteLength: number;
+      /** Bytes ACTUALLY CARRIED — the cap's subject. */
+      projectedByteLength: number;
+      /** The cap this projection was built under. */
+      cap: number;
+    }
+  | {
+      /**
+       * THE OBJECT-BACKED PROJECTION (enabler 0.13 of `PLAN: Agents Lifecycle
+       * (C)`): "the host and SDK props union (the live object projection, or a
+       * minted snapshot revision, discriminated)".
+       *
+       * §3, on the contract: "Its display receives a discriminated projection —
+       * the live object data, or a minted snapshot revision — AND SAYS WHICH OF
+       * THE TWO IT IS SHOWING."
+       *
+       * `source` is that discriminator, and it is the whole point: an
+       * object-backed row may be mutable, so a display drawing live data is
+       * drawing something that can change under the reader, while a display
+       * drawing a snapshot is drawing exactly what a decision binds. A display
+       * that could not tell them apart would label a moving row as reviewed
+       * work.
+       */
+      kind: "object";
+      channelVersion: number;
+      /**
+       * THE DISCRIMINATOR, ENCODED IN THE TYPE and not merely described: the
+       * `live` arm's revision is `null` and the `snapshot` arm's is a string, so
+       * a display that has checked `source` has already narrowed the revision,
+       * and neither wrong combination — a live projection naming a revision, a
+       * snapshot naming none — is expressible at all.
+       */
+      source: "live";
+      representationRevisionId: null;
+      /** The object type whose declared object-data schema the data satisfies. */
+      objectType: string;
+      /** The entry's structured data, as plain JSON. */
+      data: unknown;
+      /** A stable digest of the projected data. On a snapshot this is the
+       *  snapshot's own content digest, so a display and the reviewer's
+       *  decision provably speak about the same bytes. */
+      digest: string;
+      byteLength: number;
+      /** Bytes ACTUALLY CARRIED — the cap's subject. */
+      projectedByteLength: number;
+      /** The cap this projection was built under. */
+      cap: number;
+    }
+  | {
+      /** THE SNAPSHOT ARM of the object-backed projection: the pinned,
+       *  immutable revision a decision binds. Its revision is a string by the
+       *  type, so a display that has checked `source` needs no null check and
+       *  cannot draw a snapshot that names no revision. */
+      kind: "object";
+      channelVersion: number;
+      source: "snapshot";
+      /** The pinned revision this projection draws. */
+      representationRevisionId: string;
+      /** The object type whose declared object-data schema the data satisfies. */
+      objectType: string;
+      /** The entry's structured data, as plain JSON. */
+      data: unknown;
+      /** The snapshot's own content digest, so a display and the reviewer's
+       *  decision provably speak about the same bytes. */
+      digest: string;
       byteLength: number;
       /** Bytes ACTUALLY CARRIED — the cap's subject. */
       projectedByteLength: number;
