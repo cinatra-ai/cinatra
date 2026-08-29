@@ -34,22 +34,35 @@
 #     red on that gate — truthfully. See scripts/ci/dev-lock-bump-pr-body.mjs.
 #
 # TOKEN BOUNDARY: the repo's Actions policy does not let the default
-# GITHUB_TOKEN create pull requests, so push + PR use the Actions secret
-# `DEV_LOCK_BUMP_TOKEN` (an operator-provisioned least-privilege token for
-# this repo). Three rules keep that boundary closed:
-#   - the secret is referenced ONLY in this schedule/dispatch workflow; never
-#     add a pull_request trigger here — PR-controlled code must never run in
-#     a job that can reach the token;
-#   - the checkout does not persist credentials, and the token is injected
-#     only into the final push/PR step;
+# GITHUB_TOKEN create pull requests, and a rolling PR opened by a HUMAN
+# account cannot receive the non-self maintainer-tier approval its
+# high-risk authz-inventory change requires (cinatra#3010: the one person
+# most likely to review it is the account the automation acts as). So push +
+# PR run under an installation token for the org bot App, minted at run time
+# by the pinned `actions/create-github-app-token` step below from two Actions
+# secrets — `CINATRA_AGENT_APP_ID` and `CINATRA_AGENT_APP_PRIVATE_KEY`, an
+# App id and an App private key, whose values live only in repository secret
+# storage. The minted token is scoped to THIS repo (the action defaults
+# `repositories` to the current one), expires in an hour, and needs the
+# installation's `contents: write` (force-update the rolling branch) and
+# `pull requests: write` (open, refresh or retire the rolling PR). It
+# replaces `DEV_LOCK_BUMP_TOKEN`, a human-acting least-privilege PAT under
+# which the PR's author was a person, so `author != approver` could not hold.
+# Three rules keep that boundary closed:
+#   - the App credentials are referenced ONLY in this schedule/dispatch
+#     workflow; never add a pull_request trigger here — PR-controlled code
+#     must never run in a job that can reach the token;
+#   - the checkout does not persist credentials, and the token is minted
+#     immediately before, and injected only into, the final push/PR step;
 #   - no companion-controlled code executes in this job at all: the lock
 #     updater and the map generator are host-repo scripts that only READ
 #     companion manifests, and `pnpm install` runs with `--ignore-scripts`
 #     (lifecycle scripts could otherwise poison GITHUB_ENV/GITHUB_PATH for
 #     the token step; the bump PR's own full CI run exercises the normal
 #     install path).
-# Failure mode of an expired/revoked token is benign: this job fails loud,
-# the canary keeps flagging drift, and the manual recipe keeps working.
+# Failure mode of a missing, expired or revoked App credential is benign: the
+# mint step fails loud BEFORE anything is written or pushed, the canary keeps
+# flagging drift, and the manual recipe keeps working.
 #
 # NON-GATING: like the canary, this must never block a merge. The bump PR's
 # own CI run is the integration test for the new pins.
@@ -62,8 +75,8 @@ on:
     - cron: '37 6 * * 1-5'
   workflow_dispatch:
 
-# The default token stays read-only; every write goes through the PAT in the
-# final step.
+# The default token stays read-only; every write goes through the App
+# installation token minted for the final step.
 permissions:
   contents: read
 
@@ -256,9 +269,28 @@ jobs:
             --changed-pins /tmp/pin-changes.json \
             --out /tmp/skill-linked.json
 
+      # cinatra#3010. The identity the rolling PR is opened under: an
+      # installation token for the org bot App, scoped to THIS repo and
+      # expiring in an hour, so the PR's author is the App and a maintainer's
+      # approval is admissible on the high-risk authz-inventory path. Minted
+      # unconditionally — the write step below runs on BOTH roads: pushing a
+      # bump, and retiring the rolling PR once the drift is gone.
+      - name: Mint the bot App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CINATRA_AGENT_APP_ID }}
+          private-key: ${{ secrets.CINATRA_AGENT_APP_PRIVATE_KEY }}
+          # Narrow the minted token to the two permissions this job actually
+          # uses, instead of inheriting everything the installation grants:
+          # contents to force-update the rolling branch, pull requests to
+          # open, refresh or retire the rolling PR.
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Push rolling branch + open/refresh (or retire) the bump PR
         env:
-          GH_TOKEN: ${{ secrets.DEV_LOCK_BUMP_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DRIFT: ${{ steps.drift.outputs.drift }}
         run: |
           set -euo pipefail
@@ -284,8 +316,10 @@ jobs:
             exit 0
           fi
 
-          git config user.name "Sandro Groganz"
-          git config user.email "sandro@cinatra.ai"
+          # cinatra#3010: the commit identity is the same App that opens the
+          # PR, so the bump carries no person's name in either mechanism.
+          git config user.name "groganz-bot[bot]"
+          git config user.email "293224031+groganz-bot[bot]@users.noreply.github.com"
 
           today="$(date -u +%Y-%m-%d)"
           title="chore(extensions): dev-lock auto-bump (${today})"

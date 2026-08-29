@@ -10,6 +10,11 @@ import type {
   ArtifactRef,
 } from "@cinatra-ai/artifacts";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import {
+  classifyArtifactTypeOwnership,
+  unownedArtifactTypeMessage,
+  type UnownedArtifactTypeReason,
+} from "@cinatra-ai/objects/namespace";
 import { isArtifactExtensionWriteAllowed } from "./artifact-extension-access";
 import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 
@@ -245,33 +250,37 @@ export class ObjectsTypeNotRegisteredError extends Error {
    * Absent for non-upload type refusals (a direct createSemanticArtifact write).
    */
   readonly uploadRefusal?: { kind: "no_mime" | "no_type" | "ambiguous"; normalizedMime: string };
+  /**
+   * The NAMED reason the type is not owned (enabler 0.16 of `PLAN: Agents
+   * Lifecycle (C)`, cinatra#3028 — "the save boundary refuses a type that no
+   * installed extension and not the host owns, with a named reason").
+   *
+   * A CLOSED token from `@cinatra-ai/objects/namespace`, so a surface branches
+   * on the reason instead of reading the sentence — which is what made
+   * cinatra#2960's refusal opaque. Absent on the mid-write refusals (a definer
+   * uninstalled between the boundary check and the write, a MIME the type does
+   * not accept, a payload the schema rejects): those are not ownership answers
+   * and must not borrow an ownership reason.
+   */
+  readonly reason?: UnownedArtifactTypeReason;
   constructor(
     readonly attemptedType: string | null,
     message: string,
     readonly suggestedExtension?: string,
     uploadRefusal?: { kind: "no_mime" | "no_type" | "ambiguous"; normalizedMime: string },
+    reason?: UnownedArtifactTypeReason,
   ) {
     super(message);
     this.name = "ObjectsTypeNotRegisteredError";
     this.uploadRefusal = uploadRefusal;
+    this.reason = reason;
   }
 }
 
-// The retired generic host object types. Under the dependency model no save may
-// ever land under either again (kept as literals so the guard rejects them by id
-// without importing register-types). Mirrors the MCP handler's GENERIC guard.
-const GENERIC_ARTIFACT_TYPE_IDS: ReadonlySet<string> = new Set([
-  "@cinatra-ai/artifact:object",
-  "@cinatra-ai/objects:object",
-]);
-
-/** The defining extension package of a namespaced object-type id
- *  (`@scope/pkg:local` → `@scope/pkg`). Null for a non-namespaced id. */
-function definerPackageOf(typeId: string): string | null {
-  if (!typeId.startsWith("@")) return null;
-  const colon = typeId.lastIndexOf(":");
-  return colon > 0 ? typeId.slice(0, colon) : null;
-}
+// The two retired generic host object types and the defining-package derivation
+// that used to live here are now the ownership classifier's, in
+// `@cinatra-ai/objects/namespace` (enabler 0.16): one statement of what "owned"
+// means, read by BOTH write boundaries.
 
 /**
  * Whether a registered type is an ARTIFACT write target. Two shapes qualify:
@@ -300,38 +309,36 @@ async function assertWritableArtifactType(
   objectType: string,
   orgId: string,
 ): Promise<NonNullable<ResolvedObjectTypeDef>> {
-  if (GENERIC_ARTIFACT_TYPE_IDS.has(objectType)) {
+  // ONE ownership answer, from the classifier both write boundaries share
+  // (enabler 0.16). The reason token and the sentence come from the SAME call,
+  // so the two can never disagree — the failure cinatra#2960 recorded, where a
+  // reserved-namespace id was refused with "no installed artifact extension
+  // defines it" and a reader went looking for an extension to install that
+  // cannot exist.
+  const ownership = classifyArtifactTypeOwnership(objectType, {
+    isArtifactWritable: (typeId) => {
+      const resolved = objectTypeRegistry.resolve(typeId);
+      if (!resolved) return null;
+      return isArtifactWritableType(resolved);
+    },
+    packageHasRegisteredTypes: (pkg) => objectTypeRegistry.getTypesForPackage(pkg).length > 0,
+  });
+  if (!ownership.owned) {
     throw new ObjectsTypeNotRegisteredError(
       objectType,
-      `the generic host object type "${objectType}" is retired (epic #1785) — a save must name an installed artifact extension's declared type`,
+      unownedArtifactTypeMessage(objectType, ownership),
+      ownership.suggestedExtension ?? undefined,
+      undefined,
+      ownership.reason,
     );
   }
-  const def = objectTypeRegistry.resolve(objectType);
-  if (!def || !isArtifactWritableType(def)) {
-    const definer = definerPackageOf(objectType);
-    const suggest =
-      definer && objectTypeRegistry.getTypesForPackage(definer).length === 0
-        ? definer
-        : undefined;
+  // Owned ⇒ the registry resolves it and it is an artifact write target; the
+  // caller reuses the definition for the payload-schema check.
+  const def = objectTypeRegistry.resolve(objectType) as NonNullable<ResolvedObjectTypeDef>;
+  if (!(await isArtifactExtensionWriteAllowed(ownership.definer, orgId))) {
     throw new ObjectsTypeNotRegisteredError(
       objectType,
-      suggest
-        ? `no installed artifact extension defines "${objectType}"; install ${suggest}`
-        : `no installed artifact extension defines "${objectType}"`,
-      suggest,
-    );
-  }
-  const definer = definerPackageOf(objectType);
-  if (!definer) {
-    throw new ObjectsTypeNotRegisteredError(
-      objectType,
-      `object type "${objectType}" is not namespaced under a defining extension`,
-    );
-  }
-  if (!(await isArtifactExtensionWriteAllowed(definer, orgId))) {
-    throw new ObjectsTypeNotRegisteredError(
-      objectType,
-      `artifact extension "${definer}" is not write-allowed for this org (archived / ungoverned-denied install state)`,
+      `artifact extension "${ownership.definer}" is not write-allowed for this org (archived / ungoverned-denied install state)`,
     );
   }
   return def;

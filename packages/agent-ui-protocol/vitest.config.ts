@@ -23,5 +23,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/__tests__/**/*.test.ts"],
+    // The integration tier needs a real Redis; the wholesale package run has
+    // none. It runs separately via `pnpm test:agent-ui-durable-resume`
+    // (vitest/integration/3067.config.ts), so exclude it here explicitly — a
+    // file-name suffix alone does not change vitest discovery.
+    exclude: ["**/node_modules/**", "src/**/*.integration.test.ts"],
   },
 });

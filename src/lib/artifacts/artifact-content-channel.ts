@@ -157,6 +157,11 @@ export function truncateToUtf8Bytes(value: string, capBytes: number): string {
 // exactly one implementation.
 export { absentArtifactContent } from "@/lib/artifacts/artifact-renderer-props";
 
+// The object-backed projection's digest lives with the contract that mints it
+// (enabler 0.13), so a snapshot's digest and a live read's digest are derived by
+// one function.
+import { objectProjectionDigest } from "@/lib/artifacts/object-backed-contract";
+
 const none = (
   representationRevisionId: string | null,
   reason: "unsupported-form" | "absent" | "over-cap",
@@ -276,4 +281,77 @@ export function assertContentProjectionWithinCap(
     `renderer props: content projection "${projection.kind}" carries ` +
       `${projection.kind === "none" ? 0 : projection.projectedByteLength} bytes over its ${cap}-byte cap`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// THE OBJECT-BACKED PROJECTION (enabler 0.13 of `PLAN: Agents Lifecycle (C)`,
+// cinatra#3028 / epic #3023).
+//
+// §3, verbatim: "Its display receives a discriminated projection — the live
+// object data, or a minted snapshot revision — and says which of the two it is
+// showing."
+//
+// WHY IT IS NOT A `resolveArtifactContentClass` ARM. The other three classes are
+// resolved from the SUBSTRATE'S recorded form and mime, because the substance
+// lives in a representation. An object-backed row's substance is the row, and
+// before its first mint there is no representation to read a form off at all —
+// so the class cannot be derived from the substrate, and the caller who KNOWS
+// which of the two it holds is the one that says so. That is the discriminator,
+// and building it any other way would be guessing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the object-backed content projection.
+ *
+ * The `source` is the caller's, and the two arms are not interchangeable: a
+ * `snapshot` names the pinned revision a decision binds, a `live` names none
+ * because there is none. Passing a revision id with `live` is refused rather
+ * than dropped — a projection that claimed to be live while naming a pinned
+ * revision is precisely the confusion this discriminator exists to prevent.
+ */
+export function buildObjectContentProjection(input: {
+  objectType: string;
+  data: unknown;
+  source: "live" | "snapshot";
+  /** Required for `snapshot`; must be absent/null for `live`. */
+  representationRevisionId?: string | null;
+  /** The snapshot's own content digest. Computed from the carried data when the
+   *  caller has none (the live arm always does). */
+  digest?: string;
+}): ArtifactContentProjection {
+  const revisionId = input.representationRevisionId ?? null;
+  if (input.source === "snapshot" && !revisionId) {
+    return none(null, "absent");
+  }
+  if (input.source === "live" && revisionId) {
+    throw new Error(
+      "artifact content channel: a live object projection must name no pinned revision",
+    );
+  }
+
+  const byteLength = jsonBytes(input.data);
+  const cap = artifactContentCapFor("object");
+  // AN OBJECT IS NOT TRUNCATABLE, for the configuration's reason: half a record
+  // is not a smaller record, it is a wrong one. Over the cap is a named absence.
+  if (!Number.isFinite(byteLength) || byteLength > cap) {
+    return none(revisionId, "over-cap");
+  }
+
+  const common = {
+    kind: "object",
+    channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
+    objectType: input.objectType,
+    data: input.data,
+    digest: input.digest ?? objectProjectionDigest(input.data),
+    byteLength,
+    projectedByteLength: byteLength,
+    cap,
+  } as const;
+  // THE TWO ARMS ARE BUILT SEPARATELY because the props union states them
+  // separately: `live` carries a null revision by its own type and `snapshot`
+  // carries a string, so neither wrong combination can be constructed here
+  // either. The guards above are what make the narrowing sound.
+  return input.source === "snapshot"
+    ? { ...common, source: "snapshot", representationRevisionId: revisionId! }
+    : { ...common, source: "live", representationRevisionId: null };
 }

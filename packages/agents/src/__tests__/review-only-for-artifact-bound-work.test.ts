@@ -130,6 +130,9 @@ vi.mock("../lifecycle-repair-dispatch-store", () => ({
   dispatchPendingProducerRepairs: vi.fn(async () => undefined),
 }));
 vi.mock("../lifecycle-suggestion-producer-lane", () => ({
+  // The kind-resolved, multi-target entry point both gate-creation paths now
+  // call (enabler 0.15 of PLAN: Agents Lifecycle (C), cinatra#3028).
+  produceSuggestionsForGateTargets: vi.fn(async () => undefined),
   produceSuggestionsForNewGate: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/lifecycle/lifecycle-activation", () => ({
