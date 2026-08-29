@@ -703,6 +703,71 @@ export async function issueTurnLentActionGrant(input: {
         `disagree, the screen is right.`,
     };
   }
+  if (binding.resolution.kind === "armed_schedule_form") {
+    // THE ARMED SCHEDULE'S OWN FORM (cinatra#2934, the armed-schedule change
+    // road), AND ITS ABSENCE IS THE DEFECT THE GRADED RE-SHOOT MEASURED.
+    //
+    // WHAT WENT WRONG, exactly. An armed form has been a bound card since the
+    // armed-trigger tab landed — it lends a fill AND a save, and
+    // `primaryControlFor` mints `save` for it — but it had no branch here, so
+    // its turn fell through to the REVIEW card's paragraph below. That text
+    // tells the assistant it is bound to "a review", tells it to press its one
+    // control with `lifecycle_bound_card_decide`, and never names the fill road
+    // or the form's rows at all. So whether a described change reached the rows
+    // depended on the assistant reaching for a tool it had not been told about
+    // — it landed on the first ask of one run and on none of six asks of
+    // another — and following the instruction it HAD been given spent the turn
+    // on a save with nothing placed. That is the whole intermittency, and it is
+    // in this file rather than in a model.
+    //
+    // TWO ROADS, NAMED APART, exactly as the waiting screen's are: filling is
+    // what an ordinary described change reaches and it presses nothing; the
+    // save is the separate thing the person has to ask for in so many words.
+    const rows = drawnScreenControls(binding.resolution.form).join(", ");
+    // AND A FORM THAT CAN NO LONGER BE SAVED SAYS SO, IN THE SERVER'S OWN
+    // WORDS. The lending does not vanish on the snapshot (`controlsLentBy`
+    // explains why), so the turn keeps its binding and its reason: the
+    // assistant relays the sentence the write itself would have answered with
+    // instead of guessing, and asks for nothing.
+    if (!binding.resolution.canSave) {
+      const reason =
+        binding.resolution.refusal ?? "This schedule can no longer be changed.";
+      return {
+        grant: minted.grant,
+        systemContext:
+          `\n\nBOUND SCREEN. This message was sent with the armed schedule form the person is ` +
+          `looking at bound to the prompt window, ref "${binding.ref}".\n` +
+          `· THIS SCHEDULE CANNOT BE CHANGED any more. The reason, in the platform's own words: ` +
+          `"${reason}" Say that and nothing more about it.\n` +
+          `· DO NOT call \`lifecycle_bound_screen_fill\` and DO NOT call ` +
+          `\`lifecycle_bound_card_decide\` for it: both are refused, and offering to change the ` +
+          `schedule yourself would promise what the form cannot keep. A question about the ` +
+          `schedule is answered as a question.\n` +
+          `Report what comes back and add nothing to it; where your sentence and the form ` +
+          `disagree, the form is right.`,
+      };
+    }
+    return {
+      grant: minted.grant,
+      systemContext:
+        `\n\nBOUND SCREEN. This message was sent with the armed schedule form the person is ` +
+        `looking at bound to the prompt window, ref "${binding.ref}".\n` +
+        `· TO CHANGE ITS ROWS — whenever the person describes a different time, day or ` +
+        `recurrence — call \`lifecycle_bound_screen_fill\` with that ref and the values. Its rows ` +
+        `are: ${rows}. This SAVES NOTHING and RE-ARMS NOTHING: the values appear in the form in ` +
+        `front of them, and the schedule that is armed is unchanged until it is saved.\n` +
+        `· TO SAVE IT — ONLY when the person asks for that in so many words — FILL IT FIRST if ` +
+        `this message describes a change, then call \`lifecycle_bound_card_decide\` with that ref ` +
+        `and NOTHING ELSE, ONCE. You do not choose which control: this message was granted ` +
+        `exactly one and the call presses that one. A plain "save that", with nothing described ` +
+        `in the same message, saves what the earlier turn placed in the form — call the decide ` +
+        `tool for it and do not re-describe the values. What is saved is what their form was ` +
+        `shown holding; you supply none of it. A question about the schedule is answered as a ` +
+        `question and saves nothing.\n` +
+        `Report what comes back and add nothing to it; where your sentence and the form ` +
+        `disagree, the form is right.`,
+    };
+  }
   return {
     grant: minted.grant,
     systemContext:

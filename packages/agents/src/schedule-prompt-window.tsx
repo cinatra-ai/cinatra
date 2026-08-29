@@ -54,6 +54,22 @@ import { useCallback, useState, type ReactElement } from "react";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
+/**
+ * WHAT THE WINDOW SAYS when the schedule above it can no longer be changed
+ * (cinatra#2934; plan (A) §7.2).
+ *
+ * THE PLATFORM'S OWN SENTENCE, in the family the other windows already use for
+ * a window that cannot do what it invites (`RUN_WINDOW_TOOL_LESS_NOTICE`): what
+ * is no longer possible, what the surface still is, and what to do instead. It
+ * is deliberately NOT the card's reason — the card draws that, from the
+ * server's own table, right above this line — so the two say one thing between
+ * them rather than the same thing twice.
+ */
+export const SCHEDULE_WINDOW_OVER_NOTICE =
+  "This schedule can no longer be changed — the form above shows it as it " +
+  "stands, and nothing typed here would change it. Start a new run to " +
+  "schedule it again.";
+
 export function SchedulePromptWindow({
   templateId,
   runId,
@@ -83,19 +99,25 @@ export function SchedulePromptWindow({
    */
   canRespondInWindow?: boolean;
   /**
-   * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004)
+   * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004, as amended by
+   * cinatra#2934)
    *
    * The window's own invitation on this surface is "Ask Cinatra to change this
    * schedule, or ask about it…" (§X), and a schedule that is over can be
-   * changed by nobody — so the invitation would be one the surface cannot keep. The composer follows the
-   * form: present and live while the schedule can still be changed, gone once
-   * the run is over.
+   * changed by nobody — so the invitation is one the surface cannot keep. The
+   * COMPOSER therefore follows the form: present and live while the schedule
+   * can still be changed, gone once the run is over. `HitlConversationPanel`
+   * takes one `visible` boolean and has no read-only reading of its own, and a
+   * dead composer would be the same "control that exists only to refuse" the
+   * card itself withheld.
    *
-   * ABSENT RATHER THAN DISABLED, because that is what the shipped panel offers:
-   * `HitlConversationPanel` takes one `visible` boolean and has no read-only
-   * reading of its own, and `visible={!readOnly && …}` is the pattern this
-   * product already uses for exactly this state. A dead composer would be the
-   * same "control that exists only to refuse" the card itself removed.
+   * THE WINDOW ITSELF STAYS, AND THAT IS THE PART THIS PULL REQUEST GOT WRONG.
+   * It used to go with the composer, so a fired one-off drew a locked form and
+   * then nothing at all — no box, no sentence, no reason. Plan (A) §7.2 asks
+   * this state to ANSWER: the schedule "cannot be changed any more", said in
+   * the same platform's-own-words family as the other windows' notices. So the
+   * window is mounted, it says so, and the card beside it carries the server's
+   * own reason for the state.
    *
    * The surfaces that mount this window MEASURE the state off the card's own
    * DOM rather than predicting it (`useScheduleSurfaceReading`).
@@ -157,6 +179,27 @@ export function SchedulePromptWindow({
     [sendRunWindowTurn, onActed, onFill],
   );
 
+  // THE WINDOW ANSWERS RATHER THAN VANISHING (cinatra#2934; plan (A) §7.2). The
+  // panel is not mounted at all here: it exists to be typed into, and there is
+  // nothing to type. What stands in its place is one sentence, in the window's
+  // own region, so the reader finds the answer where the box used to be.
+  if (readOnly) {
+    return (
+      <div
+        data-conformance-id="schedule-prompt-window"
+        data-schedule-prompt-window=""
+      >
+        <p
+          data-conformance-id="schedule-window-over"
+          role="status"
+          className="text-sm text-muted-foreground"
+        >
+          {SCHEDULE_WINDOW_OVER_NOTICE}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       data-conformance-id="schedule-prompt-window"
@@ -172,12 +215,7 @@ export function SchedulePromptWindow({
         // Two independent reasons for there to be no box, and both still hold:
         // the schedule is over so there is nothing to edit (cinatra#3004), or
         // the run would refuse this person's message (cinatra#2933).
-        visible={
-          !readOnly &&
-          canRespondInWindow !== false &&
-          !!templateId &&
-          !!mount
-        }
+        visible={canRespondInWindow !== false && !!templateId && !!mount}
         conversation={runWindow.entries}
         promptPending={promptPending || runWindow.pending}
         storageKey={`cinatra_schedule_assist_${templateId}_step`}

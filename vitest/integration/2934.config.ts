@@ -4,7 +4,7 @@ import path from "node:path";
 // The DB tier for the FILL ROAD (cinatra#2934, lifecycle-b W5c).
 //
 // The root config deliberately EXCLUDES `**/*.integration.test.ts`; this one
-// includes exactly one file. Point it at a scratch Postgres:
+// includes the files of this slice. Point it at a scratch Postgres:
 //   SUPABASE_DB_URL='<your scratch-database DSN>' pnpm test:screen-fill
 // The suite self-skips without one, so any OTHER config that picks it up keeps
 // reporting green rather than failing for a reason that is not the code's.
@@ -15,13 +15,27 @@ export default defineConfig({
   resolve: {
     // `__dirname` is `vitest/integration/`; the app source is two levels up.
     // The directory it names is unchanged — still the repository's own `src/`.
-    alias: { "@": path.resolve(__dirname, "..", "..", "src") },
+    //
+    // `server-only` is stubbed exactly as the root config stubs it: the modules
+    // this tier drives are server modules, and the marker package throws on
+    // import outside a server component. The stub is the repository's own —
+    // this config points at it rather than declaring a second one.
+    alias: {
+      "@": path.resolve(__dirname, "..", "..", "src"),
+      "server-only": path.resolve(
+        __dirname, "..", "..", "tests", "__stubs__", "server-only.ts",
+      ),
+    },
   },
   test: {
     globals: true,
     environment: "node",
     include: [
       "src/lib/lifecycle/__tests__/screen-fill.integration.test.ts",
+      // The armed-schedule change road: what one turn places is what the next
+      // turn's plain "save that" saves (cinatra#2934, after the graded
+      // re-shoot). Same tier, same scratch schema, same self-skip.
+      "src/lib/lifecycle/__tests__/armed-schedule-save-road.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

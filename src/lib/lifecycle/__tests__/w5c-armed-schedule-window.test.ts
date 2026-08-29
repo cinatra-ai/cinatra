@@ -41,6 +41,24 @@ vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
       .filter((r) => r.messageId === messageId)
       .map((r) => r.fill as { ref: string; values: Record<string, unknown> } | undefined)
       .filter((f): f is { ref: string; values: Record<string, unknown> } => !!f && f.ref === ref),
+  // The armed form's save reads what is PLACED AND NOT YET SAVED (cinatra#2934,
+  // the armed-schedule change road): this message's own fills, plus this
+  // person's earlier placements since the trigger row was last written.
+  readRunWindowPlacedFills: async (
+    _runId: string,
+    ref: string,
+    opts: { messageId: string; placedBy?: string | null; since?: Date | null },
+  ) =>
+    windowRows
+      .filter((r) => {
+        const fill = r.fill as { ref: string } | undefined;
+        if (!fill || fill.ref !== ref) return false;
+        if (r.messageId === opts.messageId) return true;
+        if (!opts.placedBy || r.placedBy !== opts.placedBy) return false;
+        if (opts.since && (r.createdAt as Date) < opts.since) return false;
+        return true;
+      })
+      .map((r) => r.fill as { ref: string; values: Record<string, unknown> }),
   readRunWindowAttachmentsForMessage: async () => null,
 }));
 

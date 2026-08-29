@@ -35,6 +35,7 @@ import type {
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ScheduleProposalCard } from "../schedule-proposal-card";
+import { SAVE_SCHEDULE_REFUSALS, frozenScheduleReason } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -184,7 +185,7 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
     ["Run right after setup", BODIES.immediateFired],
     ["Schedule for later", BODIES.oneOffFired],
   ] as const) {
-    it(`${name}, after it fired: read-only rows and NO controls, on every host`, async () => {
+    it(`${name}, after it fired: read-only rows and a DEAD floor, on every host`, async () => {
       for (const host of [
         "chat_thread",
         "site_widget",
@@ -193,13 +194,33 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
       ] as const) {
         const view = mount(body, host);
         await waitFor(() => expect(rows(view.container)).not.toBeNull());
-        // The whole floor is gone — not a disabled control in it.
-        expect(floor(view.container), `${name}/${host}`).toBeNull();
-        expect(save(view.container), `${name}/${host}`).toBeNull();
+        // THE FLOOR STAYS, AND SAYS ON ITSELF THAT IT IS DEAD (cinatra#2934;
+        // plan (A) §7.2). This card used to draw no floor at all, and the
+        // surfaces that measure the window off it drew no window either — so a
+        // fired one-off ended up with a locked form and NOTHING telling the
+        // reader why. The reading the plan asks for is the card whole, its
+        // actions disabled, and the reason on screen.
+        expect(floor(view.container), `${name}/${host}`).not.toBeNull();
+        expect(
+          floor(view.container)!.getAttribute("data-schedule-changeable"),
+          `${name}/${host}`,
+        ).toBe("false");
+        // Save changes is THERE and DEAD; there is still nothing to cancel.
+        expect(save(view.container), `${name}/${host}`).not.toBeNull();
+        expect(disabled(save(view.container)), `${name}/${host}`).toBe(true);
         expect(cancel(view.container), `${name}/${host}`).toBeNull();
-        expect(view.container.textContent, `${name}/${host}`).not.toContain("Save changes");
         expect(view.container.textContent, `${name}/${host}`).not.toContain("Cancel schedule");
-        // And no status label stands in for the withheld controls.
+        // And the REASON is what stands beside it — the server's own sentence
+        // for this state, not a status label of the card's own invention.
+        expect(view.container.textContent, `${name}/${host}`).toContain(
+          frozenScheduleReason({
+            // The two rows of this loop are both released non-recurring
+            // schedules; which sentence each draws is the one thing that
+            // differs, and it follows the trigger type.
+            triggerType: name === "Schedule for later" ? "scheduled" : "immediate",
+            released: true,
+          }),
+        );
         expect(
           view.container.querySelector('[data-conformance-id="schedule-released"]'),
           `${name}/${host}`,
@@ -337,12 +358,17 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     expect(sent[0]).toMatchObject({ op: "cancel", ref: "run-scoped-ref" });
   });
 
-  it("AFTERWARDS the scheduler is non-editable — the stopped card has no floor", async () => {
+  it("AFTERWARDS the scheduler is non-editable — the stopped card's floor is dead", async () => {
     const { container } = mount(BODIES.recurringStopped, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
-    expect(floor(container)).toBeNull();
-    expect(save(container)).toBeNull();
+    // The floor stays and says it is dead (cinatra#2934; plan (A) §7.2): Save
+    // changes disabled, nothing left to cancel, and the STOP named as the
+    // reason — the server's own sentence for this state, not the release's.
+    expect(floor(container)).not.toBeNull();
+    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("false");
+    expect(disabled(save(container))).toBe(true);
     expect(cancel(container)).toBeNull();
+    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     // The schedule is still DRAWN — stopping it is not deleting it.
     expect(disabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
   });

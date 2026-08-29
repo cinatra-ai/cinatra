@@ -245,6 +245,13 @@ export async function recordBoundScreenFill(input: {
     text: "",
     fill,
     messageId: input.messageId,
+    // WHOSE PLACEMENT THIS IS (cinatra#2934, the armed-schedule change road).
+    // The armed form's save carries a placement forward into the NEXT turn —
+    // "you place the change, then you ask to save it" — so the row has to name
+    // the person, not only the message. Nothing else reads it, and no road
+    // widens because of it: the carry is refused unless this name matches the
+    // person asking.
+    placedBy: input.actorCtx.actor.userId ?? null,
   });
   return { kind: "filled", ref: input.ref, applied };
 }

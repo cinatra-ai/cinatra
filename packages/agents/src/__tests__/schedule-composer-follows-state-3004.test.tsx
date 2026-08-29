@@ -15,16 +15,24 @@
 //
 // ABSENT, NOT DISABLED, AND THAT IS THE SHIPPED CONTRACT SPEAKING.
 // `HitlConversationPanel` takes one `visible` boolean and has no read-only
-// reading of its own — `visible={!readOnly && …}` is the pattern this product
-// already uses for exactly this (`trigger-screen-client.tsx`,
-// `agentic-run-panel.tsx`). Drawing a dead composer would be the same
-// "control that exists only to refuse" the card itself removed, so the surface
-// withdraws the window rather than inventing a state the panel does not have.
+// reading of its own. Drawing a dead composer would be the same "control that
+// exists only to refuse" the card itself withheld, so the surface withdraws the
+// BOX rather than inventing a state the panel does not have.
+//
+// WHAT IS NO LONGER WITHDRAWN WITH IT (cinatra#2934, and the reason these cases
+// moved): the WINDOW. Withdrawing both left a fired one-off with a locked form
+// and nothing under it — no box, no sentence, no reason — and plan (A) §7.2
+// asks that state to ANSWER that the schedule can no longer be changed. So the
+// window stays and says so, the card's floor stays and is drawn dead with the
+// server's own reason on it, and only the composer goes. These cases pin the
+// composer half; the answering half is pinned in
+// `schedule-over-window-answers-2934.test.tsx`.
 //
 // IT IS MEASURED, NOT PREDICTED, like the "is there a scheduler at all"
 // reading beside it: the card resolves after mount and the surface around it
 // cannot ask it what it decided, so the honest reading is the DOM it produced —
-// its controls floor, which a card that is over does not draw at all.
+// its controls floor, which now says on itself whether the schedule can still
+// be changed.
 //
 // Run:
 //   cd packages/agents && pnpm exec vitest run \
@@ -76,7 +84,7 @@ const RECURRING_BODY: TriggerScheduleProposalViewBody = {
   canCancel: true,
 };
 
-/** A one-off that has fired: the card draws the rows and no floor at all. */
+/** A one-off that has fired: the card draws the rows and a DEAD floor. */
 const FIRED_ONE_OFF: TriggerScheduleProposalViewBody = {
   ...RECURRING_BODY,
   schedule: { kind: "scheduled", runAt: "2026-08-24T09:00", timezone: "Europe/Berlin" },
@@ -109,15 +117,17 @@ function mockResolve(body: TriggerScheduleProposalViewBody) {
   ) as unknown as typeof fetch;
 }
 
-/** The composer, as a reader would find it: the panel itself, not its mount. */
+/** The BOX a person types in — not the window's mount, which now outlives it. */
 function composerIsDrawn(root: HTMLElement): boolean {
-  const mount = root.querySelector('[data-schedule-prompt-window=""]');
-  return !!mount && mount.childElementCount > 0;
+  return !!root.querySelector(
+    '[data-schedule-prompt-window=""] [contenteditable="true"]',
+  );
 }
 
-/** The card's controls floor — what "the schedule can still be changed" IS. */
-function floorIsDrawn(root: HTMLElement): boolean {
-  return !!root.querySelector('[data-conformance-id="schedule-proposal-floor"]');
+/** The card's controls floor, and its OWN answer to "can this still change". */
+function floorSaysChangeable(root: HTMLElement): boolean {
+  const floor = root.querySelector('[data-conformance-id="schedule-proposal-floor"]');
+  return !!floor && floor.getAttribute("data-schedule-changeable") !== "false";
 }
 
 describe("the run's schedule surface — the composer follows the form's state", () => {
@@ -126,7 +136,7 @@ describe("the run's schedule surface — the composer follows the form's state",
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
-    await waitFor(() => expect(floorIsDrawn(container)).toBe(true));
+    await waitFor(() => expect(floorSaysChangeable(container)).toBe(true));
     await waitFor(() => expect(composerIsDrawn(container)).toBe(true));
   });
 
@@ -139,7 +149,7 @@ describe("the run's schedule surface — the composer follows the form's state",
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeTruthy(),
     );
-    expect(floorIsDrawn(container)).toBe(false);
+    expect(floorSaysChangeable(container)).toBe(false);
     expect(composerIsDrawn(container)).toBe(false);
   });
 
@@ -151,7 +161,7 @@ describe("the run's schedule surface — the composer follows the form's state",
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeTruthy(),
     );
-    expect(floorIsDrawn(container)).toBe(false);
+    expect(floorSaysChangeable(container)).toBe(false);
     expect(composerIsDrawn(container)).toBe(false);
   });
 });
@@ -162,7 +172,7 @@ describe("the run page's schedule step reads it the same way", () => {
     const { container } = render(
       <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
-    await waitFor(() => expect(floorIsDrawn(container)).toBe(true));
+    await waitFor(() => expect(floorSaysChangeable(container)).toBe(true));
     await waitFor(() => expect(composerIsDrawn(container)).toBe(true));
   });
 

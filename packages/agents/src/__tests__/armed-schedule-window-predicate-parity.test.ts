@@ -19,6 +19,10 @@ import { describe, expect, it } from "vitest";
 
 import { canSaveInstalled } from "../trigger-schedule-proposal-service";
 import { SAVE_SCHEDULE_REFUSALS, saveScheduleRefusalFor } from "../trigger-service";
+import {
+  SAVE_SCHEDULE_REFUSALS as CARD_REFUSALS,
+  frozenScheduleReason,
+} from "../trigger-recurrence";
 import type { TriggerRecord } from "../trigger-store";
 
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000);
@@ -112,5 +116,58 @@ describe("a refusal the window can say out loud", () => {
 
   it("says nothing at all about a schedule that CAN still be changed", () => {
     expect(saveScheduleRefusalFor({ trigger: row({}), arming: false })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE CARD DRAWS FROM THE SAME TABLE (cinatra#2934, the armed-schedule
+// change road). A schedule that is over now draws its floor dead WITH the
+// reason on it, so the card has become a reader of this table too — through the
+// client-safe leaf, because the card cannot import the write perimeter.
+//
+// WHAT IS PINNED, and what deliberately is not. The TABLE is one table: the
+// card cannot invent a sentence. WHICH entry each side picks is NOT required to
+// match, and saying it did would be a false claim: the guard answers the first
+// refusal a TRIGGER ROW earns in the order that keeps the write safe, and the
+// card answers the state the person is looking at. What must hold is that
+// wherever the card draws a reason, the server also refuses that row — the two
+// never disagree about WHETHER the schedule can be changed.
+// ---------------------------------------------------------------------------
+describe("the card's sentences and the server's are one table", () => {
+  it("the leaf the card reads IS the table the guard chooses from", () => {
+    expect(CARD_REFUSALS).toBe(SAVE_SCHEDULE_REFUSALS);
+  });
+
+  it("every reason the card can draw is an entry of that table", () => {
+    const drawn = [
+      frozenScheduleReason({ triggerType: "scheduled", released: true }),
+      frozenScheduleReason({ triggerType: "immediate", released: true }),
+      frozenScheduleReason({ triggerType: "recurring", stopped: true }),
+    ];
+    for (const sentence of drawn) {
+      expect(Object.values(SAVE_SCHEDULE_REFUSALS)).toContain(sentence);
+      // The wording of these surfaces is the schedule's, throughout.
+      expect(sentence).not.toMatch(/\btrigger\b/i);
+    }
+  });
+
+  it("wherever the card draws a reason, the server refuses that row too", () => {
+    const frozenRows: ReadonlyArray<TriggerRecord> = [
+      row({ triggerType: "scheduled", scheduledAt: PAST, cronExpression: null, releasedAt: PAST }),
+      row({ triggerType: "immediate", scheduledAt: null, cronExpression: null, releasedAt: PAST }),
+      row({ lastFiredAt: PAST, stoppedAt: PAST }),
+    ];
+    for (const trigger of frozenRows) {
+      expect(saveScheduleRefusalFor({ trigger, arming: false })).not.toBeNull();
+      expect(
+        canSaveInstalled({
+          triggerType: trigger.triggerType as "immediate" | "scheduled" | "recurring",
+          scheduledAt: trigger.scheduledAt ?? null,
+          released: !!trigger.releasedAt,
+          arming: false,
+          stopped: trigger.stoppedAt != null,
+        }),
+      ).toBe(false);
+    }
   });
 });

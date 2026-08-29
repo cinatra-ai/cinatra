@@ -122,6 +122,22 @@ export type RunWindowMessage = {
    * person presses Continue in the browser or asks the assistant to submit.
    */
   attachments: readonly RunWindowAttachment[] | null;
+  /**
+   * WHO PLACED THE FILL on this row, when this row is one (cinatra#2934, the
+   * armed-schedule change road).
+   *
+   * A fill is carried FORWARD now — the person places a change in one turn and
+   * asks for it to be saved in the next — so "whose placement is this" stops
+   * being answerable from the message identity alone. It is recorded rather
+   * than derived, and `readRunWindowPlacedFills` refuses to carry a row that
+   * does not name this person: two people, or two tabs, typing in the same
+   * run's windows must never save each other's rows (convergence round 1,
+   * finding 5, extended to the turn AFTER the placement).
+   *
+   * `null` on every row written before this was recorded, and on every row that
+   * is not a fill.
+   */
+  placedBy: string | null;
   createdAt: Date;
 };
 
@@ -153,6 +169,7 @@ type RunWindowMessageBody = {
   fill?: RunWindowFill | null;
   attachments?: readonly RunWindowAttachment[] | null;
   messageId?: string | null;
+  placedBy?: string | null;
 };
 
 /**
@@ -189,6 +206,8 @@ export async function appendRunWindowMessage(input: {
   attachments?: readonly RunWindowAttachment[] | null;
   /** The turn this row belongs to (cinatra#2934). */
   messageId?: string | null;
+  /** Who placed the fill, when this row is one (cinatra#2934). */
+  placedBy?: string | null;
 }): Promise<RunWindowMessage> {
   // The SURFACE is checked here rather than trusted from the type: a server
   // action's payload is whatever reached the process, and TypeScript checks
@@ -210,6 +229,7 @@ export async function appendRunWindowMessage(input: {
       ? { attachments: input.attachments }
       : {}),
     ...(input.messageId ? { messageId: input.messageId } : {}),
+    ...(input.placedBy ? { placedBy: input.placedBy } : {}),
   };
 
   let lastErr: unknown = null;
@@ -251,6 +271,7 @@ export async function appendRunWindowMessage(input: {
       fill: body.fill ?? null,
       attachments: body.attachments ?? null,
       messageId: body.messageId ?? null,
+      placedBy: body.placedBy ?? null,
       createdAt: new Date(),
     };
   }
@@ -307,6 +328,9 @@ export async function readRunWindowMessages(
       messageId: typeof body.messageId === "string" && body.messageId.length > 0
         ? body.messageId
         : null,
+      placedBy: typeof body.placedBy === "string" && body.placedBy.length > 0
+        ? body.placedBy
+        : null,
       createdAt: row.createdAt,
     });
   }
@@ -362,6 +386,64 @@ export async function readRunWindowFillsForMessage(
   for (const row of rows) {
     if (row.messageId !== messageId) continue;
     if (row.fill && row.fill.ref === ref) out.push(row.fill);
+  }
+  return out;
+}
+
+/**
+ * WHAT IS PLACED ON ONE FORM AND NOT YET SAVED, oldest first.
+ *
+ * THE READER THE ARMED SCHEDULE'S SAVE USES, and it exists because issue
+ * #2934's own wording is a TWO-TURN one: "the person places the change, then
+ * asks to save it". `readRunWindowFillsForMessage` above answers "what did THIS
+ * message place", which is the right question for a HITL screen's submit — that
+ * road's whole bound is that an induced bare press does nothing. It is the
+ * wrong question for a form the person is looking at while they type "save
+ * that": the fields in front of them were placed by the turn BEFORE, so a save
+ * scoped to this message alone finds an empty screen and refuses one the person
+ * can see is full.
+ *
+ * THREE BOUNDS, AND EACH ONE ANSWERS A REAL WAY THIS COULD GO WRONG:
+ *
+ *   · THE SAME PERSON. A carried row must name `placedBy` and it must be this
+ *     caller — two people, or two tabs, typing in the same run's windows never
+ *     save each other's rows. A row that names nobody (written before this was
+ *     recorded) is carried only when it is THIS message's own, which is exactly
+ *     what the message-scoped reader did with it before.
+ *   · THE SAME FORM. `ref` is the screen's own reference, as above.
+ *   · NOT ALREADY SAVED. `since` is the moment the form's own row was last
+ *     written — the trigger's `updated_at` — so a placement the person (or the
+ *     form's own button) already saved is not re-applied over rows that have
+ *     moved on since. Without it, a save asked for today would re-place a fill
+ *     abandoned last week.
+ *
+ * THIS MESSAGE'S OWN fills are always included, whatever `since` says: they are
+ * newer than any write by construction, and that keeps the same-message road
+ * byte-identical to what it was.
+ */
+export async function readRunWindowPlacedFills(
+  runId: string,
+  ref: string,
+  opts: {
+    /** This turn's own message identity — its fills are always included. */
+    readonly messageId: string;
+    /** The person asking. A row placed by anybody else is not carried. */
+    readonly placedBy?: string | null;
+    /** The last time the form's own row was written. */
+    readonly since?: Date | null;
+  },
+): Promise<RunWindowFill[]> {
+  const rows = await readRunWindowMessages(runId);
+  const out: RunWindowFill[] = [];
+  for (const row of rows) {
+    if (!row.fill || row.fill.ref !== ref) continue;
+    if (opts.messageId && row.messageId === opts.messageId) {
+      out.push(row.fill);
+      continue;
+    }
+    if (!opts.placedBy || row.placedBy !== opts.placedBy) continue;
+    if (opts.since && row.createdAt.getTime() < opts.since.getTime()) continue;
+    out.push(row.fill);
   }
   return out;
 }
