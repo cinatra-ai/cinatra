@@ -644,6 +644,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           noteRunId: (runId) => { streams.noteRunId(token, runId); }, // the server's own name for THIS instance
           isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
           onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
+          // A TYPED CHANGE RE-DRAWS THE BOUND CARD IN PLACE (cinatra#2853,
+          // plan (A) §2.2). A schedule card cannot be edited — changing it
+          // RE-PROPOSES and mints a replacement ref — so the server names the
+          // ref the mounted card is now drawn from and the settle bus carries
+          // that word to it. The card re-resolves under the reader's own access,
+          // as it does on mount; the announcement itself decides nothing.
+          onLifecycleCardReplaced: ({ supersededRef, replacementRef }) =>
+            cardSettleBus.announceReplacement(supersededRef, replacementRef),
         },
       });
     } finally {

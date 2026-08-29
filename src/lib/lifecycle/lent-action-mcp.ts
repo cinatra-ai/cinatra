@@ -208,6 +208,12 @@ import {
   type LentActionControl,
 } from "@/lib/lifecycle/lent-action-grant";
 import { consumeLentActionGrant } from "@/lib/lifecycle/lent-action-grant-store";
+// The REPLACEMENT ANNOUNCEMENT (cinatra#2853). A pure, import-free module by
+// design, so naming it here adds no reachable surface to this primitive's graph.
+import {
+  LIFECYCLE_REPLACEMENT_KEY,
+  buildLifecycleReplacementAnnouncement,
+} from "@/lib/assistant-runtime/lifecycle-view-envelope";
 
 /** The primitive's name. Exported so the policy, the carve-out and the rule's
  *  own test all name the same string rather than three literals that can drift. */
@@ -667,7 +673,40 @@ export async function handleLentAction(
         op: "adjust",
         schedule: parsed.data.schedule,
       });
-      return say({ ok: adjusted.kind === "reproposed", outcome: adjusted });
+      // THE REPLACEMENT REF TRAVELS BACK TO THE MOUNTED CARD (cinatra#2853;
+      // plan (A) §2.2 — "a typed change re-draws the bound card IN PLACE,
+      // never a second card; the stale Confirm gone").
+      //
+      // An adjust RE-PROPOSES: it mints a new ref and leaves the old one
+      // addressable, because a proposal ref IS the proposal and there is no row
+      // to edit. The card in front of the person is mounted on the OLD ref, so
+      // without this it kept drawing the schedule they had just asked to change
+      // — Confirm and all — while the new rows existed only behind a ref
+      // nothing on the page knew. The card's OWN Adjust button already swaps its
+      // ref in place from the endpoint's answer; this is that same swap, reached
+      // from the typed road, through the one channel a tool result has.
+      //
+      // AN ANNOUNCEMENT, NOT A CARD. It rides BESIDE the answer the model is
+      // owed rather than replacing it, and it draws nothing: the mounted card
+      // re-resolves the named ref under the reader's own access, exactly as it
+      // does on mount. Minting a card here would draw the SECOND card the plan
+      // forbids, which is the defect rather than the fix.
+      //
+      // ONLY ON A LANDED RE-PROPOSAL. A refusal replaced nothing, so it
+      // announces nothing.
+      const announcement =
+        adjusted.kind === "reproposed"
+          ? buildLifecycleReplacementAnnouncement({
+              viewType: "trigger_schedule_proposal",
+              supersededRef: bound.ref,
+              ref: adjusted.ref,
+            })
+          : null;
+      return say({
+        ok: adjusted.kind === "reproposed",
+        outcome: adjusted,
+        ...(announcement ? { [LIFECYCLE_REPLACEMENT_KEY]: announcement } : {}),
+      });
     }
     const outcome = await decide({ ...who, ref: bound.ref, op: "confirm" });
     return say({ ok: outcome.kind === "confirmed", outcome });

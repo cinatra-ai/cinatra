@@ -590,11 +590,40 @@ export type LifecycleCardSettleBus = {
   settledAt: (ref: string) => number;
   /** Say that this ref has been decided. Costs the mounted cards a re-resolve. */
   announceSettled: (ref: string) => void;
+  /**
+   * THE REF THAT REPLACED THIS ONE, or `null` (cinatra#2853, the second leg).
+   *
+   * A schedule proposal cannot be edited — a proposal ref IS the proposal — so
+   * changing one RE-PROPOSES and mints a replacement. A card mounted on the old
+   * ref has to be told, or it keeps drawing the schedule the person just asked
+   * to change with its own Confirm still live.
+   */
+  replacementFor: (ref: string) => string | null;
+  /**
+   * Say that `supersededRef`'s card is now drawn from `replacementRef`.
+   *
+   * IT IS STILL ONLY A RE-RESOLVE. Like `announceSettled`, this carries no claim
+   * the card acts on: the card swaps the ref it asks about and re-resolves under
+   * the READER'S OWN ACCESS, exactly as it does on mount, and a ref that is not
+   * theirs answers `absent`. It is the same swap the card's own Adjust button
+   * performs from the endpoint's answer, reached from the typed road.
+   *
+   * A CHAIN CONVERGES, AND IT CANNOT CLOSE. Two adjusts in one session announce
+   * a→b then b→c; a card on `a` follows to `b`, reads `b`'s own entry and
+   * follows to `c`. An announcement whose replacement already leads BACK to the
+   * ref being replaced is refused, so the walk a card performs is always finite
+   * — a cycle here would be a card re-pointing itself forever.
+   */
+  announceReplacement: (supersededRef: string, replacementRef: string) => void;
 };
 
 export function createLifecycleCardSettleBus(): LifecycleCardSettleBus {
   const generations = new Map<string, number>();
+  const replacements = new Map<string, string>();
   const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
   return {
     subscribe(listener) {
       listeners.add(listener);
@@ -611,7 +640,40 @@ export function createLifecycleCardSettleBus(): LifecycleCardSettleBus {
       // not a behaviour worth leaving available.
       if (typeof ref !== "string" || ref.length === 0) return;
       generations.set(ref, (generations.get(ref) ?? 0) + 1);
-      for (const listener of listeners) listener();
+      notify();
+    },
+    replacementFor(ref) {
+      if (typeof ref !== "string" || ref.length === 0) return null;
+      return replacements.get(ref) ?? null;
+    },
+    announceReplacement(supersededRef, replacementRef) {
+      // Two real, different addresses or nothing happened. A self-replacement
+      // is the one input that could make a mounted card follow itself forever.
+      if (typeof supersededRef !== "string" || supersededRef.length === 0) return;
+      if (typeof replacementRef !== "string" || replacementRef.length === 0) return;
+      if (supersededRef === replacementRef) return;
+      // NO CYCLE, EVER. A card follows this map during render, so a chain that
+      // led back to where it started would re-point that card forever rather
+      // than settle. The walk is bounded by the number of entries: a longer one
+      // is impossible in a map this size, and refusing on the bound is the safe
+      // direction — an announcement dropped costs a re-draw, a cycle costs the
+      // page. Nothing legitimate builds one: every re-proposal mints a token
+      // that has never existed before.
+      let hop = replacementRef;
+      for (let step = 0; step <= replacements.size; step += 1) {
+        if (hop === supersededRef) return;
+        const next = replacements.get(hop);
+        if (next === undefined) break;
+        hop = next;
+      }
+      // FIRST ANNOUNCEMENT WINS. A ref is replaced once; a second word about the
+      // same one is a replay of the turn that said it (the driver replays a
+      // completed tool result on a durable-log resume) or a later message's
+      // announcement arriving about a ref no card is drawn from any more.
+      // Letting it overwrite would move a card that has already moved on.
+      if (replacements.has(supersededRef)) return;
+      replacements.set(supersededRef, replacementRef);
+      notify();
     },
   };
 }
@@ -652,6 +714,22 @@ export function useLifecycleCardSettleSignal(ref: string): number {
   const bus = useLifecycleCardSettleBus();
   const read = useCallback(() => (bus ? bus.settledAt(ref) : 0), [bus, ref]);
   return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, zeroGeneration);
+}
+
+const noReplacement = (): string | null => null;
+
+/**
+ * The ref that replaced this one within this page session, or `null`.
+ *
+ * Null, always, with no provider — a surface that declares no bus keeps exactly
+ * the behaviour it had before this existed. The value is a STRING the card
+ * compares by value, so a re-render that reads the same answer is not a change
+ * and cannot loop.
+ */
+export function useLifecycleCardReplacement(ref: string): string | null {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.replacementFor(ref) : null), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, noReplacement);
 }
 
 const NOOP_UNSUBSCRIBE = (): void => {};

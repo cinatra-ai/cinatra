@@ -189,6 +189,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useLifecycleCardReplacement,
   useLifecycleCardSettleBus,
   useLifecycleCardSettleSignal,
   type LifecycleCardAuth,
@@ -400,10 +401,15 @@ export function ScheduleProposalCard({
   // with the previous proposal's ref still live, and this card's ref is what
   // every decision is taken against.
   const [wireRef, setWireRef] = useState(view.ref);
-  if (wireRef !== view.ref) {
+  const wireChanged = wireRef !== view.ref;
+  if (wireChanged) {
     setWireRef(view.ref);
     setLiveRef(view.ref);
   }
+  // THE REF THIS RENDER IS ABOUT. On a wire change the state updates above are
+  // queued, not applied, so `liveRef` still reads as the PREVIOUS proposal for
+  // the rest of this pass — and everything below must be about the new one.
+  const currentRef = wireChanged ? view.ref : liveRef;
   const [reloadToken, setReloadToken] = useState(0);
 
   // THE SAME-SESSION SETTLE (cinatra#2853, the picture leg) — the same seam the
@@ -412,6 +418,40 @@ export function ScheduleProposalCard({
   // reader and not about the one it replaced.
   const settleSignal = useLifecycleCardSettleSignal(liveRef);
   const settleBus = useLifecycleCardSettleBus();
+
+  // A TYPED CHANGE RE-DRAWS THIS CARD IN PLACE (cinatra#2853, the second fix
+  // leg; plan (A) §2.2 — "a typed change re-draws the bound card IN PLACE,
+  // never a second card; the stale Confirm gone").
+  //
+  // THE DEFECT THIS CLOSES. Adjusting from the prompt window reaches the same
+  // `adjust` the card's own button reaches, and adjust RE-PROPOSES: the new
+  // rows live behind a NEW ref and the old one stays addressable, because a
+  // proposal ref IS the proposal and there is no row to edit. The button knows
+  // the replacement because it made the call itself (`setLiveRef(outcome.ref)`
+  // below); the typed road's answer went to the assistant, so this card kept
+  // drawing the 09:00 it had been asked to change, Confirm and all, while the
+  // 08:00 rows existed behind a ref nothing on the page knew.
+  //
+  // THE SAME SWAP, THE SAME LINE. Whichever road took the decision, the card
+  // ends up on the replacement ref and re-resolves it — one card, the adjusted
+  // rows, one Confirm, and the stale ref no longer drawn anywhere.
+  //
+  // DURING RENDER, for the reason the wire-ref swap above states: an effect
+  // would let one paint go out with the superseded ref still live, and this
+  // card's ref is what every decision is taken against. It settles in one extra
+  // render — the replacement's own entry is absent, so the next read is `null`
+  // — and a chain of adjusts walks itself forward the same way.
+  //
+  // THE WIRE CHANGE WINS. Asked about the PREVIOUS ref while the wire is handing
+  // this instance a different proposal, a replacement announced for that
+  // previous ref would queue AFTER the wire reset and land last — the card would
+  // draw, and decide about, a proposal the turn already moved off. So the lookup
+  // is about `currentRef`, and on the render that resets the wire ref nothing is
+  // swapped: the next render reads the new ref's own replacement, if it has one.
+  const replacementRef = useLifecycleCardReplacement(currentRef);
+  if (!wireChanged && replacementRef !== null && replacementRef !== currentRef) {
+    setLiveRef(replacementRef);
+  }
   const resolved = useLifecycleCardResolve({
     viewType: "trigger_schedule_proposal",
     ref: liveRef,
