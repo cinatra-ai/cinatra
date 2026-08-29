@@ -1451,19 +1451,36 @@ describe("the generated display map imports through package exports, never a hos
     expect(required.filter((s) => buildConfig.has(s))).toEqual([]);
   });
 
-  it("the alias-backed remainder is EXACTLY the guarded-optional display, named and bounded", () => {
-    // The two aliases this change does not delete, pinned by name so a
-    // re-introduced one for any other package fails here. A guardedOptional
-    // package is outside `cinatra.extensions`, so it cannot take the workspace
-    // dependency edge a bare specifier needs; its alias goes when it joins the
-    // required set (or the guarded road gets its own resolution).
+  it("the alias-backed remainder is EXACTLY the guarded-optional displays, named and bounded", () => {
+    // The aliases that stay, pinned BY NAME so a re-introduced one for any other
+    // package fails here. A guardedOptional package is outside
+    // `cinatra.extensions`, so it cannot take the workspace dependency edge a
+    // bare specifier resolves through (the coverage gate refuses one) — the
+    // alias is its resolution road, never a substitute for the packaging: each
+    // of these packages publishes the very same subpath through its OWN
+    // `exports`, which the last case in this block proves for every emitted
+    // specifier. An alias goes when its package joins the required set (or the
+    // guarded road gets a resolution of its own).
+    //
+    // The four blog displays (lifecycle-c W9) enter here: they are companion,
+    // dev-universe extensions, so they take the guarded-optional road the CMS
+    // snapshot display already takes.
     const buildConfig = buildConfigAliases();
     const aliased = emittedRendererSpecifiers().filter(
       (s) => tsconfigResolves(s) || buildConfig.has(s),
     );
     expect(aliased).toEqual([
+      "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-image-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-image-artifact/src/renderers/list-row",
+      "@cinatra-ai/blog-image-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-post-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-post-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/detail",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
     ]);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
   });

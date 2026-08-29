@@ -22,6 +22,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
+import { buildFeaturedImageFields } from "@/lib/artifacts/featured-image-fields";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 // Target type via the manifest-declared "artifact-blog-image" extension
@@ -36,6 +37,16 @@ export type MaterializeBlogImageInput = {
   imageMimeType: string;
   title?: string;
   createdByRunId?: string | null;
+  /**
+   * The post artifact this picture belongs to (lifecycle-c W9).
+   *
+   * The picture type declares `post` and `placement` as REQUIRED fields, so a
+   * picture filed without the post it belongs to no longer satisfies its own
+   * type's schema and is refused by the creation road's declared-schema check.
+   * The caller that knows the post passes it here; the placement is always
+   * `featured` — the pipeline makes one picture and there are no body pictures.
+   */
+  post?: string;
 };
 
 export type MaterializeBlogImageResult = {
@@ -111,6 +122,11 @@ export async function materializeBlogImageArtifact(
     stream: asImageStream(bytes),
     createdByRunId: input.createdByRunId ?? null,
     skipFallbackClassification: true,
+    // The picture type's own declared fields (W9). Omitted when the caller
+    // names no post: the declared-schema check then refuses the write with the
+    // type's own message, which is the honest outcome — the host does not
+    // invent a post reference to get past a schema.
+    declaredObjectFields: input.post ? buildFeaturedImageFields({ post: input.post }) : undefined,
   });
 
   assertSemanticType({

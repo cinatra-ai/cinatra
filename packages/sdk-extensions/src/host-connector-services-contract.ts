@@ -1396,6 +1396,12 @@ export type BlogImageMaterializeInputShape = {
   imageMimeType: string;
   title?: string;
   createdByRunId?: string | null;
+  /**
+   * The post this picture belongs to. The picture type declares `post` and
+   * `placement` as required fields, so a picture filed without the post it
+   * belongs to does not satisfy its own type's schema.
+   */
+  post?: string;
 };
 export type BlogImageMaterializeResultShape = {
   artifactId: string;
