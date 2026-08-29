@@ -58,7 +58,7 @@ function ports(over: Record<string, unknown> = {}) {
     decodeHoldRef: async (ref: string) => decodeRecommendationHoldRef(ref),
     readScheduleProposal: async () => ({
       state: { state: "pending", canDecide: true, canComment: false },
-      view: { schedule: { mode: "recurring" }, summary: "every weekday at 09:00" },
+      view: { schedule: { mode: "recurring" }, summary: "every weekday at 09:00", phase: "proposal" },
     }),
     ...over,
   } as never;
@@ -203,6 +203,43 @@ describe("the schedule (trigger) card", () => {
     });
     expect(out).toMatchObject({ kind: "schedule_proposal", ref: "prop_token_1" });
     expect(controlsLentBy(out)).toEqual(["adjust", "confirm"]);
+  });
+
+  it("an EXPIRED card still resolves but lends ADJUST ALONE", async () => {
+    // convergence round 2, finding 5. An expired proposal keeps a live floor —
+    // the plan keeps it visible and still editable — but its token cannot be
+    // spent, so the card's OWN Confirm on one re-proposes the rows in front of
+    // the reader and confirms the replacement. That is two acts, and the typed
+    // road does one. Lending Confirm here would have spent the message's single
+    // press on a token that could never land.
+    const out = await resolveBoundReference({
+      ref: "prop_token_1",
+      actorCtx: ACTOR,
+      ports: ports({
+        readScheduleProposal: async () => ({
+          state: { state: "pending", canDecide: true, canComment: false },
+          view: { schedule: { mode: "recurring" }, summary: "every weekday at 09:00", phase: "expired" },
+        }),
+      }),
+    });
+    expect(out).toMatchObject({ kind: "schedule_proposal", expired: true });
+    expect(controlsLentBy(out)).toEqual(["adjust"]);
+  });
+
+  it("a view this reader cannot read as the live phase lends ADJUST ALONE too", async () => {
+    // The narrowing fails CLOSED: anything that is not plainly the live proposal
+    // phase is treated as expired.
+    const out = await resolveBoundReference({
+      ref: "prop_token_1",
+      actorCtx: ACTOR,
+      ports: ports({
+        readScheduleProposal: async () => ({
+          state: { state: "pending", canDecide: true, canComment: false },
+          view: { summary: "every weekday at 09:00" },
+        }),
+      }),
+    });
+    expect(controlsLentBy(out)).toEqual(["adjust"]);
   });
 
   it("is ABSENT for a settled card — a card with no floor lends none", async () => {

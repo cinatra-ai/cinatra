@@ -154,3 +154,23 @@ describe("the menu, narrowed from the card's own lent set", () => {
     ).toEqual(["adjust", "confirm"]);
   });
 });
+
+describe("a phrase that names no act is not on the menu (convergence round 2)", () => {
+  // These three were IN the confirm family and were removed. None of them names
+  // the button the card draws, so an ordinary sentence that happens to contain
+  // one put a terminal control on the menu for nothing.
+  it.each(["do it", "apply it", "arm it"])("%s does not name Confirm", (phrase) => {
+    expect(wordsNameControl("confirm", `please ${phrase} when you get a chance`)).toBe(false);
+  });
+
+  it("a schedule card bound to a message that only says 'do it' lends no confirm", () => {
+    expect(controlsNamedByThePerson(["adjust", "confirm"], "do it")).toEqual(["adjust"]);
+  });
+
+  it("the word the card actually draws still names it", () => {
+    expect(controlsNamedByThePerson(["adjust", "confirm"], "confirm that")).toEqual([
+      "adjust",
+      "confirm",
+    ]);
+  });
+});

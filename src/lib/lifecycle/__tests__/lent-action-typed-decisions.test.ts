@@ -78,6 +78,7 @@ const PROPOSAL = {
   ref: "prop_ref_1",
   runId: null,
   summary: "every weekday at 09:00",
+  expired: false,
 };
 
 /** What the person actually typed, as the mint stored it with the grant. */
@@ -248,6 +249,18 @@ describe("the skills card, typed", () => {
       { ref: REF, control: "confirm", keep: ["sk_seo"] },
       deps(HOLD),
     );
+    expect(out.structuredContent).toMatchObject({ message: LENT_ACTION_CARD_UNAVAILABLE });
+    expect(confirmHold).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES an EMPTY kept set — that is the card's Skip, not its Confirm", async () => {
+    // convergence round 2, finding 3. Omitting `keep` is "keep everything", the
+    // press of Confirm with no chip touched. An empty ARRAY is a value the model
+    // supplied that settles the hold keeping nothing, which is a different
+    // button and a decision the person's word "confirm" never carried.
+    personWords = "confirm";
+    setFrame(grantFor({ controls: ["confirm"] }));
+    const out = await handleLentAction({ ref: REF, control: "confirm", keep: [] }, deps(HOLD));
     expect(out.structuredContent).toMatchObject({ message: LENT_ACTION_CARD_UNAVAILABLE });
     expect(confirmHold).not.toHaveBeenCalled();
   });

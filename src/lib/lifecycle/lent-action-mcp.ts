@@ -557,6 +557,19 @@ export async function handleLentAction(
     if (asked && asked.some((id) => !offered.includes(id))) {
       return refuseCardUnavailable();
     }
+    // AN EMPTY `keep` IS NOT A CONFIRM (convergence round 2, finding 3).
+    //
+    // Omitting `keep` means "everything the card offered" — the press of Confirm
+    // with no chip touched. An EMPTY ARRAY is a different sentence entirely:
+    // it settles the hold keeping nothing, which is what the card's OWN Skip
+    // does, and it is a value the model supplies rather than one the person's
+    // word "confirm" carries. Read as "keep nothing" it let an induced call turn
+    // a plain typed confirm into a skip; read as "keep everything" it would put
+    // a meaning on an argument that does not say so. It presses nothing: the
+    // person still has the card, and Skip is a word of its own.
+    if (asked && asked.length === 0) {
+      return refuseCardUnavailable();
+    }
     const confirmedSkillIds = asked ?? offered;
     const confirm = deps.confirmHold ?? core!.confirmRecommendationForActor;
     const write = deps.writeSelection ?? core!.writeRunSkillSelectionForActor;

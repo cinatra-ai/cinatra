@@ -169,6 +169,19 @@ export type BoundScheduleProposal = {
   readonly runId: string | null;
   /** What the card's rows are holding right now, in the card's own words. */
   readonly summary: string;
+  /**
+   * Whether the card's token has EXPIRED (convergence round 2, finding 5).
+   *
+   * An expired proposal still draws a live floor — the plan keeps it visible and
+   * still editable — so it resolves like any other pending card. But its token
+   * is UNSPENDABLE, which is why the card's own Confirm on an expired card is
+   * not a bare confirm at all: it re-proposes the rows the reader is looking at
+   * and confirms the replacement. The typed road cannot do that in one act (see
+   * the schedule arm of the handler), so an expired card lends ADJUST ALONE and
+   * a typed "confirm" on one is refused before anything is spent, rather than
+   * spending the message's one press on a token that could never land.
+   */
+  readonly expired: boolean;
 };
 
 /** Everything else. One shape, no reason. */
@@ -483,12 +496,20 @@ async function resolveScheduleProposal(
     return ABSENT;
   }
   if (card.state?.state !== "pending" || card.state.canDecide !== true) return ABSENT;
-  const view = card.view as { runId?: string | null; summary?: string } | null;
+  const view = card.view as {
+    runId?: string | null;
+    summary?: string;
+    phase?: string;
+  } | null;
   return {
     kind: "schedule_proposal",
     ref,
     runId: view?.runId ?? null,
     summary: typeof view?.summary === "string" ? view.summary : "",
+    // The card's own word for it. Anything this reader cannot read as the live
+    // proposal phase is treated as expired, so an unreadable view narrows the
+    // lending rather than widening it.
+    expired: view?.phase !== "proposal",
   };
 }
 
@@ -516,7 +537,10 @@ async function resolveScheduleProposal(
  *     have" survives this slice;
  *   · a SCHEDULE CARD lends Adjust and Confirm (cinatra#2853). Adjust
  *     RE-PROPOSES — it writes nothing and arms nothing — so it is this card's
- *     own fill; Confirm is the act that creates the run;
+ *     own fill; Confirm is the act that creates the run. An EXPIRED card lends
+ *     ADJUST ALONE (convergence round 2, finding 5): its token cannot be spent,
+ *     so the card's own Confirm on one re-proposes and confirms the replacement,
+ *     which is two acts and not one — see `BoundScheduleProposal.expired`;
  *   · anything ABSENT lends nothing at all.
  */
 export function controlsLentBy(
@@ -526,7 +550,8 @@ export function controlsLentBy(
   if (resolution.kind === "hitl_screen") return ["fill", "submit"];
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
-  if (resolution.kind === "schedule_proposal") return ["adjust", "confirm"];
+  if (resolution.kind === "schedule_proposal")
+    return resolution.expired ? ["adjust"] : ["adjust", "confirm"];
   return [];
 }
 

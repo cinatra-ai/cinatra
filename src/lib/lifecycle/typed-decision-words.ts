@@ -110,11 +110,15 @@ export const TYPED_DECISION_WORDS: Readonly<
     "confirmed",
     "confirming",
     "go ahead",
-    "do it",
-    "apply it",
-    "arm it",
     "schedule it",
   ],
+  // WHY "do it", "apply it" and "arm it" ARE NOT HERE (convergence round 2,
+  // finding 2). They were, and they were wrong: none of them NAMES the act, so
+  // an ordinary "do it" in a message that happens to have a skills or schedule
+  // card bound put a terminal control on the menu on the strength of a phrase
+  // that means nothing in particular. The families exist to be the half of the
+  // key the PERSON holds, so an entry only earns its place by naming the button
+  // the card draws. Dropping them costs at most one press of that button.
   // The skills card's Skip.
   skip: ["skip", "skips", "skipped", "skipping", "no skills", "none of them"],
 };

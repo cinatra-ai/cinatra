@@ -55,6 +55,7 @@ const proposal = {
   ref: "prop-ref",
   runId: null,
   summary: "every weekday at 09:00",
+  expired: false,
 } as const;
 const absent = { kind: "absent" } as const;
 
