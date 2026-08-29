@@ -1,24 +1,27 @@
 // ---------------------------------------------------------------------------
-// LIVE PROOF (cinatra#1217 · S1) — a run streamed over the unified contract
-// with resume, against the GENUINE durable Redis-Streams AG-UI log.
+// INTEGRATION TIER (cinatra#3067; the proof written for cinatra#1217 - S1) - a
+// run streamed over the unified contract with resume, against the GENUINE
+// durable Redis-Streams AG-UI log.
 //
-// This is NOT a mocked unit test: it publishes the full AG-UI event vocabulary
-// through `publishAgUiEvent` (which XADDs to `cinatra:a2a:events:{runId}`, the
-// real durable log resolved via the live-proof `@cinatra-ai/a2a` shim) and
-// consumes it back through `subscribeToAgUiEventsWithId`, then proves the
-// contract's resume semantics (§4 of CONTRACT.md):
+// This is NOT a mocked unit test: it publishes a fixed, representative AG-UI
+// sequence - lifecycle, streamed text, a tool call, a HITL interrupt/resume and
+// a DATA_PART renderable view - through `publishAgUiEvent` (which XADDs to
+// `cinatra:a2a:events:{runId}`, the real durable log), consumes it back through
+// `subscribeToAgUiEventsWithId`, and proves the contract's resume semantics
+// (section 4 of CONTRACT.md):
 //
-//   1. The whole vocabulary streams back in order; every frame validates
+//   1. The published sequence streams back in order; every frame validates
 //      (`isAgUiEvent`); every SSE `id:` is a well-formed resume cursor; the
 //      DATA_PART renderable-view payload round-trips byte-for-byte.
 //   2. Reconnecting with a mid-stream `Last-Event-ID` cursor delivers EXACTLY
-//      the un-replayed suffix — no loss, no duplication — and prefix+suffix
+//      the un-replayed suffix - no loss, no duplication - and prefix+suffix
 //      reconstruct the full run exactly once.
 //   3. The `0-0` sentinel replays the entire durable log.
+//   4. A mixed AG-UI / A2A-channel log resumes past the filtered entry.
 //
-// Run against a throwaway Redis (default redis://127.0.0.1:6591):
-//   REDIS_URL=redis://127.0.0.1:6591 vitest run \
-//     --config live-proof/vitest.config.ts
+// The package's own unit config EXCLUDES `src/**/*.integration.test.ts`, so this
+// file runs only in its own tier, which needs a real Redis:
+//   REDIS_URL=redis://127.0.0.1:6379 pnpm test:agent-ui-durable-resume
 // ---------------------------------------------------------------------------
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -33,19 +36,22 @@ import {
   __disconnectSharedAgUiPublisher,
   publishAgUiEvent,
   subscribeToAgUiEventsWithId,
-} from "../src/server";
-import { isValidStreamCursor, normalizeResumeCursor } from "../src/contract";
-import { isAgUiEvent } from "../src/conformance";
-import { renderableViewDataPart } from "../src/renderable-views";
-import type { AgUiEvent } from "../src/events";
+} from "../server";
+import { isValidStreamCursor, normalizeResumeCursor } from "../contract";
+import { isAgUiEvent } from "../conformance";
+import { renderableViewDataPart } from "../renderable-views";
+import type { AgUiEvent } from "../events";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://127.0.0.1:6591";
 
 const THREAD = "thr_s1proof";
 const runId = `s1proof_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 
-// The full AG-UI vocabulary in one run: lifecycle, streamed text, a tool call,
-// a HITL interrupt/resume, and a DATA_PART renderable view (the change-diff).
+// A representative AG-UI sequence in one run: lifecycle, streamed text, a tool
+// call, a HITL interrupt/resume, and a DATA_PART renderable view (the
+// change-diff). NOT the full event vocabulary - RUN_ERROR and STATE_SNAPSHOT
+// are absent; what this tier proves is the durable log and its resume
+// semantics, not vocabulary coverage.
 const SEQUENCE: readonly AgUiEvent[] = [
   { type: "RUN_STARTED", threadId: THREAD, runId },
   { type: "TEXT_MESSAGE_START", messageId: "m1" },
@@ -104,8 +110,8 @@ afterAll(async () => {
   await __disconnectSharedEventLogPublisher().catch(() => {});
 });
 
-describe("S1 durable-resume live proof", () => {
-  it("streams the full AG-UI vocabulary in order; every frame is valid and the DATA_PART round-trips", async () => {
+describe("durable-resume integration tier", () => {
+  it("streams the published sequence in order; every frame is valid and the DATA_PART round-trips", async () => {
     const all = await drain(runId);
 
     expect(all.length).toBe(SEQUENCE.length);
