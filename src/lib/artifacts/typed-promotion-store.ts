@@ -14,11 +14,12 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+
 import {
-  buildTypedPromotionQueries,
+  buildPromotionRepresentationAppend,
   planTypedPromotion,
-  readTypedPromotionResult,
-  type ApplyTypedPromotionResult,
+  promotionRevisionId,
   type ExtensionOwnType,
   type MatcherAssociation,
   type PromotableRow,
@@ -45,7 +46,7 @@ export function readPromotableRow(input: {
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT o.type, o.version,
+        text: `SELECT o.type, o.version, o.data,
   rep.id AS rep_id, rep.resource_id, rep.form,
   COALESCE(b.mime_detected, r.mime, '') AS mime
 FROM "${s}"."objects" o
@@ -67,6 +68,7 @@ LIMIT 1`,
     | {
         type: string;
         version: number | string;
+        data: unknown;
         rep_id: string | null;
         resource_id: string | null;
         form: string | null;
@@ -76,6 +78,7 @@ LIMIT 1`,
   if (!row) return null;
   return {
     objectType: String(row.type),
+    data: row.data ?? null,
     version: Number(row.version ?? 0),
     latestRevision:
       row.rep_id && row.resource_id && row.form
@@ -130,19 +133,35 @@ ORDER BY asserted_at DESC LIMIT 1`,
 }
 
 export type PromoteMatchedArtifactTypeResult =
-  | ({ ok: true } & Extract<ApplyTypedPromotionResult, { ok: true }>)
-  | { ok: false; reason: TypedPromotionRefusal | "row-moved" };
+  | {
+      ok: true;
+      representationRevisionId: string;
+      /** The revision number the append landed, or null when the revision was
+       *  already present (a converging re-run of an interrupted promotion). */
+      revision: number | null;
+      toType: string;
+      /** FALSE when the row was already retyped and this call only completed the
+       *  append an interrupted promotion left behind. */
+      retyped: boolean;
+    }
+  | { ok: false; reason: TypedPromotionRefusal | "row-moved" | "not-authorized" };
 
 /**
  * THE ROAD, END TO END: read the row, read the matcher's association, decide,
- * and — only on a decision that says yes — retype under a compare-and-set and
- * append the revision that shares the content.
+ * and — only on a decision that says yes — retype through the canonical
+ * history-aware writer and append the revision that shares the content.
  *
  * `confirmed` is the caller's: this leaf never decides that a person agreed. The
  * one surface that asks (`assertUploadMeaning`, the library's §VI.1 Confirm)
  * passes true after it has written the person's own meaning assertion.
+ *
+ * CONVERGENT ON `already-promoted`. The two writes are two transactions, because
+ * the canonical objects writer owns its own; an interruption between them leaves
+ * a retyped row whose promotion revision is missing. So the `already-promoted`
+ * branch does not simply refuse: it re-runs the idempotent append first, and
+ * refuses only when there was nothing left to do.
  */
-export function promoteMatchedArtifactType(input: {
+export async function promoteMatchedArtifactType(input: {
   orgId: string;
   artifactId: string;
   extension: string;
@@ -150,7 +169,22 @@ export function promoteMatchedArtifactType(input: {
   threshold: number;
   confirmed: boolean;
   createdBy?: string | null;
-}): PromoteMatchedArtifactTypeResult {
+  /** The acting principal, for the history event the retype records. */
+  actor: { userId: string; orgId: string };
+  /** The org-write kernel authority, minted host-side by the calling surface —
+   *  this leaf never mints one. */
+  authority: OrgWriteAuthority;
+  /**
+   * The retype itself. Defaults to the canonical history-aware objects writer,
+   * which is the ONLY road this module ever takes in production.
+   *
+   * Injectable because that writer's module graph reaches the application boot
+   * (the session module, the connector registry), which a node-tier real-database
+   * proof of the promotion's DATA effects must not pull in. A test substitutes
+   * the same compare-and-set; nothing else does.
+   */
+  retype?: TypedPromotionRetype;
+}): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
   const matcher = readMatcherAssociation({
     orgId: input.orgId,
@@ -164,22 +198,149 @@ export function promoteMatchedArtifactType(input: {
     matcher,
     confirmed: input.confirmed,
   });
-  if (!plan.ok) return { ok: false, reason: plan.reason };
 
-  const built = buildTypedPromotionQueries(postgresSchema, {
+  if (!plan.ok) {
+    // THE CONVERGING BRANCH. An `already-promoted` row may be one an earlier
+    // call retyped and never got to append for. Everything else is a refusal.
+    if (
+      plan.reason === "already-promoted" &&
+      row?.latestRevision &&
+      input.ownType &&
+      row.objectType === input.ownType.typeId
+    ) {
+      const landed = appendPromotionRevision({
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        sharedResourceId: row.latestRevision.resourceId,
+        toType: input.ownType.typeId,
+        form: row.latestRevision.form,
+        createdBy: input.createdBy ?? null,
+      });
+      if (landed.revision !== null) {
+        return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
+      }
+    }
+    return { ok: false, reason: plan.reason };
+  }
+
+  // 1. THE RETYPE, through the canonical history-aware writer. Its
+  //    compare-and-set on the row's own version is the whole race safety, and
+  //    its change event is what puts the promotion in the row's history.
+  const retype = input.retype ?? canonicalRetype;
+  const retyped = await retype({
     orgId: input.orgId,
     artifactId: input.artifactId,
-    plan,
+    data: row!.data,
+    toType: plan.toType,
+    expectedVersion: plan.expectedVersion,
+    actor: input.actor,
+    authority: input.authority,
+  });
+  if (!retyped.ok) return { ok: false, reason: retyped.reason };
+
+  // 2. THE APPEND. The retype has committed, so the row carries the target type
+  //    and this needs no guard of its own.
+  const landed = appendPromotionRevision({
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    sharedResourceId: plan.sharedResourceId,
+    toType: plan.toType,
+    form: plan.form,
     createdBy: input.createdBy ?? null,
+  });
+  return {
+    ok: true,
+    representationRevisionId: landed.representationRevisionId,
+    revision: landed.revision,
+    toType: plan.toType,
+    retyped: true,
+  };
+}
+
+/** The retype half, as a port. */
+export type TypedPromotionRetype = (input: {
+  orgId: string;
+  artifactId: string;
+  data: unknown;
+  toType: string;
+  expectedVersion: number;
+  actor: { userId: string; orgId: string };
+  authority: OrgWriteAuthority;
+}) => Promise<{ ok: true } | { ok: false; reason: "row-moved" | "not-authorized" }>;
+
+/**
+ * THE PRODUCTION RETYPE: the canonical history-aware objects writer.
+ *
+ * This module never writes the objects table itself — a type change is an
+ * application-visible mutation, so it belongs in the row's own history with a
+ * change event and a Graphiti outbox row, which is exactly what this writer
+ * commits alongside it. Its compare-and-set on the row's version is the race
+ * safety: a concurrent confirmation that already retyped the row moved the
+ * version, and this call answers `row-moved` having written nothing.
+ */
+const canonicalRetype: TypedPromotionRetype = async (input) => {
+  const { historyAwareUpsert } = await import("@/lib/object-history/canonical-writer");
+  const { VersionConflictError } = await import("@/lib/object-history/errors");
+  const { OrgWriteAuthorityError } = await import("@/lib/org-write/authority");
+  try {
+    historyAwareUpsert(
+      {
+        id: input.artifactId,
+        // ONLY THE TYPE MOVES. The data is written back exactly as it was read,
+        // because a promotion renames the work, it does not change it.
+        type: input.toType,
+        data: input.data,
+        orgId: input.orgId,
+      },
+      {
+        actor: { actorId: input.actor.userId, actorKind: "user", orgId: input.actor.orgId },
+        historyEffect: "reversible-internal",
+        expectedBaseVersion: input.expectedVersion,
+        authority: input.authority,
+      },
+    );
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof VersionConflictError) return { ok: false, reason: "row-moved" };
+    if (error instanceof OrgWriteAuthorityError) return { ok: false, reason: "not-authorized" };
+    throw error;
+  }
+};
+
+/** Append the promotion's revision, idempotently, under the per-artifact lock
+ *  the append-only representation store takes for the same reason. */
+function appendPromotionRevision(input: {
+  orgId: string;
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+  form: "file" | "connectorRef" | "dashboard";
+  createdBy: string | null;
+}): { representationRevisionId: string; revision: number | null } {
+  ensurePostgresSchema();
+  const representationRevisionId = promotionRevisionId({
+    artifactId: input.artifactId,
+    sharedResourceId: input.sharedResourceId,
+    toType: input.toType,
   });
   const results = runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
-    queries: built.queries,
+    queries: [
+      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+      buildPromotionRepresentationAppend(postgresSchema, {
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        representationRevisionId,
+        sharedResourceId: input.sharedResourceId,
+        form: input.form,
+        createdBy: input.createdBy,
+      }),
+    ],
   });
-  const applied = readTypedPromotionResult(results ?? [], {
-    newRepresentationRevisionId: built.newRepresentationRevisionId,
-    toType: plan.toType,
-  });
-  return applied.ok ? { ...applied, ok: true } : { ok: false, reason: applied.reason };
+  const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
+  return {
+    representationRevisionId,
+    revision: appended ? Number(appended.revision) : null,
+  };
 }

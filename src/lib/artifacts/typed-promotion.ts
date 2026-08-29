@@ -38,9 +38,19 @@
 // PURE HALF / STORE HALF. `planTypedPromotion` is a total function over facts a
 // caller has already read: every refusal is a NAMED value, so a surface can say
 // WHY a confirmation did not retype anything instead of silently doing nothing.
-// `buildTypedPromotionQueries` is the compare-and-set that applies it.
+// The store half applies it in two writes, and the order is the contract:
+//
+//   1. THE RETYPE goes through the canonical history-aware objects writer, whose
+//      compare-and-set on the row's own version is what makes a lost race a
+//      no-op — and whose change event is what puts the promotion in the row's
+//      history rather than only in the reader's memory. This module never writes
+//      the objects table itself.
+//   2. THE APPEND gives the promoted row its new revision over the SAME
+//      resource. It is keyed deterministically and inserts on conflict-do-
+//      nothing, so an interrupted promotion CONVERGES on a later call instead of
+//      stranding a retyped row with no revision or stacking a second one.
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // The refusals — closed and named.
@@ -71,6 +81,9 @@ export type TypedPromotionRefusal =
 /** The base-typed row as the caller read it. */
 export interface PromotableRow {
   objectType: string;
+  /** The row's own data. Written back UNCHANGED by the retype: a promotion
+   *  renames the work, it does not change it. */
+  data: unknown;
   /** The optimistic version the promotion's compare-and-set anchors on. */
   version: number;
   /** The latest content revision — the one whose resource the new revision
@@ -183,116 +196,70 @@ export function mimeAccepted(accepts: readonly string[], mime: string): boolean 
 }
 
 // ---------------------------------------------------------------------------
-// The compare-and-set that applies the plan.
+// The revision the promotion appends.
 // ---------------------------------------------------------------------------
 
-export interface TypedPromotionQueries {
-  /** The revision id the promotion will append, pre-allocated so the caller can
-   *  report it without a second read. */
-  newRepresentationRevisionId: string;
-  queries: Array<{ text: string; values: unknown[] }>;
+/**
+ * The promotion revision's DETERMINISTIC id — the same (artifact, shared
+ * content, target type) always names the same row.
+ *
+ * WHY DETERMINISTIC, and not a fresh uuid. The retype and the append are two
+ * writes: the retype must go through the canonical history-aware objects writer
+ * (which owns its own transaction, its change event and its Graphiti outbox
+ * row), so the append cannot ride inside it. A deterministic id plus
+ * `ON CONFLICT DO NOTHING` makes the append IDEMPOTENT, which is what lets an
+ * interrupted promotion CONVERGE: a later call finds the row already retyped and
+ * re-runs the append, which either lands the missing revision or does nothing.
+ * A fresh uuid would append a second identical revision on every retry instead.
+ */
+export function promotionRevisionId(input: {
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+}): string {
+  const material = [input.artifactId, input.sharedResourceId, input.toType].join("\u0000");
+  return `rep_${createHash("sha256").update(material).digest("hex").slice(0, 32)}`;
 }
 
 /**
- * Build the promotion's ONE transaction: the row is retyped under a
- * compare-and-set on its own version AND its current type, and the new revision
- * is appended only if that retype actually happened.
+ * The append that gives the promoted row its new revision SHARING the content.
  *
- * THE COMPARE-AND-SET IS THE WHOLE SAFETY. Between the read the plan was made
- * from and this write, the row can be retyped by another confirmation, or its
- * content can move. Anchoring on `(version, type)` makes a lost race a no-op —
- * the update matches nothing, the guarded insert writes nothing, and the caller
- * is told the row moved — instead of stacking a second promotion revision under
- * a type somebody else chose.
+ * It touches `representation` and nothing else — no `objects` reference at all,
+ * because the retype that precedes it is the guard: this statement runs only
+ * after the canonical writer's compare-and-set has already committed the type
+ * change, so a lost race never reaches here.
  *
- * THE NEW REVISION SHARES THE CONTENT: it points at the SAME `resource_id` the
- * base revision does. No bytes are copied, and the content-addressed store sees
- * one resource with two representations, which is exactly the multi-artifact
- * attribution it already supports.
- *
- * THE BASE ROW KEEPS ITS HISTORY: `representation` is append-only (a trigger
- * forbids UPDATE and DELETE), and this appends. Nothing earlier is touched.
+ * THE BASE ROW KEEPS ITS HISTORY: the table is append-only (a trigger forbids
+ * UPDATE and DELETE) and the revision is `MAX + 1`, so nothing earlier moves.
+ * The resource is the BASE revision's own — the content is shared, never copied.
  */
-export function buildTypedPromotionQueries(
+export function buildPromotionRepresentationAppend(
   schema: string,
   input: {
     orgId: string;
     artifactId: string;
-    plan: Extract<TypedPromotionPlan, { ok: true }>;
+    representationRevisionId: string;
+    sharedResourceId: string;
+    form: "file" | "connectorRef" | "dashboard";
     createdBy: string | null;
   },
-): TypedPromotionQueries {
+): { text: string; values: unknown[] } {
   const s = schema.replaceAll('"', '""');
-  const newRepresentationRevisionId = randomUUID();
   return {
-    newRepresentationRevisionId,
-    queries: [
-      // Serialize promotions of ONE row against each other, and against the
-      // revision allocation below — the same per-artifact lock the append-only
-      // representation store takes for exactly this reason.
-      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-      {
-        text: `UPDATE "${s}"."objects"
-SET type = $4::text, version = version + 1, updated_at = now()
-WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL
-  AND type = $3::text AND version = $5::bigint
-RETURNING id`,
-        values: [
-          input.artifactId,
-          input.orgId,
-          input.plan.fromType,
-          input.plan.toType,
-          input.plan.expectedVersion,
-        ],
-      },
-      {
-        // GUARDED ON THE RETYPE. A revision appended without it would announce a
-        // promotion that did not happen.
-        text: `INSERT INTO "${s}"."representation"
+    text: `INSERT INTO "${s}"."representation"
   (id, org_id, artifact_id, resource_id, revision, form, created_by)
 SELECT $1::text, $2::text, $3::text, $4::text,
   COALESCE((SELECT MAX(revision) FROM "${s}"."representation" WHERE org_id = $2 AND artifact_id = $3), 0) + 1,
   $5::text, $6
-WHERE EXISTS (
-  SELECT 1 FROM "${s}"."objects"
-  WHERE id = $3 AND org_id = $2 AND type = $7::text AND deleted_at IS NULL
-)
+ON CONFLICT (id) DO NOTHING
 RETURNING id, revision`,
-        values: [
-          newRepresentationRevisionId,
-          input.orgId,
-          input.artifactId,
-          input.plan.sharedResourceId,
-          input.plan.form,
-          input.createdBy,
-          input.plan.toType,
-        ],
-      },
+    values: [
+      input.representationRevisionId,
+      input.orgId,
+      input.artifactId,
+      input.sharedResourceId,
+      input.form,
+      input.createdBy,
     ],
-  };
-}
-
-export type ApplyTypedPromotionResult =
-  | { ok: true; representationRevisionId: string; revision: number; toType: string }
-  | { ok: false; reason: "row-moved" };
-
-/**
- * Read the transaction's results into an outcome. Separated from the query
- * building so the whole compare-and-set is provable without a database, and the
- * runner is the two lines that actually touch one.
- */
-export function readTypedPromotionResult(
-  results: ReadonlyArray<{ rows?: unknown[] } | undefined>,
-  input: { newRepresentationRevisionId: string; toType: string },
-): ApplyTypedPromotionResult {
-  // results: [0] the lock, [1] the retype, [2] the guarded append.
-  const retyped = (results[1]?.rows?.length ?? 0) > 0;
-  const appended = results[2]?.rows?.[0] as { id?: unknown; revision?: unknown } | undefined;
-  if (!retyped || !appended) return { ok: false, reason: "row-moved" };
-  return {
-    ok: true,
-    representationRevisionId: String(appended.id ?? input.newRepresentationRevisionId),
-    revision: Number(appended.revision ?? 0),
-    toType: input.toType,
   };
 }

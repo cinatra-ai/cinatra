@@ -178,7 +178,14 @@ export type AssertMeaningResult =
        * row was promotable.
        */
       promotion?:
-        | { promoted: true; toType: string; representationRevisionId: string; revision: number }
+        | {
+            promoted: true;
+            toType: string;
+            representationRevisionId: string;
+            /** Null when the revision was already present — a converging re-run
+             *  of a promotion an earlier call left half-applied. */
+            revision: number | null;
+          }
         | { promoted: false; reason: string };
     }
   | {
@@ -278,6 +285,7 @@ export async function assertUploadMeaning(input: {
     artifactId: input.artifactId,
     extension: input.extension,
     principalId: actor.principalId ?? null,
+    userId: session?.user?.id ?? null,
   });
 
   revalidatePath("/artifacts");
@@ -301,7 +309,9 @@ async function promoteOnConfirmedMeaning(input: {
   artifactId: string;
   extension: string;
   principalId: string | null;
+  userId: string | null;
 }): Promise<Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null> {
+  if (!input.userId) return null;
   try {
     const { matcherManifestRegistry, objectTypeRegistry } = await import(
       "@cinatra-ai/objects/registry"
@@ -327,10 +337,14 @@ async function promoteOnConfirmedMeaning(input: {
       .find((e) => e.packageName === input.extension);
     if (!entry) return null;
 
+    // The org-write kernel authority the canonical objects writer requires,
+    // minted HERE from the acting session — the store leaf never mints one.
+    const { verifySessionAuthority } = await import("@/lib/org-write/authority");
+    const authority = await verifySessionAuthority(input.userId, input.orgId);
     const { promoteMatchedArtifactType } = await import(
       "@/lib/artifacts/typed-promotion-store"
     );
-    const outcome = promoteMatchedArtifactType({
+    const outcome = await promoteMatchedArtifactType({
       orgId: input.orgId,
       artifactId: input.artifactId,
       extension: input.extension,
@@ -338,6 +352,8 @@ async function promoteOnConfirmedMeaning(input: {
       threshold: entry.matcherConfidenceThreshold,
       confirmed: true,
       createdBy: input.principalId,
+      actor: { userId: input.userId, orgId: input.orgId },
+      authority,
     });
     return outcome.ok
       ? {

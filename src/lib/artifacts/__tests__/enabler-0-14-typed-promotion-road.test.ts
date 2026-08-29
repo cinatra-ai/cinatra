@@ -22,13 +22,16 @@
  * compare-and-set, the shared resource and the untouched history — is
  * `lifecycle-c-w4-typed-promotion.integration.test.ts`.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
-  buildTypedPromotionQueries,
+  buildPromotionRepresentationAppend,
   mimeAccepted,
   planTypedPromotion,
-  readTypedPromotionResult,
+  promotionRevisionId,
   type ExtensionOwnType,
   type PromotableRow,
 } from "@/lib/artifacts/typed-promotion";
@@ -38,6 +41,7 @@ const OWN_TYPE = "@cinatra-ai/brand-voice-artifact:voice";
 
 const row = (over: Partial<PromotableRow> = {}): PromotableRow => ({
   objectType: BASE_TYPE,
+  data: { title: "an upload" },
   version: 7,
   latestRevision: {
     representationRevisionId: "rev-base",
@@ -169,7 +173,7 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
   });
 });
 
-describe("0.14 — the compare-and-set, the shared content and the kept history", () => {
+describe("0.14 — the revision that shares the content, and the kept history", () => {
   const plan = planTypedPromotion({
     row: row(),
     ownType: ownType(),
@@ -177,70 +181,101 @@ describe("0.14 — the compare-and-set, the shared content and the kept history"
     confirmed: true,
   });
 
-  it("retypes under a compare-and-set on BOTH the version and the current type", () => {
-    if (!plan.ok) throw new Error("fixture plan refused");
-    const built = buildTypedPromotionQueries("app", {
-      orgId: "org-1",
-      artifactId: "art-1",
-      plan,
-      createdBy: "user-1",
-    });
-    const update = built.queries[1]!;
-    expect(update.text).toContain("UPDATE");
-    expect(update.text).toContain("type = $3::text AND version = $5::bigint");
-    expect(update.values).toEqual(["art-1", "org-1", BASE_TYPE, OWN_TYPE, 7]);
-    // Promotions of ONE row serialize against each other and against the
-    // revision allocation.
-    expect(built.queries[0]!.text).toContain("pg_advisory_xact_lock");
-  });
-
   it("appends a revision SHARING the base revision's resource — no bytes are copied", () => {
     if (!plan.ok) throw new Error("fixture plan refused");
-    const built = buildTypedPromotionQueries("app", {
+    const op = buildPromotionRepresentationAppend("app", {
       orgId: "org-1",
       artifactId: "art-1",
-      plan,
+      representationRevisionId: "rep-fixed",
+      sharedResourceId: plan.sharedResourceId,
+      form: plan.form,
+      createdBy: "user-1",
+    });
+    expect(op.text).toContain('INSERT INTO "app"."representation"');
+    expect(op.values[3]).toBe("res-shared");
+    // MAX+1 — the base row KEEPS its history; nothing earlier is rewritten.
+    expect(op.text).toContain("MAX(revision)");
+    expect(op.text).not.toContain("UPDATE");
+    expect(op.text).not.toContain("DELETE");
+    // It touches representation and NOTHING else: the retype that precedes it
+    // is the guard, so no objects reference is needed or wanted here.
+    expect(op.text).not.toContain("objects");
+  });
+
+  it("is IDEMPOTENT, so an interrupted promotion converges instead of stacking", () => {
+    const op = buildPromotionRepresentationAppend("app", {
+      orgId: "org-1",
+      artifactId: "art-1",
+      representationRevisionId: "rep-fixed",
+      sharedResourceId: "res-shared",
+      form: "file",
       createdBy: null,
     });
-    const insert = built.queries[2]!;
-    expect(insert.text).toContain('INSERT INTO "app"."representation"');
-    expect(insert.values[3]).toBe("res-shared");
-    // MAX+1 — the base row KEEPS its history; nothing earlier is rewritten.
-    expect(insert.text).toContain("MAX(revision)");
-    expect(insert.text).not.toContain("UPDATE");
-    expect(insert.text).not.toContain("DELETE");
-    // GUARDED ON THE RETYPE: a revision appended without it would announce a
-    // promotion that did not happen.
-    expect(insert.text).toContain("WHERE EXISTS");
+    expect(op.text).toContain("ON CONFLICT (id) DO NOTHING");
   });
 
-  it("reports a lost race as row-moved rather than a half-applied promotion", () => {
-    const applied = readTypedPromotionResult(
-      [{ rows: [] }, { rows: [] }, { rows: [] }],
-      { newRepresentationRevisionId: "rev-new", toType: OWN_TYPE },
-    );
-    expect(applied).toEqual({ ok: false, reason: "row-moved" });
-  });
-
-  it("reports the appended revision when the retype won", () => {
-    const applied = readTypedPromotionResult(
-      [{ rows: [{}] }, { rows: [{ id: "art-1" }] }, { rows: [{ id: "rev-new", revision: 2 }] }],
-      { newRepresentationRevisionId: "rev-new", toType: OWN_TYPE },
-    );
-    expect(applied).toEqual({
-      ok: true,
-      representationRevisionId: "rev-new",
-      revision: 2,
+  it("names the promotion revision deterministically from what it is a promotion OF", () => {
+    const id = promotionRevisionId({
+      artifactId: "art-1",
+      sharedResourceId: "res-shared",
       toType: OWN_TYPE,
     });
-  });
-
-  it("reports row-moved when the retype won but the append did not", () => {
     expect(
-      readTypedPromotionResult([{ rows: [{}] }, { rows: [{ id: "art-1" }] }, { rows: [] }], {
-        newRepresentationRevisionId: "rev-new",
+      promotionRevisionId({
+        artifactId: "art-1",
+        sharedResourceId: "res-shared",
         toType: OWN_TYPE,
       }),
-    ).toEqual({ ok: false, reason: "row-moved" });
+    ).toBe(id);
+    // A different target type is a different promotion, and a different row's
+    // promotion is not this one.
+    expect(
+      promotionRevisionId({
+        artifactId: "art-1",
+        sharedResourceId: "res-shared",
+        toType: "@other/pkg:thing",
+      }),
+    ).not.toBe(id);
+    expect(
+      promotionRevisionId({
+        artifactId: "art-2",
+        sharedResourceId: "res-shared",
+        toType: OWN_TYPE,
+      }),
+    ).not.toBe(id);
+  });
+
+  it("carries the version the retype's compare-and-set anchors on", () => {
+    expect(plan.ok && plan.expectedVersion).toBe(7);
+    expect(plan.ok && plan.fromType).toBe(BASE_TYPE);
+    expect(plan.ok && plan.toType).toBe(OWN_TYPE);
+  });
+});
+
+describe("0.14 — the retype goes through the canonical history-aware writer", () => {
+  const STORE = path.join(process.cwd(), "src/lib/artifacts/typed-promotion-store.ts");
+  const source = readFileSync(STORE, "utf8");
+
+  it("the road's DEFAULT retype is the canonical writer, not a raw objects write", () => {
+    // A type change is an application-visible mutation, so it belongs in the
+    // row's own history with a change event and a Graphiti outbox row — which is
+    // what that writer commits alongside it. The real-database tier substitutes
+    // the same compare-and-set (its module graph reaches the application boot);
+    // this is the pin that the SUBSTITUTION is not what production takes.
+    expect(source).toContain("const retype = input.retype ?? canonicalRetype;");
+    expect(source).toContain('await import("@/lib/object-history/canonical-writer")');
+    expect(source).toContain("historyAwareUpsert(");
+    expect(source).toContain("expectedBaseVersion: input.expectedVersion");
+  });
+
+  it("the store writes no objects row of its own", () => {
+    // The standing proof is scripts/audit/objects-writer-drift-gate.mjs; this is
+    // its positive half, beside the road it belongs to.
+    expect(/(INSERT\s+INTO|UPDATE|DELETE\s+FROM)[^\n]*"objects"/i.test(source)).toBe(false);
+  });
+
+  it("maps a lost compare-and-set to row-moved and a missing authority to not-authorized", () => {
+    expect(source).toContain('return { ok: false, reason: "row-moved" }');
+    expect(source).toContain('return { ok: false, reason: "not-authorized" }');
   });
 });

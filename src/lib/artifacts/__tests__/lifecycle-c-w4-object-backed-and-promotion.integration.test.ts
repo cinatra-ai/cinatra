@@ -51,6 +51,7 @@ vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} })
 // suites stub it for exactly this reason.
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () => {} }));
 
+
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
@@ -68,6 +69,49 @@ let contractMod: typeof import("@/lib/artifacts/object-backed-contract");
 let promotionStore: typeof import("@/lib/artifacts/typed-promotion-store");
 let producedEvent: typeof import("@/lib/lifecycle/lifecycle-produced-event");
 let registry: typeof import("@cinatra-ai/objects/registry");
+
+/** The acting principal the retype's history event records. */
+const ACTOR = { userId: "user-3028", orgId: ORG };
+/**
+ * The org-write kernel authority the canonical writer verifies. Minted host-side
+ * in production (`verifySessionAuthority`); this tier provisions no auth tables,
+ * so the fixture supplies the same shape directly — the promotion road under
+ * test never mints one and never inspects it beyond handing it on.
+ */
+const AUTHORITY = {
+  userId: "user-3028",
+  orgId: ORG,
+  role: "owner",
+  verifiedAt: new Date(0).toISOString(),
+} as never;
+
+/**
+ * THE RETYPE, substituted.
+ *
+ * In production the road's retype is the canonical history-aware objects writer,
+ * whose module graph reaches the application boot (the session module, the
+ * connector registry) — which a node tier that provisions neither must not pull
+ * in. What this tier is here to prove is the promotion's DATA effects, so it
+ * substitutes the SAME compare-and-set the canonical writer performs — anchored
+ * on the row's own version, writing nothing when it misses — and the road's use
+ * of the canonical writer is pinned by the unit tier instead.
+ */
+const RETYPE = async (input: {
+  orgId: string;
+  artifactId: string;
+  toType: string;
+  expectedVersion: number;
+}) => {
+  const res = sql(
+    `UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+     WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+     RETURNING id`,
+    [input.artifactId, input.orgId, input.toType, input.expectedVersion],
+  );
+  return (res?.rows?.length ?? 0) > 0
+    ? ({ ok: true } as const)
+    : ({ ok: false, reason: "row-moved" } as const);
+};
 
 const S = () => TEST_SCHEMA;
 
@@ -99,16 +143,6 @@ function seedDedicatedClaim(input: { id: string; type: string; ext: string }) {
       input.ext,
       JSON.stringify({ projection: "artifact-safe", pinnable: true, snapshotPolicy: "content" }),
     ],
-  );
-}
-
-function seedInstalledExtension(pkg: string) {
-  sql(
-    `INSERT INTO "${S()}"."installed_extension"
-       (id, package_name, owner_level, owner_id, organization_id, kind, status, source, version)
-     VALUES ($1,$2,'organization',$3,$3,'artifact','active','{}'::jsonb,'1.0.0')
-     ON CONFLICT DO NOTHING`,
-    [nextId("inst"), pkg, ORG],
   );
 }
 
@@ -249,7 +283,6 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.13 the object-backed contra
   /** Seed a claimed, object-backed row the capture can snapshot. */
   function seedSnapshottable(type: string) {
     const objectId = nextId("obj");
-    seedInstalledExtension(EXT);
     seedDedicatedClaim({ id: nextId("claim"), type, ext: EXT });
     seedObject(objectId, type, { subject: "Launch", body: "hello" });
     bindingMod.reconcileArtifactBinding({ orgId: ORG, artifactId: objectId });
@@ -354,7 +387,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
   const BASE_TYPE = "@cinatra-ai/text-artifact:text";
   const OWN_TYPE = "@cinatra-ai/campaigns:voice";
 
-  it("PROMOTES a matched upload into the extension's own type as a NEW revision SHARING the content", () => {
+  it("PROMOTES a matched upload into the extension's own type as a NEW revision SHARING the content", async () => {
     const objectId = nextId("obj-promote");
     const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
@@ -362,7 +395,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     const before = representationsOf(objectId);
     expect(before).toHaveLength(1);
 
-    const out = promotionStore.promoteMatchedArtifactType({
+    const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
       extension: EXT,
@@ -370,6 +403,9 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
       threshold: 0.8,
       confirmed: true,
       createdBy: "user-1",
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     });
     expect(out.ok).toBe(true);
     if (!out.ok) return;
@@ -387,55 +423,64 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(after[1]!.resource_id).toBe(seeded.resourceId);
   });
 
-  it("REFUSES a confirmation the matcher never backed — and writes nothing", () => {
+  it("REFUSES a confirmation the matcher never backed — and writes nothing", async () => {
     const objectId = nextId("obj-nomatch");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
-    const out = promotionStore.promoteMatchedArtifactType({
+    const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
       extension: EXT,
       ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
       threshold: 0.8,
       confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     });
     expect(out).toEqual({ ok: false, reason: "no-matcher-assertion" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
     expect(representationsOf(objectId)).toHaveLength(1);
   });
 
-  it("REFUSES a match below the extension's own threshold", () => {
+  it("REFUSES a match below the extension's own threshold", async () => {
     const objectId = nextId("obj-lowconf");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.4 });
-    const out = promotionStore.promoteMatchedArtifactType({
+    const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
       extension: EXT,
       ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
       threshold: 0.8,
       confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     });
     expect(out).toEqual({ ok: false, reason: "below-threshold" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
   });
 
-  it("RE-VALIDATES the shared content against the target type's accepted forms, off the sniffer's own verdict", () => {
+  it("RE-VALIDATES the shared content against the target type's accepted forms, off the sniffer's own verdict", async () => {
     const objectId = nextId("obj-wrongform");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "application/pdf" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.95 });
-    const out = promotionStore.promoteMatchedArtifactType({
+    const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
       extension: EXT,
       ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
       threshold: 0.8,
       confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     });
     expect(out).toEqual({ ok: false, reason: "form-not-accepted" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
   });
 
-  it("A SECOND PROMOTION of the same row is refused as already-promoted, never stacked", () => {
+  it("A SECOND PROMOTION of the same row converges — it never stacks a second revision", async () => {
     const objectId = nextId("obj-twice");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
@@ -446,26 +491,34 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
       ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
       threshold: 0.8,
       confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     };
-    expect(promotionStore.promoteMatchedArtifactType(args).ok).toBe(true);
-    expect(promotionStore.promoteMatchedArtifactType(args)).toEqual({
+    expect((await promotionStore.promoteMatchedArtifactType(args)).ok).toBe(true);
+    // The second call finds the row already retyped and the revision already
+    // there, so the idempotent append lands nothing and the road refuses.
+    expect(await promotionStore.promoteMatchedArtifactType(args)).toEqual({
       ok: false,
       reason: "already-promoted",
     });
     expect(representationsOf(objectId)).toHaveLength(2);
   });
 
-  it("REFUSES without the person's confirmation, however confident the match", () => {
+  it("REFUSES without the person's confirmation, however confident the match", async () => {
     const objectId = nextId("obj-unconfirmed");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 1 });
-    const out = promotionStore.promoteMatchedArtifactType({
+    const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
       extension: EXT,
       ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
       threshold: 0.8,
       confirmed: false,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
     });
     expect(out).toEqual({ ok: false, reason: "not-confirmed" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
