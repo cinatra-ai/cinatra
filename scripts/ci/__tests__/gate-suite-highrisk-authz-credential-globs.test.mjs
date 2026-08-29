@@ -333,6 +333,6 @@ describe("gate-suite highRiskPaths authz/credential/session coverage (2026-08 wi
   // ENGINE's rule (checkSuiteVersionBump), not this assertion's, and stays the
   // gate's job.
   it("carries the CalVer the widened glob set shipped under", () => {
-    expect(loadSuite().version).toBe("2026.08.4");
+    expect(loadSuite().version).toBe("2026.08.5");
   });
 });
