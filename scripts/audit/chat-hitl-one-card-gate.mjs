@@ -1399,10 +1399,9 @@ export const REGISTRY_KINDS = Object.freeze([
   "trigger_schedule_proposal",
 ]);
 
-/** Paths exempt from every rule: tests, fixtures, evidence, docs, this script. */
+/** Paths exempt from every rule: tests, fixtures, docs, this script. */
 export function isExempt(rel) {
   return (
-    rel.startsWith("evidence/") ||
     rel.startsWith("docs/") ||
     rel.startsWith("scripts/") ||
     rel.startsWith("tests/") ||

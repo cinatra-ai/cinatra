@@ -64,8 +64,8 @@
  * hand-writing a record with the recorder's id, a real screenshot's real hash,
  * and fabricated counts of one. Binding pixels to assertions would need an
  * attested capture run, which this repo does not have for ANY committed
- * evidence file — the same trust boundary already applies to every screenshot in
- * `evidence/`.
+ * evidence file — the same trust boundary already applies to every screenshot a
+ * capture run mints.
  *
  * So be exact about what IS closed. This gate catches the mislabel and the
  * omission: a capture whose recorded URL contradicts its declared host, a
@@ -79,8 +79,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 
 // THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
 // ratified and on main; a second hand-written copy of the same hosts, kinds,
@@ -101,8 +101,20 @@ import {
   RECORDER_ID,
   absenceInstanceViolations,
   captureHostAdmissibility,
+  CAPTURE_OUTPUT_ROOT,
+  isHistoricalPermalink,
+  PINNED_ARTIFACT_ROOT,
+  repoPathOf,
+  captureImageFormat,
+  createCaptureTempFile,
+  prepareCaptureTarget,
+  recheckCaptureParent,
   requiredAssertionsFor,
+  tempFileViolation,
+  resolveLiveCapture,
   settledIsAbsence,
+  sha256File,
+  sha256Pinned,
 } from "../../ci/lib/capture-record-contract.mjs";
 
 // Re-exported so the anchor contract reads the canonical answers through the
@@ -263,7 +275,7 @@ export const LIFECYCLE_KINDS = Object.freeze(Object.keys(CARD_KINDS));
  * `advisory` and nothing else, on every host it draws on. Two of its advisory
  * records stand in the index; the third was refused HERE, on `chat_thread`
  * alone, by an arm that enumerated this list for all four kinds (the driven
- * refusal is recorded in `evidence/2791-s9g-conformance/capture-results.json`).
+ * refusal is recorded in `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json`).
  *
  * THIS LIST STAYS THE TWO, deliberately. The anchor contract builds one ratified
  * anchor set per (host, kind, state) from it, so moving it would move the
@@ -395,6 +407,73 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
+ * WHERE A CAPTURE RUN WRITES.
+ *
+ * `test-results/` is the repo's existing run-artifact root: it is the Playwright
+ * config's `outputDir`, it is already gitignored, other suites already mint into
+ * it (`tests/e2e/setup/support/instance-state.ts`), and the CI job that runs the
+ * held-turn flow already uploads it. So a run leaves the tree clean by
+ * construction and nothing has to be pruned afterwards.
+ *
+ * It replaces the tracked proof-artifact tree that used to hold these files:
+ * minting proof pictures into the repository is what this root exists to stop.
+ * The path stays
+ * repo-relative because a record's `screenshot` field must be one -- an OS temp
+ * dir would need the record contract's path rule widened to absolute paths,
+ * which is a bigger change than this one and would weaken it for every record.
+ *
+ * RE-EXPORTED, NEVER REDECLARED. The ratified contract owns this string because
+ * BOTH tiers have to refuse the same paths, and a second copy here is exactly
+ * how the two tiers came to disagree about it: the canonical tier never had the
+ * rule at all, so a record naming any tracked file passed the required gate.
+ */
+export { CAPTURE_OUTPUT_ROOT };
+
+/**
+ * THE ROOT A COMMITTED WALK PLAN WAS WRITTEN AGAINST.
+ *
+ * Plans older than the tree cleanup name their output paths under the proof
+ * tree that captures were minted into at the time. That tree is gone.
+ */
+export const HISTORICAL_OUTPUT_ROOT = PINNED_ARTIFACT_ROOT;
+
+/**
+ * Move a walk plan's OUTPUT paths onto the live capture root.
+ *
+ * A walk plan is a document: it says which cells to shoot and where to put the
+ * pictures. The "where" is the only part that has moved, so it is the only part
+ * rewritten here -- every cell id, host, kind, state, viewport, action and
+ * assertion is left exactly as committed. A plan already written against
+ * `CAPTURE_OUTPUT_ROOT` is returned unchanged; this is a no-op for anything
+ * authored since the cleanup.
+ *
+ * IT IS SHIPPED CODE, not test scaffolding, because THE DRIVER LOADS PLANS
+ * THROUGH IT. When only the suites re-rooted, the suites graded a plan the real
+ * CLI never saw: `--walk <the committed fixture>` -- the command the capture
+ * index documents -- died in preflight with ten output-root violations while
+ * the tests were green. One loader, one plan, both halves.
+ *
+ * @returns {object} a deep copy; the caller may mutate it freely
+ */
+export function rerootWalkPlanOutputs(plan) {
+  const out = structuredClone(plan);
+  for (const step of out?.steps ?? []) {
+    for (const cell of step?.cells ?? []) {
+      if (typeof cell.screenshot === "string" && cell.screenshot.startsWith(HISTORICAL_OUTPUT_ROOT)) {
+        cell.screenshot =
+          CAPTURE_OUTPUT_ROOT + cell.screenshot.slice(HISTORICAL_OUTPUT_ROOT.length);
+      }
+    }
+  }
+  return out;
+}
+
+/** Read a walk plan from disk the ONE way — the driver's path and the suites'. */
+export function readWalkPlan(path, readImpl = readFileSync) {
+  return rerootWalkPlanOutputs(JSON.parse(readImpl(path, "utf8")));
+}
+
+/**
  * The path rules a screenshot must satisfy, as a reusable check.
  *
  * Shared by the observer and the validator so a path the record would be
@@ -402,13 +481,33 @@ export function collectAssertions(specs, queryCount) {
  * validated afterwards, which left a file on disk for every capture the gate
  * then rejected — including paths that escape the tree entirely.
  */
-export function screenshotPathViolation(screenshot) {
+export function screenshotPathViolation(screenshot, { allowPinned = false } = {}) {
   if (!isNonEmptyString(screenshot)) return "no screenshot path";
+  // A PINNED record names a picture that has left the working tree. It is
+  // graded, not written, so only the READER may accept one: an observer about
+  // to fire the shutter and a walk plan describing what a run will write are
+  // both declaring an output path, and a URL is not one.
+  //
+  // A PIN IS STILL ROOT-CHECKED. A permalink can name any path in the
+  // repository, so accepting one unconditionally would let a record claim
+  // `src/app/icon.png` as its capture and pass on a matching hash. A pinned
+  // picture must come from the HISTORICAL proof-artifact root, exactly as a
+  // live one must be written under the CURRENT capture root.
+  if (allowPinned && isHistoricalPermalink(screenshot)) {
+    const pinnedPath = repoPathOf(screenshot);
+    if (!pinnedPath.startsWith(PINNED_ARTIFACT_ROOT)) {
+      return (
+        `a pinned screenshot must name a picture under ${PINNED_ARTIFACT_ROOT} — ` +
+        `this one pins ${pinnedPath}`
+      );
+    }
+    return null;
+  }
   if (screenshot.startsWith("/") || screenshot.includes("..")) {
     return "screenshot must be a repo-relative path inside the tree";
   }
-  if (!screenshot.startsWith("evidence/")) {
-    return `screenshot must live under evidence/ — it is ${screenshot}`;
+  if (!screenshot.startsWith(CAPTURE_OUTPUT_ROOT)) {
+    return `screenshot must live under ${CAPTURE_OUTPUT_ROOT} — it is ${screenshot}`;
   }
   return null;
 }
@@ -578,9 +677,36 @@ export async function observeCapture({
   //    path afterwards, so every capture the gate went on to reject had already
   //    put a file on disk -- including one named by a path that escapes the
   //    tree. A path the record would be refused for is refused here instead.
+  //
+  //    LEXICALLY FIRST, for the clear message, and then RESOLVED. The lexical
+  //    rule cannot see the filesystem, and a shutter is a WRITE: a symlinked
+  //    capture root, a symlinked intermediate directory or an existing
+  //    symlinked target each redirect the write out of the root, and refusing
+  //    the record afterwards does not un-write the bytes -- which may have
+  //    landed on top of something. `resolveCaptureTarget` answers all three.
   const pathViolation = screenshotPathViolation(screenshot);
   if (pathViolation) {
     throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
+  }
+  //    THE FORMAT, BEFORE ANY DIRECTORY EXISTS. The shutter is an image writer
+  //    and the temp file has to name the same image the destination does, so an
+  //    extension outside the closed set is refused HERE -- ahead of the run
+  //    directory being created for a capture that was never going to be taken.
+  const imageFormat = captureImageFormat(screenshot);
+  if (!imageFormat.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${imageFormat.detail}`);
+  }
+  //    PREPARING, not merely resolving. A run's FIRST capture names a run
+  //    directory that does not exist yet, and in a fresh checkout the capture
+  //    root does not either -- it is gitignored. Playwright used to create both
+  //    silently on its way to the file; resolving before the shutter took that
+  //    away and broke the first capture of every run. `prepareCaptureTarget`
+  //    creates the root and the parent INSIDE the resolved root and then
+  //    re-resolves them, so what a run needs exists and every redirect is still
+  //    refused.
+  const target = prepareCaptureTarget(screenshot, { repoRoot });
+  if (!target.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${target.detail}`);
   }
 
   // 1. The frames the host requires: resolve, COUNT, enter, read the URL there.
@@ -701,9 +827,60 @@ export async function observeCapture({
 
   const assertions = await measure();
 
-  // 3. The image, written and then hashed from disk.
-  const abs = join(repoRoot, screenshot);
-  await page.screenshot(abs, { framing: framing ?? "page" });
+  // 3. The image, written ATOMICALLY into the resolved directory and then
+  //    hashed from disk.
+  //
+  //    THE SHUTTER FIRES AT A NAME NOTHING ELSE HOLDS. Writing straight to the
+  //    final path would follow whatever sits there at that instant; the temp
+  //    name is fresh, is created inside the PARENT THAT WAS RESOLVED, and is
+  //    renamed into place. `rename` replaces the destination entry itself
+  //    rather than writing through it, so an entry that appeared in the
+  //    meantime is overwritten as a NAME and never followed as a link.
+  //    THE LAST-MOMENT RE-CHECK. Everything above — the frames, the counts, the
+  //    DOM walk — takes real time, and the destination was resolved before all
+  //    of it. Node has no `openat`, so a path resolved once and used later is a
+  //    time-of-check/time-of-use gap that cannot be closed from here; what can
+  //    be done is to shrink it and fail closed. The parent is re-verified
+  //    immediately before the shutter and again immediately before the rename,
+  //    and the temp file is created EXCLUSIVELY under an unguessable name so no
+  //    one can be holding it as a symlink when the shutter writes.
+  const abs = target.absReal;
+  const beforeShutter = recheckCaptureParent(target);
+  if (beforeShutter) {
+    throw new Error(`capture "${cell}" cannot be written: ${beforeShutter.detail}`);
+  }
+  // The temp file keeps the FINAL extension: the shutter is an image writer and
+  // infers its format from the name, so an extensionless temp path made it
+  // refuse outright. The rename target keeps its real name.
+  const temp = createCaptureTempFile(target.parentReal, { extension: imageFormat.extension });
+  if (!temp.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${temp.detail}`);
+  }
+  const tmp = temp.path;
+  try {
+    // ...and the format is stated EXPLICITLY as well, so it never depends on
+    // the name at all.
+    await page.screenshot(tmp, {
+      framing: framing ?? "page",
+      type: imageFormat.type,
+    });
+    const beforeRename = recheckCaptureParent(target);
+    if (beforeRename) {
+      throw new Error(`capture "${cell}" cannot be written: ${beforeRename.detail}`);
+    }
+    const tempViolation = tempFileViolation(tmp);
+    if (tempViolation) {
+      throw new Error(`capture "${cell}" cannot be written: ${tempViolation.detail}`);
+    }
+    renameSync(tmp, abs);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // the temp file may already be gone; the original error wins
+    }
+    throw err;
+  }
 
   // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
   //    hydration, a poll, a streamed state change — and a record whose numbers
@@ -975,9 +1152,28 @@ export const RECORD_TIERS = Object.freeze(["graded", "audit"]);
  *
  * `hashOf(relPath)` returns the file's sha256, or throws when the file is
  * missing — injected so the pinned tests drive the same validator CI runs.
+ * `hashPinnedOf(url, io)` does the same job for a record whose picture is
+ * pinned in history rather than on disk; it defaults to the ratified contract's
+ * `sha256Pinned`, which reads the blob back with `git cat-file`.
  * `tier` selects the grading above; it defaults to `graded`.
  */
-export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) {
+export function validateCaptureRecord(
+  record,
+  {
+    hashOf,
+    hashPinnedOf,
+    repoRoot = process.cwd(),
+    tier = "graded",
+    virtualFilesystem: virtualFs = false,
+  } = {},
+) {
+  // WHETHER THE CALLER BROUGHT ITS OWN FILESYSTEM — an EXPLICIT option, never
+  // inferred from "it also passed a hasher". Inferring it is what let three
+  // real-disk callers (the walk observer, the capture driver and the held-turn
+  // producer) skip path resolution simply by supplying a reader. A hasher is
+  // now just a hasher; only `virtualFilesystem: true` replaces the filesystem,
+  // and only suites pass it.
+  const virtualFilesystem = virtualFs === true;
   const v = [];
   // A record is judged at the AUDIT tier when it is asked for (the driver, on
   // its own output) or when it SPEAKS that tier: a pinned `instance` is this
@@ -1065,18 +1261,64 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
 
   // --- the screenshot and its hash ---
   // The SAME check the observer runs before the shutter, so the two cannot
-  // disagree about which paths are writable.
-  const pathViolation = screenshotPathViolation(record?.screenshot);
+  // disagree about which paths are writable -- widened here, and ONLY here, to
+  // also take a record whose picture is pinned in history rather than on disk.
+  const pathViolation = screenshotPathViolation(record?.screenshot, { allowPinned: true });
   if (pathViolation) {
     v.push(`${where}: ${pathViolation}`);
   } else if (!SHA256_RE.test(record?.sha256 ?? "")) {
     v.push(`${where}: sha256 must be 64 lowercase hex characters`);
-  } else if (typeof hashOf === "function") {
+  } else if (isHistoricalPermalink(record.screenshot)) {
+    // PINNED: the picture is read back out of history at the commit the
+    // permalink names, and the digest is re-derived from those bytes -- the
+    // same binding a live record gets, off `git cat-file` instead of the tree.
+    // GATED LIKE EVERY OTHER SEAM: an injected pinned reader is honoured only
+    // when the caller asked for a virtual filesystem. A real record is read
+    // back out of git history by the shipped reader.
+    const got = (virtualFilesystem && hashPinnedOf ? hashPinnedOf : sha256Pinned)(
+      record.screenshot,
+      { repoRoot },
+    );
+    if (!got.ok) {
+      v.push(`${where}: the pinned screenshot could not be read — ${got.reason}`);
+    } else if (got.sha256 !== record.sha256) {
+      v.push(
+        `${where}: the screenshot at ${record.screenshot} hashes to ${got.sha256}, not the recorded ` +
+          `${record.sha256} — the image and the record are not the same capture`,
+      );
+    }
+  } else {
+    // THE SAME RESOLUTION THIS TIER'S SIBLING DOES. A live path is only a
+    // capture if it resolves to a regular, singly-linked file inside the real
+    // capture root: a `test-results -> .` symlink, a symlinked parent, or a
+    // hard link otherwise makes any file in the filesystem hash correctly under
+    // a capture-looking name.
     let actual;
-    try {
-      actual = hashOf(record.screenshot);
-    } catch {
-      v.push(`${where}: screenshot not found at ${record.screenshot}`);
+    if (virtualFilesystem) {
+      try {
+        actual = hashOf(record.screenshot);
+      } catch {
+        v.push(`${where}: screenshot not found at ${record.screenshot}`);
+      }
+    } else {
+      const resolved = resolveLiveCapture(record.screenshot, { repoRoot });
+      if (!resolved.ok) {
+        v.push(`${where}: ${resolved.detail}`);
+      } else {
+        // HASHED AT THE RESOLVED PATH. Hashing the lexical path again would
+        // re-walk every symlink in it, so a parent retargeted between the
+        // resolution and the read would hand back different bytes than the ones
+        // just proved to be a capture. The canonical tier does the same.
+        // An injected hasher is consulted ONLY in virtual mode. On real disk
+        // the bytes that count are the ones at the path just resolved, and
+        // letting a caller substitute a reader here would reopen the seam this
+        // option was split out to close.
+        try {
+          actual = sha256File(resolved.realPath);
+        } catch {
+          v.push(`${where}: screenshot not found at ${record.screenshot}`);
+        }
+      }
     }
     if (actual !== undefined && actual !== record.sha256) {
       v.push(
@@ -1405,7 +1647,14 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
  * ratified contract's own `validateCaptureIndex` beside this one, so every
  * record is judged by that half whatever this half grades.
  */
-export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
+export function validateCaptureIndex({
+  index,
+  hashOf,
+  hashPinnedOf,
+  repoRoot = process.cwd(),
+  tier = "graded",
+  virtualFilesystem = false,
+} = {}) {
   const v = [];
   if (index === null || typeof index !== "object") {
     return ["the capture index is not an object"];
@@ -1436,13 +1685,20 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
     }
     const cell = record?.cell ?? "(unnamed)";
     if (isNonEmptyString(record?.screenshot)) {
-      const first = byPath.get(record.screenshot);
+      // KEYED ON THE REPOSITORY PATH. Two records pinning one path at two
+      // different commits are two claims about one picture, and keying on the
+      // whole citation let that pair through as if they were unrelated files.
+      const shotPath = repoPathOf(record.screenshot);
+      const first = byPath.get(shotPath);
       if (first !== undefined) {
         v.push(
-          `"${cell}" reuses the screenshot ${record.screenshot} already claimed by "${first}" — ` +
-            "one image cannot be the evidence for two cells",
+          `"${cell}" reuses the screenshot ${shotPath} already claimed by "${first.cell}" — ` +
+            "one image cannot be the evidence for two cells" +
+            (first.citation !== record.screenshot
+              ? " (and the two pin it at different commits)"
+              : ""),
         );
-      } else byPath.set(record.screenshot, cell);
+      } else byPath.set(shotPath, { cell, citation: record.screenshot });
     }
     if (SHA256_RE.test(record?.sha256 ?? "")) {
       const first = byHash.get(record.sha256);
@@ -1453,7 +1709,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
         );
       } else byHash.set(record.sha256, cell);
     }
-    v.push(...validateCaptureRecord(record, { hashOf, tier }));
+    v.push(...validateCaptureRecord(record, { hashOf, hashPinnedOf, repoRoot, tier, virtualFilesystem }));
   }
   return v;
 }
@@ -1486,7 +1742,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
 //
 // THE PLAN IS CHECKED BEFORE THE BROWSER LAUNCHES. A walk is long, expensive and
 // in S9d's case gated on a real 30-minute TTL; a cell name that contradicts its
-// own declaration, a screenshot path outside `evidence/`, two cells writing one
+// own declaration, a screenshot path outside the capture output root, two cells writing one
 // file — each is a refusal the index would issue at the END, and each is worth
 // issuing before the first click instead. Same reason the shutter check moved
 // ahead of the shutter.
@@ -1738,6 +1994,8 @@ export async function observeWalkCell({
   repoRoot = process.cwd(),
   readImpl = readFileSync,
   now = () => new Date().toISOString(),
+  // TEST-ONLY, and named so it reads as one. A real walk never passes it.
+  virtualFilesystem = false,
 }) {
   const record = await observeCapture({
     page,
@@ -1753,9 +2011,19 @@ export async function observeWalkCell({
     readImpl,
     now,
   });
+  // THE VIRTUAL FILESYSTEM IS AN EXPLICIT REQUEST, NEVER AN INFERENCE. This
+  // used to read `readImpl !== readFileSync` and treat any non-default reader
+  // as "the caller brought its own filesystem" -- so the implicit bypass simply
+  // moved up a layer, and any wrapped or instrumented reader silently skipped
+  // the final on-disk resolution. A walk driven for real ALWAYS validates its
+  // own output from disk; only a suite that says `virtualFilesystem: true` is
+  // answered from its own bytes.
   const violations = validateCaptureRecord(record, {
-    hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl),
+    repoRoot,
     tier: "audit",
+    ...(virtualFilesystem
+      ? { virtualFilesystem: true, hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl) }
+      : {}),
   });
   if (violations.length > 0) {
     throw new Error(

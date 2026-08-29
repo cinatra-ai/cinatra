@@ -193,10 +193,18 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     }),
     applyMigrations: async (i) => {
       const { applyExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
+      // cinatra#3031 (plan (C) 0.23): the installed inventory is what the
+      // prefix-collision refusal compares the derived `ext_<scope>_<slug>_`
+      // against — "two names can normalise to one". Read here rather than
+      // defaulted to empty: an unfed check refuses nothing, and two packages
+      // sharing a normalised name would share one role and one set of tables.
+      const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+      const installedRows = await listInstalledExtensions({});
       await applyExtensionMigrationsFromStore({
         storeDir: i.storeDir,
         packageName: i.packageName,
         packageVersion: i.version,
+        installedPackageNames: [...new Set(installedRows.map((r) => r.packageName))],
       });
     },
     preflightMigrations: async (i) => {

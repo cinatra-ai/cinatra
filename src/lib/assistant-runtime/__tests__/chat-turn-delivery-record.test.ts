@@ -2,7 +2,7 @@
 // and it matches what went to the wire.
 //
 // THE GAP (finding F8 of the #2094 S7 acceptance E2E, evidence under
-// evidence/2094-s7-acceptance/e2e/): the chat surface delivered skills to the
+// https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/e2e/): the chat surface delivered skills to the
 // provider and wrote no per-run record, so the acceptance's own "assert
 // delivery from the run's records" wording was unsatisfiable and the wave99
 // evidence had to use the wire-level egress ledger as the record instead.

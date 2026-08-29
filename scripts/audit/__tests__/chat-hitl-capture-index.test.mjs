@@ -21,10 +21,11 @@
 // ruled hosts, and a deliberate ABSENT assertion (that is how a placeholder is
 // proven to be a placeholder).
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,6 +49,7 @@ import {
   validateCaptureRecord,
   validateWalkPlan,
 } from "../lib/chat-hitl-capture-recorder.mjs";
+import { loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 import {
   CAPTURE_INDEX_PATH,
   auditCaptureIndex,
@@ -65,8 +67,16 @@ import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-co
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
 
-const PNG = "evidence/2821-fixture/shot.png";
+const PNG = "test-results/capture-fixture/shot.png";
+const FIXTURE_BYTES = Buffer.from("fixture-bytes");
 const HASH = createHash("sha256").update("fixture-bytes").digest("hex");
+
+// A REAL capture tree for the observer cases. `observeCapture` prepares and
+// resolves its destination on real disk and writes atomically, so the suite
+// gives it a real root — and pre-creates NOTHING, because creating the run
+// directory on the first capture is exactly the behaviour that regressed.
+const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-index-"));
+afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
 const hashOf = (rel) => {
   if (rel !== PNG) throw new Error(`no such file: ${rel}`);
   return HASH;
@@ -164,7 +174,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
         { frame: "main", selector: "main", expect: "present", count: 1, visible: 1 },
       ],
     });
-    const violations = validateCaptureRecord(record, { hashOf });
+    const violations = validateCaptureRecord(record, { hashOf, virtualFilesystem: true });
     expect(violations.join("\n")).toMatch(/needs a chat URL/);
     expect(violations.join("\n")).toMatch(/\[data-conversation-list\]/);
     expect(violations.join("\n")).toMatch(/data-lifecycle-card-host="chat_thread"/);
@@ -174,21 +184,21 @@ describe("the mislabeled capture — the defect this index was built after", () 
     const record = chatRecord({
       cell: "S9x-2__run_card__recommendation-hold-held",
     });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /the cell name says host "run_card" and the record declares "chat_thread"/,
     );
   });
 
   it("REFUSES a record whose screenshot hashes to something else", () => {
     const record = chatRecord({ sha256: "0".repeat(64) });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /the image and the record are not the same capture/,
     );
   });
 
   it("REFUSES a record whose screenshot is not on disk", () => {
-    const record = chatRecord({ screenshot: "evidence/2821-fixture/missing.png" });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(/screenshot not found/);
+    const record = chatRecord({ screenshot: "test-results/capture-fixture/missing.png" });
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/screenshot not found/);
   });
 
   it("REFUSES a required anchor that was looked for and not found", () => {
@@ -197,7 +207,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
         ? { ...a, count: 0, visible: 0 }
         : a,
     );
-    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /recorded as present but observed 0 times/,
     );
   });
@@ -208,7 +218,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
         { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
       ],
     });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /does not assert it at all/,
     );
   });
@@ -216,7 +226,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
   it("REFUSES a chat_thread record that names no lifecycle kind", () => {
     // A transcript was on screen proves nothing about a card being in it.
     const record = chatRecord({ declaredKind: undefined });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /must declare the lifecycle `declaredKind` it photographed/,
     );
   });
@@ -233,7 +243,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
     const assertions = chatAssertions().filter(
       (a) => !a.selector.startsWith('[data-skill-action="'),
     );
-    const violations = validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n");
+    const violations = validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n");
     expect(violations).toMatch(/\[data-skill-action="confirm"\]/);
     expect(violations).toMatch(/\[data-skill-action="adjust"\]/);
     expect(violations).toMatch(/\[data-skill-action="skip"\]/);
@@ -262,31 +272,31 @@ describe("the mislabeled capture — the defect this index was built after", () 
         },
       ],
     };
-    const violations = validateCaptureRecord(record, { hashOf }).join("\n");
+    const violations = validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n");
     expect(violations).toMatch(/must declare the "widget" frame reached by \.cw-frame/);
     expect(violations).toMatch(/does not assert it at all/);
   });
 
   it("REFUSES a record not written by the one shared recorder", () => {
-    const record = chatRecord({ recordedBy: "evidence/2821/my-own-capture.mjs" });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    const record = chatRecord({ recordedBy: "scripts/lane/my-own-capture.mjs" });
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /every record is written by the ONE shared recorder/,
     );
   });
 
-  it("REFUSES a screenshot outside evidence/ and a path that escapes the tree", () => {
-    expect(validateCaptureRecord(chatRecord({ screenshot: "tmp/shot.png" }), { hashOf }).join("\n")).toMatch(
-      /must live under evidence\//,
+  it("REFUSES a screenshot outside the capture output root and a path that escapes the tree", () => {
+    expect(validateCaptureRecord(chatRecord({ screenshot: "tmp/shot.png" }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
+      /must live under test-results\//,
     );
     expect(
-      validateCaptureRecord(chatRecord({ screenshot: "evidence/../../etc/x.png" }), { hashOf }).join("\n"),
+      validateCaptureRecord(chatRecord({ screenshot: "test-results/../../etc/x.png" }), { hashOf, virtualFilesystem: true }).join("\n"),
     ).toMatch(/repo-relative path inside the tree/);
   });
 });
 
 describe("the host-anchored capture — what the index ACCEPTS", () => {
   it("accepts a chat_thread record with its frame-scoped anchors", () => {
-    expect(validateCaptureRecord(chatRecord(), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(chatRecord(), { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("accepts a run_card and a page_gate_region record on their own URL classes", () => {
@@ -302,7 +312,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       }),
     });
-    expect(validateCaptureRecord(runCard, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(runCard, { hashOf, virtualFilesystem: true })).toEqual([]);
 
     const pageGate = chatRecord({
       cell: "S9x-5__page_gate_region__review-pending",
@@ -316,7 +326,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       }),
     });
-    expect(validateCaptureRecord(pageGate, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(pageGate, { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("accepts a site_widget record scoped through the declared embed frame", () => {
@@ -366,7 +376,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       ],
     };
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("accepts a deliberate ABSENT assertion — how a placeholder is proven to be one", () => {
@@ -382,7 +392,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       ],
     });
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("REFUSES an ABSENT assertion whose selector was in fact observed", () => {
@@ -398,7 +408,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       ],
     });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /recorded as absent but observed 2 times/,
     );
   });
@@ -407,14 +417,14 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
 describe("the index as a whole", () => {
   it("refuses a wrong schema version, a foreign recorder and duplicate cells", () => {
     const bad = { schemaVersion: 99, recorder: "somewhere-else", records: [chatRecord(), chatRecord()] };
-    const violations = validateCaptureIndex({ index: bad, hashOf }).join("\n");
+    const violations = validateCaptureIndex({ index: bad, hashOf, virtualFilesystem: true }).join("\n");
     expect(violations).toMatch(/schemaVersion 99/);
     expect(violations).toMatch(/the index names the ONE shared recorder/);
     expect(violations).toMatch(/duplicate cell name/);
   });
 
   it("accepts a well-formed index", () => {
-    expect(validateCaptureIndex({ index: indexOf([chatRecord()]), hashOf })).toEqual([]);
+    expect(validateCaptureIndex({ index: indexOf([chatRecord()]), hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("covers every ruled host with a required anchor set", () => {
@@ -561,12 +571,14 @@ function fakePage({
     screenshot: async (abs) => {
       log.push("page.screenshot");
       page.written.push(abs);
+      // A REAL SHUTTER LEAVES A FILE: the recorder renames it into place and
+      // then hashes it back off disk.
+      writeFileSync(abs, FIXTURE_BYTES);
     },
   };
   return page;
 }
 
-const OBSERVER_READ = () => Buffer.from("fixture-bytes");
 
 describe("the recorder OBSERVES rather than taking dictation", () => {
   it("reads the final URL and every required anchor off the page itself", async () => {
@@ -587,8 +599,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       state: "pending",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
       now: () => "2026-08-16T09:00:00.000Z",
     });
     expect(record.finalUrl).toBe("http://localhost:3000/chat?thread=t-9");
@@ -603,7 +614,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
           : `page.count:${req.selector}`,
       );
     }
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("resolves the outer frame, ENTERS it, and reads the inner URL and anchors there", async () => {
@@ -625,8 +636,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       declaredHost: "site_widget",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
 
     // The order IS the claim: count the outer frame, enter it, read its URL,
@@ -640,7 +650,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       selector: ".cw-frame",
       url: "http://localhost:3000/embed/assistant?site=blog",
     });
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("writes ZERO counts for a frame that did not resolve, so the failure is visible", async () => {
@@ -651,12 +661,11 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       declaredHost: "site_widget",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
     expect(record.assertions.every((a) => a.count === 0)).toBe(true);
     // …and the record it produced is REFUSED, rather than silently thin.
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(/embed_assistant/);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/embed_assistant/);
   });
 
   it("writes the screenshot before hashing it, so the hash is of the image on disk", async () => {
@@ -669,14 +678,17 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       state: "pending",
       screenshot: PNG,
       build: "production",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
-    expect(page.written).toEqual([`/anywhere/${PNG}`]);
+    // The shutter fires at the resolved temp name inside the resolved parent,
+    // and the file is renamed into place — so what it was handed is a path
+    // under the real capture root, not the record's spelling.
+    expect(page.written).toHaveLength(1);
+    expect(page.written[0].startsWith(join(OBSERVE_ROOT, "test-results"))).toBe(true);
     expect(page.log.indexOf("page.screenshot")).toBeGreaterThan(page.log.indexOf("page.url"));
     // Nothing was observed, so nothing is claimed — and the record fails.
     expect(record.assertions.every((a) => a.count === 0)).toBe(true);
-    expect(validateCaptureRecord(record, { hashOf }).length).toBeGreaterThan(0);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).length).toBeGreaterThan(0);
   });
 });
 
@@ -684,7 +696,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
 // The BINDING: an unindexed screenshot counts as zero
 // ---------------------------------------------------------------------------
 
-function manifestClaiming(cell, file = "evidence/2821-fixture/README.md") {
+function manifestClaiming(cell, file = "test-results/capture-fixture/README.md") {
   return {
     rows: [
       { criterion: "x", disposition: "BUILT", e2eProofs: [{ file, testName: cell }] },
@@ -706,14 +718,14 @@ describe("a SETTLED capture owes the absence of its controls", () => {
   }
 
   it("ACCEPTS a settled record whose controls are gone and whose summary is there", () => {
-    expect(validateCaptureRecord(settledRecord(), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(settledRecord(), { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("REFUSES a settled record that still shows its decision controls", () => {
     const assertions = settledRecord().assertions.map((a) =>
       a.selector === '[data-skill-action="confirm"]' ? { ...a, count: 1 } : a,
     );
-    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /recorded as absent but observed 1 times/,
     );
   });
@@ -722,13 +734,13 @@ describe("a SETTLED capture owes the absence of its controls", () => {
     const assertions = settledRecord().assertions.filter(
       (a) => a.selector !== DECIDED_SUMMARY_SELECTOR,
     );
-    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /does not assert it at all/,
     );
   });
 
   it("REFUSES a chat_thread record that declares no state at all", () => {
-    expect(validateCaptureRecord(chatRecord({ declaredState: undefined }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(chatRecord({ declaredState: undefined }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /must declare the `declaredState` it photographed/,
     );
   });
@@ -739,7 +751,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   // ratchet records it on all four. Two of its records stand in the committed
   // index; the chat_thread one was DRIVEN and refused HERE, by a state list
   // that read one vocabulary for four kinds
-  // (evidence/2791-s9g-conformance/capture-results.json).
+  // (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json).
   function advisoryChat(over = {}) {
     return chatRecord({
       cell: "G7__audit-card__chat_thread__advisory",
@@ -752,12 +764,13 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   }
 
   it("ACCEPTS the audit card's advisory record on chat_thread", () => {
-    expect(validateCaptureRecord(advisoryChat(), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(advisoryChat(), { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("and the canonical half accepts the same record", () => {
     expect(
       validateCanonicalRecord(advisoryChat(), {
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -766,7 +779,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
 
   it("REFUSES `advisory` on a kind that never resolves it", () => {
     expect(
-      validateCaptureRecord(chatRecord({ declaredState: "advisory" }), { hashOf }).join("\n"),
+      validateCaptureRecord(chatRecord({ declaredState: "advisory" }), { hashOf, virtualFilesystem: true }).join("\n"),
     ).toMatch(/is not one "recommendation_hold" resolves \(pending\/decided\)/);
   });
 
@@ -792,7 +805,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
           },
         }),
       };
-      expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
         /is not one "recommendation_hold" resolves \(pending\/decided\)/,
       );
     }
@@ -801,7 +814,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   it("REFUSES the audit card declaring a state its card never draws", () => {
     for (const state of ["pending", "decided"]) {
       expect(
-        validateCaptureRecord(advisoryChat({ declaredState: state }), { hashOf }).join("\n"),
+        validateCaptureRecord(advisoryChat({ declaredState: state }), { hashOf, virtualFilesystem: true }).join("\n"),
       ).toMatch(/is not one "verification_summary" resolves \(advisory\)/);
     }
   });
@@ -843,9 +856,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
   it("admits it in a WALK PLAN for that kind, and refuses it for another", () => {
     // Built by rewriting ONE cell of a committed, valid plan, so the only thing
     // this case can be failing on is the state vocabulary.
-    const base = JSON.parse(
-      readFileSync(join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json"), "utf8"),
-    );
+    const base = loadWalkPlan();
     expect(validateWalkPlan(base)).toEqual([]);
     const withCell = (kind) => {
       const plan = JSON.parse(JSON.stringify(base));
@@ -857,7 +868,7 @@ describe("the advisory state — the tier refused it, not the screen", () => {
           declaredHost: "chat_thread",
           kind,
           state: "advisory",
-          screenshot: "evidence/2788-s9d-rework/captures/z1-advisory.png",
+          screenshot: "test-results/capture-fixture/z1-advisory.png",
         },
       ];
       return plan;
@@ -917,12 +928,11 @@ describe("the three bypasses an adversarial round found", () => {
       declaredState: "decided",
       screenshot: PNG,
       build: "development",
-      repoRoot: "/anywhere",
-      readImpl: OBSERVER_READ,
+      repoRoot: OBSERVE_ROOT,
     });
     // The host declaration and the settled marker were counted zero INSIDE the
     // card, so the record is refused however the page looked.
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /data-lifecycle-card-host="chat_thread"/,
     );
   });
@@ -952,8 +962,7 @@ describe("the three bypasses an adversarial round found", () => {
         state: "pending",
         screenshot: PNG,
         build: "development",
-        repoRoot: "/anywhere",
-        readImpl: OBSERVER_READ,
+        repoRoot: OBSERVE_ROOT,
       }),
     ).rejects.toThrow(/is not stable/);
   });
@@ -1019,7 +1028,7 @@ describe("the manifest to capture-index binding", () => {
 
   it("REFUSES a record whose screenshot lives away from the proof that cites it", () => {
     const violations = auditManifestIndexBinding({
-      manifest: manifestClaiming("X1__chat_thread__held.png", "evidence/somewhere-else/README.md"),
+      manifest: manifestClaiming("X1__chat_thread__held.png", "test-results/somewhere-else/README.md"),
       index: indexOf([chatRecord({ cell: "X1__chat_thread__held" })]),
     });
     expect(violations.join("\n")).toMatch(/the image must sit with the proof that cites it/);
@@ -1255,7 +1264,7 @@ function fakeBrowserPage({ url, tree }) {
     locator: (selector) => fakeLocator(tree[selector] ?? []),
     $$: async (selector) => (tree[selector] ?? []).map(fakeElementHandle),
     $: async () => null,
-    screenshot: async () => {},
+    screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES),
   };
 }
 
@@ -1265,7 +1274,7 @@ function fakeBrowserPage({ url, tree }) {
  * creating an evidence file to prove it.
  */
 function drivenPage(page) {
-  return { ...playwrightPage(page), screenshot: async () => {} };
+  return { ...playwrightPage(page), screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES) };
 }
 
 const CARD_ROOT = '[data-lifecycle-card="recommendation_hold"]';
@@ -1340,7 +1349,7 @@ function firstMatchAttachedOnlyPage(page) {
       return { count: descendantsOnly, countVisible: descendantsOnly };
     },
     frame: async () => null,
-    screenshot: async () => {},
+    screenshot: async (abs) => writeFileSync(abs, FIXTURE_BYTES),
   };
 }
 
@@ -1351,8 +1360,7 @@ const OBSERVE_ARGS = {
   state: "pending",
   screenshot: PNG,
   build: "development",
-  repoRoot: "/anywhere",
-  readImpl: OBSERVER_READ,
+  repoRoot: OBSERVE_ROOT,
   now: () => "2026-08-19T09:00:00.000Z",
 };
 
@@ -1373,7 +1381,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       ...OBSERVE_ARGS,
       page: firstMatchAttachedOnlyPage(page),
     });
-    expect(validateCaptureRecord(before, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(before, { hashOf, virtualFilesystem: true })).toEqual([]);
     for (const selector of [HOST_ANCHOR, ...DECISION_CONTROLS]) {
       const a = before.assertions.find((x) => x.selector === selector && x.scope === "root");
       expect(a.count).toBe(1);
@@ -1403,7 +1411,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         visible: 0,
       });
     }
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /attached DOM is not a photograph/,
     );
   });
@@ -1414,7 +1422,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       page: drivenPage(twoCardTranscript()),
       instance: "run-B",
     });
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
     // host + kind + state + URL binding is now host + kind + state + URL +
     // INSTANCE binding: the record names the card, off the card's own markup.
     expect(record.instance).toEqual({
@@ -1446,7 +1454,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       },
     });
     const record = await observeCapture({ ...OBSERVE_ARGS, page: drivenPage(page) });
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
     expect(record.instance).toMatchObject({ matched: 1, index: 0, id: null });
   });
 
@@ -1466,7 +1474,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       id: null,
       attributes: {},
     });
-    const violations = validateCaptureRecord(record, { hashOf }).join("\n");
+    const violations = validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n");
     expect(violations).toMatch(/the recorded instance matched 0 card\(s\)/);
     expect(violations).toMatch(/requires \[data-lifecycle-card="recommendation_hold"\] PRESENT/);
   });
@@ -1474,7 +1482,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
   it("REFUSES a chat_thread record that names no instance at all, at its own tier", () => {
     const record = chatRecord();
     delete record.instance;
-    expect(validateCaptureRecord(record, { hashOf, tier: "audit" }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true, tier: "audit" }).join("\n")).toMatch(
       /must carry the `instance` its card-scoped counts were read from/,
     );
   });
@@ -1497,16 +1505,16 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         count: a.count,
       })),
     };
-    expect(validateCaptureRecord(canonicalShaped, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(canonicalShaped, { hashOf, virtualFilesystem: true })).toEqual([]);
     // ...and the SAME record is refused the moment it is asked for at this tier.
     expect(
-      validateCaptureRecord(canonicalShaped, { hashOf, tier: "audit" }).length,
+      validateCaptureRecord(canonicalShaped, { hashOf, virtualFilesystem: true, tier: "audit" }).length,
     ).toBeGreaterThan(0);
   });
 
   it("REFUSES a record that measured one of several cards without saying which", () => {
     const record = chatRecord({ instance: chatInstance("recommendation_hold", { matched: 3 }) });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /3 cards matched .* and the record names no instance id/,
     );
   });
@@ -1515,7 +1523,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     const record = chatRecord({
       instance: chatInstance("recommendation_hold", { matched: 2, id: "run-ghost" }),
     });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /the id names a card the recorder did not find/,
     );
   });
@@ -1524,7 +1532,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     const record = chatRecord({
       instance: chatInstance("recommendation_hold", { selector: '[data-lifecycle-card="verification_summary"]' }),
     });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /the recorded instance pins .* but this record's card-scoped counts are taken inside/,
     );
   });
@@ -1537,7 +1545,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     });
     // The record still PINS AN INSTANCE, so it speaks this tier and owes the
     // painted count. Dropping the pin as well is the graded case above.
-    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /visible must be the observed count of PAINTED matches/,
     );
   });
@@ -1553,7 +1561,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         ? { ...a, within: '[data-lifecycle-card="verification_summary"]' }
         : a,
     );
-    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
       /requires \[data-skill-action="confirm"\] root-scoped inside/,
     );
   });
@@ -1580,7 +1588,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     );
     const record = chatRecord({ assertions });
     delete record.instance;
-    for (const opts of [{ hashOf }, { hashOf, tier: "audit" }]) {
+    for (const opts of [{ hashOf, virtualFilesystem: true }, { hashOf, virtualFilesystem: true, tier: "audit" }]) {
       expect(validateCaptureRecord(record, opts).join("\n")).toMatch(
         /visible must be the observed count of PAINTED matches, between 0 and 1; it is 4/,
       );
@@ -1597,7 +1605,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     expect(
       validateCaptureRecord(
         chatRecord({ cell: "S9x-mut__chat_thread__recommendation-hold-settled", declaredState: "decided", assertions }),
-        { hashOf },
+        { hashOf, virtualFilesystem: true },
       ).join("\n"),
     ).toMatch(/recorded as absent but observed 1 times/);
   });
@@ -1632,7 +1640,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         a.selector === dropped ? { ...a, count: 0, visible: 0 } : a,
       );
       expect(
-        validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n"),
+        validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n"),
       ).toMatch(
         new RegExp(
           `${dropped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} PRESENT \\(root-scoped\\)`,
@@ -1718,8 +1726,7 @@ function reviewArgs(state) {
     state,
     screenshot: PNG,
     build: "development",
-    repoRoot: "/anywhere",
-    readImpl: OBSERVER_READ,
+    repoRoot: OBSERVE_ROOT,
     now: () => "2026-08-20T09:00:00.000Z",
   };
 }
@@ -1750,16 +1757,19 @@ function runCardArgs(cell, state) {
     state,
     screenshot: PNG,
     build: "development",
-    repoRoot: "/anywhere",
-    readImpl: OBSERVER_READ,
+    repoRoot: OBSERVE_ROOT,
     now: () => "2026-08-20T09:00:00.000Z",
   };
 }
 
 /** Judge one record with the ratified CI half, on its own terms. */
 function canonicalViolations(record) {
+  // GENUINELY VIRTUAL: these records are hand-built to exercise the vocabulary
+  // and were never written anywhere, so the filesystem is supplied — and,
+  // since the seam is an explicit option rather than an inference, said so.
   return validateCanonicalRecord(record, {
     repoRoot: "/anywhere",
+    virtualFilesystem: true,
     fileExists: (abs) => abs === `/anywhere/${PNG}`,
     hashFile: () => HASH,
   });
@@ -1777,7 +1787,7 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
         ...args,
         page: descendantOnlyPinPage(reviewGateTranscript({ state })),
       });
-      const beforeViolations = validateCaptureRecord(before, { hashOf });
+      const beforeViolations = validateCaptureRecord(before, { hashOf, virtualFilesystem: true });
       expect(beforeViolations.join("\n")).toMatch(
         /\[data-lifecycle-card-host="chat_thread"\] PRESENT \(root-scoped\); the record observed 0/,
       );
@@ -1788,7 +1798,7 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
         ...args,
         page: drivenPage(reviewGateTranscript({ state })),
       });
-      expect(validateCaptureRecord(after, { hashOf })).toEqual([]);
+      expect(validateCaptureRecord(after, { hashOf, virtualFilesystem: true })).toEqual([]);
       const rootHost = after.assertions.find(
         (a) => a.selector === HOST_ANCHOR && a.scope === "root",
       );
@@ -1827,7 +1837,7 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
       expect(record.declaredState).toBe(state);
       expect(record.assertions.every((a) => ["page", "frame", "root"].includes(a.scope))).toBe(true);
       // And the two validators agree.
-      expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+      expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
       expect(canonicalViolations(record)).toEqual([]);
     }
   });
@@ -1844,7 +1854,7 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
     });
     expect(record.declaredHost).toBe("run_card");
     expect(record.declaredState).toBe("decided");
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true })).toEqual([]);
     expect(canonicalViolations(record)).toEqual([]);
   });
 
