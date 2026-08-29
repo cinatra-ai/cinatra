@@ -303,9 +303,17 @@ describe("the settled Skills step on the run page", () => {
   });
 });
 
-describe("every other host is untouched (review point E)", () => {
-  // THE TWO COOKIE HOSTS, one per line, because this IS the record of which
-  // hosts were driven: the conversation and the review page's gate region.
+describe("the conversation is untouched (review point E)", () => {
+  // WHICH HOSTS ARE STILL "EVERY OTHER" NARROWED BY ONE (cinatra#3047, the
+  // re-shoot's first defect). This arm drove `chat_thread` AND
+  // `page_gate_region`, because point C named the run page alone. The re-shoot
+  // then photographed the review page still drawing the retired chip reading
+  // above its review card, and the review page is not "another host" in the
+  // sense point E means: it is the run's OWN second page — the same run, the
+  // same rail, the same Skills step — and the change request names it beside
+  // the run page. So `page_gate_region` draws the Skills step now, which
+  // `skills-step-on-the-review-page.test.tsx` reads in full, and what is left
+  // here is the CONVERSATION, which point E still leaves alone.
   //
   // THE WIDGET IS NOT DRIVEN HERE, and the reason is a property of the product
   // rather than a gap: `site_widget` is not a cookie host, so the surface
@@ -315,7 +323,7 @@ describe("every other host is untouched (review point E)", () => {
   // `recommendation-hold-card.test.tsx` already carries — and its per-host arm
   // asserts the same reading, for all four hosts, through each host's own
   // transport.
-  it.each(["chat_thread", "page_gate_region"] as const)(
+  it.each(["chat_thread"] as const)(
     "keeps the three affordances on %s, and draws no checkbox and no Continue",
     async (host) => {
       holdStateMock.mockResolvedValue(HELD);

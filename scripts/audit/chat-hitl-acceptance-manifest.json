@@ -407,7 +407,13 @@
     },
     {
      "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-     "testName": "draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone"
+     "testName": "draws IDENTICALLY on the two transcripts — the widget is chat's twin, byte for byte",
+     "note": "THE CRITERION'S OWN PAIR (cinatra#3047, convergence). The byte comparison this row carries used to be taken on `page_gate_region` against `chat_thread`, which proved the widget-versus-chat claim only while every host but the run page drew the same chip-row. The review page is the run's own second page now and draws the run's Skills step, so that pair compares two run pages rather than two transcripts. This arm is the same pin taken on the hosts the criterion is actually about — `chat_thread` against `site_widget`, each read through its own transport, everything but the mount's identity compared byte for byte — so the claim is proved by a comparison of the two things it names."
+    },
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+     "testName": "draws IDENTICALLY on the run's two pages — the per-surface matrix is gone",
+   "note": "REPOINTED 2026-08-29 (cinatra#3047, the re-shoot's first defect). The arm is the same pin — two hosts, one drawing, everything but the mount's identity compared byte for byte — and only the pair it is taken on moved. It compared `page_gate_region` against `chat_thread`, which was a true byte comparison while every host but the run page drew the same chip-row; the review page is the run's OWN second page and now draws the run's Skills step, so the comparison is taken on the run's two pages, where the two readings that must not diverge actually live. The CLAIM this row carries is unchanged and is still proved for the widget: the same file's four-host arm (`every host with a production adapter draws EXACTLY ONE chip row`) drives `site_widget` through its own broker transport and asserts the transcript reading on it, and the six other proofs on this row are untouched."
     },
     {
      "file": "src/lib/lifecycle/__tests__/widget-lifecycle-actor-parity.test.ts",

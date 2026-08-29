@@ -101,7 +101,11 @@ import { RunSurfaceRail } from "./run-surface-rail";
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
 // answer (`instance-screens-client-boundary.test.ts`).
-import type { RunStepSelection, RunSurfaceRailStep } from "./run-surface-rail-step";
+import {
+  runSurfaceRailNumberedCount,
+  type RunStepSelection,
+  type RunSurfaceRailStep,
+} from "./run-surface-rail-step";
 import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-steps";
 // The labels come from a module with NO "use client" directive, deliberately:
 // this screen is a server component, and a constant imported from the rail's own
@@ -1187,7 +1191,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   key: "recommendation",
                   row: (
                     <RecommendationRailStepRow
-                      displayStep={railSteps.length + 1}
                       settled={recommendationEntry === "settled"}
                     />
                   ),
@@ -1210,7 +1213,17 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 railSteps.push({
                   key: "schedule",
                   row: (
-                    <ScheduleRailStepRow host="run_card" displayStep={railSteps.length + 1} />
+                    <ScheduleRailStepRow
+                      host="run_card"
+                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
+                      // (cinatra#3047). The Skills entry above draws the
+                      // drawing's own glyph and consumes no numeral, so the
+                      // schedule is "1" whether or not it is the second gate
+                      // row — which is exactly what the drawing shows.
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                    />
                   ),
                   // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
                   // — "The run page's prompt window shows below the scheduler"
@@ -1247,7 +1260,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   entries={rail.entries}
                   activeOrdinal={rail.activeOrdinal}
                   reviewHrefBase={reviewHrefBase}
-                  stepOffset={railSteps.length}
+                  // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS
+                  // ONLY (cinatra#3047). The Skills entry is unnumbered, so a
+                  // run paused on its skills question numbers its first work
+                  // step "1" — the drawing's own rail — instead of the "2" the
+                  // re-shoot photographed.
+                  stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
                 />
               ) : null;
               // A COLUMN with a GAP, not a margin on the row above. A flex gap
@@ -1925,6 +1943,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationStepOpens = recommendationRailStepOpens({
     entry: recommendationEntry,
     parkStatus: recommendationPark?.status,
+    // AND A DECISION THAT RACED THE SWEEPER IS STILL A DECISION (cinatra#3047,
+    // convergence). `policy_unresolved` with evidence on file is a run the card
+    // draws a settled row for; the status alone would close this step over it.
+    // One definition of "decided", asked here rather than restated.
+    decided: run
+      ? recommendationDecidedForRun({ runId: run.id, parkStatus: recommendationPark?.status })
+      : false,
   });
   // AND HOW DOES THE ROW READ once the question has been answered
   // (cinatra#2975)? The ratified drawing: "A resolved gate stays on the rail as

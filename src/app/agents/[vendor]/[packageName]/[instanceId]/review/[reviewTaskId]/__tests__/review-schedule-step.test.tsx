@@ -14,16 +14,31 @@
 // So on this page the rail has two selectable steps and ONE region beside it:
 // the Review row shows the review card there, the Schedule row shows the
 // schedule form there, and neither can be on the screen while the other is. That
-// is what this suite reads out of real DOM, driving the REAL rail
-// (`ReviewRunSteps`) and the REAL step (`ScheduleRailStep`) — the page composes
-// exactly these two around the gate region.
+// is what this suite reads out of real DOM.
+//
+// WHAT IT DRIVES MOVED ONE MODULE (cinatra#3047). It drove `ScheduleRailStep`,
+// the one-step frame, because the schedule was this page's only gate step. The
+// page grew a second — the Skills question, at the head of the rail, where the
+// drawing puts it — so it composes the shared frame through
+// `ReviewRunSurface`, and this suite drives THAT, with the real rail
+// (`ReviewRunSteps`) beside it. Every claim below is unchanged and is made about
+// a run with NO recommendation, which is the run this file has always been
+// about: the schedule step and the review card, and never both.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
-import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
+// THE SKILLS STEP'S CARD IS NOT THIS FILE'S SUBJECT, and its real module reaches
+// the generated extension registry — a graph this suite has no reason to load
+// and, on a checkout without the connector fleet, cannot. Every run driven below
+// has NO recommendation, so the marker is never rendered; it exists so the
+// composition module can be imported at all.
+vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
+  RecommendationHoldCard: () => <div data-run-recommendation-chip-row="" />,
+}));
 
 import { ReviewRunSteps } from "../review-run-steps";
+import { ReviewRunSurface } from "../review-run-surface";
 
 afterEach(() => {
   cleanup();
@@ -82,10 +97,13 @@ function mockResolve() {
 function renderSurface() {
   return render(
     <div className="flex items-start gap-6" data-run-detail-contract="">
-      <ScheduleRailStep
-        host="page_gate_region"
-        cardRef="schedule-ref-1"
-        displayStep={1}
+      <ReviewRunSurface
+        runId="run-777"
+        // A run with no recommendation: the schedule is this page's only gate
+        // step, which is the composition every claim below is about.
+        recommendationEntry="none"
+        recommendationStepOpens={false}
+        scheduleCardRef="schedule-ref-1"
         rail={
           <ReviewRunSteps
             steps={[{ index: 1, label: "Review" }]}
@@ -94,7 +112,6 @@ function renderSurface() {
           />
         }
         detail={<div data-testid="review-gate-card" data-lifecycle-card="artifact_review_gate" />}
-        initialSelection="detail"
       />
     </div>,
   );

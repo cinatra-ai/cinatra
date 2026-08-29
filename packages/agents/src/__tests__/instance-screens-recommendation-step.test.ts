@@ -200,8 +200,16 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     const scheduleAt = SCREEN_SRC.indexOf('key: "schedule"');
     expect(recommendationAt).toBeGreaterThan(-1);
     expect(scheduleAt).toBeGreaterThan(recommendationAt);
-    // The rail below renumbers around however many gate steps there are.
-    expect(SCREEN_SRC).toMatch(/stepOffset=\{railSteps\.length\}/);
+    // AND THE RAIL BELOW RENUMBERS AROUND THE NUMBERED ONES ONLY
+    // (cinatra#3047). It used to be `railSteps.length`, which counted the Skills
+    // entry — and the drawing gives that entry its own glyph and no numeral, so
+    // counting it pushed the run's first work step to "2". The offset is the
+    // rail's own rule now (`runSurfaceRailNumberedCount`), asked once, and the
+    // arithmetic itself is pinned in `skills-step-glyph-and-numerals.test.tsx`.
+    expect(SCREEN_SRC).toMatch(
+      /stepOffset=\{runSurfaceRailNumberedCount\(railSteps\.map\(\(step\) => step\.key\)\)\}/,
+    );
+    expect(SCREEN_SRC).not.toMatch(/stepOffset=\{railSteps\.length\}/);
   });
 
   it("asks the entry predicate for the step rather than restating the branch inline", () => {

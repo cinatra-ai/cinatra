@@ -145,23 +145,44 @@ import {
  * must be applied to the agent run", and "the continue button is missing on the
  * skills recommendation screen".
  *
- * IT IS THE RUN PAGE ONLY, and the review says so too: point E asks for a
- * SEPARATE issue to apply the same two changes to the chat and the widget. So
- * this is a reading, not a redraw of the card — every other host keeps the
- * chip-row it draws today, byte for byte, until that issue lands.
+ * IT IS THE RUN'S OWN PAGES, and the review says which those are: point E asks
+ * for a SEPARATE issue to apply the same two changes to the chat and the widget,
+ * so the conversation and the embedded widget keep the chip-row they draw today,
+ * byte for byte, until that issue lands.
  *
- * WHY THE HOST DECLARATION IS THE SEAM. `run_card` is declared in exactly one
- * production place — the run page's own frame in `instance-screens.tsx` — while
- * the conversation declares `chat_thread`, the embedded widget `site_widget` and
- * the review page `page_gate_region`. So "the run page" is a fact the card can
- * read off the provider it is already mounted under, rather than a prop a host
- * could pass by accident, and a host that never declared itself draws no card at
- * all. It is the same declaration the card root publishes as
- * `data-lifecycle-card-host`, so the reading and the anchor a capture is graded
- * by can never disagree.
+ * THE REVIEW PAGE IS ONE OF THE RUN'S PAGES (cinatra#3047, the re-shoot's first
+ * defect), and this predicate said otherwise for one round. The review route is
+ * a SECOND composition of the same run surface — the same run, the same rail,
+ * the same Skills step at its head — and the change request names it in the same
+ * breath as the run page: "Do not show the skills on top of the review card or
+ * the schedule card or any other card either." While the predicate named
+ * `run_card` alone, moving that page's mount onto its Skills step opened the
+ * step onto the PRE-REFINEMENT reading — the settled outcome chips reading
+ * "✓ CONFIRMED / ✗ SKIPPED", with no checkbox and nothing to press — which is
+ * what the re-shoot photographed. The drawing at the capture contract's pin
+ * draws §V's checkbox pills as the anatomy EVERY host reuses, so widening this
+ * seam to the run's other page follows the drawing rather than outrunning it.
+ * The two transcript hosts stay exactly where point E left them.
+ *
+ * WHY THE HOST DECLARATION IS STILL THE SEAM. The four hosts are declared in
+ * exactly one production place each — the run page's own frame in
+ * `instance-screens.tsx` for `run_card`, the review route's gate region for
+ * `page_gate_region`, the conversation for `chat_thread` and the embedded widget
+ * for `site_widget`. So "the run's own page" is a fact the card can read off the
+ * provider it is already mounted under, rather than a prop a host could pass by
+ * accident, and a host that never declared itself draws no card at all. It is
+ * the same declaration the card root publishes as `data-lifecycle-card-host`, so
+ * the reading and the anchor a capture is graded by can never disagree.
+ *
+ * AND THE MOUNT KEEPS ITS HOST. The review page's Skills step declares
+ * `page_gate_region` exactly as its gate region always did — re-declaring it as
+ * `run_card` would take `recommendation_hold` off a host the anchor contract's
+ * `hostParity` records it on, which the host-parity ratchet raises `host-lost`
+ * for. The same four hosts, the same two methods; one of them draws a different
+ * reading.
  */
 export function chipRowDrawsSkillChecklist(host: string | null): boolean {
-  return host === "run_card";
+  return host === "run_card" || host === "page_gate_region";
 }
 
 /** What one chip recorded — the three marks §V draws on a settled chip. */
@@ -1170,7 +1191,18 @@ export function RunRecommendationChipRow({
             size="sm"
             data-action="continue-skills-step -> released"
             data-skills-step-continue=""
-            disabled={!canDecide || pending || submitted}
+            // INERT EXACTLY WHEN THE READING SAYS SO (cinatra#3047, review point
+            // B — the re-shoot round). `submitted` is the step's own answer: it
+            // is written synchronously on the press and cleared, together with
+            // the refusal message, in ONE commit. `pending` was read here too,
+            // and it does NOT move with it — React clears the transition flag in
+            // a later commit of its own — so a refusal painted a frame that said
+            // the hold was live and the step decidable while the one control it
+            // offers was greyed out. The control now follows the single answer
+            // the row publishes as `data-skills-step-submitted`, which covers
+            // the in-flight window as well: it is true from the press until the
+            // decision comes back, and only a refusal clears it.
+            disabled={!canDecide || submitted}
             onClick={onContinue}
           >
             Continue

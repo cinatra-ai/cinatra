@@ -25,6 +25,7 @@ import { RunSurfaceRailRow } from "./run-surface-rail";
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 import {
   isRunSurfaceStepSelectable,
+  runSurfaceRailNumerals,
   type RunSurfaceRailStep,
 } from "./run-surface-rail-step";
 
@@ -42,6 +43,12 @@ export type SetupRailStep = Omit<RunSurfaceRailStep, "row">;
 export function buildSetupRailSteps(
   steps: readonly SetupRailStep[],
 ): RunSurfaceRailStep[] {
+  // THE NUMERALS ARE THE RAIL'S OWN RULE, not this list's index (cinatra#3047,
+  // the re-shoot's third defect). The Skills entry draws the drawing's glyph and
+  // takes NO numeral, so the row after it is the next number rather than the
+  // next index — "1 Schedule · [glyph] Skills · 2 Review" here, exactly as the
+  // run page's rail renumbers around the same entry.
+  const numerals = runSurfaceRailNumerals(steps.map((step) => step.key));
   return steps.map((step, index) => {
     const selectable = isRunSurfaceStepSelectable(step, null);
     return {
@@ -50,7 +57,7 @@ export function buildSetupRailSteps(
         <RunSurfaceRailRow
           selectionKey={step.key}
           label={RUN_SURFACE_RAIL_LABELS[step.key]}
-          displayStep={index + 1}
+          displayStep={numerals[index] ?? null}
           reached={step.reached}
           settled={step.settled}
           selectable={selectable}

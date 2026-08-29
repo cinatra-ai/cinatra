@@ -70,6 +70,7 @@ import {
   type RunSurfaceRailStep,
 } from "../run-surface-rail";
 import { recommendationRailEntry } from "../recommendation-rail-entry";
+import { runSurfaceRailNumberedCount } from "../run-surface-rail-step";
 
 const HELD: HoldState = {
   state: "held",
@@ -142,19 +143,23 @@ function surface(opts: {
   if (opts.hasRecommendationStep !== false) {
     steps.push({
       key: "recommendation",
-      row: (
-        <RecommendationRailStepRow
-          displayStep={steps.length + 1}
-          settled={opts.settled === true}
-        />
-      ),
+      row: <RecommendationRailStepRow settled={opts.settled === true} />,
       surface: card,
     });
   }
   if (opts.hasScheduleStep !== false) {
     steps.push({
       key: "schedule",
-      row: <ScheduleRailStepRow host="run_card" displayStep={steps.length + 1} />,
+      // THE SCHEDULE'S NUMERAL IS THE RAIL'S RULE (cinatra#3047): the Skills
+      // entry above draws its own glyph and consumes none, so the schedule is
+      // "1" whether or not it is the second gate row — the same arithmetic the
+      // screen applies.
+      row: (
+        <ScheduleRailStepRow
+          host="run_card"
+          displayStep={runSurfaceRailNumberedCount(steps.map((step) => step.key)) + 1}
+        />
+      ),
       surface: <div data-testid="schedule-surface" />,
     });
   }
@@ -226,13 +231,20 @@ describe("a LIVE hold — the gate opens in the run detail, under the same rail"
       "schedule-rail-step",
       "review-row",
     ]);
-    // …and it is numbered first, with the schedule renumbered behind it.
+    // …and it takes NO numeral (cinatra#3047, the re-shoot's third defect): the
+    // drawing gives this entry its own glyph on the open reading and starts the
+    // numerals on the step after it, so the schedule below reads "1" rather than
+    // being renumbered behind a Skills entry that took the first slot.
+    const indicator = rail.querySelector(
+      '[data-conformance-id="recommendation-rail-indicator"]',
+    )!;
+    expect(indicator.textContent?.trim()).toBe("");
     expect(
-      rail.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
-    ).toBe("1");
+      indicator.querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
     expect(
       rail.querySelector('[data-conformance-id="schedule-rail-indicator"]')!.textContent,
-    ).toBe("2");
+    ).toBe("1");
   });
 
   it("draws NO agentic run progress beside it — the selected step is what the detail shows", async () => {

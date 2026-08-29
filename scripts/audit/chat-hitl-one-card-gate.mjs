@@ -502,19 +502,30 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
         },
       ],
-      // THE REVIEW-PAGE APPEARANCE (cinatra#2790, epic #2784 S9f). Its position
-      // is the plan's, not a layout choice: §6.4 item 6 puts the same row on the
-      // review page, ahead of the gate it would authorize, "where it is mostly
-      // seen in its decided form". The page declares the host on the gate
-      // region's root and keys the card by the run and nothing else.
+      // THE REVIEW-PAGE APPEARANCE (cinatra#2790, epic #2784 S9f) — AND IT IS
+      // THE PAGE'S SKILLS STEP NOW, NOT ITS GATE REGION (cinatra#3047).
+      //
+      // The position used to be read from §6.4 item 6 as "the same row on the
+      // review page, ahead of the gate it would authorize" and was composed as a
+      // row ABOVE the review card. The ratified drawing at the capture
+      // contract's pin rules one page per gate, and the change request says the
+      // same in its own words — "do not show the skills on top of the review
+      // card" — so the row is the FIRST ENTRY of this page's rail, opening in
+      // the run detail in place of the review card rather than over it. The
+      // module that composes those two columns is the adapter; the region is the
+      // rail's step, the same `step_rail` the run page's own entry declares.
+      //
+      // THE HOST DID NOT MOVE. The mount still declares `page_gate_region`, so
+      // the anchor contract's `hostParity` row for this kind is unchanged and
+      // this gate still counts four hosts.
       page_gate_region: [
         {
           module:
-            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
           adapter: "mount",
-          region: "gate_region",
+          region: "step_rail",
           surface: "production",
-          why: "the review page mounts the same chip row inside its gate region, above the review card and under that region's own `page_gate_region` host declaration; the page composes no recommendation drawing of its own and passes only the run id, so the card decides whether it draws and in which state",
+          why: "the review page's Skills step mounts the same chip row as its own surface, under that page's `page_gate_region` host declaration; the module composes no recommendation drawing of its own and passes only the run id, so the card decides whether it draws and in which state",
         },
       ],
     },
@@ -735,7 +746,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "step_rail",
           surface: "production",
-          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card, holding the recommendation hold card above the review gate card, which is the composition the plan requires",
+          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card. It holds the review gate card and the run's own parked question and NOTHING else: the recommendation hold card stood there too until cinatra#3047, and it is the surface of this rail's own Skills step now, because no reading is drawn as a row above another card",
         },
       ],
     },

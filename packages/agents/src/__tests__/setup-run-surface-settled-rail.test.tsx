@@ -198,19 +198,32 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     ).toContain("bg-primary");
   });
 
-  it("leaves a LIVE row on its numeral — the step the run is paused on", () => {
+  it("leaves a LIVE Skills row on its own GLYPH — the step the run is paused on", () => {
+    // THE GLYPH, NOT A NUMERAL (cinatra#3047, the re-shoot's third defect). The
+    // drawing at the capture contract's pin gives this entry a clipboard-check
+    // glyph while its question is open and starts the rail's numerals on the
+    // step after it, so the Review row below reads "2" here rather than "3".
+    // The row is still not history — `settled` is false and the circle is muted
+    // — which is the claim this arm has always made.
     const { container } = renderSetupSurface({ park: LIVE_HOLD, slot: REVIEW_ON_FILE });
 
     expect(rows(container)[1].getAttribute("data-run-surface-rail-settled")).toBe("false");
     expect(railStepRecord(rows(container)[1])).toEqual({
-      railStepIndicatorText: "2",
-      railStepIndicatorHasCheckGlyph: false,
+      railStepIndicatorText: "",
+      railStepIndicatorHasCheckGlyph: true,
     });
-    expect(rows(container)[1].textContent).toBe("2Skills");
-    // A gate that is still open is not history either.
+    expect(
+      rows(container)[1].querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
+    expect(rows(container)[1].textContent).toBe("Skills");
+    expect(
+      rows(container)[1].querySelector<HTMLElement>(INDICATOR_SEL)!.className,
+    ).toContain("bg-muted-foreground/40");
+    // A gate that is still open is not history either — and it is the rail's
+    // FIRST numeral's neighbour now: "1 Schedule · [glyph] Skills · 2 Review".
     expect(rows(container)[2].getAttribute("data-run-surface-rail-settled")).toBe("false");
     expect(railStepRecord(rows(container)[2])).toEqual({
-      railStepIndicatorText: "3",
+      railStepIndicatorText: "2",
       railStepIndicatorHasCheckGlyph: false,
     });
   });
@@ -223,10 +236,16 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     const row = rows(container)[1];
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("false");
+    // The circle holds the step's OWN glyph (cinatra#3047), which is what an
+    // unsettled Skills row draws — never the completed check, and never a
+    // numeral. The two are told apart by the glyph's own conformance id.
     expect(railStepRecord(row)).toEqual({
-      railStepIndicatorText: "2",
-      railStepIndicatorHasCheckGlyph: false,
+      railStepIndicatorText: "",
+      railStepIndicatorHasCheckGlyph: true,
     });
+    expect(
+      row.querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
     // Still the closed, muted row it already was.
     expect(row.getAttribute("aria-disabled")).toBe("true");
     expect(row.querySelector<HTMLElement>(INDICATOR_SEL)!.className).toContain(
@@ -241,8 +260,9 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     const row = rows(container)[2];
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("false");
+    // "2", not "3": the Skills entry above it takes no numeral (cinatra#3047).
     expect(railStepRecord(row)).toEqual({
-      railStepIndicatorText: "3",
+      railStepIndicatorText: "2",
       railStepIndicatorHasCheckGlyph: false,
     });
   });

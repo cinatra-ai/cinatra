@@ -583,11 +583,23 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     }
   });
 
-  it("draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone", async () => {
+  it("draws IDENTICALLY on the run's two pages — the per-surface matrix is gone", async () => {
     // The removed rule said "a widget visitor never shapes a run's skills", and
     // it made this kind FALSE on `site_widget` in a presence table. The table is
     // gone: what a host draws is no longer a property of which host it is. The
     // widget's own remaining gate is the credential guard above, not a matrix.
+    //
+    // WHICH TWO HOSTS THIS COMPARES MOVED (cinatra#3047). It compared
+    // `page_gate_region` against `chat_thread`, which was a true byte comparison
+    // while every host but the run page drew the same chip-row. It no longer is:
+    // the review page is the run's OWN second page — the same run, the same
+    // rail, the same Skills step — so it draws the Skills step too, and the
+    // change request names it beside the run page ("do not show the skills on
+    // top of the review card"). The pin this file makes is unchanged in kind:
+    // two hosts, one drawing, everything but the mount's identity compared byte
+    // for byte. It is taken on the RUN'S TWO PAGES now, which is where the two
+    // readings that must not diverge actually live; the two transcript hosts'
+    // agreement is pinned by the arm below, which drives all four.
     holdStateMock.mockImplementation(async () => HELD);
     const widget = await mountCard({ wireRef: "hold-ref-1", host: "page_gate_region" });
     await act(async () => {
@@ -616,11 +628,12 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
         .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
     const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
     expect(widgetHtml).not.toBe("");
-    // REDRAWN (cinatra#2841): the decision affordances are PER CHIP now — the
-    // row-level pair this used to name does not exist on any host.
-    expect(widgetHtml).toContain('data-action="confirm-skill -> confirmed"');
-    expect(widgetHtml).toContain('data-action="adjust-skill -> adjusted"');
-    expect(widgetHtml).toContain('data-action="skip-skill -> skipped"');
+    // THE RUN'S OWN PAGES DRAW THE SKILLS STEP (cinatra#3047, review points B
+    // and C): a checkbox per pill and one Continue, and no per-chip affordance
+    // anywhere. The row-level pair the pre-#2841 drawing named does not exist on
+    // any host.
+    expect(widgetHtml).toContain("data-skills-step-continue");
+    expect(widgetHtml).not.toContain("data-skill-action");
     expect(widgetHtml).not.toContain("confirm-run-recommendation");
     expect(widgetHtml).not.toContain("skip-run-recommendation");
     // The label is normalised above, so assert it is REALLY there and really
@@ -631,17 +644,18 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
 
     cleanup();
     holdStateMock.mockClear();
-    const chat = await mountCard({ wireRef: "hold-ref-1", host: "chat_thread" });
+    const runPage = await mountCard({ wireRef: "hold-ref-1", host: "run_card" });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
-      ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
-    // The chat mount's evidence marker rides that same root, and no other host
-    // carries it.
-    expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(runPage.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    // Neither of the run's own pages carries the chat mount's evidence marker —
+    // that marker is the transcript's, and it is pinned as the transcript's in
+    // the arm that drives all four hosts.
+    expect(runPage.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
     expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
-    expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
+    expect(stripGeneratedIds(runPage.container.innerHTML)).toBe(widgetHtml);
   });
 
   it("draws nothing before the first authorized resolve answers", async () => {
@@ -769,6 +783,84 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
   // cookie-bound server action, so the run through it proves the broker read
   // paints the same single row — and the assertion that the action was NOT
   // called is what keeps that honest.
+  it("draws IDENTICALLY on the two transcripts — the widget is chat's twin, byte for byte", async () => {
+    // WHY THIS ARM EXISTS (cinatra#3047, convergence). The byte comparison above
+    // used to be taken on `page_gate_region` against `chat_thread`, and while
+    // every host but the run page drew the same chip-row it was ALSO the proof
+    // that the widget and first-party chat draw one card — the acceptance
+    // criterion "the widget renders … identically to first-party chat". The
+    // review page is the run's own second page now and draws the Skills step, so
+    // that pair no longer compares a transcript with a transcript. The claim did
+    // not move, so its proof must not either: this is the same pin, taken on the
+    // two hosts the criterion is actually about, each through its OWN transport.
+    const WIDGET_AUTH = {
+      headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
+      credentials: "omit" as RequestCredentials,
+    };
+    const brokerFetch = vi.fn(
+      async () => ({ ok: true, json: async () => HELD }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", brokerFetch);
+    try {
+      // The same two normalisations the arm above names, and no others: React's
+      // per-mount generated ids, and the mount's own IDENTITY (the host label and
+      // the chat transcript's evidence marker), both asserted explicitly below so
+      // normalising them can hide neither a missing nor a wrong one.
+      const stripGeneratedIds = (html: string) =>
+        html
+          .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
+          .replaceAll(/data-lifecycle-card-host="[a-z_]+"/g, 'data-lifecycle-card-host="HOST"')
+          .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
+
+      holdStateMock.mockImplementation(async () => HELD);
+      const chat = await mountCard({ wireRef: "hold-ref-1", host: "chat_thread" });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // The transcript's own marker is really on the chat mount…
+      expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+      expect(
+        chat.container
+          .querySelector('[data-lifecycle-card="recommendation_hold"]')
+          ?.getAttribute("data-lifecycle-card-host"),
+      ).toBe("chat_thread");
+      const chatHtml = stripGeneratedIds(chat.container.innerHTML);
+      expect(chatHtml).not.toBe("");
+      // …and the transcripts keep the per-chip affordances the change request's
+      // point E left them, which is what makes this a comparison of the reading
+      // the widget must match rather than of an empty root.
+      expect(chatHtml).toContain("data-skill-action");
+
+      cleanup();
+      holdStateMock.mockClear();
+      brokerFetch.mockClear();
+
+      const widget = await mountCard({
+        wireRef: "hold-ref-1",
+        host: "site_widget",
+        auth: WIDGET_AUTH,
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // The widget read through its OWN transport — the broker, never a session
+      // cookie — so this compares two hosts that fetched the row differently.
+      expect(brokerFetch.mock.calls.length > 0).toBe(true);
+      expect(holdStateMock.mock.calls.length).toBe(0);
+      expect(
+        widget.container
+          .querySelector('[data-lifecycle-card="recommendation_hold"]')
+          ?.getAttribute("data-lifecycle-card-host"),
+      ).toBe("site_widget");
+      // …and the marker normalised above is the transcript's alone.
+      expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
+
+      expect(stripGeneratedIds(widget.container.innerHTML)).toBe(chatHtml);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("every host with a production adapter draws EXACTLY ONE chip row", async () => {
     const WIDGET_AUTH = {
       headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
@@ -800,8 +892,11 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
         expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
         expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
         expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-        // Per host — see the same reading in the arm above (cinatra#3047).
-        if (host === "run_card") {
+        // PER HOST, and the split is the run's own pages against the two
+        // transcripts (cinatra#3047): the run page and the review page draw the
+        // Skills step, the conversation and the widget keep the chip-row until
+        // the change request's point E gives them their own issue.
+        if (host === "run_card" || host === "page_gate_region") {
           expect(root.querySelectorAll("[data-skill-action]")).toHaveLength(0);
           expect(root.querySelector("[data-skills-step-continue]")).not.toBeNull();
         } else {
@@ -809,6 +904,11 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
           expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
           expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
         }
+        // THE CHAT MOUNT'S EVIDENCE MARKER is the transcript's alone
+        // (cinatra#2794) — pinned here, where all four hosts are driven.
+        expect(root.hasAttribute("data-chat-thread-recommendation-hold")).toBe(
+          host === "chat_thread",
+        );
         // …and the row really came from the transport this host declares.
         expect(brokerFetch.mock.calls.length > 0).toBe(viaBroker);
         expect(holdStateMock.mock.calls.length > 0).toBe(!viaBroker);

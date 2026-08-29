@@ -333,14 +333,21 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(surface.children[1]).toBe(detailColumn(container)[0]);
   });
 
-  it("lists the three setup steps on the rail, in order, numbered from one", async () => {
+  it("lists the three setup steps on the rail, in order, and numbers the two the drawing numbers", async () => {
+    // THE SKILLS ROW CARRIES A GLYPH, NOT A NUMERAL (cinatra#3047, the
+    // re-shoot's third defect), so the series numbers around it: the drawing at
+    // the capture contract's pin draws this entry with its own clipboard-check
+    // glyph and starts the rail's numerals on the step after it.
     const { container } = await renderSetupSurface();
 
     expect(rows(container).map((r) => r.textContent)).toEqual([
       "1Schedule",
-      "2Skills",
-      "3Review",
+      "Skills",
+      "2Review",
     ]);
+    expect(
+      rows(container)[1].querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-step-key"))).toEqual([
       "schedule",
       "recommendation",
@@ -457,7 +464,8 @@ describe("the skills-recommendation step opens exactly when the run has one to s
 
     // Still a row, still named, still in the series — muted, not removed.
     expect(rows(container).length).toBe(3);
-    expect(rows(container)[1].textContent).toBe("2Skills");
+    // Named and glyphed, never numbered (cinatra#3047).
+    expect(rows(container)[1].textContent).toBe("Skills");
     expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
     expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
     // The row's action NAMES the state instead of promising an open.
@@ -531,6 +539,42 @@ describe("recommendationRailStepOpens — a terminal park is not a decided one",
     expect(recommendationRailStepOpens({ entry: "settled", parkStatus: "who-knows" })).toBe(
       false,
     );
+  });
+
+  it("a decision that RACED THE SWEEPER still opens the step (cinatra#3047, convergence)", () => {
+    // The park's status and the decision's evidence are not written atomically:
+    // a confirm or a skip landing as the TTL sweeper fires leaves
+    // `policy_unresolved` behind with the answer on file, and the card reads
+    // that run as decided and draws its settled row. Read from the status
+    // alone, the rail closed the step over a card that draws — a settled
+    // history row whose press does nothing and whose answer is nowhere.
+    expect(
+      recommendationRailStepOpens({
+        entry: "settled",
+        parkStatus: "policy_unresolved",
+        decided: true,
+      }),
+    ).toBe(true);
+    // And nobody's answer is still nobody's: the fail-closed park with no
+    // evidence behind it stays closed and muted, which is the reading
+    // cinatra#2970 ruled for a step that opens onto an empty column.
+    expect(
+      recommendationRailStepOpens({
+        entry: "settled",
+        parkStatus: "policy_unresolved",
+        decided: false,
+      }),
+    ).toBe(false);
+    // `decided` never manufactures an entry that does not exist, and never
+    // re-opens a live hold's answer: it is read only for a SETTLED entry.
+    expect(
+      recommendationRailStepOpens({ entry: "none", parkStatus: null, decided: true }),
+    ).toBe(false);
+    // Omitting it states nothing and leaves the status-only reading exactly as
+    // it was for every caller that has no run id to ask with.
+    expect(
+      recommendationRailStepOpens({ entry: "settled", parkStatus: "policy_unresolved" }),
+    ).toBe(false);
   });
 
   it("is the ENTRY question's companion, not a replacement for it", () => {
@@ -636,7 +680,8 @@ describe("the review step opens the run's review slot", () => {
     expect(row.hasAttribute("data-run-surface-rail-step")).toBe(true);
     expect(row.getAttribute("data-run-surface-rail-step-key")).toBe("review");
     expect(row.getAttribute("data-run-surface-rail-reached")).toBe("false");
-    expect(row.textContent).toBe("3Review");
+    // "2", not "3": the Skills entry above it takes no numeral (cinatra#3047).
+    expect(row.textContent).toBe("2Review");
     expect(
       row.querySelector('[data-conformance-id="run-surface-rail-indicator"]'),
     ).not.toBeNull();
