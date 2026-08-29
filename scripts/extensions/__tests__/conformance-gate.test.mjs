@@ -405,13 +405,26 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
 const UI_RULES = loadLiveRules(REPO_ROOT);
 const GEN_UI_RANGE = UI_RULES.artifactUiSdkAbiRange;
 
-function artifactUiFixture({ ui, files = ["src", "cinatra"], entryFile = "src/detail.tsx", withEntryFile = true } = {}) {
+function artifactUiFixture({
+  ui,
+  files = ["src", "cinatra"],
+  entryFile = "src/detail.tsx",
+  withEntryFile = true,
+  // THE PACKAGING RULE (cinatra#3025, plan §4.1 item 0.8): an artifact
+  // extension declares its display through its OWN `exports`, so the host
+  // imports a bare specifier instead of a deep internal source path. The key is
+  // the one the MANIFEST GENERATOR derives from the entry — the entry minus its
+  // source extension — so `./src/detail.tsx` is published at `./src/detail`.
+  // `null` omits the map entirely (the pre-rule shape); an object replaces it.
+  exportsField = { ".": "./src/index.ts", "./src/detail": "./src/detail.tsx" },
+} = {}) {
   const pkg = {
     name: "@cinatra-ai/fixture-artifact",
     version: "0.0.1",
     license: "Apache-2.0",
     files,
     main: "src/index.ts",
+    ...(exportsField === null ? {} : { exports: exportsField }),
     cinatra: {
       kind: "artifact",
       apiVersion: "cinatra.ai/v1",
@@ -549,6 +562,520 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
     expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-out-of-scope")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE PACKAGING RULE (cinatra#3025, plan §4.1 item 0.8): "every artifact
+  // extension declares its display through its own `exports`, the generator
+  // requires it for artifact extensions, and the thirteen hand-maintained
+  // display aliases are deleted". These cases are the gate half — an artifact
+  // extension whose renderer entry is not reachable at a declared, literal
+  // `exports` subpath is REFUSED, so the host can import a bare specifier and
+  // the per-extension alias a host edit keeps alive can go.
+  // -------------------------------------------------------------------------
+
+  it("REFUSES an artifact extension that declares a display but NO exports map at all", () => {
+    const pkgDir = writeFixture(artifactUiFixture({ ui: validUiBlock(), exportsField: null }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-exports-missing")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a renderer entry that no declared exports subpath reaches", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        // A well-formed exports map that simply does not publish the display.
+        exportsField: { ".": "./src/index.ts", "./register": "./src/index.ts" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a WILDCARD subpath standing in for the display declaration", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        // "./*" re-exposes the package's internals wholesale — the very
+        // coupling the packaging rule removes — so it is not a declaration.
+        exportsField: { ".": "./src/index.ts", "./*": "./src/*" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a display published at a declared subpath under a conditions object", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          "./src/detail": { default: "./src/detail.tsx" },
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS an extension-less exports target that resolves to the same module file", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": "./src/detail" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("does NOT raise the exports finding for an entry that never resolved (one finding per defect)", () => {
+    const ui = {
+      abiVersion: 1,
+      sdkAbiRange: GEN_UI_RANGE,
+      renderers: { detail: { entry: "./src/missing.tsx", propsApiVersion: 1 } },
+    };
+    const pkgDir = writeFixture(artifactUiFixture({ ui, withEntryFile: false, exportsField: null }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-unresolved")).toBe(true);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-exports-missing")).toBe(false);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // SELECTION, NOT PRESENCE. Node resolves a subpath to ONE target — the first
+  // applicable condition, the first valid array entry — so a subpath whose
+  // branches disagree does not publish the display, however many of its leaves
+  // name it.
+
+  it("REFUSES a fallback ARRAY whose first entry is not the display", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          "./src/detail": ["./src/index.ts", "./src/detail.tsx"],
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a conditions object whose RUNTIME branch resolves elsewhere", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          // A bare import selects `default` — index.ts — not the display.
+          "./src/detail": { default: "./src/index.ts", types: "./src/detail.tsx" },
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a `types` branch beside a runtime branch that IS the display", () => {
+    const files = artifactUiFixture({
+      ui: validUiBlock(),
+      exportsField: {
+        ".": "./src/index.ts",
+        "./src/detail": { types: "./src/detail.d.ts", import: "./src/detail.tsx", default: "./src/detail.tsx" },
+      },
+    });
+    files["src/detail.d.ts"] = "export default function R(): null;\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a BLOCKED subpath (a null target) standing in for the display", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": null },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES an exports map that MIXES subpath keys with condition keys (Node rejects it outright)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { "./src/detail": "./src/detail.tsx", default: "./src/index.ts" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-exports-invalid")).toBe(true);
+    // ONE defect, ONE finding: the map is unusable, so the per-renderer check
+    // does not also fire off a half-read map.
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(false);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a NARROW wildcard subpath — the policy is literal subpaths, not just \"./*\"", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./renderers/*": "./src/*" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES top-level STRING exports sugar — it declares only \".\", never the generator's key", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({ ui: validUiBlock(), exportsField: "./src/detail.tsx" }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    // The map EXISTS — this is not the missing-map defect.
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-exports-missing")).toBe(false);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a display published at some OTHER subpath than the generator's key", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        // Correct target, wrong key: the generated import is
+        // "<pkg>/src/detail", so "./renderers/detail" publishes nothing the
+        // host will ask for. This is the divergence that would break
+        // generation the moment the per-extension alias is deleted.
+        exportsField: { ".": "./src/index.ts", "./renderers/detail": "./src/detail.tsx" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // The gate SIMULATES the host's own resolution: an import-side walk in
+  // declaration order, where the first always-matched condition ends it.
+
+  it("ACCEPTS a VERSIONED types condition (types@{selector}) beside a runtime default", () => {
+    const files = artifactUiFixture({
+      ui: validUiBlock(),
+      exportsField: {
+        ".": "./src/index.ts",
+        "./src/detail": {
+          "types@>=5.2": "./src/detail.d.ts",
+          types: "./src/detail.d.ts",
+          default: "./src/detail.tsx",
+        },
+      },
+    });
+    files["src/detail.d.ts"] = "export default function R(): null;\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a display reachable only through `require` — the host emits import()", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": { require: "./src/detail.tsx" } },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a display reachable only through a CUSTOM condition (resolution not guaranteed)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": { cinatra: "./src/detail.tsx" } },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a `default` that PRECEDES a disagreeing branch (order decides selection)", () => {
+    const files = artifactUiFixture({
+      ui: validUiBlock(),
+      exportsField: {
+        ".": "./src/index.ts",
+        // `default` matches first, so the `node` branch is unreachable.
+        "./src/detail": { default: "./src/detail.tsx", node: "./src/index.ts" },
+      },
+    });
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES the SAME two branches in the other order (the host may select `node`)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          "./src/detail": { node: "./src/index.ts", default: "./src/detail.tsx" },
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a fallback array whose FIRST resolvable entry is the display", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          "./src/detail": ["./src/detail.tsx", "./src/index.ts"],
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a dot-prefixed key that names NO importable specifier (\".not-a-subpath\")", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        // Every key starts with "." so the map is not "mixed", but no consumer
+        // can import "@cinatra-ai/fixture-artifact.not-a-subpath".
+        exportsField: { ".": "./src/index.ts", ".not-a-subpath": "./src/detail.tsx" },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a fallback array whose first VALID target is missing on disk (Node does not retry)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        // Node selects "./src/missing.tsx" — a well-formed target — and the
+        // import then fails; it does not fall through to the next entry.
+        exportsField: { ".": "./src/index.ts", "./src/detail": ["./src/missing.tsx", "./src/detail.tsx"] },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a fallback array whose first entry is SYNTACTICALLY invalid (Node skips that one)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": ["src/detail.tsx", "./src/detail.tsx"] },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES an INVALID package target in an active branch (Node throws before any later branch)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": { node: false, default: "./src/detail.tsx" } },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a `node`-only branch — the display must be reachable portably (stated policy)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": { node: "./src/detail.tsx" } },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("the gate's required key IS the manifest generator's derived key (no second contract)", () => {
+    // The generator computes `exportsKey = "./" + entry-without-extension` and
+    // refuses to generate without it; the gate must demand the same string, or
+    // a package could pass publish and break the build.
+    const gateSrc = readFileSync(resolve(REPO_ROOT, "scripts/extensions/conformance-gate.mjs"), "utf8");
+    const genSrc = readFileSync(
+      resolve(REPO_ROOT, "scripts/extensions/generate-extension-manifest.mjs"),
+      "utf8",
+    );
+    // Bound to the artifact-renderer block: an identical derivation elsewhere in
+    // the generator must not be able to keep this green while THIS one drifts.
+    const blockStart = genSrc.indexOf("const ARTIFACT_UI_RENDER_SLOTS");
+    const blockEnd = genSrc.indexOf("FAIL-CLOSED system-extension coverage", blockStart);
+    expect(blockStart).toBeGreaterThan(-1);
+    expect(blockEnd).toBeGreaterThan(blockStart);
+    const genBlock = genSrc.slice(blockStart, blockEnd);
+    expect(genBlock).toContain('const exportsKey = `./${importSubpath}`;');
+    expect(genBlock).toContain('const importSubpath = entryRel.replace(/\\.(ts|tsx)$/, "");');
+    // ...and the generator's entry candidates, which the gate now mirrors.
+    expect(genBlock).toContain('const candidates = [entryPath, `${entryPath}.ts`, `${entryPath}.tsx`];');
+    expect(gateSrc).toContain("function generatorResolvesEntryFile(pkgDir, entry)");
+    expect(gateSrc).toContain("function generatorExportsKeyForEntry(entry)");
+    expect(gateSrc).toContain('return `./${rel.replace(/\\.(ts|tsx)$/, "")}`;');
+  });
+
+  it("ACCEPTS a fallback array whose first entry is null (Node walks past it)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": [null, "./src/detail.tsx"] },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS a fallback array whose first entry is a branch yielding nothing", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          // The `require`-only branch selects nothing on the import side, so
+          // Node moves on to the next entry.
+          "./src/detail": [{ require: "./src/index.ts" }, "./src/detail.tsx"],
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES a NUMERIC condition key (an invalid package configuration Node throws on)", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: { ".": "./src/index.ts", "./src/detail": { 0: "./src/detail.tsx", default: "./src/detail.tsx" } },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES an entry the GENERATOR could not resolve, however good the exports map is", () => {
+    // Entry "./src/detail.js" with the file shipped as src/detail.ts: the
+    // gate's general entry check resolves it (it strips any extension), but the
+    // generator only tries the literal path, .ts and .tsx against "src/detail.js"
+    // and throws. The packaging rule asks the generator's question.
+    const files = artifactUiFixture({
+      ui: {
+        abiVersion: 1,
+        sdkAbiRange: GEN_UI_RANGE,
+        renderers: { detail: { entry: "./src/detail.js", propsApiVersion: 1 } },
+      },
+      withEntryFile: false,
+      exportsField: { ".": "./src/index.ts", "./src/detail.js": "./src/detail.ts" },
+    });
+    files["src/detail.ts"] = "export default function R() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS the conditional-fallback compatibility shape [{ node: display }, display]", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          // Node selects the branch when `node` matches and the bare fallback
+          // when it does not: the display is selected either way.
+          "./src/detail": [{ node: "./src/detail.tsx" }, "./src/detail.tsx"],
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("REFUSES the same shape when the branch and the fallback DISAGREE", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          "./src/detail": [{ node: "./src/index.ts" }, "./src/detail.tsx"],
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-not-exported")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("ACCEPTS an always-matched branch that resolves NOWHERE, falling through to the next key", () => {
+    const pkgDir = writeFixture(
+      artifactUiFixture({
+        ui: validUiBlock(),
+        exportsField: {
+          ".": "./src/index.ts",
+          // `import` matches, but its value selects nothing on the import side,
+          // so Node falls through to `default`.
+          "./src/detail": { import: { require: "./src/index.ts" }, default: "./src/detail.tsx" },
+        },
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
