@@ -620,7 +620,7 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
         orgId: ORG,
         schedule: WEEKDAYS_8AM,
       });
-      expect(out).toEqual({ ok: false });
+      expect(out).toEqual({ ok: false, reason: "ref_refused" });
     }
     // The refusal lands before the template store is ever reached.
     expect(readAgentTemplateById).not.toHaveBeenCalled();
@@ -641,7 +641,7 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
       orgId: ORG,
       schedule: WEEKDAYS_8AM,
     });
-    expect(out).toEqual({ ok: false });
+    expect(out).toEqual({ ok: false, reason: "ref_refused" });
   });
 
   it("cannot be re-pointed at an agent the reader was never proposed", async () => {
