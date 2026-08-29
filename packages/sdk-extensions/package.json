@@ -1,7 +1,7 @@
 {
   "name": "@cinatra-ai/sdk-extensions",
   "version": "0.1.1",
-  "description": "Cinatra extension SDK — the frozen author-facing ABI: the register(ctx) host-port surface (ExtensionHostContext), the extension manifest + dependency contracts, and the loader/registry types. The only first-party code dependency a Cinatra extension may have (alongside @cinatra-ai/sdk-ui).",
+  "description": "Cinatra extension SDK \u2014 the frozen author-facing ABI: the register(ctx) host-port surface (ExtensionHostContext), the extension manifest + dependency contracts, and the loader/registry types. The only first-party code dependency a Cinatra extension may have (alongside @cinatra-ai/sdk-ui).",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "main": "./src/index.ts",
@@ -34,6 +34,9 @@
     "./registry-contract": "./src/registry-contract.ts",
     "./artifact-client-bundle": "./src/artifact-client-bundle.ts",
     "./artifact-renderer-props": "./src/artifact-renderer-props.ts",
+    "./artifact-content-channel": "./src/artifact-content-channel.ts",
+    "./markdown-sanitizer": "./src/markdown-sanitizer.ts",
+    "./read-only-compositions": "./src/read-only-compositions.ts",
     "./objects-contract": "./src/objects-contract.ts",
     "./objects-provider": "./src/objects-provider-contract.ts",
     "./project-template-contract": "./src/project-template-contract.ts",
@@ -86,5 +89,8 @@
   },
   "cinatra": {
     "sdkAbiVersion": "2.5.0"
+  },
+  "dependencies": {
+    "marked": "^18.0.5"
   }
 }

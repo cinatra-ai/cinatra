@@ -106,6 +106,21 @@ export type CinatraManifest = {
    * runner into the shared `pgmigrations` ledger (#115/#118).
    */
   migrationsDir?: string;
+  /**
+   * The tables this extension OWNS (cinatra#3031, epic #3023 W7; plan (C)
+   * enablers 0.23/0.24) — name, columns, indexes and the organisation column.
+   *
+   * The HOST creates them, not the migration: at install the declaration is
+   * compiled into CREATE TABLE / CREATE INDEX under the derived prefix
+   * `ext_<scope>_<slug>_` and granted to a database role of the extension's
+   * own, so `migrationsDir` ships DATA migrations only and a statement that
+   * touches another table, another extension's table or the ledger is refused
+   * by the database itself. A declaration that breaks the 63-byte identifier
+   * limit, names a column type outside the closed vocabulary, or omits its
+   * organisation column is refused at install PREFLIGHT, before anything runs.
+   * See `./declared-tables`.
+   */
+  declaredTables?: DeclaredTableDeclaration[];
   // ---- self-describing card identity (additive) ----
   /** User-facing card label. Falls back to the host catalog when absent. */
   displayName?: string;
@@ -398,3 +413,390 @@ export type NormalizedExtensionRecord = {
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {
   return typeof value === "string" && (UI_SURFACE_KINDS as readonly string[]).includes(value);
 }
+
+// ===========================================================================
+// EXTENSION-OWNED TABLES (cinatra#3031, epic #3023 W7; plan (C) 0.23/0.24).
+//
+// Here rather than in a module of its own, deliberately: plan (C) §8.1 names
+// THIS file as where the declared-tables field lands, and the manifest is
+// already reachable from four route-graph-ratcheted routes whose ceilings may
+// only ever shrink — a sibling module would have grown all four by one for a
+// contract that belongs beside the field that carries it.
+// ===========================================================================
+// The DECLARED-TABLES contract: what an extension owns in the database, and
+// under which name (cinatra#3031, epic #3023 W7; plan (C) enablers 0.23/0.24).
+//
+// WHY THIS MODULE EXISTS. An extension can create a table today and cannot
+// read it: `cinatra.migrationsDir` runs arbitrary statements under the host's
+// own credential, the `ext_` prefix is a convention nothing derives, and the
+// database's 63-byte identifier limit is checked nowhere. Enabler 0.23 makes
+// the OWNERSHIP explicit — "an extension declares the tables it owns in its
+// manifest — name, columns, indexes, the organisation column — and ships only
+// data migrations beside them" — and enabler 0.24 makes the NAME derived once:
+// "`ext_`, then the extension's scope and slug lowercased with every character
+// outside letters, digits and underscore replaced by an underscore, joined and
+// terminated by underscores".
+//
+// This module is the SDK's leaf half of that: pure derivation and pure
+// validation, no database, no host import. The HOST creates the tables from
+// what this module returns (`src/lib/extension-declared-tables.ts`); the
+// migration never does. A declaration that breaks the identifier limit, names
+// a column type outside the closed vocabulary, or omits its organisation
+// column is REFUSED AT PREFLIGHT, before anything runs — a refusal here costs
+// an install, a refusal later would cost a half-created schema.
+//
+// NO FREE SQL ANYWHERE. Column types and defaults are closed vocabularies, not
+// pass-through strings: the declaration is data the host compiles into DDL, so
+// admitting an arbitrary type string would admit arbitrary SQL into a CREATE
+// TABLE the host executes under its own credential.
+
+/** Enabler 0.24, call 3: the one prefix every extension-owned name carries. */
+export const EXTENSION_TABLE_PREFIX = "ext_";
+
+/**
+ * PostgreSQL's identifier limit (`NAMEDATALEN - 1`). A longer name is not an
+ * error in Postgres — it is silently TRUNCATED, which is worse: two declared
+ * tables can collapse onto one physical table. So the limit is checked here
+ * and a declaration that breaks it is refused.
+ */
+export const PG_IDENTIFIER_MAX_BYTES = 63;
+
+/** The closed column-type vocabulary a declaration may name. */
+export const DECLARED_COLUMN_TYPES = [
+  "text",
+  "uuid",
+  "boolean",
+  "integer",
+  "bigint",
+  "numeric",
+  "jsonb",
+  "timestamptz",
+] as const;
+export type DeclaredColumnType = (typeof DECLARED_COLUMN_TYPES)[number];
+
+/** The closed default vocabulary. Anything else is free SQL and is refused. */
+export const DECLARED_COLUMN_DEFAULTS = ["now()", "gen_random_uuid()", "false", "true"] as const;
+export type DeclaredColumnDefault = (typeof DECLARED_COLUMN_DEFAULTS)[number];
+
+export type DeclaredColumn = {
+  name: string;
+  type: DeclaredColumnType;
+  notNull: boolean;
+  primaryKey: boolean;
+  default: DeclaredColumnDefault | null;
+};
+
+export type DeclaredIndex = {
+  /** Declaration-local name; the physical name carries the prefix. */
+  name: string;
+  columns: string[];
+  unique: boolean;
+};
+
+export type DeclaredTable = {
+  /** Declaration-local name; the physical name carries the prefix. */
+  name: string;
+  /** The column carrying the organisation every row is bound to. */
+  organizationColumn: string;
+  columns: DeclaredColumn[];
+  indexes: DeclaredIndex[];
+};
+
+/** A declaration-local identifier: lowercase, starts with a letter. */
+const LOCAL_IDENT_RE = /^[a-z][a-z0-9_]*$/;
+
+function byteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The normalisation of enabler 0.24: lowercase, then every character outside
+ * letters, digits and underscore becomes an underscore.
+ */
+export function normalizeExtensionNameSegment(segment: string): string {
+  return segment.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+}
+
+function splitScopedPackageName(packageName: string): { scope: string; slug: string } {
+  const m = /^@([^/]+)\/([^/]+)$/.exec(String(packageName ?? ""));
+  if (!m || m[1] === undefined || m[2] === undefined || m[1] === "" || m[2] === "") {
+    throw new Error(
+      `[declared-tables] cannot derive a table prefix for package "${packageName}" — ` +
+        `extension-owned tables require a scoped package name (@scope/name)`,
+    );
+  }
+  return { scope: m[1], slug: m[2] };
+}
+
+/**
+ * Enabler 0.24's prefix, derived once: `ext_` + scope + `_` + slug + `_`.
+ * `@cinatra-ai/blog-pipeline-agent` -> `ext_cinatra_ai_blog_pipeline_agent_`.
+ */
+export function extensionTablePrefix(packageName: string): string {
+  const { scope, slug } = splitScopedPackageName(packageName);
+  return `${EXTENSION_TABLE_PREFIX}${normalizeExtensionNameSegment(scope)}_${normalizeExtensionNameSegment(slug)}_`;
+}
+
+/**
+ * The database role an extension's own statements run under (enabler 0.23).
+ * The prefix without its terminating underscore, so the role reads as the
+ * extension's name and can never collide with one of its tables.
+ */
+export function extensionDatabaseRoleName(packageName: string): string {
+  const prefix = extensionTablePrefix(packageName);
+  const role = prefix.slice(0, -1);
+  if (byteLength(role) > PG_IDENTIFIER_MAX_BYTES) {
+    throw new Error(
+      `[declared-tables] the database role "${role}" derived for ${packageName} is ` +
+        `${byteLength(role)} bytes, over PostgreSQL's ${PG_IDENTIFIER_MAX_BYTES}-byte identifier limit`,
+    );
+  }
+  return role;
+}
+
+/** The physical table name: the prefix plus the declared name. */
+export function declaredTablePhysicalName(packageName: string, tableName: string): string {
+  const physical = `${extensionTablePrefix(packageName)}${tableName}`;
+  assertIdentifierFits(physical, `table "${tableName}" of ${packageName}`);
+  return physical;
+}
+
+/** The physical index name: the prefix plus the declared index name. */
+export function declaredIndexPhysicalName(packageName: string, indexName: string): string {
+  const physical = `${extensionTablePrefix(packageName)}${indexName}`;
+  assertIdentifierFits(physical, `index "${indexName}" of ${packageName}`);
+  return physical;
+}
+
+function assertIdentifierFits(physical: string, what: string): void {
+  const bytes = byteLength(physical);
+  if (bytes > PG_IDENTIFIER_MAX_BYTES) {
+    throw new Error(
+      `[declared-tables] the derived identifier "${physical}" for ${what} is ${bytes} bytes, ` +
+        `over PostgreSQL's ${PG_IDENTIFIER_MAX_BYTES}-byte identifier limit — PostgreSQL would ` +
+        `TRUNCATE it, so the declaration is refused instead`,
+    );
+  }
+}
+
+function parseColumn(raw: unknown, where: string): DeclaredColumn {
+  if (!isPlainObject(raw)) throw new Error(`[declared-tables] ${where}: each column must be an object`);
+  const name = raw.name;
+  if (typeof name !== "string" || !LOCAL_IDENT_RE.test(name)) {
+    throw new Error(
+      `[declared-tables] ${where}: column name ${JSON.stringify(name)} must match ${LOCAL_IDENT_RE}`,
+    );
+  }
+  // A column name carries no prefix, so it is the identifier PostgreSQL sees.
+  // Two columns sharing their first 63 bytes would both TRUNCATE to the same
+  // identifier and the CREATE TABLE would fail halfway through the host's own
+  // DDL — the same silent truncation the table and index names are refused for.
+  if (byteLength(name) > PG_IDENTIFIER_MAX_BYTES) {
+    throw new Error(
+      `[declared-tables] ${where}: column name "${name}" is ${byteLength(name)} bytes, over ` +
+        `PostgreSQL's ${PG_IDENTIFIER_MAX_BYTES}-byte identifier limit — PostgreSQL would ` +
+        `TRUNCATE it, so the declaration is refused instead`,
+    );
+  }
+  const type = raw.type;
+  if (typeof type !== "string" || !(DECLARED_COLUMN_TYPES as readonly string[]).includes(type)) {
+    throw new Error(
+      `[declared-tables] ${where}: column "${name}" declares type ${JSON.stringify(type)}, ` +
+        `which is outside the closed vocabulary (${DECLARED_COLUMN_TYPES.join(", ")})`,
+    );
+  }
+  const def = raw.default;
+  if (def !== undefined && def !== null) {
+    if (typeof def !== "string" || !(DECLARED_COLUMN_DEFAULTS as readonly string[]).includes(def)) {
+      throw new Error(
+        `[declared-tables] ${where}: column "${name}" declares default ${JSON.stringify(def)}, ` +
+          `which is outside the closed vocabulary (${DECLARED_COLUMN_DEFAULTS.join(", ")}) — a ` +
+          `declaration is data the host compiles into DDL, never free SQL`,
+      );
+    }
+  }
+  return {
+    name,
+    type: type as DeclaredColumnType,
+    notNull: raw.notNull === true,
+    primaryKey: raw.primaryKey === true,
+    default: (def as DeclaredColumnDefault | undefined) ?? null,
+  };
+}
+
+function parseIndex(raw: unknown, columnNames: Set<string>, where: string): DeclaredIndex {
+  if (!isPlainObject(raw)) throw new Error(`[declared-tables] ${where}: each index must be an object`);
+  const name = raw.name;
+  if (typeof name !== "string" || !LOCAL_IDENT_RE.test(name)) {
+    throw new Error(
+      `[declared-tables] ${where}: index name ${JSON.stringify(name)} must match ${LOCAL_IDENT_RE}`,
+    );
+  }
+  const columns = raw.columns;
+  if (!Array.isArray(columns) || columns.length === 0) {
+    throw new Error(`[declared-tables] ${where}: index "${name}" must name at least one column`);
+  }
+  const cols: string[] = [];
+  for (const c of columns) {
+    if (typeof c !== "string" || !columnNames.has(c)) {
+      throw new Error(
+        `[declared-tables] ${where}: index "${name}" names ${JSON.stringify(c)}, which the table does not declare`,
+      );
+    }
+    cols.push(c);
+  }
+  return { name, columns: cols, unique: raw.unique === true };
+}
+
+/**
+ * Parse and validate `cinatra.declaredTables` for one package. Fail-closed:
+ * every refusal names what broke and why, and NOTHING is created for a package
+ * whose declaration does not parse.
+ *
+ * `undefined` (the common case — an extension that owns no table) parses to an
+ * empty list, never to an error.
+ */
+export function parseDeclaredTables(raw: unknown, packageName: string): DeclaredTable[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`[declared-tables] ${packageName}: cinatra.declaredTables must be an array`);
+  }
+  // Derivation first: a package whose prefix or role cannot be derived owns no
+  // namespace to put a table in, and must not reach the per-table checks.
+  extensionDatabaseRoleName(packageName);
+
+  const out: DeclaredTable[] = [];
+  const seenTables = new Set<string>();
+  const seenIndexes = new Set<string>();
+  for (const entry of raw) {
+    if (!isPlainObject(entry)) {
+      throw new Error(`[declared-tables] ${packageName}: each declared table must be an object`);
+    }
+    const name = entry.name;
+    if (typeof name !== "string" || !LOCAL_IDENT_RE.test(name)) {
+      throw new Error(
+        `[declared-tables] ${packageName}: table name ${JSON.stringify(name)} must match ${LOCAL_IDENT_RE}`,
+      );
+    }
+    if (seenTables.has(name)) {
+      throw new Error(`[declared-tables] ${packageName}: table "${name}" is declared twice`);
+    }
+    seenTables.add(name);
+    const where = `${packageName} table "${name}"`;
+
+    const rawColumns = entry.columns;
+    if (!Array.isArray(rawColumns) || rawColumns.length === 0) {
+      throw new Error(`[declared-tables] ${where}: must declare at least one column`);
+    }
+    const columns: DeclaredColumn[] = [];
+    const columnNames = new Set<string>();
+    for (const c of rawColumns) {
+      const col = parseColumn(c, where);
+      if (columnNames.has(col.name)) {
+        throw new Error(`[declared-tables] ${where}: column "${col.name}" is declared twice`);
+      }
+      columnNames.add(col.name);
+      columns.push(col);
+    }
+
+    const organizationColumn = entry.organizationColumn;
+    if (typeof organizationColumn !== "string" || !columnNames.has(organizationColumn)) {
+      throw new Error(
+        `[declared-tables] ${where}: organizationColumn ${JSON.stringify(organizationColumn)} must name ` +
+          `one of the table's own columns — every row an extension owns is bound to an organisation`,
+      );
+    }
+    const orgCol = columns.find((c) => c.name === organizationColumn);
+    if (!orgCol || orgCol.type !== "text" || !orgCol.notNull) {
+      throw new Error(
+        `[declared-tables] ${where}: the organisation column "${organizationColumn}" must be declared ` +
+          `\`text\` and \`notNull: true\` — a nullable organisation is a row outside every tenant`,
+      );
+    }
+
+    const rawIndexes = entry.indexes;
+    const indexes: DeclaredIndex[] = [];
+    if (rawIndexes !== undefined && rawIndexes !== null) {
+      if (!Array.isArray(rawIndexes)) {
+        throw new Error(`[declared-tables] ${where}: indexes must be an array`);
+      }
+      for (const i of rawIndexes) {
+        const idx = parseIndex(i, columnNames, where);
+        if (seenIndexes.has(idx.name)) {
+          throw new Error(`[declared-tables] ${packageName}: index "${idx.name}" is declared twice`);
+        }
+        seenIndexes.add(idx.name);
+        indexes.push(idx);
+      }
+    }
+
+    // The identifier limit, checked BEFORE anything runs (enabler 0.23).
+    declaredTablePhysicalName(packageName, name);
+    for (const idx of indexes) declaredIndexPhysicalName(packageName, idx.name);
+
+    out.push({ name, organizationColumn, columns, indexes });
+  }
+  return out;
+}
+
+/**
+ * The collision refusal of enabler 0.23: "the install also refuses an extension
+ * whose derived prefix collides with an installed extension's, since two names
+ * can normalise to one" (`@a-b/c` and `@a_b/c` both normalise to `ext_a_b_c_`).
+ *
+ * Compares against the packages already installed; the SAME package name is
+ * never a collision with itself (a reinstall/upgrade is not a new owner).
+ */
+export function assertNoDeclaredTablePrefixCollision(
+  packageName: string,
+  installedPackageNames: readonly string[],
+): void {
+  const prefix = extensionTablePrefix(packageName);
+  for (const other of installedPackageNames) {
+    if (other === packageName) continue;
+    let otherPrefix: string;
+    try {
+      otherPrefix = extensionTablePrefix(other);
+    } catch {
+      continue; // an unscoped/legacy name owns no prefix and cannot collide
+    }
+    if (otherPrefix === prefix) {
+      throw new Error(
+        `[declared-tables] ${packageName}: its derived table prefix "${prefix}" collides with the ` +
+          `installed extension "${other}" — two package names normalise to one prefix, so the ` +
+          `install is refused rather than letting one extension reach the other's tables`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The AUTHORED shape — what an extension writes in its manifest, before the
+// parser fills the defaults. Kept separate from `DeclaredTable` so the manifest
+// type stays honest about what is optional to write.
+// ---------------------------------------------------------------------------
+
+export type DeclaredColumnDeclaration = {
+  name: string;
+  type: DeclaredColumnType;
+  notNull?: boolean;
+  primaryKey?: boolean;
+  default?: DeclaredColumnDefault | null;
+};
+
+export type DeclaredIndexDeclaration = {
+  name: string;
+  columns: string[];
+  unique?: boolean;
+};
+
+export type DeclaredTableDeclaration = {
+  name: string;
+  organizationColumn: string;
+  columns: DeclaredColumnDeclaration[];
+  indexes?: DeclaredIndexDeclaration[];
+};

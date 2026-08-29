@@ -311,6 +311,8 @@
     "test:lent-action-grant": "vitest run --config vitest/integration/2932.config.ts --no-coverage",
     "test:run-window": "vitest run --config vitest/integration/2933.config.ts --no-coverage",
     "test:named-agent-start": "vitest run --config vitest/integration/2935.config.ts --no-coverage",
+    "test:lifecycle-c-w3": "vitest run --config vitest/integration/3027.config.ts --no-coverage",
+    "test:extension-tables": "vitest run --config vitest/integration/3031.config.ts --no-coverage",
     "test:widget-schedule-grant": "vitest run --config vitest/integration/3052.config.ts --no-coverage",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",
