@@ -164,7 +164,30 @@ export async function listInstalledTypesForArtifact(
 }
 
 export type AssertMeaningResult =
-  | { ok: true }
+  | {
+      ok: true;
+      /**
+       * THE TYPED PROMOTION ROAD's outcome (enabler 0.14 of `PLAN: Agents
+       * Lifecycle (C)`, cinatra#3028), when the confirmed extension is one the
+       * MATCHER associated with this row.
+       *
+       * Reported, never silent, and never a condition of the confirmation:
+       * writing the person's meaning is the thing they asked for, and a
+       * promotion that could not run must say WHY rather than leave the surface
+       * claiming a retype that did not happen. Absent when nothing about this
+       * row was promotable.
+       */
+      promotion?:
+        | {
+            promoted: true;
+            toType: string;
+            representationRevisionId: string;
+            /** Null when the revision was already present — a converging re-run
+             *  of a promotion an earlier call left half-applied. */
+            revision: number | null;
+          }
+        | { promoted: false; reason: string };
+    }
   | {
       ok: false;
       reason: "auth-required" | "not-found" | "denied" | "invalid-type" | "blocked";
@@ -222,6 +245,33 @@ export async function assertUploadMeaning(input: {
   );
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
+    // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
+    // behind the candidate gate: the candidate list EXCLUDES every candidate of
+    // the extension that defines the row's CURRENT type, so a row an earlier
+    // confirmation already retyped can never reach the road again through the
+    // gate above. That is exactly the row an interrupted promotion leaves —
+    // retyped, with its promotion revision missing — so without this the
+    // convergence the road promises is unreachable from the product.
+    //
+    // It completes and nothing else: the road itself still demands the matcher's
+    // assertion at its threshold, so a row that merely CARRIES this extension's
+    // type is refused there and this call falls through to the same
+    // `invalid-type` it always answered. No meaning assertion is written — the
+    // call that retyped the row wrote the person's, and a second identical
+    // assertion would stack a duplicate for a choice already recorded.
+    if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+      const completed = await promoteOnConfirmedMeaning({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        principalId: actor.principalId ?? null,
+        userId: session?.user?.id ?? null,
+      });
+      if (completed?.promoted) {
+        revalidatePath("/artifacts");
+        return { ok: true, promotion: completed };
+      }
+    }
     return {
       ok: false,
       reason: "invalid-type",
@@ -245,8 +295,120 @@ export async function assertUploadMeaning(input: {
       message: "A higher-ranked meaning already applies to this artifact.",
     };
   }
+
+  // THE TYPED PROMOTION ROAD (enabler 0.14). The plan: "a matched base-type row
+  // — an upload the matcher associated with an extension — is promoted into that
+  // extension's own type as a new revision sharing the content, ON THE MATCHER'S
+  // ASSERTION AT ITS THRESHOLD AND WITH THE PERSON'S CONFIRMATION WHERE THE
+  // PRODUCT ALREADY ASKS FOR ONE."
+  //
+  // THIS IS THAT PLACE, and deliberately the only one: §VI.1's Confirm is where
+  // the product already asks. No new confirmation surface is invented, and the
+  // person's meaning assertion is written FIRST — the promotion rides a
+  // confirmation that has already landed, so a promotion that refuses leaves the
+  // meaning they chose intact.
+  const promotion = await promoteOnConfirmedMeaning({
+    orgId,
+    artifactId: input.artifactId,
+    extension: input.extension,
+    principalId: actor.principalId ?? null,
+    userId: session?.user?.id ?? null,
+  });
+
   revalidatePath("/artifacts");
-  return { ok: true };
+  return promotion ? { ok: true, promotion } : { ok: true };
+}
+
+/**
+ * Does this extension's package define the type the row already carries?
+ *
+ * The one question the converging re-confirmation asks: it is what separates
+ * "this row is already in the type this extension defines" (the interrupted
+ * promotion's own row) from "this extension has nothing to do with this row".
+ */
+async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+  try {
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run the typed promotion road for a confirmation, or say why it did not run.
+ *
+ * Returns NULL when the road does not apply at all — the extension declares no
+ * type of its own, so there is nothing to promote INTO and nothing worth
+ * reporting on the surface. Every other outcome is reported: a refusal names its
+ * reason, so "I confirmed and nothing was retyped" is answerable.
+ *
+ * BEST-EFFORT AROUND AN INFRASTRUCTURE FAILURE ONLY. A thrown store error is
+ * reported as a refusal rather than failing the confirmation the person already
+ * completed; a business refusal is a value from the road itself.
+ */
+async function promoteOnConfirmedMeaning(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  principalId: string | null;
+  userId: string | null;
+}): Promise<Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null> {
+  if (!input.userId) return null;
+  try {
+    const { matcherManifestRegistry, objectTypeRegistry } = await import(
+      "@cinatra-ai/objects/registry"
+    );
+    // THE EXTENSION'S OWN TYPE: the one artifact type its package defines. A
+    // package that defines none is a pure matcher pack — the road does not
+    // apply. A package that defines SEVERAL cannot be resolved from a
+    // package-keyed confirmation, so it is left alone rather than guessed at.
+    const owned = objectTypeRegistry
+      .getTypesForPackage(input.extension)
+      .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
+      .filter((t) => t.def?.isArtifact != null);
+    if (owned.length !== 1) return null;
+    const ownType = owned[0]!;
+    const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
+
+    // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
+    // the matcher itself resolved it from — never a default invented here. A
+    // package with no matcher declaration never matched this row, so the road
+    // refuses on the missing assertion rather than on a fabricated threshold.
+    const entry = matcherManifestRegistry
+      .list()
+      .find((e) => e.packageName === input.extension);
+    if (!entry) return null;
+
+    // The org-write kernel authority the canonical objects writer requires,
+    // minted HERE from the acting session — the store leaf never mints one.
+    const { verifySessionAuthority } = await import("@/lib/org-write/authority");
+    const authority = await verifySessionAuthority(input.userId, input.orgId);
+    const { promoteMatchedArtifactType } = await import(
+      "@/lib/artifacts/typed-promotion-store"
+    );
+    const outcome = await promoteMatchedArtifactType({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      extension: input.extension,
+      ownType: { typeId: ownType.typeId, acceptsMimes },
+      threshold: entry.matcherConfidenceThreshold,
+      confirmed: true,
+      createdBy: input.principalId,
+      actor: { userId: input.userId, orgId: input.orgId },
+      authority,
+    });
+    return outcome.ok
+      ? {
+          promoted: true,
+          toType: outcome.toType,
+          representationRevisionId: outcome.representationRevisionId,
+          revision: outcome.revision,
+        }
+      : { promoted: false, reason: outcome.reason };
+  } catch {
+    return { promoted: false, reason: "promotion-unavailable" };
+  }
 }
 
 /**

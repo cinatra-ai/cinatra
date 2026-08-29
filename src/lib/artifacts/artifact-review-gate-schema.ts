@@ -224,8 +224,11 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   representation_revision_id text NOT NULL,
   event_kind                 text NOT NULL DEFAULT 'artifact_produced'
                                CHECK (event_kind IN ('artifact_produced')),
+  -- The closed emitter set. object_snapshot_mint is the object-backed
+  -- contract's mint (enabler 0.13 of PLAN: Agents Lifecycle (C),
+  -- cinatra#3028); the operator-upgrade twin of this widen is core__0099.
   emitter                    text NOT NULL
-                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture')),
+                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint')),
   producer_run_id            text,
   producer_agent_id          text,
   origin_kind                text NOT NULL CHECK (origin_kind IN ('agent_produced','user_provided','intermediate')),

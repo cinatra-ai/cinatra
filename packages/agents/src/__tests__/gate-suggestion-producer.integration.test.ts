@@ -31,9 +31,12 @@ import { Client } from "pg";
 
 import {
   buildGateSuggestions,
+  buildMultiTargetGateSuggestions,
   SUGGESTION_PRODUCER_LANE_ID,
+  snapshotSuggestions,
+  snapshotTargetPayloads,
   verifyGateSuggestionSnapshotPayload,
-  type GateSuggestionSnapshotPayload,
+  type GateSuggestionSnapshotPayloadV1,
 } from "@/lib/lifecycle/lifecycle-suggestion-producer";
 import type { CoreAnalysisTarget } from "@/lib/lifecycle/lifecycle-core-analysis";
 import type { SuggestionProjector } from "../lifecycle-suggestion-producer-lane";
@@ -69,7 +72,10 @@ async function pinnedGate(): Promise<{ gateId: string; target: CoreAnalysisTarge
 }
 
 /** A deterministic payload for `target`, varied by the disclosed text. */
-function payloadFor(target: CoreAnalysisTarget, lead: string): GateSuggestionSnapshotPayload {
+function payloadFor(
+  target: CoreAnalysisTarget,
+  lead: string,
+): GateSuggestionSnapshotPayloadV1 {
   const built = buildGateSuggestions({
     target,
     projection: { includedFields: { lead }, excludedFields: ["body"] },
@@ -148,9 +154,12 @@ describe.skipIf(!HAS_DB)("S1 — a gate gains a snapshot bound to its pinned tar
     expect(rows).toHaveLength(1);
 
     const read = await snapStore.readVerifiedSuggestionSnapshotForGate(gateId);
-    expect(read?.payload.target).toEqual(target);
-    expect(read?.payload.provenance.targetArtifactId).toBe(target.artifactId);
-    expect(read?.payload.provenance.targetRevisionId).toBe(target.representationRevisionId);
+    // Read through the accessor: the store returns EITHER payload shape
+    // (enabler 0.15's multi-target payload beside the single-target one).
+    const half = snapshotTargetPayloads(read!.payload)[0]!;
+    expect(half.target).toEqual(target);
+    expect(half.provenance.targetArtifactId).toBe(target.artifactId);
+    expect(half.provenance.targetRevisionId).toBe(target.representationRevisionId);
   });
 
   it("is visible through the existing run-scoped batch reader", async () => {
@@ -265,6 +274,57 @@ describe.skipIf(!HAS_DB)("S4 — the refusals", () => {
     expect(await snapshotRowsFor(gateId)).toHaveLength(0);
   });
 
+  it("refuses a MULTI-TARGET payload that does not cover every pinned target", async () => {
+    // Subset alone is not the contract: a payload speaking about one of two
+    // pinned targets would become the gate's ONE immutable snapshot, leaving the
+    // other target with no recorded kind, no projector and no provenance — and
+    // no second snapshot may ever correct it.
+    const t1: CoreAnalysisTarget = {
+      artifactId: `art-${randomUUID()}`,
+      representationRevisionId: `rev-${randomUUID()}`,
+    };
+    const t2: CoreAnalysisTarget = {
+      artifactId: `art-${randomUUID()}`,
+      representationRevisionId: `rev-${randomUUID()}`,
+    };
+    const emitted = await gateStore.emitArtifactReviewGate({
+      runId: `run-${randomUUID()}`,
+      orgId: ORG,
+      reviewTaskId: `task-${randomUUID()}`,
+      targets: [t1, t2],
+    });
+    const entryFor = (target: CoreAnalysisTarget, lead: string) => ({
+      target,
+      kind: "@cinatra-ai/text-artifact:text",
+      projectorId: "text.v1",
+      projection: { includedFields: { lead }, excludedFields: ["body"] },
+      authzDecision: "authorized" as const,
+    });
+    const partial = buildMultiTargetGateSuggestions({
+      targets: [entryFor(t1, "  only one  ")],
+      laneId: SUGGESTION_PRODUCER_LANE_ID,
+    });
+    expect(
+      await snapStore.writeGateSuggestionSnapshot({
+        gateId: emitted.gateId,
+        payload: partial.payload,
+      }),
+    ).toEqual({ status: "refused", reason: "target-not-pinned" });
+    expect(await snapshotRowsFor(emitted.gateId)).toHaveLength(0);
+
+    // The SAME gate accepts the payload that covers both.
+    const whole = buildMultiTargetGateSuggestions({
+      targets: [entryFor(t1, "  first  "), entryFor(t2, "  second  ")],
+      laneId: SUGGESTION_PRODUCER_LANE_ID,
+    });
+    const write = await snapStore.writeGateSuggestionSnapshot({
+      gateId: emitted.gateId,
+      payload: whole.payload,
+    });
+    expect(write.status).toBe("written");
+    expect(await snapshotRowsFor(emitted.gateId)).toHaveLength(1);
+  });
+
   it("refuses a gate that does not exist", async () => {
     const target: CoreAnalysisTarget = {
       artifactId: `art-${randomUUID()}`,
@@ -343,7 +403,8 @@ describe.skipIf(!HAS_DB)("S5 — the lane, end to end", () => {
     const read = await snapStore.readVerifiedSuggestionSnapshotForGate(gateId);
     expect(read).not.toBeNull();
     expect(read!.payload.laneId).toBe(SUGGESTION_PRODUCER_LANE_ID);
-    expect(read!.payload.provenance).toMatchObject({
+    const readHalf = snapshotTargetPayloads(read!.payload)[0]!;
+    expect(readHalf.provenance).toMatchObject({
       laneId: SUGGESTION_PRODUCER_LANE_ID,
       targetArtifactId: target.artifactId,
       targetRevisionId: target.representationRevisionId,
@@ -351,8 +412,8 @@ describe.skipIf(!HAS_DB)("S5 — the lane, end to end", () => {
       excludedFields: ["artifact.content"],
       authzDecision: "authorized",
     });
-    expect(read!.payload.provenance.projectionDigest).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Set(read!.payload.suggestions.map((s) => s.op))).toEqual(
+    expect(readHalf.provenance.projectionDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Set(snapshotSuggestions(read!.payload).map((s) => s.op))).toEqual(
       new Set(["replace", "add"]),
     );
   });

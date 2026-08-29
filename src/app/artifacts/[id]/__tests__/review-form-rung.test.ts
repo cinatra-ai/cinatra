@@ -109,9 +109,20 @@ afterEach(() => {
 });
 
 describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
-  it("a markdown draft under review resolves to the FORM rung, not the floor", async () => {
+  it("a markdown draft under review mounts the markdown BASE — a package renderer, which the rung sits below", async () => {
+    // Item 0.19 of the readiness plan gave markdown its own base, and this
+    // change pins it into the required set. A base that claims text/markdown is
+    // a package renderer, and rung (3) of this suite's own contract puts the form
+    // rung BELOW every package renderer — so the card mounts the base, which is
+    // exactly the drawing §8.5's resolution proof looks for on this surface. The
+    // rung's first-party arm is still proved, by the plain-text case below, and
+    // the host's markdown handler stays in the tree as the defensive floor.
     const mount = await mountFor(summary(`${PKG}:post`, { kind: "no-primary" }), MARKDOWN);
-    expect(mount).toEqual({ kind: "form", arm: "first-party", form: "markdown" });
+    expect(mount).toEqual({
+      kind: "build-map",
+      packageName: "@cinatra-ai/markdown-artifact",
+      generatedKey: "@cinatra-ai/markdown-artifact::detail",
+    });
   });
 
   it("a plain-text target resolves to the form rung's text arm", async () => {
@@ -135,8 +146,11 @@ describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
     );
     expect(withWinner.kind).toBe("runtime");
 
-    // The same MIME with no package renderer lands on the rung — never the floor.
-    const withoutWinner = await mountFor(summary(`${PKG}:post`, { kind: "no-primary" }), MARKDOWN);
+    // A declared form with no package renderer lands on the rung — never the
+    // floor. Plain text is that form now: the markdown base claims text/markdown
+    // (item 0.19), while text-artifact declares representations=[text/csv] only,
+    // so nothing covers text/plain and the rung is reached.
+    const withoutWinner = await mountFor(summary(`${PKG}:note`, { kind: "no-primary" }), PLAIN);
     expect(withoutWinner.kind).toBe("form");
   });
 

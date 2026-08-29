@@ -44,6 +44,13 @@
 //   - a top-level `scripts/` directory — dev/bootstrap tooling (e.g. a
 //     connector's local database-seed script), never on the host's
 //     `register(ctx)`/serverEntry import graph.
+//   - a TEST-RUNNER CONFIG (`vitest.config.*`, `vitest.workspace.*`) — the test
+//     tooling's own configuration, in the same non-hazardous class as the
+//     `__tests__` carve-out below: it is excluded from the packages' `files`
+//     allowlist, so it is never published and never on the host's
+//     `register(ctx)`/serverEntry import graph, and reading its own
+//     repository's manifest with node:fs to resolve a published entry point is
+//     the author-facing-gate-script case one line up.
 //   - `__tests__` dirs and `*.test.*`/`*.spec.*` files — test fixtures
 //     legitimately use `node:fs`/tmpdir for their OWN scratch state; that is
 //     unrelated to "does this extension log/persist through node:fs at
@@ -124,6 +131,11 @@ const AUTHOR_FACING_GATE_SCRIPTS = new Set([
   "renderer-binding-gate.mjs",
 ]);
 
+/** A test-runner CONFIG file. Excluded for the same reason `__tests__` and
+ *  `*.test.*` are: it configures the test run, is not published (outside the
+ *  package `files` allowlist) and never reaches the host's import graph. */
+export const TEST_RUNNER_CONFIG_RE = /^vitest\.(?:config|workspace)\.[mc]?[jt]sx?$/;
+
 function walkSourceFiles(dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tests__") continue;
@@ -134,6 +146,7 @@ function walkSourceFiles(dir, acc = []) {
     }
     if (AUTHOR_FACING_GATE_SCRIPTS.has(entry.name)) continue;
     if (/\.(test|spec)\./.test(entry.name)) continue;
+    if (TEST_RUNNER_CONFIG_RE.test(entry.name)) continue;
     const dot = entry.name.lastIndexOf(".");
     if (dot < 0 || !SOURCE_EXTENSIONS.has(entry.name.slice(dot))) continue;
     acc.push(full);
