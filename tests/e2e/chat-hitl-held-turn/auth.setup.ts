@@ -39,6 +39,7 @@ import {
 import { PROMOTE_ADMIN_ROLE_SQL, memberIdFor } from "./state-rules";
 import {
   ROUTE_READY_BOUND_MS,
+  isRuntimeNotFoundDocument,
   retryWhileRouteMissing,
   waitForRouteReady,
 } from "./route-readiness";
@@ -184,6 +185,17 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
   //    proves the route compiled and ran, which is all readiness asks. The bound
   //    spent without an answer fails the setup NAMING THE ROUTE — a two-minute
   //    report instead of a twenty-minute mystery.
+  //
+  //    AND THE ANSWER'S MEDIA TYPE IS READ WITH ITS STATUS, because a 404 has two
+  //    different senders and a status cannot name which one answered. When the
+  //    runtime cannot route a path it resolves it in the PAGE tree and renders the
+  //    application's not-found page, so its 404 is an HTML DOCUMENT; a handler's
+  //    own 404 is that handler's media type. Neither of these two routes can answer
+  //    404 from its handler at all — the capabilities POST answers 401/400/200 and
+  //    Better Auth's sign-up 400 — so this changes NOTHING about what either probe
+  //    waits for; it changes what the failure is able to say it saw, and it keeps
+  //    the rule true for a route whose handler does 404 (the widget's thread read
+  //    404s across tenants by design).
   for (const path of ["/api/auth/sign-up/email", "/api/assistants/chat/capabilities"]) {
     const ready = await waitForRouteReady(
       `POST ${path}`,
@@ -200,7 +212,7 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
           failOnStatusCode: false,
           timeout: remainingMs,
         });
-        return { status: response.status() };
+        return { status: response.status(), contentType: response.headers()["content-type"] ?? null };
       },
       {
         timeoutMs: ROUTE_READY_BOUND_MS,
@@ -208,18 +220,23 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
         // "not up yet", so the PROBE — and only the probe — retries a thrown
         // attempt too. Every later call site keeps its instant transport failure.
         retryOnError: true,
-        onRetry: ({ attempts, delayMs, status, lastError }) =>
+        onRetry: ({ attempts, delayMs, status, contentType, lastError }) =>
           console.log(
             `[S9k setup] ${path} is not ready after ${attempts} attempt(s) — ` +
               (status === null
                 ? `no response at all (${lastError ?? "unknown error"})`
-                : `HTTP ${status}`) +
-              `; the dev runtime has not compiled it yet, retrying in ${delayMs}ms`,
+                : `HTTP ${status}${contentType ? ` (${contentType})` : ""}`) +
+              "; " +
+              (isRuntimeNotFoundDocument(contentType)
+                ? "that is the dev runtime's own not-found PAGE, so the route is not routable yet"
+                : "the dev runtime has not compiled it yet") +
+              `, retrying in ${delayMs}ms`,
           ),
       },
     );
     console.log(
-      `[S9k setup] ${path} ready — HTTP ${ready.status} after ${ready.attempts} attempt(s), ` +
+      `[S9k setup] ${path} ready — HTTP ${ready.status}` +
+        `${ready.contentType ? ` (${ready.contentType})` : ""} after ${ready.attempts} attempt(s), ` +
         `${ready.elapsedMs}ms`,
     );
   }
@@ -242,7 +259,7 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
         failOnStatusCode: false,
         timeout: remainingMs,
       });
-      return { status: response.status() };
+      return { status: response.status(), contentType: response.headers()["content-type"] ?? null };
     },
     {
       onRetry: ({ attempts, delayMs }) =>

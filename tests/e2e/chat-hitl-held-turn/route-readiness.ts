@@ -12,11 +12,27 @@
 // So this module holds the three decisions that turn that class of failure into a
 // bounded wait and a legible message, and it holds them WHERE THEY CAN BE TESTED:
 //
-//   * `routeAnswered` — WHAT COUNTS AS READY. A 404 is the runtime saying "not
-//     yet"; every other status proves the route compiled and ran, which is the
-//     only thing readiness asks. A status is therefore read, never a body, and the
-//     probe request is one the route rejects WITHOUT SIDE EFFECTS — so readiness
-//     never creates the state the flow is about to assert on.
+//   * `routeAnswered` — WHAT COUNTS AS READY. THE RULE: a 404 counts as "not
+//     ready" only while it is the development runtime's own page-tree fall-back —
+//     an HTML not-found DOCUMENT, or a 404 that declares no media type at all —
+//     because a 404 carrying the handler's own media type was produced BY the
+//     handler and therefore already proves the route compiled and ran. Every other
+//     status is ready as before. A status and one response HEADER are read, never a
+//     body, and the probe request is one the route rejects WITHOUT SIDE EFFECTS —
+//     so readiness never creates the state the flow is about to assert on.
+//
+//     THE RUN THAT FORCED THE HEADER (run 33244751481, job "Chat-HITL held-turn
+//     dev-runtime e2e"): the capabilities probe read 404 fourteen times over
+//     117 016 ms and the bound failed the job. Every one of those fourteen carried
+//     `content-type: text/html; charset=utf-8` and a ~205 KB body that was the
+//     application's own not-found page — the path was resolved in the PAGE tree and
+//     the handler never ran, which is why the first hit spent 3.7 s in application
+//     code rendering that page instead of the 40 ms the handler takes. The same
+//     probe read 401 on its first attempt seventeen minutes earlier (run
+//     33244071398) and 200 on the trunk (run 33245807460), so the compiled handler
+//     cannot answer 404 to this shape at all. Reading the status alone, those two
+//     404s are one fact; reading the media type, they are the two different facts
+//     they always were.
 //   * `retryWhileRouteMissing` — the bounded back-off. Only a 404 (and a request
 //     that produced no response at all) is retried; EVERY OTHER STATUS IS RETURNED
 //     UNTOUCHED, so each call site keeps its own handling of every real answer.
@@ -33,6 +49,41 @@
 
 /** The development runtime's "this route is not prepared yet" answer. */
 export const ROUTE_NOT_COMPILED_STATUS = 404;
+
+/**
+ * What the runtime's OWN not-found answer is made of.
+ *
+ * A development runtime that cannot route a path resolves it in the page tree and
+ * renders the application's not-found PAGE, so its 404 is a DOCUMENT. A route
+ * handler's own 404 is whatever that handler serves — JSON here, and nothing in
+ * this repository answers a 404 as HTML from a handler. So the media type is the
+ * one cheap, header-only discriminant between "not routable" and "answered".
+ */
+const RUNTIME_NOT_FOUND_MEDIA_TYPES: readonly string[] = ["text/html", "application/xhtml+xml"];
+
+/** The bare media type, lower-cased, without parameters — "" when undeclared. */
+function mediaTypeOf(contentType: string | null | undefined): string {
+  if (typeof contentType !== "string") return "";
+  return (contentType.split(";")[0] ?? "").trim().toLowerCase();
+}
+
+/** True when this 404 is the runtime's own not-found DOCUMENT. */
+export function isRuntimeNotFoundDocument(contentType: string | null | undefined): boolean {
+  return RUNTIME_NOT_FOUND_MEDIA_TYPES.includes(mediaTypeOf(contentType));
+}
+
+/**
+ * True when a 404 was produced BY the handler — it declares a media type, and one
+ * the runtime's not-found page never uses.
+ *
+ * AN UNDECLARED MEDIA TYPE IS NOT A HANDLER ANSWER. Every existing caller passes
+ * no media type at all, and each must keep meaning exactly what it meant before:
+ * not ready. Unknown may only ever fall to the retrying side.
+ */
+export function handlerAnswered404(contentType: string | null | undefined): boolean {
+  const media = mediaTypeOf(contentType);
+  return media !== "" && !RUNTIME_NOT_FOUND_MEDIA_TYPES.includes(media);
+}
 
 /**
  * THE BOUND, and why it is this number.
@@ -79,8 +130,14 @@ export const BOOT_WINDOW_BACKOFF_CAP_MS = 4_000;
  * site: a request that fails instantly also "returns quickly", and grading that as
  * ready turns the whole measurement into "it failed fast".
  */
-export function routeAnswered(status: number | null): boolean {
-  return status !== null && status !== ROUTE_NOT_COMPILED_STATUS;
+export function routeAnswered(status: number | null, contentType?: string | null): boolean {
+  if (status === null) return false;
+  if (status !== ROUTE_NOT_COMPILED_STATUS) return true;
+  // A 404 the handler itself produced is an ANSWER: the route compiled and ran,
+  // which is the whole of what readiness asks. Only the runtime's own not-found
+  // document — and an undeclared media type, which cannot be told apart from one —
+  // still means "not yet".
+  return handlerAnswered404(contentType);
 }
 
 /** The delay before attempt `attempt + 1`, 0-based. */
@@ -119,6 +176,12 @@ export function bootWindowRemainingMs(
  *  wants carried out of the successful attempt (a response object, typically). */
 export interface RouteAttempt<T> {
   status: number | null;
+  /**
+   * The `content-type` the answer declared, when the call site can read one.
+   * OPTIONAL, and its absence is read as "unknown" rather than as "handler" — a
+   * call site that does not pass it keeps precisely the behaviour it had.
+   */
+  contentType?: string | null;
   value?: T;
 }
 
@@ -145,15 +208,18 @@ export interface BootWindowOptions {
   onRetry?: (info: {
     attempts: number;
     status: number | null;
+    contentType: string | null;
     delayMs: number;
     lastError: string | null;
   }) => void;
 }
 
 export interface BootWindowResult<T> {
-  /** True when the route produced a status other than 404 within the bound. */
+  /** True when the route ANSWERED within the bound — see `routeAnswered`. */
   answered: boolean;
   status: number | null;
+  /** The last answer's declared media type, when the call site read one. */
+  contentType?: string | null;
   value?: T;
   attempts: number;
   elapsedMs: number;
@@ -181,6 +247,7 @@ export async function retryWhileRouteMissing<T>(
 
   let attempts = 0;
   let status: number | null = null;
+  let contentType: string | null = null;
   let value: T | undefined;
   let lastError: string | null = null;
 
@@ -197,16 +264,26 @@ export async function retryWhileRouteMissing<T>(
     try {
       const outcome = await attempt(attempts - 1, Math.max(1, remainingMs));
       status = outcome.status;
+      contentType = outcome.contentType ?? null;
       value = outcome.value;
       lastError = null;
     } catch (err) {
       if (options.retryOnError !== true) throw err;
       status = null;
+      contentType = null;
       value = undefined;
       lastError = err instanceof Error ? err.message : String(err);
     }
-    if (routeAnswered(status)) {
-      return { answered: true, status, value, attempts, elapsedMs: now() - started, lastError };
+    if (routeAnswered(status, contentType)) {
+      return {
+        answered: true,
+        status,
+        contentType,
+        value,
+        attempts,
+        elapsedMs: now() - started,
+        lastError,
+      };
     }
     const delayMs = bootWindowBackoffMs(attempts - 1, {
       baseMs: options.baseMs,
@@ -215,11 +292,19 @@ export async function retryWhileRouteMissing<T>(
     // The NEXT attempt has to fit inside the bound to be worth making; a wait that
     // ends after the deadline would only delay the same report.
     if (now() + delayMs >= deadline) break;
-    options.onRetry?.({ attempts, status, delayMs, lastError });
+    options.onRetry?.({ attempts, status, contentType, delayMs, lastError });
     await sleep(delayMs);
   }
 
-  return { answered: false, status, value, attempts, elapsedMs: now() - started, lastError };
+  return {
+    answered: false,
+    status,
+    contentType,
+    value,
+    attempts,
+    elapsedMs: now() - started,
+    lastError,
+  };
 }
 
 /** The message a spent bound produces — NAMING THE ROUTE, which is the whole
@@ -232,12 +317,25 @@ export function routeReadinessFailure<T>(
   const last =
     result.status === null
       ? `the route produced no response at all${result.lastError ? ` — last error: ${result.lastError}` : ""}`
-      : `last status: ${result.status}`;
+      : `last status: ${result.status}` +
+        (result.contentType ? `, served as ${result.contentType}` : ", with no media type declared");
+  // WHAT THE PROBE ACTUALLY SAW, rather than one assertion covering both cases.
+  // "The runtime had not prepared this route" is TRUE of the not-found document
+  // and unproven of a 404 whose media type was never read, and the difference is
+  // the whole distance between a diagnosis and a guess.
+  const diagnosis =
+    result.status === null
+      ? "The development runtime never answered this route at all"
+      : isRuntimeNotFoundDocument(result.contentType)
+        ? "Every answer was the development runtime's own not-found DOCUMENT — the page tree " +
+          "rendered because no handler was routable at this path — so this route's handler never ran"
+        : "The answers declared no media type, so they cannot be told apart from the development " +
+          "runtime's own not-found page and are read as a route that was never prepared";
   return (
     `${route} never answered anything but ${ROUTE_NOT_COMPILED_STATUS} within its ${timeoutMs}ms ` +
-    `readiness bound (${result.attempts} attempts over ${result.elapsedMs}ms; ${last}). The ` +
-    "development runtime had not prepared this route, so every request the flow makes against it " +
-    "would fail for a reason that has nothing to do with what the flow is testing."
+    `readiness bound (${result.attempts} attempts over ${result.elapsedMs}ms; ${last}). ` +
+    `${diagnosis}, so every request the flow makes against it would fail for a reason that has ` +
+    "nothing to do with what the flow is testing."
   );
 }
 

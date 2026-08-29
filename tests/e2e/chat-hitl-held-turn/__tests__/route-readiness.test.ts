@@ -20,7 +20,9 @@ import {
   ROUTE_READY_BOUND_MS,
   bootWindowBackoffMs,
   bootWindowRemainingMs,
+  handlerAnswered404,
   handshakeFailureFrom,
+  isRuntimeNotFoundDocument,
   retryWhileRouteMissing,
   routeAnswered,
   routeReadinessFailure,
@@ -51,14 +53,27 @@ function fakeClock() {
 
 let server: Server | null = null;
 
-/** A server answering the given statuses in order; the last one repeats. */
-async function serverAnswering(statuses: readonly number[]): Promise<string> {
+/**
+ * A server answering the given answers in order; the last one repeats.
+ *
+ * AN ANSWER CARRIES A MEDIA TYPE, because the media type is the whole subject of
+ * the arms below: the two 404s this helper must tell apart are identical as
+ * statuses and differ only in what they are made of. A bare number keeps the
+ * original meaning — a handler's own JSON refusal.
+ */
+type Answer = number | { status: number; contentType: string; body?: string };
+
+async function serverAnswering(answers: readonly Answer[]): Promise<string> {
   let i = 0;
   server = createServer((_req, res) => {
-    const status = statuses[Math.min(i, statuses.length - 1)]!;
+    const answer = answers[Math.min(i, answers.length - 1)]!;
     i += 1;
-    res.writeHead(status, { "Content-Type": "application/json" });
-    res.end("{}");
+    const { status, contentType, body } =
+      typeof answer === "number"
+        ? { status: answer, contentType: "application/json", body: "{}" }
+        : { status: answer.status, contentType: answer.contentType, body: answer.body ?? "{}" };
+    res.writeHead(status, { "Content-Type": contentType });
+    res.end(body);
   });
   await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -89,6 +104,58 @@ describe("routeAnswered — what counts as ready", () => {
 
   it("reads NO RESPONSE as not ready — a request that fails instantly is not a fast route", () => {
     expect(routeAnswered(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MEASURED RUN THIS SECTION EXISTS FOR (run 33244751481, job "Chat-HITL
+// held-turn dev-runtime e2e").
+//
+// The setup probe posted an empty body to /api/assistants/chat/capabilities
+// fourteen times over 117 016 ms and read 404 every time, so the bound failed the
+// job. Reading the statuses alone, that is "the route never compiled". Reading
+// the RESPONSES — the run's own Playwright trace — it is something else: every
+// one of the fourteen carried `content-type: text/html; charset=utf-8` and a
+// ~205 KB body that is the application's own not-found PAGE (title "Page not
+// found", breadcrumb "Api Assistants Chat Capabilities"). The handler never ran;
+// the development runtime resolved the path in the PAGE tree and rendered
+// not-found, which is also why the first hit spent 3.7 s in application code
+// (rendering that page) rather than the 40 ms the handler takes.
+//
+// The same probe, same shape, on the same branch seventeen minutes earlier (run
+// 33244071398) read 401 on its first attempt, and on main (run 33245807460) 200.
+// So the compiled handler CANNOT answer 404 to this probe's request — its arms
+// are 401 (sessionless), 400 (a body the hello schema rejects) and 200 — and the
+// probe's "404 = not ready" contract is right for it.
+//
+// What the probe could not do is SAY WHICH 404 it saw, and that is the flaw these
+// arms close: a 404 the handler itself produced is an ANSWER, and only the media
+// type separates it from the runtime's not-found document.
+// ---------------------------------------------------------------------------
+describe("routeAnswered — a 404 the HANDLER produced is an answer, the runtime's page is not", () => {
+  it("keeps the runtime's own not-found DOCUMENT as not ready — the failing run's exact header", () => {
+    expect(routeAnswered(ROUTE_NOT_COMPILED_STATUS, "text/html; charset=utf-8")).toBe(false);
+    expect(isRuntimeNotFoundDocument("text/html; charset=utf-8")).toBe(true);
+  });
+
+  it("reads a 404 carrying the handler's own media type as READY — it ran to answer", () => {
+    expect(routeAnswered(ROUTE_NOT_COMPILED_STATUS, "application/json")).toBe(true);
+    expect(handlerAnswered404("application/problem+json")).toBe(true);
+  });
+
+  it("keeps an UNDECLARED media type not ready — unknown may never widen readiness", () => {
+    // The one-argument call is every existing call site, and it must keep meaning
+    // what it meant: not ready.
+    expect(routeAnswered(ROUTE_NOT_COMPILED_STATUS)).toBe(false);
+    expect(routeAnswered(ROUTE_NOT_COMPILED_STATUS, null)).toBe(false);
+    expect(routeAnswered(ROUTE_NOT_COMPILED_STATUS, "")).toBe(false);
+    expect(handlerAnswered404(undefined)).toBe(false);
+  });
+
+  it("leaves every non-404 status alone, media type or not", () => {
+    expect(routeAnswered(401, "text/html; charset=utf-8")).toBe(true);
+    expect(routeAnswered(400, "application/json")).toBe(true);
+    expect(routeAnswered(null, "application/json")).toBe(false);
   });
 });
 
@@ -251,6 +318,99 @@ describe("retryWhileRouteMissing — a 404 is retried, everything else is return
     expect(clock.slept).toEqual([250, 500]);
     expect(result.attempts).toBe(3);
     expect(result.elapsedMs).toBe(750);
+  });
+});
+
+describe("the two 404s, against a real socket", () => {
+  // The failing run's shape, replayed: the runtime answers its not-found PAGE
+  // first, and once the path is routable the handler answers for itself — 404 for
+  // a request shape it does not know, which is still an ANSWER.
+  const RUNTIME_THEN_HANDLER: readonly Answer[] = [
+    { status: 404, contentType: "text/html; charset=utf-8", body: "<!DOCTYPE html><html></html>" },
+    { status: 404, contentType: "application/json" },
+  ];
+
+  it("OLD CONTRACT (status alone): the handler's own 404 is misread and the whole bound is spent", async () => {
+    const url = await serverAnswering(RUNTIME_THEN_HANDLER);
+    const clock = fakeClock();
+    // Exactly what the probe did before this change — the status, and nothing
+    // else — against a route that IS answering. The bound is spent on a route
+    // that was ready at the second attempt.
+    await expect(
+      waitForRouteReady(
+        "POST /api/probe",
+        async () => ({ status: (await fetch(url, { method: "POST" })).status }),
+        { timeoutMs: ROUTE_READY_BOUND_MS, now: clock.now, sleep: clock.sleep },
+      ),
+    ).rejects.toThrow(/never answered anything but 404/);
+  });
+
+  it("NEW CONTRACT (status + media type): ready on the attempt the handler answers", async () => {
+    const url = await serverAnswering(RUNTIME_THEN_HANDLER);
+    const clock = fakeClock();
+    const result = await waitForRouteReady(
+      "POST /api/probe",
+      async () => {
+        const response = await fetch(url, { method: "POST" });
+        return { status: response.status, contentType: response.headers.get("content-type") };
+      },
+      { timeoutMs: ROUTE_READY_BOUND_MS, now: clock.now, sleep: clock.sleep },
+    );
+    expect(result.answered).toBe(true);
+    expect(result.status).toBe(ROUTE_NOT_COMPILED_STATUS);
+    expect(result.contentType).toContain("application/json");
+    expect(result.attempts).toBe(2);
+    expect(clock.slept).toEqual([250]);
+  });
+
+  it("the sign-up route's probe is untouched: a runtime 404 then a handler 400 reads ready either way", async () => {
+    const answers: readonly Answer[] = [
+      { status: 404, contentType: "text/html; charset=utf-8" },
+      { status: 400, contentType: "application/json" },
+    ];
+    for (const withMediaType of [false, true]) {
+      const url = await serverAnswering(answers);
+      const clock = fakeClock();
+      const result = await waitForRouteReady(
+        "POST /api/probe",
+        async () => {
+          const response = await fetch(url, { method: "POST" });
+          return withMediaType
+            ? { status: response.status, contentType: response.headers.get("content-type") }
+            : { status: response.status };
+        },
+        { timeoutMs: ROUTE_READY_BOUND_MS, now: clock.now, sleep: clock.sleep },
+      );
+      expect(result.status, `withMediaType=${withMediaType}`).toBe(400);
+      expect(result.attempts).toBe(2);
+      if (server) {
+        await new Promise<void>((resolve) => server!.close(() => resolve()));
+        server = null;
+      }
+    }
+  });
+
+  it("tells the operator WHICH 404 it spent the bound on", () => {
+    const runtimePage = routeReadinessFailure("POST /api/probe", 120_000, {
+      answered: false,
+      status: 404,
+      contentType: "text/html; charset=utf-8",
+      attempts: 14,
+      elapsedMs: 117_016,
+      lastError: null,
+    });
+    expect(runtimePage).toContain("not-found");
+    expect(runtimePage).toContain("text/html");
+    expect(runtimePage).toContain("14 attempts");
+
+    const undeclared = routeReadinessFailure("POST /api/probe", 120_000, {
+      answered: false,
+      status: 404,
+      attempts: 3,
+      elapsedMs: 900,
+      lastError: null,
+    });
+    expect(undeclared).toContain("no media type");
   });
 });
 

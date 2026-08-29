@@ -107,6 +107,7 @@ import {
 import {
   bootWindowRemainingMs,
   handshakeFailureFrom,
+  isRuntimeNotFoundDocument,
   retryWhileRouteMissing,
 } from "./route-readiness";
 
@@ -559,14 +560,25 @@ async function installHandshakeBootWindowRetry(page: Page): Promise<void> {
           // The rest of the window is the request's own timeout (never 0, which
           // Playwright reads as "no timeout"), so the window bounds the wall clock.
           const response = await route.fetch({ timeout: remainingMs });
-          return { status: response.status(), value: response };
+          return {
+            status: response.status(),
+            // The media type separates the runtime's own not-found DOCUMENT from a
+            // 404 the handler produced; only the first is worth waiting through.
+            contentType: response.headers()["content-type"] ?? null,
+            value: response,
+          };
         },
         {
           timeoutMs: windowMs,
-          onRetry: ({ attempts, delayMs }) =>
+          onRetry: ({ attempts, delayMs, contentType }) =>
             console.log(
-              `[S9k] the stream handshake answered 404 (attempt ${attempts}) — the dev runtime ` +
-                `has not compiled /api/assistants/chat/capabilities yet; retrying in ${delayMs}ms`,
+              `[S9k] the stream handshake answered 404 (attempt ${attempts}) — ` +
+                (isRuntimeNotFoundDocument(contentType)
+                  ? "the dev runtime answered its own not-found PAGE, so " +
+                    "/api/assistants/chat/capabilities is not routable yet"
+                  : "the dev runtime has not compiled " +
+                    "/api/assistants/chat/capabilities yet") +
+                `; retrying in ${delayMs}ms`,
             ),
         },
       );
