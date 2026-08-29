@@ -112,6 +112,17 @@ const REFUSED: IslandByteServeDecision = { ok: false };
  * `embed`, and the `empty` of a display's own `fetch()` for a text/JSON body.
  * `document` and `iframe` are absent on purpose: those are navigations, which is
  * the pasted-link case, and a byte capability must never become a top-level page.
+ *
+ * WHAT THAT MEANS FOR THE `download` DISPOSITION, SAID PLAINLY, because the
+ * contract is easy to read the other way round. A sealed `download` capability
+ * chooses the RESPONSE's `Content-Disposition`; it does NOT widen this rung. A
+ * plain `<a href download>` click is a navigation (`Sec-Fetch-Dest: document`,
+ * `Sec-Fetch-Mode: navigate`) and is REFUSED here like any other navigation — a
+ * display saves the bytes by fetching them (`Sec-Fetch-Dest: empty`) and handing
+ * the result to the reader, never by pointing a link at this route. Admitting
+ * `document` for the download disposition would reopen exactly the top-level
+ * rendering of artifact bytes this rung exists to close, so the rung stays as it
+ * is and the wiring follows it.
  */
 export function isSameOriginDisplaySubresourceFetch(headers: Headers): boolean {
   const dest = headers.get("sec-fetch-dest");

@@ -131,15 +131,23 @@ function jsonBytes(value: unknown): number {
  * last whole character.
  */
 export function truncateToUtf8Bytes(value: string, capBytes: number): string {
+  if (capBytes <= 0) return "";
   if (utf8Bytes(value) <= capBytes) return value;
-  const buf = Buffer.from(value, "utf8").subarray(0, capBytes);
-  // `toString` on a buffer that ends mid-sequence emits U+FFFD for the partial
-  // tail; drop exactly that tail rather than shipping it.
-  let out = buf.toString("utf8");
-  if (out.endsWith("�") && !value.endsWith("�")) {
-    out = out.slice(0, -1);
-  }
-  return out;
+  const buf = Buffer.from(value, "utf8");
+  // WALK THE CUT BACK OFF A CONTINUATION BYTE, never off a rendered character.
+  // A UTF-8 continuation byte is `10xxxxxx`; while the byte AT the cut is one,
+  // the cut lands inside a code point, so step back until it lands on a lead
+  // byte (or on 0) — at which point every byte before it is a whole character.
+  //
+  // The earlier rule compared the decoded tail with the input's own last
+  // character, and that was wrong in a way the cap could not survive: a value
+  // whose LAST character is itself a genuine U+FFFD kept the replacement
+  // character the split had produced, and the returned prefix was then TWO bytes
+  // OVER the cap — which `assertContentProjectionWithinCap` throws on, turning
+  // one artifact into a broken card. Counting bytes cannot be fooled by content.
+  let end = capBytes;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+  return buf.subarray(0, end).toString("utf8");
 }
 
 // The NAMED ABSENCE lives on the props contract (`artifact-renderer-props.ts`),

@@ -30,6 +30,11 @@
 import type { ComponentProps } from "react";
 import { DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
+import {
+  narrowToSinglePortlet,
+  type NarrowableDashboardConfig,
+} from "./narrow-to-single-portlet";
+
 /** The props the read-only dashboard takes — the provider's, minus every
  *  editing-shaped one the composition deliberately does not mount. */
 export type ReadOnlyComposedDashboardProps = Omit<
@@ -69,18 +74,17 @@ export type ReadOnlySinglePortletProps = ReadOnlyComposedDashboardProps & {
  * the composition hands the grid a configuration containing exactly the named
  * portlet, so nothing downstream can render a sibling portlet the caller did not
  * ask for. A `portletId` that names nothing draws an empty grid rather than the
- * whole dashboard — the fail-closed direction.
+ * whole dashboard — the fail-closed direction, and a configuration carrying the
+ * id TWICE still draws ONE portlet: "exactly the named portlet" is a count as
+ * much as it is a name, and a filter would have handed the grid both copies.
  */
 export function ReadOnlySinglePortlet({ portletId, ...rest }: ReadOnlySinglePortletProps) {
   const props = rest as ComponentProps<typeof DashboardProvider> & {
-    config?: { portlets?: Array<{ id?: string }> } | null;
+    config?: NarrowableDashboardConfig | null;
   };
-  const config = props.config ?? null;
-  const portlets = Array.isArray(config?.portlets) ? config.portlets : [];
-  const narrowed = {
-    ...(config ?? {}),
-    portlets: portlets.filter((p) => p?.id === portletId),
-  };
+  // THE NARROWING IS A PURE LEAF (`narrow-to-single-portlet.ts`) so the rule that
+  // decides what the grid may see is provable without rendering drizzle-cube.
+  const narrowed = narrowToSinglePortlet(props.config, portletId);
   return (
     <DashboardProvider
       {...(props as ComponentProps<typeof DashboardProvider>)}

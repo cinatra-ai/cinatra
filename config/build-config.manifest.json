@@ -218,6 +218,7 @@
     { "alias": "@cinatra-ai/sdk-dashboard/adapters/drizzle-cube", "target": "./packages/sdk-dashboard/src/adapters/drizzle-cube/index.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/hooks", "target": "./packages/sdk-dashboard/src/hooks/index.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/components", "target": "./packages/sdk-dashboard/src/components/index.ts" },
+    { "alias": "@cinatra-ai/sdk-dashboard/components/narrow-to-single-portlet", "target": "./packages/sdk-dashboard/src/components/narrow-to-single-portlet.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/ai", "target": "./packages/sdk-dashboard/src/ai/index.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/cube-ir", "target": "./packages/sdk-dashboard/src/cube-ir/index.ts" },
     { "alias": "@cinatra-ai/dashboards", "target": "./packages/dashboards/src/index.ts" },

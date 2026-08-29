@@ -23,8 +23,11 @@ import {
   type ArtifactContentChannelPorts,
 } from "@/lib/artifacts/artifact-content-channel";
 import {
+  ARTIFACT_CONTENT_CHANNEL_CAPS_MIRROR,
   ARTIFACT_CONTENT_CHANNEL_VERSION as HOST_MIRRORED_CHANNEL_VERSION,
   absentArtifactContent,
+  assertSerializableRendererProps,
+  type ArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 
 const ORG = "org-3027";
@@ -204,5 +207,99 @@ describe("enabler 0.3 — the caps, and the assertion at the serialization bound
       );
       expect(() => assertContentProjectionWithinCap(projection)).not.toThrow();
     }
+  });
+});
+
+/**
+ * THE CAP IS ONLY A CAP IF NEITHER THE CONTENT NOR THE SNAPSHOT CAN TALK IT
+ * DOWN. Two ways it could be talked down, each pinned by its own case.
+ */
+describe("enabler 0.3 — the cap holds against the content, and against the snapshot", () => {
+  it("NEVER returns more bytes than the cap, whatever the value's last character is", () => {
+    // THE CASE THAT USED TO OVER-SHOOT. The old rule dropped the replacement
+    // character the split produced only when the INPUT did not itself end in
+    // one — so a value whose genuine last character is U+FFFD kept the split's
+    // replacement character too, and the prefix came back TWO bytes over the
+    // cap. `assertContentProjectionWithinCap` throws on that, so one artifact
+    // with an ordinary Unicode tail broke its own card.
+    const pathological = "a".repeat(7) + "\u{1F600}" + "\uFFFD";
+    const cut = truncateToUtf8Bytes(pathological, 8);
+    expect(Buffer.byteLength(cut, "utf8")).toBeLessThanOrEqual(8);
+    expect(cut).toBe("a".repeat(7));
+
+    // And the invariant, swept: no cap, on any of these values, may be exceeded.
+    const values = [
+      "a".repeat(40),
+      "\u{1F600}".repeat(10),
+      "n\u00e4\u00e4".repeat(10),
+      "a".repeat(7) + "\u{1F600}" + "\uFFFD",
+      "\uFFFD".repeat(10),
+      "\u{1F600}" + "\uFFFD".repeat(5),
+    ];
+    for (const value of values) {
+      for (let cap = 0; cap <= 24; cap += 1) {
+        const out = truncateToUtf8Bytes(value, cap);
+        expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(cap);
+        // A prefix, never a rewrite of the work.
+        expect(value.startsWith(out)).toBe(true);
+      }
+    }
+  });
+
+  it("keeps a GENUINE trailing replacement character when nothing was cut", () => {
+    const value = "ok\uFFFD";
+    expect(truncateToUtf8Bytes(value, 100)).toBe(value);
+  });
+
+  it("mirrors the SDK leaf's caps exactly — the props contract may not drift from them", () => {
+    // The props contract imports nothing at value level (the route-graph
+    // ratchet), so the caps are mirrored there. A mirror only holds while a test
+    // pins it, exactly as the channel version's mirror is pinned above.
+    expect(ARTIFACT_CONTENT_CHANNEL_CAPS_MIRROR).toEqual({
+      text: ARTIFACT_CONTENT_CHANNEL_CAPS.text,
+      configuration: ARTIFACT_CONTENT_CHANNEL_CAPS.configuration,
+      page: ARTIFACT_CONTENT_CHANNEL_CAPS.page,
+    });
+  });
+
+  it("REFUSES a projection at the serialization boundary that stamps a larger cap on itself", () => {
+    // The size assertion the enabler names runs on the SNAPSHOT, in
+    // `assertSerializableRendererProps`. Checking only the stamped cap would let
+    // a projection buy room by stamping a bigger number — and the payload this
+    // channel exists to bound would cross the boundary anyway. Both caps bind.
+    const snapshot = (cap: number, projected: number) =>
+      ({
+        propsApiVersion: 1,
+        artifact: {},
+        representation: { revisionId: REV, mime: "text/markdown" },
+        urls: { preview: null, download: null },
+        identity: { kind: "no-primary", extension: null },
+        actions: { download: null, openInSource: null },
+        content: {
+          kind: "text",
+          channelVersion: HOST_MIRRORED_CHANNEL_VERSION,
+          representationRevisionId: REV,
+          text: "x",
+          encoding: "utf-8",
+          byteLength: projected,
+          projectedByteLength: projected,
+          cap,
+          truncated: false,
+        },
+      }) as unknown as ArtifactRendererProps;
+
+    expect(() =>
+      assertSerializableRendererProps(
+        snapshot(ARTIFACT_CONTENT_CHANNEL_CAPS.text * 100, ARTIFACT_CONTENT_CHANNEL_CAPS.text + 1),
+      ),
+    ).toThrow(/over its .*-byte cap/);
+
+    // The honest snapshot still passes, and so does an honest truncated one.
+    expect(() =>
+      assertSerializableRendererProps(
+        snapshot(ARTIFACT_CONTENT_CHANNEL_CAPS.text, ARTIFACT_CONTENT_CHANNEL_CAPS.text),
+      ),
+    ).not.toThrow();
+    expect(() => assertSerializableRendererProps(snapshot(16, 8))).not.toThrow();
   });
 });

@@ -33,6 +33,25 @@ export const ARTIFACT_RENDERER_PROPS_API_VERSION = 1;
 export const ARTIFACT_CONTENT_CHANNEL_VERSION = 1;
 
 /**
+ * The CANONICAL per-class byte caps, mirrored here for the same route-budget
+ * reason as the version above and pinned equal to the SDK leaf's
+ * `ARTIFACT_CONTENT_CHANNEL_CAPS` by the enabler 0.3 suite.
+ *
+ * WHY THE ASSERTION BELOW NEEDS THEM. A projection carries the cap it was
+ * stamped with, and checking only against that stamp lets a projection buy room
+ * by stamping a larger number on itself — the boundary would then pass a payload
+ * the channel exists to bound. The SDK leaf's own predicate already requires
+ * BOTH the stamped cap and the canonical one; the host boundary must require
+ * both too, or the two halves of one contract disagree.
+ */
+export const ARTIFACT_CONTENT_CHANNEL_CAPS_MIRROR: Readonly<Record<string, number>> =
+  Object.freeze({
+    text: 256 * 1024,
+    configuration: 128 * 1024,
+    page: 64 * 1024,
+  });
+
+/**
  * The NAMED ABSENCE of a content projection — what a caller that has not wired
  * the content channel passes, so that it is VISIBLY unwired ("each a contract
  * defined here and wired for its consumers in the sibling plan") rather than
@@ -219,10 +238,19 @@ export function assertSerializableRendererProps(props: ArtifactRendererProps): v
   // reach it (the route-graph ratchet is the gate that says so) — the canonical
   // caps stay in the SDK leaf, where the builder reads them.
   const content = props.content as ArtifactContentProjection | undefined;
-  if (content && content.kind !== "none" && content.projectedByteLength > content.cap) {
-    throw new Error(
-      `renderer props: content projection "${content.kind}" carries ` +
-        `${content.projectedByteLength} bytes over its ${content.cap}-byte cap`,
-    );
+  if (content && content.kind !== "none") {
+    // BOTH CAPS, never only the stamped one: a projection that stamps a larger
+    // cap on itself must not buy room at the boundary. This is the same rule the
+    // SDK leaf's `isArtifactContentWithinCap` applies, mirrored rather than
+    // imported for the route-budget reason stated on the constants above.
+    const canonical = ARTIFACT_CONTENT_CHANNEL_CAPS_MIRROR[content.kind];
+    const bound =
+      typeof canonical === "number" ? Math.min(content.cap, canonical) : content.cap;
+    if (content.projectedByteLength > bound) {
+      throw new Error(
+        `renderer props: content projection "${content.kind}" carries ` +
+          `${content.projectedByteLength} bytes over its ${bound}-byte cap`,
+      );
+    }
   }
 }

@@ -257,3 +257,33 @@ describe("enabler 0.6 — sealed to the EXACT gate, artifact and revision", () =
     expect(decision).toEqual({ ok: false });
   });
 });
+
+describe("enabler 0.6 — a DOWNLOAD capability is fetched, never navigated to", () => {
+  it("admits the download disposition at a display's own fetch, and refuses it as a link click", () => {
+    // THE CONTRACT IS EASY TO READ THE OTHER WAY ROUND, so it is written down
+    // here as a case rather than only as prose: a plain `<a href download>`
+    // click IS a navigation — `Sec-Fetch-Dest: document`,
+    // `Sec-Fetch-Mode: navigate` — so it would have received the common 404 and
+    // the advertised affordance would have been dead on arrival.
+    //
+    // The rung does not widen: admitting `document` for one disposition reopens
+    // the top-level rendering of artifact bytes it exists to close. A display
+    // FETCHES the bytes (`Sec-Fetch-Dest: empty`) and hands the reader the save.
+    // This case pins that rule so the wiring in the sibling plan cannot get it
+    // wrong silently.
+    const fetched = new Headers({
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
+    });
+    expect(isSameOriginDisplaySubresourceFetch(fetched)).toBe(true);
+
+    const linkClick = new Headers({
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+      "sec-fetch-user": "?1",
+    });
+    expect(isSameOriginDisplaySubresourceFetch(linkClick)).toBe(false);
+  });
+});

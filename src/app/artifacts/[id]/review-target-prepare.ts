@@ -36,6 +36,7 @@ import "server-only";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   readArtifactForDetail,
+  readArtifactForSettledReview,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import {
@@ -77,16 +78,34 @@ export function bindArtifactReviewPorts(ctx: {
   actor: ActorContext;
 }): Pick<
   PrepareReviewPorts,
-  "readArtifact" | "revisionMember" | "revisionMemberHistorical" | "resolveMount" | "buildProps"
+  | "readArtifact"
+  | "readArtifactHistorical"
+  | "revisionMember"
+  | "revisionMemberHistorical"
+  | "resolveMount"
+  | "buildProps"
 > {
   const { orgId, actor } = ctx;
 
-  const readArtifact = (artifactId: string): ArtifactReadOutcome => {
-    const access = readArtifactForDetail({ artifactId, orgId, actor });
+  const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
     if (access.kind === "denied") return { kind: "denied" };
     return { kind: "ok", artifact: access.artifact };
   };
+
+  const readArtifact = (artifactId: string): ArtifactReadOutcome =>
+    toOutcome(readArtifactForDetail({ artifactId, orgId, actor }));
+
+  /**
+   * THE ARTIFACT-LEVEL HISTORICAL READ (enabler 0.9), the twin of
+   * `revisionMemberHistorical` below. Same authorization, tombstone-tolerant —
+   * without it the live read floors a settled card at `unknown-or-tombstoned`
+   * before the historical revision reader is ever consulted, and the enabler
+   * delivers nothing. Reached only on the settled reading, only for a target the
+   * gate itself pinned.
+   */
+  const readArtifactHistorical = (artifactId: string): ArtifactReadOutcome =>
+    toOutcome(readArtifactForSettledReview({ artifactId, orgId, actor }));
 
   /**
    * Membership for ONE pinned revision.
@@ -178,6 +197,22 @@ export function bindArtifactReviewPorts(ctx: {
         // Pass the descriptor through even when it carries a pre-import `reason`
         // (peer/abi/archived) — the client loader renders its floor from the reason,
         // exactly as the detail route does. Never blank.
+        //
+        // AND CARRY THE VERSION THIS DISPLAY NEGOTIATED (enabler 0.4): "resolve
+        // the display, read its declared props version, then build the snapshot
+        // at that version". The tuple names the version the display itself
+        // declared, and admission has already put it inside the host's window,
+        // so the core builds the snapshot at it rather than at the host's
+        // newest. A descriptor carrying a pre-import floor `reason` never
+        // renders, so it keeps the host's own version and nothing changes.
+        if (descriptor.reason === undefined) {
+          return {
+            kind: "runtime",
+            packageName,
+            descriptor,
+            propsApiVersion: descriptor.tuple.propsApiVersion,
+          };
+        }
         return { kind: "runtime", packageName, descriptor };
       }
       return { kind: "floor", packageName, reason: "requires-rebuild" };
@@ -265,7 +300,14 @@ export function bindArtifactReviewPorts(ctx: {
     });
   };
 
-  return { readArtifact, revisionMember, revisionMemberHistorical, resolveMount, buildProps };
+  return {
+    readArtifact,
+    readArtifactHistorical,
+    revisionMember,
+    revisionMemberHistorical,
+    resolveMount,
+    buildProps,
+  };
 }
 
 /**

@@ -9,7 +9,10 @@ import "server-only";
 // nothing and the fallback's links are dead ends."
 //
 // A display drawn on the review card inside the CMS widget paints its bytes
-// with `<img src>` / `<video src>` / a download link. The card is drawn inside
+// with `<img src>` / `<video src>`, or fetches them to hand the reader a save.
+// NEVER with a link pointed at this route: a link click is a navigation, and
+// this route refuses every navigation (see the transport rung in
+// `review-island-byte-serving.ts`) whatever disposition the capability seals. The card is drawn inside
 // cinatra's OWN embed iframe, so the request is same-origin — but the reader is
 // authenticated by a broker `cwu_` bearer, not a cookie session, and a
 // subresource load carries no bearer. That is the whole problem this route

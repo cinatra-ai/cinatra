@@ -210,8 +210,26 @@ export interface PrepareReviewPorts {
     runId: string,
     reviewTaskId: string,
   ): Promise<GatePinnedOutcome> | GatePinnedOutcome;
-  /** Read the artifact with object.read enforced (mirrors readArtifactForDetail). */
+  /** Read the artifact with object.read enforced (mirrors readArtifactForDetail).
+   *  LIVE rows only — a tombstone reads as not-found. */
   readArtifact(artifactId: string): Promise<ArtifactReadOutcome> | ArtifactReadOutcome;
+  /**
+   * THE ARTIFACT-LEVEL HALF OF THE GATE-AUTHORIZED HISTORICAL READ (enabler
+   * 0.9). Same authorization as {@link readArtifact} — the same ownership filter
+   * and the same `object.read` decision — differing only in that a TOMBSTONED
+   * row still resolves.
+   *
+   * It exists because the two halves cannot be split: the live artifact read
+   * answers `not-found` for a tombstone, so a historical REVISION reader alone
+   * never runs and the settled card floors at `unknown-or-tombstoned` — the
+   * exact defect the enabler names. Consulted ONLY on the settled reading.
+   *
+   * Optional: a binder that supplies none keeps the live-only reading, which is
+   * the pre-0.9 behaviour.
+   */
+  readArtifactHistorical?(
+    artifactId: string,
+  ): Promise<ArtifactReadOutcome> | ArtifactReadOutcome;
   /** Confirm the pinned revision is a member of the artifact (and resolve its
    * mime, its form and — for a non-file revision — its pinned configuration).
    * Null ⇒ non-member / tombstoned-away. */
@@ -384,7 +402,19 @@ async function prepareOneTarget(
   settled: boolean,
 ): Promise<PreparedReviewTarget> {
   // Artifact-level floors (props null — nothing authorized to render props from).
-  const read = await ports.readArtifact(target.artifactId);
+  //
+  // ON THE SETTLED READING THE ARTIFACT ITSELF MAY BE TOMBSTONED (enabler 0.9).
+  // The live reader answers `not-found` for a tombstone, so reading live here
+  // floored the settled card at `unknown-or-tombstoned` BEFORE the historical
+  // revision reader could run — "the reviewed revision can be tombstoned later,
+  // so a settled card that read the live artifact could show nothing where the
+  // approved work was". Both halves of the read therefore go historical
+  // together, and only on the reading the gate itself authorized.
+  const settledHistorical = settled === true;
+  const read =
+    settledHistorical && typeof ports.readArtifactHistorical === "function"
+      ? await ports.readArtifactHistorical(target.artifactId)
+      : await ports.readArtifact(target.artifactId);
   if (read.kind === "not-found") {
     return { target, props: null, mount: floor(null, "unknown-or-tombstoned") };
   }
@@ -397,8 +427,9 @@ async function prepareOneTarget(
   // this exact target, so the historical reader may answer for a tombstoned
   // artifact (enabler 0.9); everywhere else the live-only reader answers, and a
   // tombstoned pin floors exactly as it did before.
-  const historical = settled === true && typeof ports.revisionMemberHistorical === "function";
-  const member = historical
+  const memberHistorical =
+    settledHistorical && typeof ports.revisionMemberHistorical === "function";
+  const member = memberHistorical
     ? await ports.revisionMemberHistorical!(target.artifactId, target.representationRevisionId)
     : await ports.revisionMember(target.artifactId, target.representationRevisionId);
   if (!member) {

@@ -203,3 +203,43 @@ describe("resolveRuntimeRendererForRoute — attaches the server-known pre-impor
     expect(await resolveRuntimeRendererForRoute(runtimeAssetRegistry.keyFor(PKG, "detail"), 1)).toBeNull();
   });
 });
+
+describe("ExtensionRendererSlot — the snapshot the display negotiated, or none", () => {
+  it("mounts the renderer when the negotiated version IS the snapshot's version", async () => {
+    const el = (await ExtensionRendererSlot({
+      generatedKey: BUILD_MAP_KEY,
+      packageName: "@fixture/built-ext",
+      slot: "detail",
+      props: props(1),
+      fallback: "FLOOR",
+    })) as ReactElement;
+    // The renderer itself, not a fragment carrying a degrade notice.
+    expect(el.type).not.toBe(RendererDegradedNotice);
+  });
+
+  it("DEGRADES rather than handing an admitted older display a newer snapshot", async () => {
+    // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4 of `PLAN: Agents Lifecycle
+    // (C)`, cinatra#3027) has two halves: admit the display at its own version,
+    // AND build the snapshot at that version. This seam receives a snapshot
+    // already built, so it can only honour the first half. The gap that leaves:
+    // the build entry declares v1, the host ceiling here is v2, negotiation
+    // admits v1, and the v1 component would be mounted with the v2 snapshot the
+    // caller built.
+    //
+    // Until the sibling plan wires a per-version snapshot builder into this
+    // seam, the fail-closed half of the ratchet stands: the same
+    // `abi-incompatible` degrade the strict equality used to produce, never a
+    // shape the display did not agree to.
+    const el = (await ExtensionRendererSlot({
+      generatedKey: BUILD_MAP_KEY,
+      packageName: "@fixture/built-ext",
+      slot: "detail",
+      props: props(2),
+      fallback: "FLOOR",
+    })) as ReactElement;
+    const kids = (el.props as { children: ReactElement[] }).children;
+    expect(kids[0].type).toBe(RendererDegradedNotice);
+    expect((kids[0].props as { failureClass: string }).failureClass).toBe("abi-incompatible");
+    expect(kids[1]).toBe("FLOOR");
+  });
+});

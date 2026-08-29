@@ -22,6 +22,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { narrowToSinglePortlet } from "@cinatra-ai/sdk-dashboard/components/narrow-to-single-portlet";
 import {
   findPromotedReadOnlyComposition,
   isCompositionAdmittedForExtension,
@@ -100,5 +101,27 @@ describe("enabler 0.11 — ONE composition, consumed by the host and by an exten
     expect(host).toContain("ReadOnlyComposedDashboard");
     // The host's read-only branch DELEGATES; it does not assemble a second one.
     expect(host).toMatch(/if \(readOnly\)[\s\S]{0,200}<ReadOnlyComposedDashboard/);
+  });
+});
+
+describe("enabler 0.11 — the single-portlet view draws EXACTLY the named portlet", () => {
+  it("draws one portlet, and only that one", () => {
+    const config = { title: "d", portlets: [{ id: "a" }, { id: "b" }, { id: "c" }] };
+    expect(narrowToSinglePortlet(config, "b")).toEqual({ title: "d", portlets: [{ id: "b" }] });
+  });
+
+  it("draws ONE portlet when the configuration carries the id twice", () => {
+    // "Exactly the named portlet" is a COUNT as much as a name: a filter kept
+    // every match and handed the grid both copies of a duplicated id.
+    const config = { portlets: [{ id: "p", n: 1 }, { id: "p", n: 2 }] };
+    expect(narrowToSinglePortlet(config, "p").portlets).toEqual([{ id: "p", n: 1 }]);
+  });
+
+  it("draws an EMPTY grid — never the whole dashboard — for an id that names nothing", () => {
+    expect(narrowToSinglePortlet({ portlets: [{ id: "a" }] }, "zzz").portlets).toEqual([]);
+    expect(narrowToSinglePortlet(null, "a").portlets).toEqual([]);
+    expect(narrowToSinglePortlet({}, "a").portlets).toEqual([]);
+    const malformed = { portlets: "nonsense" } as unknown as { portlets?: Array<{ id?: string }> };
+    expect(narrowToSinglePortlet(malformed, "a").portlets).toEqual([]);
   });
 });
