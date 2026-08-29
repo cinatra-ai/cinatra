@@ -124,7 +124,6 @@
     "cronstrue": "^3.14.0",
     "diff": "9.0.0",
     "libnpmpublish": "^12.0.0",
-    "marked": "^18.0.5",
     "pacote": "^22.0.0",
     "semver": "7.8.0",
     "tar": "^7.5.16",

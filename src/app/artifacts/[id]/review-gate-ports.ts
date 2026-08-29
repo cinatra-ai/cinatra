@@ -47,6 +47,7 @@ import {
 } from "@/lib/authz/build-actor-context";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import {
   type PrepareReviewInput,
   type PrepareReviewResult,
@@ -182,15 +183,14 @@ export function bindSubmitDecisionPorts(ctx: ReviewActorContext): SubmitDecision
       target.representationRevisionId,
     );
     if (!member) return { kind: "floor", packageName: null, digest: null };
-    const props = artifactPorts.buildProps({
-      artifact: read.artifact,
-      representationRevisionId: target.representationRevisionId,
-      mime: member.mime,
-    });
+    // The mount is resolved at the host's CEILING (enabler 0.4: the check is a
+    // window, not an equality), and provenance is derived from the mount alone —
+    // the submit path records WHICH renderer resolved, never a props snapshot,
+    // so it no longer builds one it would immediately throw away.
     const resolved = await artifactPorts.resolveMount({
       artifact: read.artifact,
       mime: member.mime,
-      propsApiVersion: props.propsApiVersion,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
     });
     return provenanceFromResolvedMount(resolved);
   };
