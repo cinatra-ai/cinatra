@@ -135,6 +135,15 @@ const HOST_STANDARD_IDS = new Set([
   // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
   // photographed (https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity, the S5a / R7a cells).
   "review-gate-placeholder",
+  // cinatra#3046 -- the placeholder's EMPTY FRAME, closing the stated skeleton
+  // deviation: the box the review screen will fill, drawn as an empty frame
+  // per section II ("names no status, reports no result, draws nothing to
+  // press") rather than the borrowed bar-skeleton motif. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (frame
+  // present, no bar-skeleton motif inside it) is pinned in
+  // packages/agents/src/__tests__/review-gate-placeholder-drawing.test.tsx.
+  "review-gate-placeholder-frame",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer
