@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import {
   getPostgresConnectionString,
@@ -196,6 +197,179 @@ LIMIT 1`,
     // identity lives in `semantic_assertion`, and per-row originKind is on
     // `objects.data.originKind` for callers that need it.
     originKind: "upload",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE NON-FILE REVISION READER (enabler 0.10 of `PLAN: Agents Lifecycle (C)`,
+// cinatra#3027 / epic #3023).
+//
+// THE ENABLER, IN THE PLAN'S OWN WORDS: "The non-file revision reader: a
+// membership-and-projection reader for resources that are not files verifies the
+// exact organization, artifact and representation-revision tuple and returns its
+// form and the pinned configuration record; the file-serving read stays
+// file-only, and non-file props carry no preview or download address."
+//
+// WHAT IT FIXES, IN THE PLAN'S OWN WORDS: "the review path serves file-backed
+// resources only, so a non-file artifact floors before any renderer runs,
+// however good the renderer, and a revision of it carries nothing pinned to
+// draw."
+//
+// WHY IT IS A SECOND READER AND NOT A WIDENING OF THE FIRST. The resolver above
+// exists to answer "which BYTES may be streamed" — it joins `artifact_blobs`,
+// it returns a storage key, and every caller of it hands that key to the blob
+// store. A dashboard revision has no bytes and no storage key; widening that
+// query to admit it would put a null storage key on a serving path and make
+// every byte caller carry a branch it must never take. The plan says so
+// directly: "the file-serving read stays file-only". So this is a sibling
+// reader with the SAME tenant rule and a different projection.
+//
+// THE TENANT RULE IS IDENTICAL, and deliberately copied rather than shared:
+// org_id + artifact_id + representation.id must all match, the object must be an
+// artifact type, and a tombstoned object is refused unless a pinning
+// `artifact_refs` row keeps it alive (the historical reading of enabler 0.9).
+// A reader that quietly used a laxer rule than the byte reader would be a
+// tenant-isolation hole with no bytes to make it obvious.
+//
+// THE PINNED CONFIGURATION RECORD lives on the REVISION, under the reserved
+// `pinnedConfiguration` key of `representation.classifier_signals` — the only
+// per-revision jsonb the substrate carries. That location is this slice's own
+// call and is recorded as a deviation: the plan fixes that the record is
+// "written by the owning system's twin writer on every upsert" and per-revision,
+// but names no column, and a new column would be a migration this slice's issue
+// says it does not expect. The dashboard twin writer that fills it is the
+// sibling plan's ("the dashboard's is the first, wired in the sibling plan"), so
+// TODAY this reader returns a null configuration for every existing dashboard
+// revision — and says so honestly rather than inventing one.
+// ---------------------------------------------------------------------------
+
+/** The two non-file representation forms the substrate admits
+ *  (`representation_form_chk`: 'file' | 'connectorRef' | 'dashboard'). */
+export type NonFileRepresentationForm = "connectorRef" | "dashboard";
+
+/** The reserved key the per-revision configuration record is written under. */
+export const PINNED_CONFIGURATION_SIGNAL_KEY = "pinnedConfiguration";
+
+export type NonFileRevisionResolution = {
+  /** The form the substrate recorded for this revision — never a caller claim. */
+  form: NonFileRepresentationForm;
+  /** The resource's mime (e.g. `application/vnd.cinatra.dashboard+json`). */
+  mime: string;
+  /** The pinned configuration record for THIS revision, or null when the owning
+   *  system's twin writer has not written one for it. */
+  configuration: unknown | null;
+  /** A stable digest of that record — the value a data capability is sealed to
+   *  (enabler 0.12) — or null when there is no record. */
+  configurationDigest: string | null;
+};
+
+/** Canonical JSON: object keys sorted at every depth, so two structurally equal
+ *  configurations always digest identically. */
+function canonicalJson(value: unknown): string {
+  const norm = (v: unknown): unknown => {
+    if (v === null || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(norm);
+    const o = v as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o).sort()) out[k] = norm(o[k]);
+    return out;
+  };
+  return JSON.stringify(norm(value));
+}
+
+/** The digest a data capability seals and the content channel carries. */
+export function pinnedConfigurationDigest(configuration: unknown): string {
+  return createHash("sha256").update(canonicalJson(configuration), "utf8").digest("hex");
+}
+
+/**
+ * Resolve ONE non-file representation revision: verify the exact
+ * (organization, artifact, representation-revision) tuple and project the
+ * revision's form plus its pinned configuration record.
+ *
+ * `null` for every failure — a tuple that does not match, a FILE revision
+ * (which belongs to the byte reader), a row in another tenant, or a tombstoned
+ * object with no pin. One answer, so nothing here is an existence oracle.
+ *
+ * `liveOnly` defaults to TRUE, the safe reading: only the run-/gate-authorized
+ * HISTORICAL reader of enabler 0.9 passes `false`, and it does so only after the
+ * gate has vouched for the exact revision.
+ */
+export function resolveNonFileArtifactRevision(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  liveOnly?: boolean;
+}): NonFileRevisionResolution | null {
+  ensurePostgresSchema();
+  const schema = postgresSchema.replaceAll('"', '""');
+  ensureArtifactTypesRegistered();
+  const artifactTypeIds = objectTypeRegistry.listArtifacts().map((d) => d.type);
+  const liveOnly = input.liveOnly !== false;
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT rep.form, r.mime, rep.classifier_signals
+FROM "${schema}"."representation" rep
+JOIN "${schema}"."resource" r
+  ON r.id = rep.resource_id AND r.org_id = rep.org_id
+JOIN "${schema}"."objects" o
+  ON o.id = rep.artifact_id AND o.org_id = rep.org_id
+WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
+  AND rep.form <> 'file'
+  AND r.kind <> 'blob'
+  AND (o.type = $4 OR o.type = ANY($5::text[]))
+  AND (
+    o.deleted_at IS NULL
+    ${liveOnly ? "" : `OR EXISTS (
+      SELECT 1 FROM "${schema}"."artifact_refs" ar
+      WHERE ar.org_id = rep.org_id
+        AND ar.artifact_id = rep.artifact_id
+        AND ar.representation_revision_id = rep.id
+    )`}
+  )
+LIMIT 1`,
+        values: [
+          input.representationRevisionId,
+          input.artifactId,
+          input.orgId,
+          SEMANTIC_ARTIFACT_OBJECT_TYPE,
+          artifactTypeIds,
+        ],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as
+    | { form: string; mime: string; classifier_signals: unknown }
+    | undefined;
+  if (!row) return null;
+  if (row.form !== "connectorRef" && row.form !== "dashboard") return null;
+
+  let signals: Record<string, unknown> | null = null;
+  const raw = row.classifier_signals;
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        signals = parsed as Record<string, unknown>;
+      }
+    } catch {
+      signals = null;
+    }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    signals = raw as Record<string, unknown>;
+  }
+  const configuration =
+    signals && Object.hasOwn(signals, PINNED_CONFIGURATION_SIGNAL_KEY)
+      ? (signals[PINNED_CONFIGURATION_SIGNAL_KEY] ?? null)
+      : null;
+
+  return {
+    form: row.form,
+    mime: row.mime,
+    configuration,
+    configurationDigest: configuration === null ? null : pinnedConfigurationDigest(configuration),
   };
 }
 

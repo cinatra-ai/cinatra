@@ -20,5 +20,10 @@
   },
   "dependencies": {
     "drizzle-cube": "0.6.6"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./components": "./src/components/index.ts",
+    "./components/narrow-to-single-portlet": "./src/components/narrow-to-single-portlet.ts"
   }
 }
