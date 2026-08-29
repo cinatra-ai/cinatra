@@ -107,6 +107,25 @@ vi.mock("lucide-react", () => {
     UserCircle: make("user-circle"),
     X: make("x"),
     XCircle: make("x-circle"),
+    // Reached once the picker's loader pulled the run-access seam into this
+    // graph (cinatra#3050) — the list above had drifted behind its own
+    // "every icon imported anywhere in packages/agents/src" contract.
+    CheckCheck: make("check-check"),
+    CircleX: make("circle-x"),
+    ClipboardCheck: make("clipboard-check"),
+    GitBranchIcon: make("git-branch"),
+    LinkIcon: make("link"),
+    MailIcon: make("mail"),
+    Maximize2: make("maximize-2"),
+    MessageSquare: make("message-square"),
+    Minimize2: make("minimize-2"),
+    Repeat: make("repeat"),
+    ScaleIcon: make("scale"),
+    ScanSearch: make("scan-search"),
+    SkipForward: make("skip-forward"),
+    SlidersHorizontal: make("sliders-horizontal"),
+    TagIcon: make("tag"),
+    Zap: make("zap"),
     // shadcn/ui components import these *Icon-suffixed names.
     CheckIcon: make("check"),
     ChevronDownIcon: make("chevron-down"),
