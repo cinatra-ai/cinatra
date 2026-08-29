@@ -213,5 +213,6 @@ describe("LIVE enforcement (the guard itself, engineering#484)", () => {
     expect(REQUIRED_CONTEXTS).toContain("CRM migration gates");
     expect(REQUIRED_CONTEXTS).toContain("build");
     expect(REQUIRED_CONTEXTS).toContain("proof");
+    expect(REQUIRED_CONTEXTS).toContain("design-pin-drift");
   });
 });
