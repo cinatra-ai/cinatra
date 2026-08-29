@@ -244,6 +244,15 @@ type AgenticRunPanelProps = {
    * otherwise answer as whoever else is signed in on that browser.
    */
   readReviewSlot?: RunReviewSlotReader;
+  /**
+   * HOW THIS SURFACE READS THE RUN ITSELF (cinatra#3051). Same rule as the slot
+   * above, one level out: a first-party, same-origin surface passes none and
+   * this panel's own tick asks the run's seed route with the ambient session.
+   * The embedded widget passes its own reader, which travels on the broker
+   * credential with `credentials: "omit"` — the same one its seed and its slot
+   * already ask with.
+   */
+  readRunSnapshot?: () => Promise<RunPollResponse | null>;
 };
 
 export type ChatGateField = {
@@ -299,7 +308,7 @@ export type ChatGateDescriptor = {
 // from ./run-surface-status — the poll endpoint already returns it and
 // SSE INTERRUPT frames are mapped into it via mapInterruptToHitlContext.
 
-type RunPollResponse = {
+export type RunPollResponse = {
   status: string;
   error: string | null;
   startedAt: string | null;
@@ -413,6 +422,7 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  readRunSnapshot,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -631,7 +641,23 @@ export function AgenticRunPanel({
 
   // AG-UI SSE hook — provides live status + presentationHint when agUiEnabled=true.
   // When disabled (agUiEnabled != true), hook opens no EventSource — zero network overhead.
-  const streamEnabled = agUiEnabled === true;
+  //
+  // AND IT IS A COOKIE-SESSION TRANSPORT (cinatra#3051). The stream is an
+  // `EventSource` to a same-origin route that authenticates a session cookie and
+  // nothing else: a request the browser builds, with no place to put a broker
+  // credential. Inside the site widget there is no such session, so the stream
+  // never delivers a status — and while it is enabled the tick's status write
+  // stands aside for it, so the run's status stayed frozen at the value the
+  // mount was seeded with. A run that parked for review while the page was open
+  // therefore never read `completed`, the review slot was never asked for, and
+  // the slot stayed empty until the page was re-opened onto a fresh seed.
+  //
+  // So on a host whose identity does not travel by cookie the stream stands
+  // down and the tick is authoritative, exactly as it is for a run that predates
+  // the stream. What that host loses is the live text of an external run; what
+  // it gains is a run that reaches its own review.
+  const streamAuthenticates = ambientLifecycleHost !== "site_widget";
+  const streamEnabled = agUiEnabled === true && streamAuthenticates;
   const streamResult = useAgUiRunStream(runId, {
     enabled: streamEnabled,
     initialStatus,
@@ -1051,7 +1077,14 @@ export function AgenticRunPanel({
   const refetchDerivedContext = useCallback(async () => {
     let outcome: HitlDerivationOutcome;
     try {
-      if (taskId) {
+      // A SURFACE THAT BROUGHT ITS OWN READER IS ASKED WITH IT, TASK OR NO TASK
+      // (cinatra#3051, convergence). The A2A action below is a cookie-session
+      // server action; a run drawn on a host whose identity does not travel by
+      // cookie carries an a2a task id just like any other, so keying the
+      // transport on the task id alone would send exactly those runs back down
+      // the ambient-cookie path and leave their status frozen. The credential
+      // decides first; the task id decides only among cookie surfaces.
+      if (taskId && !readRunSnapshot) {
         // A2A transport path
         const snapshot = await getAgentBuilderTask(taskId);
         if (!snapshot || !("cinatraStatus" in snapshot)) {
@@ -1081,17 +1114,26 @@ export function AgenticRunPanel({
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
-        const response = await fetch(
-          `/api/agents/runs/${encodeURIComponent(runId)}`,
-          { cache: "no-store" },
-        );
-        if (!response.ok) {
+        //
+        // WHICH CREDENTIAL THIS ASKS WITH is the caller's to say, exactly as it
+        // is for the review slot (cinatra#3051): a surface that holds a broker
+        // credential passes its own reader, and this route is never asked with
+        // an ambient cookie from a frame that is same-origin to the app.
+        const data = readRunSnapshot
+          ? await readRunSnapshot()
+          : await (async () => {
+              const response = await fetch(
+                `/api/agents/runs/${encodeURIComponent(runId)}`,
+                { cache: "no-store" },
+              );
+              return response.ok ? ((await response.json()) as RunPollResponse) : null;
+            })();
+        if (!data) {
           outcome = {
             kind: "transport_failed",
-            reason: `the run could not be read (HTTP ${response.status})`,
+            reason: "the run could not be read",
           };
         } else {
-          const data = (await response.json()) as RunPollResponse;
           if (!streamEnabled) {
             if (data?.status) {
               setPollStatus(data.status);
@@ -1118,7 +1160,7 @@ export function AgenticRunPanel({
       };
     }
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
-  }, [runId, taskId, streamEnabled]);
+  }, [runId, taskId, streamEnabled, readRunSnapshot]);
 
   useEffect(() => {
     if (!isPollLive && !isPollPendingApproval) return;

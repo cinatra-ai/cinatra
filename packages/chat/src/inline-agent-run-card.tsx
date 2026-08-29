@@ -33,6 +33,7 @@ import {
   type ChatGateDescriptor,
   type HitlGateContext,
 } from "@cinatra-ai/agents/client-entry";
+import type { RunPollResponse } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   brokerRequestInit,
@@ -202,6 +203,33 @@ function reviewSlotReader(
   };
 }
 
+/**
+ * THE RUN'S OWN RE-READ (cinatra#3051).
+ *
+ * The panel keeps the run current on its own tick — that is how a run which
+ * parks for review while the page is open reaches its review with nobody
+ * re-opening the page. Until this change the panel could not use that tick on
+ * the widget: its live status came from the app's cookie-session run stream,
+ * which cannot carry a broker credential, and the tick's status write stood
+ * aside for it. The tick is authoritative on this host now, so the read it makes
+ * has to travel on the SAME credential the seed and the slot do — built by the
+ * one shared builder, so a widget frame keeps `credentials: "omit"` and never
+ * sends an ambient cookie, and a host that cannot say who is asking reads
+ * nothing at all.
+ */
+function runSnapshotReader(
+  credential: ConversationCredential,
+  runId: string,
+): (() => Promise<RunPollResponse | null>) | undefined {
+  const request = seedRequest(credential, runId);
+  if (!request) return undefined;
+  return async () => {
+    const res = await fetch(request.url, request.init);
+    if (!res.ok) return null;
+    return (await res.json()) as RunPollResponse;
+  };
+}
+
 export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
@@ -244,6 +272,13 @@ export function InlineAgentRunCard({
   // restart the panel's slot reader on every render.
   const slotReader = useMemo(
     () => reviewSlotReader(credential, runId),
+    [credential, runId],
+  );
+  // Memoized on the same two values, and for the same reason: it is a hook
+  // input inside the panel, and a fresh function every render would restart the
+  // panel's tick on every render.
+  const runSnapshot = useMemo(
+    () => runSnapshotReader(credential, runId),
     [credential, runId],
   );
 
@@ -361,6 +396,7 @@ export function InlineAgentRunCard({
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}
         readReviewSlot={slotReader}
+        readRunSnapshot={runSnapshot}
       />
     </div>
   );

@@ -259,6 +259,17 @@ describe("§II — the immutable target header is inert (no edit control, no rev
     expect(TARGET_PANEL).toMatch(/pinned/);
   });
 
+  it("names the representation slot — the island document's own body anchor", () => {
+    // WHAT THE RECORDER READS (cinatra#3051). The card draws this panel inside a
+    // nested frame, and once that frame has painted, the card's own overlay
+    // anchors are gone by design — nothing is drawn twice. So a recording of a
+    // painted target reads the ISLAND document's anchors: the header's, above,
+    // and the body's, here. Both are pinned so the reading survives a rename.
+    // Comment-stripped, and the ATTRIBUTE syntax rather than the bare name, so
+    // prose about the anchor can never stand in for the anchor itself.
+    expect(stripComments(TARGET_PANEL)).toMatch(/data-review-representation-slot=/);
+  });
+
   it("exposes NO edit affordance and NO revision picker on the target header", () => {
     expect(stripComments(TARGET_PANEL)).not.toMatch(/revision picker|RevisionPicker|Edit\b|contentEditable|<select/i);
   });

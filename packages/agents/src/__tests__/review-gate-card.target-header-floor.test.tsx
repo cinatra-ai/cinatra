@@ -72,7 +72,8 @@ const ROW: ReviewTargetRow = {
   ownerLevel: "organization",
   visibility: "organization",
   mime: "text/markdown",
-  updatedAt: "8 min ago",
+  // An INSTANT, as the gate's row carries it — the header reads it as a time.
+  updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
   packageName: "@cinatra-ai/blog-post-artifact",
 };
 
@@ -200,10 +201,14 @@ describe("the header and the floor are on screen at the FIRST render, on every h
       );
       expect(text, `${host}: revision`).toContain("revision ea615d36-2ad");
       expect(text, `${host}: pinned`).toContain("pinned");
-      expect(text, `${host}: ownership`).toContain("Ownership: organization");
-      expect(text, `${host}: visibility`).toContain("Visibility: organization");
+      // The DRAWN line: bare scope words in the host's own vocabulary, and the
+      // instant as a relative reading — never a labelled enum, never raw.
+      expect(text, `${host}: the scope words`).toContain(
+        "Organization · Organization",
+      );
+      expect(text, `${host}: the relative time`).toContain("updated 8 minutes ago");
+      expect(text, `${host}: no raw instant`).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
       expect(text, `${host}: mime`).toContain("text/markdown");
-      expect(text, `${host}: updated`).toContain("updated 8 min ago");
       // The exact revision is preserved for the reader who hovers it.
       expect(
         head!.querySelector("[title]")?.getAttribute("title"),

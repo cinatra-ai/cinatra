@@ -75,7 +75,10 @@ const approveReviewTask = vi.hoisted(() => vi.fn(async () => undefined));
 const rejectReviewTask = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../hitl-actions", () => ({ approveReviewTask, rejectReviewTask }));
 
-vi.mock("../a2a-actions", () => ({ getAgentBuilderTask: vi.fn(async () => null) }));
+// THE A2A SNAPSHOT ACTION, a hoisted spy for the same reason: it is a
+// cookie-session server action, so "never called on this host" is a reading.
+const getAgentBuilderTask = vi.hoisted(() => vi.fn(async () => null));
+vi.mock("../a2a-actions", () => ({ getAgentBuilderTask }));
 
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({
@@ -120,8 +123,10 @@ vi.mock("../run-actions", () => ({
   readRunOutputEvidence,
 }));
 
-vi.mock("../use-ag-ui-run-stream", () => ({
-  useAgUiRunStream: vi.fn(() => ({
+// THE RUN STREAM, kept as a hoisted spy rather than an anonymous mock: whether
+// this panel OPENS it on a given host is one of the readings pinned below.
+const useAgUiRunStream = vi.hoisted(() =>
+  vi.fn((_runId: string, _options: { enabled: boolean }) => ({
     status: null,
     error: null,
     presentationHint: null,
@@ -130,7 +135,8 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     streamedText: "",
     dataPartFrames: [],
   })),
-}));
+);
+vi.mock("../use-ag-ui-run-stream", () => ({ useAgUiRunStream }));
 
 import {
   LifecycleCardSurfaceProvider,
@@ -517,5 +523,177 @@ describe("a widget declaration the runtime refused", () => {
       return el;
     });
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+  }, 20_000);
+});
+
+describe("the run's own status, on a host that does not ask with a cookie", () => {
+  // THE READING THIS DEFECT PRODUCED: a run parked for review while the page was
+  // open drew NO review slot at all — for twelve consecutive samples, sixteen
+  // seconds after the gate was minted — and only a re-open of the third-party
+  // page brought the card. A re-open is not a fix; it is a fresh mount reading a
+  // fresh server seed.
+  //
+  // WHY. The panel's live status comes from the app's own run stream, and that
+  // stream is a COOKIE-SESSION transport: an `EventSource` to a same-origin
+  // route that answers only a session cookie, with no way to carry a broker
+  // credential. Inside the widget there is no such session, so the stream never
+  // delivers — and while the stream is enabled the poll tick's status write is
+  // suppressed in its favour. The status therefore stayed at the seed value for
+  // ever, and the review slot is only read once the run reads `completed`.
+  //
+  // So on this host the stream stands down and the run is read on the tick,
+  // through the surface's OWN reader — the same credential the seed and the
+  // slot already travel on.
+  it("carries a run that parks while the page is open into its review, in place", async () => {
+    let body = seedBody();
+    stubFetch(() => body, () => PENDING);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      onWidget(
+        <AgenticRunPanel
+          {...panelProps({
+            agUiEnabled: true,
+            initialReviewGate: { ref: null, awaiting: false },
+          })}
+        />,
+      ),
+    );
+
+    // The placeholder is in the slot the moment the run is working.
+    await waitFor(() => expect(document.querySelector(PLACEHOLDER)).not.toBeNull());
+    expect(document.querySelector(REVIEW_CARD)).toBeNull();
+
+    // The run parks. NOTHING re-mounts and nothing re-opens: the same page
+    // instance, the same slot, the panel's own cadence.
+    body = seedBody({
+      status: "completed",
+      reviewGate: { ref: "lcr-opaque-3051", awaiting: false },
+    });
+
+    const card = await waitFor(
+      () => {
+        const el = document.querySelector(REVIEW_CARD);
+        if (!el) throw new Error("the review slot stayed empty on the open page");
+        return el;
+      },
+      { timeout: 10_000 },
+    );
+    expect(document.querySelector(SLOT)?.contains(card)).toBe(true);
+    expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
+      "review",
+    );
+    expect(document.querySelector(PLACEHOLDER)).toBeNull();
+    expect(card.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+  }, 20_000);
+
+  it("opens no cookie-session stream on this host", async () => {
+    stubFetch(() => seedBody(), () => PENDING);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(onWidget(<AgenticRunPanel {...panelProps({ agUiEnabled: true })} />));
+
+    await waitFor(() => expect(useAgUiRunStream).toHaveBeenCalled());
+    for (const [, options] of useAgUiRunStream.mock.calls) {
+      expect((options as { enabled: boolean }).enabled).toBe(false);
+    }
+  }, 20_000);
+
+  it("leaves the stream exactly as it was on a first-party mount", async () => {
+    // The rule is about the CREDENTIAL, not about the run: a surface that does
+    // ask with a cookie keeps the live stream it has always had.
+    stubFetch(() => seedBody(), () => PENDING);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(<AgenticRunPanel {...panelProps({ agUiEnabled: true })} />);
+
+    await waitFor(() => expect(useAgUiRunStream).toHaveBeenCalled());
+    expect(
+      useAgUiRunStream.mock.calls.some(
+        ([, options]) => (options as { enabled: boolean }).enabled === true,
+      ),
+    ).toBe(true);
+  }, 20_000);
+
+  it("reads the run through the surface's own reader, never the ambient cookie", async () => {
+    const calls = stubFetch(
+      () => seedBody({ status: "completed", reviewGate: { ref: "lcr-opaque-3051", awaiting: false } }),
+      () => PENDING,
+    );
+    const readRunSnapshot = vi.fn(async () => ({
+      status: "completed",
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      messages: [],
+      hitlContext: null,
+      reviewGate: { ref: "lcr-opaque-3051", awaiting: false },
+    }));
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      onWidget(
+        <AgenticRunPanel
+          {...panelProps({
+            agUiEnabled: true,
+            initialStatus: "running",
+            readRunSnapshot,
+            // The widget hands BOTH of its reads down; neither may fall back
+            // to the same-origin route.
+            readReviewSlot: async () => ({ ref: "lcr-opaque-3051", awaiting: false }),
+            initialReviewGate: { ref: null, awaiting: false },
+          })}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(readRunSnapshot).toHaveBeenCalled(), { timeout: 10_000 });
+    // The panel's own tick asked the reader and NOT the same-origin route, whose
+    // answer on a frame same-origin to the app is whoever else is signed in.
+    expect(calls.filter((c) => c.url.includes("/api/agents/runs/"))).toEqual([]);
+  }, 20_000);
+
+  it("asks the surface's reader even when the run carries an a2a task id", async () => {
+    // THE READING THE FIRST FIX MISSED: a widget run carries a task id like any
+    // other, and the a2a snapshot action is cookie-session. Keying the transport
+    // on the task id sent exactly these runs back down the ambient-cookie path
+    // and left their status frozen — the defect this leg exists to remove.
+    getAgentBuilderTask.mockClear();
+    const calls = stubFetch(
+      () => seedBody({ status: "completed", reviewGate: { ref: "lcr-opaque-3051", awaiting: false } }),
+      () => PENDING,
+    );
+    const readRunSnapshot = vi.fn(async () => ({
+      status: "completed",
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      messages: [],
+      hitlContext: null,
+      reviewGate: { ref: "lcr-opaque-3051", awaiting: false },
+    }));
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      onWidget(
+        <AgenticRunPanel
+          {...panelProps({
+            agUiEnabled: true,
+            initialStatus: "running",
+            taskId: "a2a-task-3051",
+            readRunSnapshot,
+            readReviewSlot: async () => ({ ref: "lcr-opaque-3051", awaiting: false }),
+            initialReviewGate: { ref: null, awaiting: false },
+          })}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(readRunSnapshot).toHaveBeenCalled(), { timeout: 10_000 });
+    expect(getAgentBuilderTask).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.url.includes("/api/agents/runs/"))).toEqual([]);
+    await waitFor(
+      () => {
+        const el = document.querySelector(REVIEW_CARD);
+        if (!el) throw new Error("the review slot stayed empty on the open page");
+        return el;
+      },
+      { timeout: 10_000 },
+    );
   }, 20_000);
 });

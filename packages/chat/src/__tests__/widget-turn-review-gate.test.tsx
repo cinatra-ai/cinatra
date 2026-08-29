@@ -253,7 +253,10 @@ const TARGET_ROW = {
   ownerLevel: "organization",
   visibility: "organization",
   mime: "text/markdown",
-  updatedAt: "8 min ago",
+  // THE ROW CARRIES AN INSTANT, which is what the store holds and what the
+  // capture photographed printed raw into the header ("updated
+  // 2026-08-29T03:07:18.778Z"). The header reads it as a time instead.
+  updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
   packageName: "@cinatra-ai/blog-post-artifact",
 };
 
@@ -268,13 +271,14 @@ function expectTargetNamed(root: HTMLElement, when: string): void {
     "@cinatra-ai/blog-post-artifact:post",
     "revision ea615d36-2ad",
     "pinned",
-    "Ownership: organization",
-    "Visibility: organization",
-    "text/markdown",
-    "updated 8 min ago",
+    // THE DRAWN LINE: bare scope words in the host's own vocabulary and a
+    // relative time — never a labelled enum and never a raw instant.
+    "Organization · Organization · text/markdown · updated 8 minutes ago",
   ]) {
     expect(text, `${when}: ${fact}`).toContain(fact);
   }
+  expect(text, `${when}: no raw instant in the header`).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  expect(text, `${when}: no labelled enum in the header`).not.toContain("Ownership:");
   const floor = root.querySelector("[data-review-target-floor]");
   expect(floor, `${when}: the never-blank floor`).not.toBeNull();
   expect(floor!.getAttribute("data-review-floor-package"), when).toBe(

@@ -16,6 +16,13 @@
  * renderer identity is host-resolved from the artifact TYPE upstream and reaches
  * this model only as the opaque `ReviewTargetMount` kind.
  */
+// THE APP'S OWN RELATIVE-TIME FORMATTER, taken from its per-function entry
+// rather than the package root. This module is a LEAF of the conversation
+// column's module graph, and the root entry re-exports the whole library: taking
+// it here cost roughly a second on every surface that mounts a transcript. The
+// function is the same one the library rows and the console rows print with.
+import { formatDistance } from "date-fns/formatDistance";
+
 import type {
   PreparedReviewTarget,
   ReviewTargetMount,
@@ -211,36 +218,72 @@ export function reviewTypeLabel(objectType: string): string {
  * visibility, MIME, and updated time"
  * (design@fe2182547d4a specs/app-artifact-review.html §IV).
  *
- * THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line printed the
- * two scope facts BARE, one after the other, so the ordinary case read
- * "organization · organization" — the same word twice for two facts that are not
- * the same thing at all: which scope HOLDS the artifact, and who can SEE it. The
- * plan's fix is that "the line gets labels or drops the storage fact". The
- * drawing keeps BOTH facts on the line ("… · Team · Private · text/html ·
- * updated 8 min ago", specs/app-lifecycle-cards.html §II), so dropping the
- * storage fact would delete a fact the drawing draws: the facts are LABELLED
- * instead, in the drawing's own order, with the label the host already uses for
- * ownership on its other screens.
+ * THE LINE IS THE DRAWING'S LINE (cinatra#3051, re-shoot grade). The drawing
+ * draws "… · Team · Private · text/html · updated 8 min ago"
+ * (specs/app-lifecycle-cards.html §II, and §IV's own row-fact clause): the two
+ * scope facts as BARE words in the host's own vocabulary, and the instant as a
+ * RELATIVE reading. The line printed neither — it carried labelled raw enum
+ * values ("Ownership: organization · Visibility: organization") and the raw ISO
+ * instant the row was stored with ("updated 2026-08-29T03:07:18.778Z"), which
+ * is a machine's reading of a header a person reads.
+ *
+ * The earlier honesty concern — that two BARE scope words read as the same word
+ * twice for an organization-owned, organization-visible artifact — is answered
+ * by the vocabulary rather than by labels: the words are the ones the host's
+ * other cards already print for these two facts, and the drawing's own line is
+ * what a reader is entitled to see. Nothing is dropped; both facts stay, in the
+ * drawing's order.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
-export function reviewTargetRowFacts(artifact: {
-  ownerLevel: string | null;
-  visibility: string | null;
-  mime: string | null;
-  updatedAt: string | null;
-}): string[] {
+export function reviewTargetRowFacts(
+  artifact: {
+    ownerLevel: string | null;
+    visibility: string | null;
+    mime: string | null;
+    updatedAt: string | null;
+  },
+  /** The instant the line is read AT. Defaults to now; a caller passes one so a
+   *  rendering can be pinned. */
+  now: Date = new Date(),
+): string[] {
   // NULLABLE SINCE cinatra#3051, and the fields are DROPPED rather than printed
   // as absences. The page always has all four, so this is a no-op there; the
   // card draws the same line from the gate's own rows, where a target whose
   // artifact this reader may not read (or which is gone) carries ids and
-  // nothing else — and "Ownership: null" is worse than a shorter true line.
+  // nothing else — and an empty scope word is worse than a shorter true line.
   const facts: string[] = [];
-  if (artifact.ownerLevel) facts.push(`Ownership: ${artifact.ownerLevel}`);
-  if (artifact.visibility) facts.push(`Visibility: ${artifact.visibility}`);
+  if (artifact.ownerLevel) facts.push(reviewScopeWord(artifact.ownerLevel));
+  if (artifact.visibility) facts.push(reviewScopeWord(artifact.visibility));
   if (artifact.mime) facts.push(artifact.mime);
-  if (artifact.updatedAt) facts.push(`updated ${artifact.updatedAt}`);
+  if (artifact.updatedAt) {
+    facts.push(`updated ${reviewRelativeInstant(artifact.updatedAt, now)}`);
+  }
   return facts;
+}
+
+/** A scope fact in the host's own vocabulary: the stored level/visibility word,
+ *  capitalized, exactly as the library's own rows print it
+ *  (`src/components/artifacts/library-mode.tsx`'s `ownerLabel`). */
+export function reviewScopeWord(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * An instant as the header reads it: a relative time, through the SAME
+ * formatter the host's other cards use for one (`date-fns`'s distance-to-now,
+ * with the suffix — the library rows, the console rows and the marketplace
+ * header all print it that way).
+ *
+ * A value that does not parse as an instant is passed through UNTOUCHED. The
+ * card draws this line from the gate's own rows, and a row that already carries
+ * a phrase rather than a timestamp must read as that phrase, never as
+ * "Invalid Date".
+ */
+export function reviewRelativeInstant(value: string, now: Date = new Date()): string {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+  return formatDistance(at, now, { addSuffix: true });
 }
 
 // ---------------------------------------------------------------------------
