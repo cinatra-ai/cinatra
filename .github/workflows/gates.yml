@@ -238,9 +238,9 @@ jobs:
 
   # Every pinned design conformance manifest still matches the one that is
   # published. Its OWN job, not a step in `gates`: `gates` is a required
-  # context, and cinatra#3057 landed this warn-first so that a red here was
-  # VISIBLE without blocking anything; rollout step (b) then added this job's
-  # own context to .github/branch-protections.json. Pure node,
+  # context, and cinatra#3057 lands this warn-first — a red here must be
+  # VISIBLE without blocking anything until a separate PR adds this job's
+  # context to .github/branch-protections.json (rollout step b). Pure node,
   # no dependency install, so it costs a runner slot and nothing else.
   design-pin-drift:
     runs-on: ubuntu-latest
