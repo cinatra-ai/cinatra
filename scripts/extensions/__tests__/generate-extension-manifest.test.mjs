@@ -19,10 +19,11 @@ import {
   validateChatViewsDeclaration,
   webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
+  assertArtifactRendererPackaging,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { GENERATED_MANIFEST_FILES } from "../generated-manifest-files.mjs";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1367,5 +1368,198 @@ describe("the generator scopes the on-disk tree to the DECLARED extension univer
     for (const r of records) {
       expect(universe.has(r.packageName), r.packageName).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The packaging rule's host half (plan (C) item 0.8 / §8.5): "every base
+// extension gains its `exports` entry, the generated display maps stop
+// importing internal source paths, and the thirteen hand-maintained aliases
+// go." The generated display map is the emitted artefact those three sentences
+// meet in, so it is pinned here: every emitted renderer import is a BARE
+// package specifier that the owning package itself publishes at the
+// generator's `exports` key, and NO host-maintained path alias stands behind
+// it any more (neither in the generated tsconfig nor in its source manifest).
+// A regression in any direction — a re-introduced alias, a relative path into
+// extensions/, an unpublished key — is a failure here rather than a runtime
+// import error on a page.
+// ---------------------------------------------------------------------------
+describe("the generated display map imports through package exports, never a host alias", () => {
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const MAP_REL = "src/lib/generated/artifact-renderers.ts";
+
+  /** Every dynamic-import specifier the generated display map emits. */
+  function emittedRendererSpecifiers() {
+    const src = readFileSync(path.join(REPO_ROOT, MAP_REL), "utf8");
+    const found = new Set();
+    for (const m of src.matchAll(/import\(\s*"([^"]+)"\s*\)/g)) found.add(m[1]);
+    return [...found].sort();
+  }
+
+  /** The emitted specifiers of entries the generator classified `required` —
+   *  the packages the host acquires in every deployment. A `guardedOptional`
+   *  entry is a package the required set deliberately does NOT carry, so it can
+   *  take no workspace dependency edge (the coverage gate refuses one for a
+   *  package outside `cinatra.extensions`) and keeps its host alias until it
+   *  either joins that set or the guarded road gets a resolution of its own. */
+  function emittedByResolution(resolution) {
+    const src = readFileSync(path.join(REPO_ROOT, MAP_REL), "utf8");
+    const found = new Set();
+    const entry = /resolution:\s*"([^"]+)"[\s\S]*?import\(\s*"([^"]+)"\s*\)/g;
+    for (const line of src.split("\n")) {
+      entry.lastIndex = 0;
+      const m = entry.exec(line);
+      if (m && m[1] === resolution) found.add(m[2]);
+    }
+    return [...found].sort();
+  }
+
+  /** The generator's OWN alias predicate (generate-extension-manifest.mjs:
+   *  `tsconfigText.includes(JSON.stringify(specifier))`), mirrored so this test
+   *  judges resolution the way the generator judges it. tsconfig.json carries
+   *  trailing line comments, so it is read as text, never parsed. */
+  function tsconfigResolves(specifier) {
+    const tsconfigText = readFileSync(path.join(REPO_ROOT, "tsconfig.json"), "utf8");
+    return tsconfigText.includes(JSON.stringify(specifier));
+  }
+
+  function buildConfigAliases() {
+    const manifest = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "config/build-config.manifest.json"), "utf8"),
+    );
+    return new Set((manifest.tsconfigPaths ?? []).map((e) => e.alias));
+  }
+
+  it("emits one bare specifier per renderer — no relative path, no path into extensions/, no file extension", () => {
+    const specifiers = emittedRendererSpecifiers();
+    // Anti-vacuity: the thirteen alias-backed renderers are the floor; the two
+    // new bases only add to it.
+    expect(specifiers.length).toBeGreaterThanOrEqual(13);
+    for (const spec of specifiers) {
+      expect(spec.startsWith("."), spec).toBe(false);
+      expect(spec.includes("extensions/"), spec).toBe(false);
+      expect(/\.(ts|tsx|js|jsx)$/.test(spec), spec).toBe(false);
+      expect(/^@[a-z0-9-]+\/[a-z0-9.-]+\/.+$/.test(spec), spec).toBe(true);
+    }
+  });
+
+  it("no host-maintained path alias stands behind a REQUIRED base's renderer specifier (the eleven are gone)", () => {
+    const required = emittedByResolution("required");
+    expect(required.length).toBeGreaterThanOrEqual(11);
+    const buildConfig = buildConfigAliases();
+    expect(required.filter((s) => tsconfigResolves(s))).toEqual([]);
+    expect(required.filter((s) => buildConfig.has(s))).toEqual([]);
+  });
+
+  it("the alias-backed remainder is EXACTLY the guarded-optional display, named and bounded", () => {
+    // The two aliases this change does not delete, pinned by name so a
+    // re-introduced one for any other package fails here. A guardedOptional
+    // package is outside `cinatra.extensions`, so it cannot take the workspace
+    // dependency edge a bare specifier needs; its alias goes when it joins the
+    // required set (or the guarded road gets its own resolution).
+    const buildConfig = buildConfigAliases();
+    const aliased = emittedRendererSpecifiers().filter(
+      (s) => tsconfigResolves(s) || buildConfig.has(s),
+    );
+    expect(aliased).toEqual([
+      "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
+      "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+    ]);
+    expect(emittedByResolution("guardedOptional")).toEqual(aliased);
+  });
+
+  it("every emitted renderer specifier is published by its own package at the generator's exports key", () => {
+    const specifiers = emittedRendererSpecifiers();
+    const missing = [];
+    for (const spec of specifiers) {
+      const m = spec.match(/^(@[^/]+\/[^/]+)\/(.+)$/);
+      expect(m, spec).not.toBe(null);
+      const [, packageName, subpath] = m;
+      const dir = path.join(REPO_ROOT, "extensions", ...packageName.replace(/^@/, "").split("/"));
+      const manifestPath = path.join(dir, "package.json");
+      if (!existsSync(manifestPath)) {
+        // A bare checkout without the companion tree cannot judge publication;
+        // the two alias assertions above still ran.
+        console.warn(`[artifact-renderers] ${packageName} absent from extensions/ — exports check skipped`);
+        continue;
+      }
+      const pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const key = `./${subpath}`;
+      const exportsMap = pkg.exports;
+      if (exportsMap === null || typeof exportsMap !== "object" || Array.isArray(exportsMap) || !(key in exportsMap)) {
+        missing.push(`${packageName} does not publish exports["${key}"]`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PACKAGING RULE, on fixtures (item 0.8 of `PLAN: Agents Lifecycle (C)`):
+// "every artifact extension declares its display through its own `exports`, the
+// generator REQUIRES it for artifact extensions, and the thirteen hand-maintained
+// display aliases are deleted".
+//
+// The real-tree block above proves the CURRENT fleet is clean. These cases prove
+// the generator would REFUSE a regression: an artifact renderer that publishes no
+// `exports` entry must fail generation even when a host alias would resolve it,
+// because an alias standing in for the packaging is the host-edit-per-extension
+// coupling item 0.8 removes.
+// ---------------------------------------------------------------------------
+describe("the packaging rule: a display is published by its own package, never by a host alias", () => {
+  const base = {
+    packageName: "@cinatra-ai/example-artifact",
+    slot: "detail",
+    specifier: "@cinatra-ai/example-artifact/src/renderers/detail",
+    exportsKey: "./src/renderers/detail",
+  };
+
+  it("REFUSES a renderer with no exports entry even when a host path alias would resolve it", () => {
+    expect(() =>
+      assertArtifactRendererPackaging({
+        ...base,
+        hasExportsEntry: false,
+        hasAliasRoad: true,
+        hasDependencyEdge: false,
+      }),
+    ).toThrow(/not published by its own package/);
+    expect(() =>
+      assertArtifactRendererPackaging({
+        ...base,
+        hasExportsEntry: false,
+        hasAliasRoad: true,
+        hasDependencyEdge: true,
+      }),
+    ).toThrow(/is not an accepted substitute/);
+  });
+
+  it("REFUSES a renderer that publishes its exports but has no resolution road at all", () => {
+    expect(() =>
+      assertArtifactRendererPackaging({
+        ...base,
+        hasExportsEntry: true,
+        hasAliasRoad: false,
+        hasDependencyEdge: false,
+      }),
+    ).toThrow(/has no resolution road/);
+  });
+
+  it("ACCEPTS exports + a root dependency edge (the required road) and exports + an alias (the guarded-optional road)", () => {
+    expect(() =>
+      assertArtifactRendererPackaging({
+        ...base,
+        hasExportsEntry: true,
+        hasAliasRoad: false,
+        hasDependencyEdge: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertArtifactRendererPackaging({
+        ...base,
+        hasExportsEntry: true,
+        hasAliasRoad: true,
+        hasDependencyEdge: false,
+      }),
+    ).not.toThrow();
   });
 });
