@@ -121,6 +121,9 @@ const BLOG_POST_EXT = "@cinatra-ai/blog-post-artifact";
 let client: Client;
 let deriveMod: typeof import("../unbound-output-derivation");
 let pickupMod: typeof import("../default-road-pickup");
+// The CANONICAL install road, the one the product uses — this suite creates
+// its fixture install rows through the lifecycle primitive, never a raw write.
+let lifecycle: typeof import("@cinatra-ai/extensions/lifecycle-primitive");
 
 /** A markdown document comfortably over the one-kilobyte document floor. */
 const MARKDOWN_DOC = [
@@ -324,6 +327,7 @@ beforeAll(async () => {
   await client.connect();
   deriveMod = await import("../unbound-output-derivation");
   pickupMod = await import("../default-road-pickup");
+  lifecycle = await import("@cinatra-ai/extensions/lifecycle-primitive");
   objectTypeRegistry._clearForTests();
 }, 90_000);
 
@@ -653,13 +657,37 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     // A GOVERNED but NOT-LIVE install row: the write-allowed gate denies. The
     // gate answers the same `false` when the canonical store cannot be read at
     // all, which is why settling on it would lose the output for good.
+    // The row is created THE WAY THE PRODUCT CREATES ONE — the canonical
+    // lifecycle primitive, installed live and then archived — so this suite
+    // cannot drift from the one write road it is proving the pickup respects.
     const installId = `inst-${randomUUID()}`;
-    await client.query(
-      `INSERT INTO "${S()}"."installed_extension"
-         (id, package_name, version, owner_level, owner_id, organization_id, kind, status, source)
-       VALUES ($1, $2, '1.0.0', 'organization', $3, $3, 'artifact', 'archived', '{}'::jsonb)`,
-      [installId, TEXT_BASE_EXT, ORG],
+    const fixtureActor = { actor: { source: "dispatcher" as const, userId: "u-3029" } };
+    await lifecycle.installExtensionManifest(
+      {
+        id: installId,
+        packageName: TEXT_BASE_EXT,
+        ownerLevel: "organization",
+        ownerId: ORG,
+        organizationId: ORG,
+        kind: "artifact",
+        source: {
+          type: "verdaccio",
+          registryUrl: "http://127.0.0.1:4873",
+          packageName: TEXT_BASE_EXT,
+          version: "1.0.0",
+          integrity: "sha512-fixture-3029",
+        },
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+        status: "active",
+      } as never,
+      { ...fixtureActor, reason: "cinatra#3029 fixture install" },
     );
+    await lifecycle.transitionExtensionLifecycle(installId, "archive", {
+      ...fixtureActor,
+      reason: "cinatra#3029 fixture — governed, not live",
+    });
 
     const { templateId, runId } = await seedTemplateAndRun();
     await seedOutbox({ runId, templateId, items: [item("draft", MARKDOWN_DOC)] });
@@ -673,7 +701,10 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     const row = await outboxRow(runId);
     expect(row?.status).toBe("pending");
     expect(await ledgerRows(runId)).toHaveLength(0);
-    await client.query(`DELETE FROM "${S()}"."installed_extension" WHERE id = $1`, [installId]);
+    await lifecycle.transitionExtensionLifecycle(installId, "force_delete", {
+      ...fixtureActor,
+      reason: "cinatra#3029 fixture teardown",
+    });
   });
 
   it("CONVERGENCE — the run page waits for the capture before it says a run made nothing", async () => {
