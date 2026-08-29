@@ -29,7 +29,7 @@
 // @/lib/dev-tunnel-status). The tailscale connector's registered impl carries
 // that getter since its #65, pinned here from 9061f2c3, so the identity
 // branches below are LIVE on a real instance (proven end to end in
-// evidence/2534-pin).
+// https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2534-pin).
 //
 // The "unknown" branch is not dead: the connector reports no code for the
 // unresolved-tailnet cause (none is minted), and a provider that never grows
