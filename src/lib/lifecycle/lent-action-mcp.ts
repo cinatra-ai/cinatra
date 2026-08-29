@@ -123,6 +123,12 @@ type SubmitReviewDecisionAction = typeof import(
 type ApproveReviewTaskInternal = typeof import(
   "@cinatra-ai/agents/review-task-actions"
 )["approveReviewTaskInternal"];
+/** The ARMED schedule's own Save changes — the function the card's endpoint
+ *  calls (cinatra#2934, the armed-trigger tab). Deferred for the same
+ *  route-graph reason as the two above. */
+type DecideTriggerScheduleProposal = typeof import(
+  "@/lib/lifecycle/trigger-schedule-proposal-card"
+)["decideTriggerScheduleProposal"];
 
 async function loadSubmitReviewDecision(): Promise<SubmitReviewDecisionAction> {
   const mod = await import(
@@ -163,9 +169,6 @@ type WriteRunSkillSelectionForActor = typeof import(
 type DispatchRunStartForPrincipal = typeof import(
   "@cinatra-ai/agents/run-dispatch-core"
 )["dispatchRunStartForPrincipal"];
-type DecideTriggerScheduleProposal = typeof import(
-  "@/lib/lifecycle/trigger-schedule-proposal-card"
-)["decideTriggerScheduleProposal"];
 
 async function loadHoldDecisionCore() {
   return import("@cinatra-ai/agents/run-recommendation-core");
@@ -179,6 +182,17 @@ async function loadRunStartDispatcher(): Promise<DispatchRunStartForPrincipal> {
 async function loadDecideSchedule(): Promise<DecideTriggerScheduleProposal> {
   const mod = await import("@/lib/lifecycle/trigger-schedule-proposal-card");
   return mod.decideTriggerScheduleProposal;
+}
+
+/** The one function that says what a placed value does to a §VI selection —
+ *  deferred with the rest of this arm, for the same route-graph reason. */
+type ApplyArmedScheduleFill = typeof import(
+  "@cinatra-ai/agents/trigger-recurrence"
+)["applyArmedScheduleFill"];
+
+async function loadApplyArmedScheduleFill(): Promise<ApplyArmedScheduleFill> {
+  const mod = await import("@cinatra-ai/agents/trigger-recurrence");
+  return mod.applyArmedScheduleFill;
 }
 import { LIFECYCLE_REF_MAX_LENGTH } from "@/lib/assistant-runtime/lifecycle-view-envelope";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
@@ -373,6 +387,7 @@ export async function handleLentAction(
     readonly writeSelection?: WriteRunSkillSelectionForActor;
     readonly dispatchRunStart?: DispatchRunStartForPrincipal;
     readonly decideSchedule?: DecideTriggerScheduleProposal;
+    readonly applyFill?: ApplyArmedScheduleFill;
     /** This message's own fills + its own attachments (cinatra#2934). */
     readonly readFills?: (
       runId: string,
@@ -433,6 +448,22 @@ export async function handleLentAction(
   const lent = controlsLentBy(bound);
   if (!isLentActionControl(control) || !lent.includes(control)) {
     return refuseCardUnavailable();
+  }
+
+  // AND, FOR AN ARMED SCHEDULE, THE FORM'S OWN PREDICATE — ASKED BEFORE THE
+  // SPEND (cinatra#2934, the armed-trigger tab). `canSave` is the boolean the
+  // card's **Save changes** is gated by, carried by the resolve rather than
+  // re-derived: a schedule the button is withheld from is a schedule this road
+  // refuses, in the server's own words. It is asked HERE, above gate 6, because
+  // a grant spent on a refusal buys the person nothing and costs them their one
+  // press — and the write's own guard is asked twice again below regardless, so
+  // nothing is authorized by this being a snapshot.
+  if (bound.kind === "armed_schedule_form" && !bound.canSave) {
+    return say({
+      ok: false,
+      outcome: { kind: "refused" },
+      message: bound.refusal ?? "This schedule can no longer be changed.",
+    });
   }
 
   // GATE 6 — spend the grant. Before the effect, atomically, once.
@@ -642,11 +673,94 @@ export async function handleLentAction(
     return say({ ok: outcome.kind === "confirmed", outcome });
   }
 
+  // THE ARMED SCHEDULE'S **Save changes** (cinatra#2934, the armed-trigger tab).
+  //
+  // ONE ROAD FOR THE PRESS AND FOR THE ASK, and it is the same function, with
+  // the same argument: `decideTriggerScheduleProposal` with the card's own ref
+  // and its `save` op — which is what `/api/lifecycle-views/decide` calls when
+  // the button is pressed. Nothing about the write is re-implemented and nothing
+  // is relaxed: the selections go through the same closed-vocabulary parse, the
+  // run is re-derived from the ref rather than named, and
+  // `updateRunTriggerScheduleForActor` asks its guard before it delegates and
+  // again inside the setter, against the row the cancel and the upsert act on.
+  //
+  // WHAT IS SAVED IS WHAT THE FORM WAS SHOWN HOLDING — the card's own rows with
+  // every fill THIS MESSAGE placed applied over them, in order, read back here
+  // on the server. The model supplies none of it.
+  //
+  // AND A MESSAGE THAT PLACED NOTHING SAVES NOTHING, for exactly the reason the
+  // screen's Continue does: a press with nothing placed has no "what was sent"
+  // to show, and an induced bare press must do nothing at all.
+  if (bound.kind === "armed_schedule_form") {
+    const readers = deps.readFills ? null : await loadRunWindowFillReaders();
+    const readFills = deps.readFills ?? readers!.readRunWindowFillsForMessage;
+    const placed = await readFills(bound.runId, parsed.data.ref, claims.messageId).catch(
+      () => [] as { ref: string; values: Record<string, unknown> }[],
+    );
+    if (placed.length === 0) return refuseCardUnavailable();
+    const apply = deps.applyFill ?? (await loadApplyArmedScheduleFill());
+    // EACH FILL, IN THE ORDER IT WAS PLACED — the browser's own arithmetic.
+    //
+    // The card applies every accepted fill to its draft ONE AT A TIME
+    // (`applyArmedScheduleFill(prev, values)`), and the placement rule reads the
+    // selection it is given to decide what a row means: recurrence rows placed
+    // without naming a kind ARE the recurring row. Folding the fills into the
+    // card's CURRENT row values first would hand that rule a `triggerType` the
+    // person never typed — so a one-off asked to repeat would SHOW recurring in
+    // the rows and SAVE the one-off. Same function, same order, same result on
+    // both sides.
+    let shown = bound.schedule;
+    for (const f of placed) shown = apply(shown, f.values) as typeof shown;
+    const decide = deps.decideSchedule ?? (await loadDecideSchedule());
+    const outcome = await decide({
+      ref: parsed.data.ref,
+      op: "save",
+      schedule: shown,
+      userId: frame.userId,
+      orgId: frame.orgId,
+      // THE ROLE THE ACTOR WAS RESOLVED WITH — the SAME expression the card's
+      // own endpoint uses, so the ask is neither wider nor narrower than the
+      // press. The service re-checks it against the run it reaches.
+      role: actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null,
+      access: {
+        actor: actorCtx.actor,
+        ...(actorCtx.roleHints ? { roles: actorCtx.roleHints } : {}),
+      },
+    });
+    if (outcome.kind !== "saved") {
+      // The service's own words, relayed. A state refusal is copy the reader
+      // needs; an authorization refusal is the card's one fixed sentence.
+      return say({
+        ok: false,
+        outcome,
+        message:
+          "message" in outcome && typeof outcome.message === "string"
+            ? outcome.message
+            : LENT_ACTION_CARD_UNAVAILABLE,
+      });
+    }
+    // AND THE ROWS STILL SHOW WHAT WAS SAVED. The trigger row is read back
+    // through the resolver's own arm — the same read the card re-resolves with,
+    // under the same access — rather than reported from what was sent.
+    const after = await resolve({ ref: parsed.data.ref, actorCtx }).catch(() => null);
+    // AND ONLY A REAL READ-BACK IS REPORTED AS ONE. A read that failed, or a
+    // card that is no longer an armed form, has no rows to show: answering with
+    // the values the card held BEFORE the write would be what was SENT dressed
+    // as what was ARMED, which is the one thing this read-back exists to rule
+    // out. The write stands either way — it is the reading that is missing, and
+    // the answer says so rather than inventing it.
+    if (!after || after.kind !== "armed_schedule_form") {
+      return say({ ok: true, outcome: { kind: "saved", rows: null } });
+    }
+    return say({ ok: true, outcome: { kind: "saved", rows: after.form.values } });
+  }
+
   // ONLY A HITL SCREEN HAS A CONTINUE (cinatra#2934, repaired after the picture
-  // leg). The scheduler form is a bound screen too, and its button is the
-  // person's: gate 5 above already refuses it — it lends `fill` and no pressable
-  // control — and this states the same thing where the effect is, so a card kind
-  // added later cannot fall into a resume path that was never written for it.
+  // leg). The UNARMED scheduler form is a bound screen too, and its button is
+  // the person's: gate 5 above already refuses it — it lends `fill` and no
+  // pressable control — and this states the same thing where the effect is, so a
+  // card kind added later cannot fall into a resume path that was never written
+  // for it.
   if (bound.kind !== "hitl_screen") return refuseCardUnavailable();
 
   // The HITL screen's Continue. `approveReviewTaskInternal` is the gate's own

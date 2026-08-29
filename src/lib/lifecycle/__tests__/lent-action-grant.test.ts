@@ -87,6 +87,9 @@ describe("the grant names the person, the message, the card and ONE control", ()
     // Adjust and Confirm — so it still says exactly what it says: the buttons a
     // lifecycle card actually draws, and nothing else. A control no card draws
     // is still not in it, which is what stops a grant from naming one.
+    // `save` joined it with the ARMED scheduler form (cinatra#2934, the
+    // armed-trigger tab): it IS a button that card draws, and the plan puts it
+    // on the ask road — "one road for the press and for the ask".
     expect([...LENT_ACTION_CONTROLS]).toEqual([
       "comment",
       "approve",
@@ -95,6 +98,7 @@ describe("the grant names the person, the message, the card and ONE control", ()
       "confirm",
       "skip",
       "adjust",
+      "save",
     ]);
     expect(isLentActionControl("fill")).toBe(false);
     expect(isLentActionControl("approve")).toBe(true);

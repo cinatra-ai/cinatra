@@ -830,12 +830,12 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 807
+      "line": 924
     },
     {
       "primitiveName": "lifecycle_bound_screen_fill",
       "file": "src/lib/lifecycle/bound-screen-fill-mcp.ts",
-      "line": 195
+      "line": 202
     },
     {
       "primitiveName": "linkedin_accounts_list",
@@ -1115,7 +1115,7 @@
     {
       "primitiveName": "schedule_proposal_render",
       "file": "src/lib/lifecycle/schedule-proposal-mcp.ts",
-      "line": 216
+      "line": 289
     },
     {
       "primitiveName": "skill_source_compile",

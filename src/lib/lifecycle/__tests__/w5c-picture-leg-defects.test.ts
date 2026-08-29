@@ -488,10 +488,15 @@ describe("the schedule screen binds the scheduler form", () => {
       screenRunIds: [RUN],
       candidateRefs: [],
     });
-    // The ARMED tab stays on the run's own screen: the armed form is #2788's.
-    expect(boundScreenClaimForSurface("armed-trigger", RUN)).toEqual({
-      screenRunIds: [RUN],
-      candidateRefs: [],
+    // THE ARMED TAB BINDS ITS OWN FORM TOO (cinatra#2934, the armed-trigger
+    // tab — this pull request's Deviation 1, closed). It named the run's
+    // WAITING SCREEN while the surface in front of the person is the armed
+    // scheduler form, which is the same defect this file records for the
+    // scheduling step, one surface along. Its ref is the RUN-SCOPED schedule
+    // ref its own card is already drawn from.
+    expect(boundScreenClaimForSurface("armed-trigger", RUN, undefined, () => "ARMED")).toEqual({
+      screenRunIds: [],
+      candidateRefs: ["ARMED"],
     });
     expect(boundScreenClaimForSurface("review", RUN)).toEqual({
       screenRunIds: [],

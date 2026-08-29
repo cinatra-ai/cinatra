@@ -409,3 +409,173 @@ export function describeRecurrence(c: RecurringConfig): string {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE ARMED SCHEDULER FORM'S OWN ROWS, MOVED BY A DESCRIBED CHANGE
+// (cinatra#2934, lifecycle-b W5c — the armed-trigger tab).
+//
+// THE PLAN'S SENTENCE THIS EXISTS FOR (§X, the schedule reading): "Fills the
+// scheduler form's own rows — when the run starts, its time, its timezone —
+// whether the schedule is being set for the first time or changed once it
+// stands. The person presses the form's own button."
+//
+// "ONCE IT STANDS" IS THIS SECTION. The scheduling STEP holds its rows as a
+// react-hook-form state and moves them with `applyScheduleValues`; the ARMED
+// card holds them as ONE §VI selection and moves them with `setDraft`. Same
+// rows, two shapes — so the placement rule is written ONCE, against the
+// selection, and both the browser that must show the change and the server that
+// must save it read it from the same function. A second implementation on
+// either side is exactly the drift §VI's "the builder's selections are what the
+// reader sees and confirms" rules out.
+//
+// AND IT LIVES HERE, IN THE VOCABULARY, rather than in a leaf of its own — for
+// the reason this module already exists: it is the ONE module that says what a
+// selection means, and the placement rule is selection semantics. It is also a
+// measurement: the four routes carrying LOCKED first-party-graph budgets
+// (`/api/mcp`, `/api/a2a`, `/api/llm-bridge`, `/chat`) already reach this
+// module, so nothing new lands on any of them.
+//
+// The §VI selection is typed STRUCTURALLY through `RecurringConfig` — this
+// package is the one that owns the vocabulary and must keep no edge onto the
+// view layer, exactly as `SavedScheduleSelection` in the trigger service does.
+// ---------------------------------------------------------------------------
+
+/** §VI's selection rows, as this module sees them — the discriminated schedule
+ *  the armed card draws. Mirrors `ProposedSchedule` in the protocol package. */
+export type ArmedScheduleSelection =
+  | { kind: "immediate" }
+  | { kind: "scheduled"; runAt: string; timezone: string }
+  | { kind: "recurring"; selection: RecurringConfig; timezone: string };
+
+/**
+ * The recurrence rows the scheduler form draws, by the names the form's own
+ * schema declares. The list is the selection's own keys — never a second
+ * spelling of them.
+ */
+export const ARMED_SCHEDULE_RECURRENCE_ROWS: readonly (keyof RecurringConfig)[] =
+  Object.keys(DEFAULT_RECURRING_CONFIG) as (keyof RecurringConfig)[];
+
+/**
+ * WHAT THE ARMED FORM'S ROWS ARE HOLDING, as the fill road's closed set sees
+ * them.
+ *
+ * Read from the SELECTIONS the card is drawing — which the resolver reads back
+ * off the installed trigger row — rather than from the row a second time, so
+ * "what the fields show" has one source and a fill that changes nothing is
+ * dropped against exactly what the person can see.
+ */
+export function armedScheduleFormValues(
+  schedule: ArmedScheduleSelection,
+): Record<string, unknown> {
+  if (schedule.kind === "immediate") return { triggerType: "immediate" };
+  if (schedule.kind === "scheduled") {
+    return {
+      triggerType: "scheduled",
+      // The row is a local `YYYY-MM-DDTHH:mm` box, which is what the card's own
+      // datetime-local control holds and what a fill has to match to read as
+      // "no change".
+      scheduledAt: schedule.runAt.replace(" ", "T").slice(0, 16),
+      timezone: schedule.timezone,
+    };
+  }
+  return { triggerType: "recurring", timezone: schedule.timezone, ...schedule.selection };
+}
+
+/** Kept only when the placed value is a value the control could actually hold. */
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function coerceSelection(
+  base: RecurringConfig,
+  values: Record<string, unknown>,
+): RecurringConfig {
+  const next: RecurringConfig = { ...base };
+  if (typeof values.frequency === "string") {
+    next.frequency = values.frequency as RecurringConfig["frequency"];
+  }
+  const interval = num(values.interval);
+  if (interval !== undefined) next.interval = interval;
+  if (Array.isArray(values.weekdays)) {
+    next.weekdays = values.weekdays.filter((d): d is number => typeof d === "number");
+  }
+  const dayOfMonth = num(values.dayOfMonth);
+  if (dayOfMonth !== undefined) next.dayOfMonth = dayOfMonth;
+  if (values.monthlyMode === "date" || values.monthlyMode === "weekday") {
+    next.monthlyMode = values.monthlyMode;
+  }
+  const nthWeek = num(values.nthWeek);
+  if (nthWeek !== undefined) next.nthWeek = nthWeek as RecurringConfig["nthWeek"];
+  const monthlyWeekday = num(values.monthlyWeekday);
+  if (monthlyWeekday !== undefined) next.monthlyWeekday = monthlyWeekday;
+  if (values.quarterAnchor === "start" || values.quarterAnchor === "end") {
+    next.quarterAnchor = values.quarterAnchor;
+  }
+  const yearlyMonth = num(values.yearlyMonth);
+  if (yearlyMonth !== undefined) next.yearlyMonth = yearlyMonth;
+  const hour = num(values.hour);
+  if (hour !== undefined) next.hour = hour;
+  const minute = num(values.minute);
+  if (minute !== undefined) next.minute = minute;
+  return next;
+}
+
+/**
+ * Move the armed form's rows by the values a fill placed in them.
+ *
+ * THE SAME WRITE THE FORM'S OWN CONTROLS MAKE — row for row, and in the same
+ * order the scheduling step's `applyScheduleValues` makes it, so a described
+ * change lands identically whether the person is arming a schedule for the
+ * first time or changing one that stands:
+ *
+ *   · a repeat row described WITHOUT naming the kind IS the recurring row; a
+ *     message that named a kind keeps the one it named;
+ *   · the timezone is the one that was placed, else the one the form is already
+ *     showing — never the server's, and never the browser's guessed at here;
+ *   · a row the placed values cannot express is left exactly as it stood. A
+ *     one-off asked for with no moment to run at has no `Run at` to show, and a
+ *     form that silently invented one would be showing a time nobody chose.
+ *
+ * PURE and total: it returns a §VI selection the card can draw and the save road
+ * can validate, or the one it was given.
+ */
+export function applyArmedScheduleFill(
+  current: ArmedScheduleSelection,
+  values: Record<string, unknown>,
+): ArmedScheduleSelection {
+  const touchesRecurrence = ARMED_SCHEDULE_RECURRENCE_ROWS.some(
+    (row) => values[row] !== undefined,
+  );
+  const named =
+    values.triggerType === "immediate" ||
+    values.triggerType === "scheduled" ||
+    values.triggerType === "recurring"
+      ? values.triggerType
+      : null;
+  const kind = named ?? (touchesRecurrence ? "recurring" : current.kind);
+
+  const timezone =
+    typeof values.timezone === "string" && values.timezone.length > 0
+      ? values.timezone
+      : current.kind === "immediate"
+        ? "UTC"
+        : current.timezone;
+
+  if (kind === "immediate") return { kind: "immediate" };
+
+  if (kind === "scheduled") {
+    const placed =
+      typeof values.scheduledAt === "string" && values.scheduledAt.length > 0
+        ? values.scheduledAt.replace(" ", "T").slice(0, 16)
+        : null;
+    const runAt = placed ?? (current.kind === "scheduled" ? current.runAt : null);
+    // NOTHING TO SHOW, SO NOTHING MOVES. See the note above: an invented moment
+    // would be a time the person never chose.
+    if (!runAt) return current;
+    return { kind: "scheduled", runAt, timezone };
+  }
+
+  const base: RecurringConfig =
+    current.kind === "recurring" ? current.selection : { ...DEFAULT_RECURRING_CONFIG };
+  return { kind: "recurring", selection: coerceSelection(base, values), timezone };
+}

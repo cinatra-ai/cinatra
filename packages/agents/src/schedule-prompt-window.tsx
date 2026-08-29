@@ -27,11 +27,26 @@
 // immediately below the scheduler form. That is a composition decision, not a
 // change to the shared panel — no other surface moves.
 //
-// IT CHANGES NOTHING BY ITSELF. What is typed here goes into the run's own
-// conversation with the assistant and nowhere else; the schedule above it is
-// changed by the form's own controls. cinatra#2853 owns making a typed
-// instruction act on the card, and `schedule-proposal-card.tsx` already exports
-// the act it will call (`submitScheduleDecision` / `adjustAndConfirmSchedule`).
+// AND IT CHANGES THE SCHEDULE ABOVE IT (cinatra#2934, the armed-trigger tab).
+// This box used to do nothing but talk: what was typed reached the run's
+// conversation and the form above it never moved, which is the deviation this
+// pull request recorded and the maintainer refused. The plan's own sentence for
+// the surface is "Fills the scheduler form's own rows … whether the schedule is
+// being set for the first time or changed once it stands. The person presses the
+// form's own button", and the second half is what lands here:
+//
+//   · a described change comes back as this turn's own FILL and is written into
+//     the card's rows — its `draft`, the same state its controls write — so the
+//     person sees it and nothing is saved;
+//   · a message that ALSO plainly asks for it to be saved is pressed by the
+//     assistant through the card's own save, and the card is re-drawn from the
+//     server so the rows show what was actually armed;
+//   · a schedule that can no longer be changed refuses in the server's own
+//     words, and the window touches nothing.
+//
+// THE WINDOW DECIDES NONE OF THAT. It relays this turn's effect to its host,
+// which owns the card; which road a sentence took is the server's answer, read
+// off the turn (`effect.fill` / `effect.acted`), never guessed at here.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useState, type ReactElement } from "react";
@@ -44,6 +59,8 @@ export function SchedulePromptWindow({
   runId,
   canRespondInWindow,
   readOnly = false,
+  onFill,
+  onActed,
 }: {
   /** The template the assist call is scoped to. The schedule itself is never
    *  named here: this window answers, it does not act. */
@@ -84,6 +101,19 @@ export function SchedulePromptWindow({
    * DOM rather than predicting it (`useScheduleSurfaceReading`).
    */
   readOnly?: boolean;
+  /**
+   * THIS TURN PLACED VALUES IN THE FORM ABOVE (cinatra#2934). Handed up
+   * unchanged, for the host to write into the card's own rows — the window draws
+   * no schedule and holds no draft, exactly as the scheduling step's window
+   * hands its fill to that form's `applyScheduleValues`.
+   */
+  onFill?: (values: Record<string, unknown>) => void;
+  /**
+   * THIS TURN PRESSED SOMETHING. The card is re-resolved rather than re-drawn
+   * from what was asked for: "whatever it did, the server is the only thing that
+   * knows what the card now shows".
+   */
+  onActed?: () => void;
 }): ReactElement {
   const [mount, setMount] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
@@ -107,22 +137,24 @@ export function SchedulePromptWindow({
       // stored, so once it is accepted it stands, and a schedule ending
       // afterwards does not reach back and unsay it.
       //
-      // CHANGING THE ARMED SCHEDULE FROM THIS BOX still needs the scheduler
-      // form in its armed state. The plan: "On an armed schedule only the
-      // scheduler form is shown, in its different states, and the assistant
-      // fills that form's own fields — never a trigger configuration card."
-      // That form is the screens epic's own slice (cinatra#2788); the server
-      // rule that accepts the change (`updateRunTriggerScheduleForActor`)
-      // already exists, so the fill road reaches it the moment it is drawn
-      // under this window.
+      // AND IT IS THE ONE ROAD THAT CHANGES THE ARMED SCHEDULE TOO
+      // (cinatra#2934, the armed-trigger tab). The turn is bound to the ARMED
+      // scheduler form — the server mints its ref from the run this box sits
+      // under — so the same send that answers the question is the send that
+      // fills the rows and, when the person plainly asks, presses the card's own
+      // Save changes.
       setPromptPending(true);
       try {
-        await sendRunWindowTurn(prompt);
+        const effect = await sendRunWindowTurn(prompt);
+        // A turn that PRESSED writes no fields: the card re-resolves and shows
+        // what the server actually armed, never the values optimistically.
+        if (effect.acted) onActed?.();
+        else if (effect.fill) onFill?.(effect.fill.values);
       } finally {
         setPromptPending(false);
       }
     },
-    [sendRunWindowTurn],
+    [sendRunWindowTurn, onActed, onFill],
   );
 
   return (

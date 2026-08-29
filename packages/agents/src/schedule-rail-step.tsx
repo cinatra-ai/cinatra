@@ -60,12 +60,21 @@
 // "above '1 Review'" rather than a second row numbered 1.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
-import { ScheduleProposalCard } from "./schedule-proposal-card";
+import {
+  ScheduleProposalCard,
+  type ArmedScheduleFill,
+} from "./schedule-proposal-card";
 import { SchedulePromptWindow } from "./schedule-prompt-window";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
 import {
@@ -235,6 +244,15 @@ export function ScheduleStepSurface({
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
   const scheduler = useScheduleSurfaceReading(cardHost);
+  // The SAME composition the run's schedule tab makes, for the same reason: the
+  // window is the card's sibling, so this host carries the turn's fill into the
+  // card's rows and re-mounts it after a press (cinatra#2934).
+  const [armedFill, setArmedFill] = useState<ArmedScheduleFill | null>(null);
+  const [cardGeneration, setCardGeneration] = useState(0);
+  const onActed = useCallback(() => {
+    setArmedFill(null);
+    setCardGeneration((n) => n + 1);
+  }, []);
   const cardView = {
     viewType: "trigger_schedule_proposal" as const,
     schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -245,11 +263,11 @@ export function ScheduleStepSurface({
       <div data-schedule-card-host="" ref={setCardHost}>
         {host === "run_card" ? (
           <LifecycleCardSurfaceProvider host="run_card">
-            <ScheduleProposalCard view={cardView} />
+            <ScheduleProposalCard key={cardGeneration} view={cardView} armedFill={armedFill} />
           </LifecycleCardSurfaceProvider>
         ) : (
           <LifecycleCardSurfaceProvider host="page_gate_region">
-            <ScheduleProposalCard view={cardView} />
+            <ScheduleProposalCard key={cardGeneration} view={cardView} armedFill={armedFill} />
           </LifecycleCardSurfaceProvider>
         )}
       </div>
@@ -276,6 +294,8 @@ export function ScheduleStepSurface({
           runId={runId}
           canRespondInWindow={canRespondInWindow}
           readOnly={!scheduler.changeable}
+          onFill={(values) => setArmedFill({ values })}
+          onActed={onActed}
         />
       ) : null}
     </div>

@@ -91,7 +91,16 @@ export type BoundScreenFillOutcome =
   /** The card is not this person's, is not a screen, or lends no fill. */
   | { readonly kind: "unavailable" }
   /** The card is a screen, but nothing asked for is a field it declares. */
-  | { readonly kind: "no-fields"; readonly fields: readonly string[] };
+  | { readonly kind: "no-fields"; readonly fields: readonly string[] }
+  /**
+   * The form is there and is this person's, and it can no longer be changed
+   * (cinatra#2934, the armed-trigger tab). NOT the uniform absence: every gate
+   * above it passed, so the reader is looking at this very form and is owed the
+   * state in words rather than a sentence that says nothing. The words are the
+   * server's own — `SAVE_SCHEDULE_REFUSALS`, the table the card itself refuses
+   * from — so the window and the card say one thing.
+   */
+  | { readonly kind: "not-editable"; readonly message: string };
 
 /**
  * Which surface a fill row is filed under.
@@ -167,7 +176,11 @@ export async function recordBoundScreenFill(input: {
   // the SCHEDULER FORM the schedule surface sits under (cinatra#2934, repaired
   // after the picture leg). Both answer the same question below — does this card
   // lend `fill` — and a review, an absence and anything else lend nothing.
-  if (bound.kind !== "hitl_screen" && bound.kind !== "schedule_form") {
+  if (
+    bound.kind !== "hitl_screen" &&
+    bound.kind !== "schedule_form" &&
+    bound.kind !== "armed_schedule_form"
+  ) {
     return { kind: "unavailable" };
   }
   if (!controlsLentBy(bound).includes("fill")) return { kind: "unavailable" };
@@ -184,6 +197,19 @@ export async function recordBoundScreenFill(input: {
     input.actorCtx.roleHints ?? {},
   ).catch(() => false);
   if (!mayOperate) return { kind: "unavailable" };
+
+  // AND, FOR AN ARMED SCHEDULE, THE FORM'S OWN PREDICATE (cinatra#2934, the
+  // armed-trigger tab). Issue 2934's acceptance is "an armed one-off changed
+  // before firing and REFUSED AFTER", and the reading that refuses is the one
+  // the form's **Save changes** is gated by — `canSave`, carried by the resolve
+  // rather than re-derived here. A fill into rows nobody can save would place
+  // values the person cannot act on and cannot see saved.
+  if (bound.kind === "armed_schedule_form" && !bound.canSave) {
+    return {
+      kind: "not-editable",
+      message: bound.refusal ?? "This schedule can no longer be changed.",
+    };
+  }
 
   // THE SCREEN'S OWN DRAWN CONTROLS, never the schema's raw properties (see the
   // note atop `bound-screen-controls.ts`): a setup-loop screen draws ONE control

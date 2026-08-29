@@ -97,6 +97,14 @@ export const LENT_ACTION_CONTROLS = [
   "confirm",
   "skip",
   "adjust",
+  // THE ARMED SCHEDULER FORM'S **Save changes** (cinatra#2934, the armed-trigger
+  // tab). It is a real button on a real card — "its choices are exactly what the
+  // card's own buttons offer" — and the plan puts it on the ask road in so many
+  // words: "the assistant submits through the same checked, server-side action
+  // the button uses — one road for the press and for the ask". The road it takes
+  // is `decideTriggerScheduleProposal`'s `save`, which is what the button's own
+  // endpoint calls; nothing about the write is re-implemented or relaxed.
+  "save",
 ] as const;
 
 export type LentActionControl = (typeof LENT_ACTION_CONTROLS)[number];

@@ -57,17 +57,66 @@ import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
 // agents store: a dynamic import is opaque to the org-write boundary analyser,
 // which reads it as an unreviewed new caller inside the write perimeter.
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+import type { ProposedSchedule } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+import { armedScheduleFormValues } from "@cinatra-ai/agents/trigger-recurrence";
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import {
   decodeLifecycleGateRef,
   decodeScheduleFormRef,
+  decodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
+  ARMED_SCHEDULE_FORM_X_RENDERER,
   SCHEDULE_FORM_X_RENDERER,
+  armedScheduleFormSchema,
   scheduleFormSchema,
   scheduleFormValues,
 } from "@/lib/lifecycle/schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
+
+// ---------------------------------------------------------------------------
+// THE ARMED FORM'S OWN TWO FACTS, from the two functions that already own them
+// (cinatra#2934, the armed-trigger tab).
+//
+//   · `resolveProposalForRun` is the SAME call that computes the settled card's
+//     `body.canSave`, so the window's reading of "can this still be changed" IS
+//     the button's rather than a parallel one;
+//   · `saveScheduleRefusalFor` is the write guard's own sentence for the state.
+//
+// DEFERRED TO THE CALL, AND THAT IS A MEASUREMENT (route-graph ratchet). This
+// module is reachable from `/api/mcp`, `/api/a2a`, `/api/llm-bridge` and `/chat`,
+// all four carrying LOCKED first-party-graph budgets, and the proposal service
+// plus the trigger service put four more modules on each of them for code that
+// runs ONLY when a bound ref names an ARMED schedule. `lent-action-mcp.ts` defers
+// the card's own decision paths for exactly this reason and says so.
+//
+// THE SPECIFIERS ARE LITERAL, so nothing here is a variable-URL import, and the
+// functions are the SAME ones the card's own resolve and the card's own save
+// call — nothing is re-implemented and nothing is relaxed. Reached through the
+// ports below, so a test never pays the import at all.
+// ---------------------------------------------------------------------------
+type ResolveProposalForRun = typeof import(
+  "@cinatra-ai/agents/trigger-schedule-proposal-service"
+)["resolveProposalForRun"];
+type SaveScheduleRefusalFor = typeof import(
+  "@cinatra-ai/agents/trigger-service"
+)["saveScheduleRefusalFor"];
+
+async function loadArmedScheduleResolve(): Promise<ResolveProposalForRun> {
+  const mod = await import("@cinatra-ai/agents/trigger-schedule-proposal-service");
+  return mod.resolveProposalForRun;
+}
+
+async function loadArmedScheduleRefusal(): Promise<{
+  refusalFor: SaveScheduleRefusalFor;
+  noTrigger: string;
+}> {
+  const mod = await import("@cinatra-ai/agents/trigger-service");
+  return {
+    refusalFor: mod.saveScheduleRefusalFor,
+    noTrigger: mod.SAVE_SCHEDULE_REFUSALS.noTrigger,
+  };
+}
 
 /** The HITL screen a run is parked at, as the resolver answers it. */
 export type BoundHitlScreen = {
@@ -109,6 +158,52 @@ export type BoundScheduleForm = {
   };
   /** The surface's identity, as every other bound screen carries one. */
   readonly xRenderer: string;
+};
+
+/**
+ * The ARMED scheduler form — the one on the agent's Schedule tab and the run
+ * page's schedule step (cinatra#2934, the armed-trigger tab; owed by this pull
+ * request's Deviation 1).
+ *
+ * §X's schedule reading covers BOTH halves of the sentence — "whether the
+ * schedule is being set for the first time or changed once it stands" — and the
+ * second half is this. The rows are the same rows; what is different is that
+ * there is a trigger already armed behind them, so two more facts travel with
+ * the form and neither is derived here:
+ *
+ *   · `canSave` is `canSaveInstalled(...)` as the settled card computes it — the
+ *     VERY boolean the form's own **Save changes** is gated by. It is read from
+ *     `resolveProposalForRun`, the same call the card resolves through, so the
+ *     window and the button cannot disagree about which schedules are still
+ *     changeable. A parallel rule here is exactly what the maintainer's reading
+ *     forbids.
+ *   · `refusal` is the WRITE GUARD's own sentence for the state, so a window
+ *     that has to say why can say the same words the card refuses with.
+ *
+ * IT LENDS A FILL AND A SAVE. Unlike the unarmed form — whose button arms a
+ * schedule for the first time and stays the person's — the plan puts this one on
+ * the ask road too: "When you plainly ask, in the same message, for it to be
+ * submitted, the assistant submits through the same checked, server-side action
+ * the button uses — one road for the press and for the ask." The save road is
+ * `decideTriggerScheduleProposal`'s own `save` op, which is the function the
+ * button's endpoint calls.
+ */
+export type BoundArmedScheduleForm = {
+  readonly kind: "armed_schedule_form";
+  readonly runId: string;
+  /** The form's own rows and what they are holding. */
+  readonly form: {
+    readonly schema: Record<string, unknown>;
+    readonly values: Record<string, unknown>;
+  };
+  /** The surface's identity, as every other bound screen carries one. */
+  readonly xRenderer: string;
+  /** The armed rows as §VI selections — what the card is drawing right now. */
+  readonly schedule: ProposedSchedule;
+  /** `body.canSave`, verbatim: may **Save changes** re-arm this trigger? */
+  readonly canSave: boolean;
+  /** Why not, in the server's own words. `null` exactly when `canSave`. */
+  readonly refusal: string | null;
 };
 
 /** The review a card is bound to, as the resolver answers it. */
@@ -190,6 +285,7 @@ export type BoundReferenceAbsent = { readonly kind: "absent" };
 export type BoundReferenceResolution =
   | BoundHitlScreen
   | BoundScheduleForm
+  | BoundArmedScheduleForm
   | BoundReview
   | BoundRecommendationHold
   | BoundScheduleProposal
@@ -247,6 +343,13 @@ export type BoundReferencePorts = {
    * sits on four locked route graphs.
    */
   readonly decodeHoldRef: (ref: string) => Promise<{ runId: string; holdId: string } | null>;
+  /** The settled card's own resolve — where `canSave` comes from, unmodified. */
+  readonly readArmedSchedule: ResolveProposalForRun;
+  /** The write guard's own sentence for a schedule that cannot be changed. */
+  readonly armedScheduleRefusal: (input: {
+    trigger: Awaited<ReturnType<typeof readRunTriggerByRunId>>;
+    arming: boolean;
+  }) => Promise<string>;
 };
 
 // LAZY, AND THAT IS A MEASUREMENT (the same one `lent-action-mcp.ts` records).
@@ -290,6 +393,14 @@ const DEFAULT_PORTS: BoundReferencePorts = {
   readScheduleProposal: async (input) =>
     (await loadScheduleCardReader())(input as never) as unknown as ScheduleCardRead,
   decodeHoldRef: async (ref) => (await loadHoldRefCodec())(ref),
+  readArmedSchedule: async (...args) => (await loadArmedScheduleResolve())(...args),
+  armedScheduleRefusal: async (input) => {
+    const { refusalFor, noTrigger } = await loadArmedScheduleRefusal();
+    // The fallback is reached only where the guard has nothing to say about a
+    // schedule the card is already withholding its button from, and it says the
+    // narrowest true thing rather than inventing a state.
+    return refusalFor({ trigger: input.trigger, arming: input.arming }) ?? noTrigger;
+  },
 };
 
 /**
@@ -391,6 +502,66 @@ export async function resolveBoundReference(input: {
       holdRef: held.holdRef,
       agentPackageName: held.agentPackageName,
       offered,
+    };
+  }
+
+  // THE ARMED FORM'S REF IS THE CARD'S OWN (cinatra#2934, the armed-trigger
+  // tab). The Schedule tab and the run page's schedule step already draw the
+  // settled card from a RUN-SCOPED schedule ref; the window under it binds THAT
+  // ref, so the box and the form it is about name one thing and the save the
+  // person asks for reaches the card's own endpoint with the card's own
+  // argument. A third ref family here would have been a second address for one
+  // form. Disjoint from the two families around it by construction.
+  const armed = decodeScheduleRunRef(input.ref);
+  if (armed) {
+    // THE SAME ORDER AS EVERY OTHER ARM: run READ first.
+    let mayRead = false;
+    try {
+      mayRead = await ports.enforceRunRead(armed.runId, input.actorCtx);
+    } catch {
+      return ABSENT;
+    }
+    if (!mayRead) return ABSENT;
+    // THE CARD'S OWN RESOLVE, presented with the standing the read took — the
+    // same call, the same arguments and the same refusals the card's endpoint
+    // makes, so a form a person can SEE is a form this window can read.
+    const settled = await ports
+      .readArmedSchedule(
+        armed.runId,
+        {
+          userId: input.actorCtx.actor.userId ?? "",
+          orgId: input.actorCtx.orgId,
+        } as never,
+        {
+          actor: input.actorCtx.actor,
+          ...(input.actorCtx.roleHints ? { roles: input.actorCtx.roleHints } : {}),
+        } as never,
+      )
+      .catch(() => null);
+    // Only a SETTLED card has an armed schedule to change. A proposal is the
+    // conversation's, and an absence is everyone else's one uniform absence.
+    if (!settled || settled.phase !== "settled") return ABSENT;
+    const schedule = settled.schedule as ProposedSchedule;
+    // THE REASON, not a second rule: the guard the write itself asks twice.
+    const refusal = settled.canSave
+      ? null
+      : await ports
+          .armedScheduleRefusal({
+            trigger: await ports.readRunTrigger(armed.runId).catch(() => null),
+            arming: settled.arming,
+          })
+          .catch(() => "This schedule can no longer be changed.");
+    return {
+      kind: "armed_schedule_form",
+      runId: armed.runId,
+      xRenderer: ARMED_SCHEDULE_FORM_X_RENDERER,
+      schedule,
+      canSave: settled.canSave,
+      refusal,
+      form: {
+        schema: armedScheduleFormSchema(),
+        values: armedScheduleFormValues(schedule),
+      },
     };
   }
 
@@ -552,6 +723,15 @@ export function controlsLentBy(
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
   if (resolution.kind === "schedule_proposal")
     return resolution.expired ? ["adjust"] : ["adjust", "confirm"];
+  // THE ARMED FORM LENDS BOTH, AND THE STATE IS ASKED AT THE ACT, NOT HERE
+  // (cinatra#2934, the armed-trigger tab). What an armed scheduler form OFFERS
+  // is a fill and the Save changes beside it; whether THIS one will accept a
+  // save is `canSave`, a snapshot the resolve took, and the roads that act ask
+  // it — then the server asks its own guard again, twice, inside the write. A
+  // lending that vanished on the snapshot would leave a frozen schedule's window
+  // with no card bound at all, and therefore nothing to answer with: the person
+  // would be told nothing rather than told why.
+  if (resolution.kind === "armed_schedule_form") return ["fill", "save"];
   return [];
 }
 
@@ -576,4 +756,5 @@ export type LentCardControl =
   | "fill"
   | "confirm"
   | "skip"
-  | "adjust";
+  | "adjust"
+  | "save";
