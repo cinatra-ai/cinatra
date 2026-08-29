@@ -31,6 +31,7 @@ import { Client } from "pg";
 
 import {
   buildGateSuggestions,
+  buildMultiTargetGateSuggestions,
   SUGGESTION_PRODUCER_LANE_ID,
   snapshotSuggestions,
   snapshotTargetPayloads,
@@ -271,6 +272,57 @@ describe.skipIf(!HAS_DB)("S4 — the refusals", () => {
       }),
     ).toEqual({ status: "refused", reason: "target-not-pinned" });
     expect(await snapshotRowsFor(gateId)).toHaveLength(0);
+  });
+
+  it("refuses a MULTI-TARGET payload that does not cover every pinned target", async () => {
+    // Subset alone is not the contract: a payload speaking about one of two
+    // pinned targets would become the gate's ONE immutable snapshot, leaving the
+    // other target with no recorded kind, no projector and no provenance — and
+    // no second snapshot may ever correct it.
+    const t1: CoreAnalysisTarget = {
+      artifactId: `art-${randomUUID()}`,
+      representationRevisionId: `rev-${randomUUID()}`,
+    };
+    const t2: CoreAnalysisTarget = {
+      artifactId: `art-${randomUUID()}`,
+      representationRevisionId: `rev-${randomUUID()}`,
+    };
+    const emitted = await gateStore.emitArtifactReviewGate({
+      runId: `run-${randomUUID()}`,
+      orgId: ORG,
+      reviewTaskId: `task-${randomUUID()}`,
+      targets: [t1, t2],
+    });
+    const entryFor = (target: CoreAnalysisTarget, lead: string) => ({
+      target,
+      kind: "@cinatra-ai/text-artifact:text",
+      projectorId: "text.v1",
+      projection: { includedFields: { lead }, excludedFields: ["body"] },
+      authzDecision: "authorized" as const,
+    });
+    const partial = buildMultiTargetGateSuggestions({
+      targets: [entryFor(t1, "  only one  ")],
+      laneId: SUGGESTION_PRODUCER_LANE_ID,
+    });
+    expect(
+      await snapStore.writeGateSuggestionSnapshot({
+        gateId: emitted.gateId,
+        payload: partial.payload,
+      }),
+    ).toEqual({ status: "refused", reason: "target-not-pinned" });
+    expect(await snapshotRowsFor(emitted.gateId)).toHaveLength(0);
+
+    // The SAME gate accepts the payload that covers both.
+    const whole = buildMultiTargetGateSuggestions({
+      targets: [entryFor(t1, "  first  "), entryFor(t2, "  second  ")],
+      laneId: SUGGESTION_PRODUCER_LANE_ID,
+    });
+    const write = await snapStore.writeGateSuggestionSnapshot({
+      gateId: emitted.gateId,
+      payload: whole.payload,
+    });
+    expect(write.status).toBe("written");
+    expect(await snapshotRowsFor(emitted.gateId)).toHaveLength(1);
   });
 
   it("refuses a gate that does not exist", async () => {

@@ -86,8 +86,9 @@ export interface ObjectBackedReadPorts {
   /** Does this type declare an object-data substance? A type whose substance is
    *  a file is representation-backed and takes the other road entirely. */
   isObjectBackedType(objectType: string): boolean;
-  /** The actor's read decision on the row. Asked AFTER the row is found, so the
-   *  decision is made against the real type rather than a caller claim. */
+  /** The actor's read decision on the row. Asked AFTER the row is found (so the
+   *  decision is made against the real type rather than a caller claim) and
+   *  BEFORE anything else about the row is disclosed. */
   authorizeRead(input: {
     orgId: string;
     objectId: string;
@@ -104,9 +105,15 @@ export type AuthorizedLiveObjectResult =
  *
  * Order is load-bearing and is the whole security content of this function: the
  * row is found first (so the type is the substrate's, never the caller's), the
- * type is checked second (so this road refuses a file-backed artifact instead of
- * projecting one), and the authorization decision is asked LAST, against the
- * real (organization, object, type) triple.
+ * authorization decision is asked SECOND — against the real (organization,
+ * object, type) triple, which is why the row must be read before it — and only
+ * a caller allowed to read the row is told anything ELSE about it.
+ *
+ * WHY AUTHORIZATION PRECEDES THE CLASS CHECK. `not-object-backed` is a fact
+ * about the row: answering it to an actor who may not read the row separates an
+ * existing file-backed row from an absent id, which is an existence oracle over
+ * rows the actor cannot see. The unauthorized actor gets `denied` for every row
+ * that exists, whatever its substrate.
  */
 export async function readAuthorizedLiveObject(
   input: { orgId: string; objectId: string },
@@ -114,15 +121,15 @@ export async function readAuthorizedLiveObject(
 ): Promise<AuthorizedLiveObjectResult> {
   const row = await ports.readLiveObject(input);
   if (!row) return { ok: false, reason: "not-found" };
-  if (!ports.isObjectBackedType(row.objectType)) {
-    return { ok: false, reason: "not-object-backed" };
-  }
   const allowed = await ports.authorizeRead({
     orgId: input.orgId,
     objectId: input.objectId,
     objectType: row.objectType,
   });
   if (!allowed) return { ok: false, reason: "denied" };
+  if (!ports.isObjectBackedType(row.objectType)) {
+    return { ok: false, reason: "not-object-backed" };
+  }
   return { ok: true, objectType: row.objectType, data: row.data, version: row.version };
 }
 

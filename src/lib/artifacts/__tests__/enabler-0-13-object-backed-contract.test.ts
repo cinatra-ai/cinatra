@@ -28,6 +28,11 @@ import {
   type ObjectBackedReviewPorts,
 } from "@/lib/artifacts/object-backed-contract";
 import { buildObjectContentProjection } from "@/lib/artifacts/artifact-content-channel";
+import {
+  ARTIFACT_CONTENT_CHANNEL_VERSION,
+  artifactContentCapFor,
+  type ArtifactContentProjection,
+} from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 import { producedEventId } from "@/lib/lifecycle/lifecycle-produced-event";
 import {
   PRODUCED_EVENT_EMITTERS,
@@ -77,7 +82,7 @@ describe("0.13 — the authorized live-object read", () => {
     expect(out).toEqual({ ok: false, reason: "not-object-backed" });
   });
 
-  it("asks the authorization decision LAST, against the substrate's own type", async () => {
+  it("asks the authorization decision against the substrate's own type", async () => {
     const authorizeRead = vi.fn(() => false);
     const out = await readAuthorizedLiveObject({ orgId: ORG, objectId: OBJECT }, ports({ authorizeRead }));
     expect(out).toEqual({ ok: false, reason: "denied" });
@@ -86,6 +91,26 @@ describe("0.13 — the authorized live-object read", () => {
       objectId: OBJECT,
       objectType: EMAIL_TYPE,
     });
+  });
+
+  it("tells an unauthorized actor `denied` for a FILE-backed row too — never its class", async () => {
+    // The existence oracle this order closes: an actor who may not read the row
+    // must not be able to separate "an existing row on the other road" from "no
+    // such row" by the refusal it gets back.
+    const out = await readAuthorizedLiveObject(
+      { orgId: ORG, objectId: OBJECT },
+      ports({ isObjectBackedType: () => false, authorizeRead: () => false }),
+    );
+    expect(out).toEqual({ ok: false, reason: "denied" });
+  });
+
+  it("never asks the row's CLASS for an actor that may not read it", async () => {
+    const isObjectBackedType = vi.fn(() => true);
+    await readAuthorizedLiveObject(
+      { orgId: ORG, objectId: OBJECT },
+      ports({ authorizeRead: () => false, isObjectBackedType }),
+    );
+    expect(isObjectBackedType).not.toHaveBeenCalled();
   });
 
   it("never asks the authorization decision for a row it could not find", async () => {
@@ -207,6 +232,39 @@ describe("0.13 — the props union says which of the two it is showing", () => {
       representationRevisionId: null,
     });
     expect(p).toMatchObject({ kind: "none", reason: "absent" });
+  });
+
+  it("STATES the discriminator in the type: neither wrong combination is expressible", () => {
+    // A type-level case, checked by the fleet-pinned compiler on this file: the
+    // `live` arm's revision is null BY THE TYPE and the `snapshot` arm's is a
+    // string, so a display that has checked `source` has already narrowed it and
+    // a projection that mixes the two does not compile at all.
+    const snapshot: ArtifactContentProjection = {
+      kind: "object",
+      channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
+      source: "snapshot",
+      representationRevisionId: "rev-minted",
+      objectType: EMAIL_TYPE,
+      data: {},
+      digest: "d",
+      byteLength: 2,
+      projectedByteLength: 2,
+      cap: artifactContentCapFor("object"),
+    };
+    if (snapshot.kind === "object" && snapshot.source === "snapshot") {
+      const pinned: string = snapshot.representationRevisionId;
+      expect(pinned).toBe("rev-minted");
+    }
+    // AND THE LIVE ARM'S REVISION IS NULL BY THE TYPE. Extracting each arm by
+    // its own `source` is what proves the union is DISCRIMINATED: over a single
+    // member declaring `source: "live" | "snapshot"` neither extraction names a
+    // member at all, and neither of these two declarations compiles.
+    type LiveArm = Extract<ArtifactContentProjection, { kind: "object"; source: "live" }>;
+    type SnapshotArm = Extract<ArtifactContentProjection, { kind: "object"; source: "snapshot" }>;
+    const liveRevision: LiveArm["representationRevisionId"] = null;
+    const snapshotRevision: SnapshotArm["representationRevisionId"] = "rev-minted";
+    expect(liveRevision).toBeNull();
+    expect(snapshotRevision).toBe("rev-minted");
   });
 
   it("an over-cap object is a named absence — half a record is a wrong record", () => {

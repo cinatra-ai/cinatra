@@ -337,16 +337,21 @@ export function buildObjectContentProjection(input: {
     return none(revisionId, "over-cap");
   }
 
-  return {
+  const common = {
     kind: "object",
     channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
-    source: input.source,
-    representationRevisionId: revisionId,
     objectType: input.objectType,
     data: input.data,
     digest: input.digest ?? objectProjectionDigest(input.data),
     byteLength,
     projectedByteLength: byteLength,
     cap,
-  };
+  } as const;
+  // THE TWO ARMS ARE BUILT SEPARATELY because the props union states them
+  // separately: `live` carries a null revision by its own type and `snapshot`
+  // carries a string, so neither wrong combination can be constructed here
+  // either. The guards above are what make the narrowing sound.
+  return input.source === "snapshot"
+    ? { ...common, source: "snapshot", representationRevisionId: revisionId! }
+    : { ...common, source: "live", representationRevisionId: null };
 }

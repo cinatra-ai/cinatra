@@ -245,6 +245,33 @@ export async function assertUploadMeaning(input: {
   );
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
+    // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
+    // behind the candidate gate: the candidate list EXCLUDES every candidate of
+    // the extension that defines the row's CURRENT type, so a row an earlier
+    // confirmation already retyped can never reach the road again through the
+    // gate above. That is exactly the row an interrupted promotion leaves —
+    // retyped, with its promotion revision missing — so without this the
+    // convergence the road promises is unreachable from the product.
+    //
+    // It completes and nothing else: the road itself still demands the matcher's
+    // assertion at its threshold, so a row that merely CARRIES this extension's
+    // type is refused there and this call falls through to the same
+    // `invalid-type` it always answered. No meaning assertion is written — the
+    // call that retyped the row wrote the person's, and a second identical
+    // assertion would stack a duplicate for a choice already recorded.
+    if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+      const completed = await promoteOnConfirmedMeaning({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        principalId: actor.principalId ?? null,
+        userId: session?.user?.id ?? null,
+      });
+      if (completed?.promoted) {
+        revalidatePath("/artifacts");
+        return { ok: true, promotion: completed };
+      }
+    }
     return {
       ok: false,
       reason: "invalid-type",
@@ -290,6 +317,22 @@ export async function assertUploadMeaning(input: {
 
   revalidatePath("/artifacts");
   return promotion ? { ok: true, promotion } : { ok: true };
+}
+
+/**
+ * Does this extension's package define the type the row already carries?
+ *
+ * The one question the converging re-confirmation asks: it is what separates
+ * "this row is already in the type this extension defines" (the interrupted
+ * promotion's own row) from "this extension has nothing to do with this row".
+ */
+async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+  try {
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+  } catch {
+    return false;
+  }
 }
 
 /**

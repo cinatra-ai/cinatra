@@ -157,19 +157,44 @@ export type ArtifactContentProjection =
        */
       kind: "object";
       channelVersion: number;
-      /** `live` — the object row's own data, read now; `snapshot` — the pinned,
-       *  immutable revision a decision binds. */
-      source: "live" | "snapshot";
-      /** NULL exactly when `source` is `live`: a live row has no pinned
-       *  revision, and inventing one would be the lie this discriminator
-       *  exists to prevent. Non-null for every snapshot. */
-      representationRevisionId: string | null;
+      /**
+       * THE DISCRIMINATOR, ENCODED IN THE TYPE and not merely described: the
+       * `live` arm's revision is `null` and the `snapshot` arm's is a string, so
+       * a display that has checked `source` has already narrowed the revision,
+       * and neither wrong combination — a live projection naming a revision, a
+       * snapshot naming none — is expressible at all.
+       */
+      source: "live";
+      representationRevisionId: null;
       /** The object type whose declared object-data schema the data satisfies. */
       objectType: string;
       /** The entry's structured data, as plain JSON. */
       data: unknown;
       /** A stable digest of the projected data. On a snapshot this is the
        *  snapshot's own content digest, so a display and the reviewer's
+       *  decision provably speak about the same bytes. */
+      digest: string;
+      byteLength: number;
+      /** Bytes ACTUALLY CARRIED — the cap's subject. */
+      projectedByteLength: number;
+      /** The cap this projection was built under. */
+      cap: number;
+    }
+  | {
+      /** THE SNAPSHOT ARM of the object-backed projection: the pinned,
+       *  immutable revision a decision binds. Its revision is a string by the
+       *  type, so a display that has checked `source` needs no null check and
+       *  cannot draw a snapshot that names no revision. */
+      kind: "object";
+      channelVersion: number;
+      source: "snapshot";
+      /** The pinned revision this projection draws. */
+      representationRevisionId: string;
+      /** The object type whose declared object-data schema the data satisfies. */
+      objectType: string;
+      /** The entry's structured data, as plain JSON. */
+      data: unknown;
+      /** The snapshot's own content digest, so a display and the reviewer's
        *  decision provably speak about the same bytes. */
       digest: string;
       byteLength: number;

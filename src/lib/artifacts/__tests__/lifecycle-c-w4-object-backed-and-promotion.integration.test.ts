@@ -505,6 +505,73 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(representationsOf(objectId)).toHaveLength(2);
   });
 
+  it("COMPLETES an interrupted promotion — the retype committed, the append did not", async () => {
+    // The state an interruption between the road's two transactions leaves: the
+    // row already carries the target type, its promotion revision is missing,
+    // and the matcher's assertion is still on the row. A later confirmation
+    // CONVERGES it rather than stranding it.
+    const objectId = nextId("obj-interrupted");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    // It COMPLETED — it did not retype anything, because the retype had landed.
+    expect(out.retyped).toBe(false);
+    expect(representationsOf(objectId)).toHaveLength(2);
+  });
+
+  it("does NOT append to a row that merely CARRIES the target type — no matcher, no write", async () => {
+    // A row written in that type from the start, or typed by some other road, is
+    // not a half-finished promotion of THIS road: the converging branch carries
+    // the same two authorities the promotion itself does, so a bare confirmation
+    // appends nothing.
+    const objectId = nextId("obj-carries");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "already-promoted" });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("REFUSES the converging append to an unconfirmed caller", async () => {
+    const objectId = nextId("obj-carries-unconfirmed");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: false,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "already-promoted" });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
   it("REFUSES without the person's confirmation, however confident the match", async () => {
     const objectId = nextId("obj-unconfirmed");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });

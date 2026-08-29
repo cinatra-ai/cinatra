@@ -71,6 +71,7 @@ import {
 } from "./schema";
 import { reviewTargetKey } from "@/lib/artifacts/artifact-review-target";
 import {
+  isMultiTargetSnapshotPayload,
   snapshotSuggestions,
   snapshotTargetPayloads,
   verifyGateSuggestionSnapshotPayload,
@@ -159,6 +160,28 @@ export async function writeGateSuggestionSnapshot(input: {
     );
     if (!allPinned) {
       return { status: "refused", reason: "target-not-pinned" };
+    }
+
+    //    AND, for a MULTI-TARGET payload, the cover is total: the payload holds
+    //    one entry per target the gate pinned. Subset alone would let a snapshot
+    //    that speaks about one of three pinned targets become the gate's ONE
+    //    immutable snapshot, leaving the other two with no recorded kind, no
+    //    projector and no provenance — and no second snapshot may ever correct
+    //    it. A v1 row is exempt by construction: it predates the per-target
+    //    contract and names exactly one target.
+    if (isMultiTargetSnapshotPayload(verified)) {
+      const payloadKeys = new Set(
+        snapshotTargetPayloads(verified).map((entry) =>
+          reviewTargetKey({
+            artifactId: entry.target.artifactId,
+            representationRevisionId: entry.target.representationRevisionId,
+          }),
+        ),
+      );
+      const coversEveryPinned = [...pinnedKeys].every((key) => payloadKeys.has(key));
+      if (!coversEveryPinned) {
+        return { status: "refused", reason: "target-not-pinned" };
+      }
     }
 
     // 3. At most ONE snapshot per gate.

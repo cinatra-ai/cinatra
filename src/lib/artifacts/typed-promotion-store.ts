@@ -18,6 +18,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import {
   buildPromotionRepresentationAppend,
+  mimeAccepted,
   planTypedPromotion,
   promotionRevisionId,
   type ExtensionOwnType,
@@ -202,11 +203,23 @@ export async function promoteMatchedArtifactType(input: {
   if (!plan.ok) {
     // THE CONVERGING BRANCH. An `already-promoted` row may be one an earlier
     // call retyped and never got to append for. Everything else is a refusal.
+    //
+    // IT CARRIES THE SAME TWO AUTHORITIES AS THE PROMOTION ITSELF, and the same
+    // form re-validation. A row that simply CARRIES the target type — written
+    // that way from the start, or promoted under some other road — was never
+    // this promotion, and appending a revision to it on a bare confirmation
+    // would be a write no matcher ever asserted for: the completion of an
+    // interrupted promotion is only a completion when the promotion's own
+    // conditions still hold.
     if (
       plan.reason === "already-promoted" &&
       row?.latestRevision &&
       input.ownType &&
-      row.objectType === input.ownType.typeId
+      row.objectType === input.ownType.typeId &&
+      input.confirmed &&
+      matcher !== null &&
+      matcher.confidence >= matcher.threshold &&
+      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
       const landed = appendPromotionRevision({
         orgId: input.orgId,
