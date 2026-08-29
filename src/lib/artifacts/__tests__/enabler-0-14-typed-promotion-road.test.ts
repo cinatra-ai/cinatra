@@ -269,8 +269,9 @@ describe("0.14 — the retype goes through the canonical history-aware writer", 
   });
 
   it("the store writes no objects row of its own", () => {
-    // The standing proof is scripts/audit/objects-writer-drift-gate.mjs; this is
-    // its positive half, beside the road it belongs to.
+    // The standing proof is the repository audit that refuses direct DML
+    // against the objects table; this is its positive half, beside the road it
+    // belongs to.
     expect(/(INSERT\s+INTO|UPDATE|DELETE\s+FROM)[^\n]*"objects"/i.test(source)).toBe(false);
   });
 
