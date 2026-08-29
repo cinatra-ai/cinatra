@@ -55,6 +55,42 @@ function annotationFromObjectData(data: unknown): string | null {
 }
 
 /**
+ * Has the run's default-road capture SETTLED? (cinatra#3029, convergence.)
+ *
+ * The run's terminal transition commits `completed` and enqueues the pickup;
+ * the pickup then types and writes. Between the two, the ledger is legitimately
+ * empty — and the list's EMPTY READING ("this run wrote no artifact and used
+ * none") would be a false statement about a run that is still producing. The
+ * page therefore asks whether the capture row is still `pending`/`deriving`
+ * before it says a run made nothing.
+ *
+ * `true` when there is no capture row at all (a run that captured nothing has
+ * nothing to wait for) and when the row has settled. A read failure returns
+ * `false`, so the page stays silent rather than asserting.
+ */
+export async function isRunOutputCaptureSettled(input: {
+  orgId: string;
+  runId: string;
+}): Promise<boolean> {
+  try {
+    ensurePostgresSchema();
+    const s = schema();
+    const res = await pool().query(
+      `SELECT status
+         FROM "${s}"."agent_run_output_derivations"
+        WHERE run_id = $1 AND org_id = $2
+        LIMIT 1`,
+      [input.runId, input.orgId],
+    );
+    const row = res.rows[0] as { status?: string } | undefined;
+    if (!row) return true;
+    return row.status !== "pending" && row.status !== "deriving";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Every artifact this run WROTE and every artifact it USED, oldest first inside
  * each role. Returns `[]` for a run that reached neither — which the list model
  * draws as the EMPTY reading, not as an empty panel.
@@ -99,7 +135,7 @@ export async function readRunArtifactRecords(input: {
        LEFT JOIN "${s}"."resource" r
               ON r.id = rep.resource_id AND r.org_id = c.org_id
       WHERE c.parent_run_id = $1 AND c.org_id = $2
-      ORDER BY c.artifact_id, c.created_at ASC`,
+      ORDER BY c.artifact_id, c.selected_at ASC`,
     [input.runId, input.orgId],
   );
 

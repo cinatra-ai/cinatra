@@ -17,10 +17,13 @@ import { writeClaimedArtifact, resolveRunScopeOwnership } from "./run-artifact-m
 import type { ScopeDerivedOwnership } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   claimMaterialization,
+  findFinalizedMaterializationForOutput,
   finalizeMaterializationAgainstExistingArtifact,
+  type MaterializationDecidedVerdict,
 } from "./materialization-ledger";
 import {
   detectOutputForm,
+  type DetectionRung,
   type DetectionVerdict,
   type ModelRungAsk,
 } from "./output-detection-ladder";
@@ -248,6 +251,36 @@ async function readDeclaredKindCandidates(
 // The drive.
 // ---------------------------------------------------------------------------
 
+/** The verdict an EARLIER drive recorded on the ledger row, read back as the
+ *  ladder's own shape. The row is written by this module, so its `rung` is
+ *  always one of the ladder's; a row from anywhere else is reported as the
+ *  explicit statement it effectively is rather than being re-typed. */
+function recordedVerdict(
+  stored: MaterializationDecidedVerdict | null,
+  rung: string | null,
+): DetectionVerdict {
+  const known = (r: string | null | undefined): DetectionRung =>
+    r === "explicit" ||
+    r === "signature" ||
+    r === "structural" ||
+    r === "name_extension" ||
+    r === "model" ||
+    r === "binary_fallback"
+      ? r
+      : "explicit";
+  if (stored) {
+    return {
+      ...stored,
+      rung: known(stored.rung),
+    } as DetectionVerdict;
+  }
+  return {
+    form: "",
+    rung: known(rung),
+    reason: "the verdict of the earlier drive that already wrote this output",
+  };
+}
+
 /**
  * Run the default road over one run's item family.
  *
@@ -290,11 +323,45 @@ export async function pickUpDefaultRoadItems(
   // ledger rows" (§3): the first item's refs, by content hash.
   const writtenByHash = new Map<
     string,
-    { artifactId: string; representationRevisionId: string; extension: string; objectTypeId: string }
+    { artifactId: string; representationRevisionId: string; extension: string }
   >();
 
   const outcomes: DefaultRoadItemOutcome[] = [];
   for (const item of input.items) {
+    // ---- the per-output idempotence guard (convergence) ------------------
+    // The ledger's 4-part key includes the EXTENSION, which the ladder derives;
+    // a verdict can legitimately differ between drives (the model rung's switch
+    // turned off, a base installed or taken down, a runtime reconfigured), so a
+    // re-drive after a crashed settle could claim a DIFFERENT key and write a
+    // SECOND artifact for one output. One output of one run reaches at most one
+    // artifact on this road: if a finalized `default_road` row for this output
+    // already exists, the road is done with it — no detection, no model call,
+    // no write.
+    const settled = await findFinalizedMaterializationForOutput({
+      orgId: input.orgId,
+      runId: input.runId,
+      outputId: item.outputId,
+      path: "default_road",
+    });
+    if (settled) {
+      outcomes.push({
+        outputId: item.outputId,
+        outputName: item.outputName,
+        status: "deduped",
+        verdict: recordedVerdict(settled.decidedVerdict, settled.decidedRung),
+        targetRung: null,
+        extension: settled.extension,
+        artifactId: settled.artifactId,
+        representationRevisionId: settled.representationRevisionId,
+      });
+      writtenByHash.set(item.contentHash, {
+        artifactId: settled.artifactId,
+        representationRevisionId: settled.representationRevisionId,
+        extension: settled.extension,
+      });
+      continue;
+    }
+
     const bytes = new TextEncoder().encode(item.content);
     const verdict = await withActorContext(
       buildDefaultRoadActorContext(input.orgId),
@@ -383,6 +450,18 @@ export async function pickUpDefaultRoadItems(
       decidedVerdict: verdict,
     });
     if (!write.ok) {
+      // A refusal is only a RECORDED VERDICT when it is a fact about the work.
+      // `not_write_allowed` is fail-closed on a canonical-store read error and
+      // `path_collision` is a ledger race, so both can be facts about the
+      // MOMENT. Settling on them would drop an agent's output for good — the
+      // one thing item 0.17 exists to stop. THROW instead: the caller's lease
+      // is released and the sweep re-drives to the attempts cap.
+      if (write.reason !== "accepts_mismatch") {
+        throw new Error(
+          `[default-road] write refused for run ${input.runId} output "${item.outputName}" ` +
+            `(${write.reason}) — retryable: ${write.error}`,
+        );
+      }
       outcomes.push({
         outputId: item.outputId,
         outputName: item.outputName,
@@ -399,7 +478,6 @@ export async function pickUpDefaultRoadItems(
       artifactId: write.artifactId,
       representationRevisionId: write.representationRevisionId,
       extension: target.extension,
-      objectTypeId: target.objectTypeId,
     });
     outcomes.push({
       outputId: item.outputId,

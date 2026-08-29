@@ -421,6 +421,27 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
 }
 
 /**
+ * WHY a refusal is a refusal (cinatra#3029, convergence).
+ *
+ * A caller that SETTLES on a refusal has to know whether the refusal is a fact
+ * about the WORK or a fact about the MOMENT:
+ *   - `accepts_mismatch` — the resolved type does not accept this form. A
+ *     permanent property of the content and the installed type; re-driving
+ *     changes nothing.
+ *   - `not_write_allowed` — the install-state gate said no. That gate is
+ *     FAIL-CLOSED on a canonical-store read error, so this value covers both a
+ *     genuinely archived extension AND a database that was briefly unreachable.
+ *     A caller must NOT settle permanently on it.
+ *   - `path_collision` — the ledger identity is already held by a different
+ *     materialization path; aliasing it would hand back a different-typed
+ *     artifact.
+ */
+export type WriteClaimedRefusalReason =
+  | "accepts_mismatch"
+  | "not_write_allowed"
+  | "path_collision";
+
+/**
  * Shared write core for both materialization paths (cinatra#923 EndNode
  * bindings, cinatra#925 `artifact_materialize` tool): registry/accepts/
  * write-gate validation on an ALREADY-RESOLVED {extension, title, mime,
@@ -478,12 +499,13 @@ export async function writeClaimedArtifact(input: {
       representationRevisionId: string;
       deduped: boolean;
     }
-  | { ok: false; error: string }
+  | { ok: false; reason: WriteClaimedRefusalReason; error: string }
 > {
   const acceptedMimes = input.resolvedTarget.acceptedFileMimeTypes;
   if (!acceptedMimes.includes(input.mime)) {
     return {
       ok: false,
+      reason: "accepts_mismatch",
       error:
         `object type "${input.resolvedTarget.objectTypeId}" (extension "${input.extension}") accepts ` +
         `[${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`,
@@ -492,6 +514,7 @@ export async function writeClaimedArtifact(input: {
   if (!(await isArtifactExtensionWriteAllowed(input.extension, input.orgId))) {
     return {
       ok: false,
+      reason: "not_write_allowed",
       error: `artifact extension "${input.extension}" is not write-allowed for this org (archived/ungoverned-denied install state)`,
     };
   }
@@ -523,6 +546,7 @@ export async function writeClaimedArtifact(input: {
   if (claim.path !== undefined && claim.path !== input.path) {
     return {
       ok: false,
+      reason: "path_collision",
       error:
         `materialization ledger identity collided with a different path ` +
         `("${claim.path}" vs "${input.path}") for run ${input.runId} ` +

@@ -393,6 +393,64 @@ export async function finalizeMaterializationAgainstExistingArtifact(input: {
 }
 
 /**
+ * The FINALIZED row of ONE run output on ONE path, whatever extension and
+ * whatever content hash it settled under.
+ *
+ * The 4-part unique key (run, output_id, extension, content_hash) makes a claim
+ * idempotent only while the CHOSEN EXTENSION is stable. On the default road the
+ * extension is derived from the detection ladder's verdict, and a verdict can
+ * legitimately differ between drives — the model rung's per-organisation switch
+ * can be turned off, an extension can be installed or taken down, a runtime can
+ * be reconfigured. A re-drive after a crashed settle would then claim a
+ * DIFFERENT key and write a SECOND artifact for one output. This read is the
+ * per-output guard the road takes BEFORE it types anything: one output of one
+ * run reaches at most one artifact on one path, whatever the ladder says the
+ * second time.
+ */
+export async function findFinalizedMaterializationForOutput(input: {
+  orgId: string;
+  runId: string;
+  outputId: string;
+  path: MaterializationPath;
+}): Promise<{
+  artifactId: string;
+  representationRevisionId: string;
+  extension: string;
+  decidedRung: string | null;
+  decidedVerdict: MaterializationDecidedVerdict | null;
+} | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT artifact_id, representation_revision_id, extension, decided_rung, decided_verdict
+       FROM "${s}"."artifact_materializations"
+      WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+        AND phase = 'finalized'
+        AND artifact_id IS NOT NULL AND representation_revision_id IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [input.orgId, input.runId, input.outputId, input.path],
+  );
+  const row = res.rows[0] as
+    | {
+        artifact_id: string;
+        representation_revision_id: string;
+        extension: string;
+        decided_rung: string | null;
+        decided_verdict: MaterializationDecidedVerdict | null;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    artifactId: row.artifact_id,
+    representationRevisionId: row.representation_revision_id,
+    extension: row.extension,
+    decidedRung: row.decided_rung ?? null,
+    decidedVerdict: row.decided_verdict ?? null,
+  };
+}
+
+/**
  * Every FINALIZED materialization of one run, newest last — the read behind the
  * run page's "what this run made" list (plan §6 step 6; issue #3002's artifact
  * half). Org-scoped; the caller has already proved the person may read the run.

@@ -586,4 +586,116 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     expect(again.outcome).toBe("skipped");
     expect(await ledgerRows(runId)).toEqual(first);
   });
+
+  // -------------------------------------------------------------------------
+  // CONVERGENCE. Three defects the convergence round found, each proved
+  // here on the same real store.
+  // -------------------------------------------------------------------------
+
+  it("CONVERGENCE — a re-drive whose ladder now resolves a DIFFERENT extension still leaves ONE artifact", async () => {
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    registerArtifactType(BLOG_POST, BLOG_POST_EXT, ["text/markdown"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+    // The claim may already be seeded by an earlier case in this file — one
+    // live dedicated claim per (scope, type) is the AC-1 constraint.
+    await seedActiveClaim(BLOG_POST, BLOG_POST_EXT).catch(() => {});
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    // Drive one: the agent declares blog-post, so the DECLARED KIND rung claims
+    // the markdown output and the ledger key carries that extension.
+    contextByTemplate.set(templateId, {
+      producesRefs: [{ extension: BLOG_POST_EXT, objectTypeId: BLOG_POST }],
+      hasBindings: false,
+    });
+    await seedOutbox({ runId, templateId, items: [item("draft", MARKDOWN_DOC)] });
+    await deriveMod.deriveUnboundRunOutput(
+      { runId, orgId: ORG },
+      { ask: neverAsk, modelRungEnabled: false, loadContext },
+    );
+    const first = await ledgerRows(runId);
+    expect(first).toHaveLength(1);
+    expect(first[0].extension).toBe(BLOG_POST_EXT);
+
+    // The settle is LOST (a crash between the artifact write and the outbox
+    // settle) and the world has moved on: the agent no longer declares
+    // blog-post, so the ladder would now resolve the TEXT base — a different
+    // ledger key, and, without the per-output guard, a SECOND artifact.
+    contextByTemplate.set(templateId, { producesRefs: [], hasBindings: false });
+    await client.query(
+      `UPDATE "${S()}"."agent_run_output_derivations"
+          SET status = 'pending', lease_token = NULL, lease_expires_at = NULL, attempts = 0
+        WHERE run_id = $1`,
+      [runId],
+    );
+
+    const again = await deriveMod.deriveUnboundRunOutput(
+      { runId, orgId: ORG },
+      { ask: neverAsk, modelRungEnabled: false, loadContext },
+    );
+    expect(again.outcome).toBe("done");
+    const rows = await ledgerRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].extension).toBe(BLOG_POST_EXT);
+    expect(rows[0].artifact_id).toBe(first[0].artifact_id);
+    contextByTemplate.clear();
+  });
+
+  it("CONVERGENCE — an install-state write refusal is RETRYABLE, never a settled drop", async () => {
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+    // A GOVERNED but NOT-LIVE install row: the write-allowed gate denies. The
+    // gate answers the same `false` when the canonical store cannot be read at
+    // all, which is why settling on it would lose the output for good.
+    const installId = `inst-${randomUUID()}`;
+    await client.query(
+      `INSERT INTO "${S()}"."installed_extension"
+         (id, package_name, version, owner_level, owner_id, organization_id, kind, status, source)
+       VALUES ($1, $2, '1.0.0', 'organization', $3, $3, 'artifact', 'archived', '{}'::jsonb)`,
+      [installId, TEXT_BASE_EXT, ORG],
+    );
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    await seedOutbox({ runId, templateId, items: [item("draft", MARKDOWN_DOC)] });
+    await expect(
+      deriveMod.deriveUnboundRunOutput(
+        { runId, orgId: ORG },
+        { ask: neverAsk, modelRungEnabled: false, loadContext },
+      ),
+    ).rejects.toThrow(/not_write_allowed|retryable/i);
+    // The row is STILL DRIVABLE: not settled, and its lease released.
+    const row = await outboxRow(runId);
+    expect(row?.status).toBe("pending");
+    expect(await ledgerRows(runId)).toHaveLength(0);
+    await client.query(`DELETE FROM "${S()}"."installed_extension" WHERE id = $1`, [installId]);
+  });
+
+  it("CONVERGENCE — the run page waits for the capture before it says a run made nothing", async () => {
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+
+    const records = await import("../run-artifact-records");
+    const { templateId, runId } = await seedTemplateAndRun();
+    // A run with NO capture row at all has nothing to wait for.
+    expect(await records.isRunOutputCaptureSettled({ orgId: ORG, runId })).toBe(true);
+
+    // Captured and not yet driven: the page must NOT read the empty list as
+    // "this run made nothing".
+    await seedOutbox({ runId, templateId, items: [item("draft", MARKDOWN_DOC)] });
+    expect(await records.isRunOutputCaptureSettled({ orgId: ORG, runId })).toBe(false);
+
+    await deriveMod.deriveUnboundRunOutput(
+      { runId, orgId: ORG },
+      { ask: neverAsk, modelRungEnabled: false, loadContext },
+    );
+    expect(await records.isRunOutputCaptureSettled({ orgId: ORG, runId })).toBe(true);
+    expect(
+      (await records.readRunArtifactRecords({ orgId: ORG, runId })).length,
+    ).toBeGreaterThan(0);
+  });
 });

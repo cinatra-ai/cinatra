@@ -28,7 +28,10 @@ import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { RunMadePanel } from "./run-made-panel";
-import { readRunArtifactRecords } from "@/lib/artifacts/run-artifact-records";
+import {
+  isRunOutputCaptureSettled,
+  readRunArtifactRecords,
+} from "@/lib/artifacts/run-artifact-records";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
@@ -894,6 +897,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     run && isTerminalRunStatus(run.status)
       ? await readRunArtifactRecords({ orgId: run.orgId, runId: run.id }).catch(() => [])
       : [];
+  // The terminal transition commits BEFORE the pickup has typed and written, so
+  // a page served inside that window would read the empty list as the definitive
+  // "this run made nothing" (cinatra#3029, convergence). The entry and its panel
+  // therefore wait for the capture to settle — unless the run already has rows,
+  // which answer the question by themselves.
+  const runMadeSaysSomething =
+    run != null &&
+    isTerminalRunStatus(run.status) &&
+    (runMadeRecords.length > 0 ||
+      (await isRunOutputCaptureSettled({ orgId: run.orgId, runId: run.id })));
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -952,7 +965,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             outcome: v.outcome,
           })),
         runMade:
-          run && isTerminalRunStatus(run.status)
+          run && runMadeSaysSomething
             ? { runId: run.id, artifactCount: runMadeRecords.length }
             : null,
         lifecycleDecisions: railLifecycleDecisions.map((d) => ({
@@ -1297,7 +1310,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   (cinatra#3029). Drawn only for a finished run; its own EMPTY
                   reading covers a run that kept nothing, so it is never an empty
                   panel. Every row is a pointer into the artifact's own page. */}
-              {run && isTerminalRunStatus(run.status) ? (
+              {runMadeSaysSomething ? (
                 <RunMadePanel records={runMadeRecords} />
               ) : null}
               {recommendationCardNode}
