@@ -37,6 +37,12 @@ import {
   type AccountSnapshot,
 } from "./account-state";
 import { PROMOTE_ADMIN_ROLE_SQL, memberIdFor } from "./state-rules";
+import {
+  ROUTE_READY_BOUND_MS,
+  isRuntimeNotFoundDocument,
+  retryWhileRouteMissing,
+  waitForRouteReady,
+} from "./route-readiness";
 
 const EMAIL = process.env.E2E_CHAT_HITL_USER_EMAIL ?? "chat-hitl-s9k@local.test";
 const PASSWORD = process.env.E2E_CHAT_HITL_USER_PASSWORD ?? "ChatHitlS9k!2026";
@@ -148,13 +154,127 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
   const origin = baseURL ?? "http://localhost:3000";
   const headers = { Origin: origin } as const;
 
+  // 0. THE ROUTES THIS SETUP AND THE FLOW DEPEND ON — WAITED FOR, BOUNDED, AND
+  //    WITHOUT CREATING ANY STATE.
+  //
+  //    `webServer.url` polls `/api/health`, which answers as soon as the server is
+  //    up. That is NOT the claim the next step needs. The development runtime
+  //    compiles a route on its FIRST hit and answers 404 until that compile lands,
+  //    and this very route's cold compile has been measured at 41 s on a contended
+  //    runner — so a single unretried status assertion against it can fail the
+  //    whole job for a reason that has nothing to do with holds. That is how this
+  //    setup died once already.
+  //
+  //    NEITHER PROBE MAY CREATE STATE, and that constraint is what picks the
+  //    request. Neither route publishes a HEAD or an OPTIONS handler, so the
+  //    side-effect-free signal is a body the route rejects before it does anything:
+  //
+  //      * `POST /api/auth/sign-up/email` with an EMPTY body — Better Auth
+  //        validates the body before it touches the store, so no user is written.
+  //        A VALID sign-up here would seed the very account step 1 exists to
+  //        arbitrate over, which is the one thing a readiness probe must not do.
+  //      * `POST /api/assistants/chat/capabilities` with an empty body — the
+  //        handler's first statement is `const session = await getAuthSession(); if
+  //        (!session?.user?.id) return Response.json({ error: "Unauthorized" }, {
+  //        status: 401 })`, and this probe runs BEFORE the sign-in, so it is
+  //        answered by that line having read nothing and written nothing. (With a
+  //        session it would be the `clientHelloSchema` parse answering 400
+  //        instead. Both are answers; only a 404 is not.)
+  //
+  //    A 404 is therefore the ONLY status treated as "not yet"; every other status
+  //    proves the route compiled and ran, which is all readiness asks. The bound
+  //    spent without an answer fails the setup NAMING THE ROUTE — a two-minute
+  //    report instead of a twenty-minute mystery.
+  //
+  //    AND THE ANSWER'S MEDIA TYPE IS READ WITH ITS STATUS, because a 404 has two
+  //    different senders and a status cannot name which one answered. When the
+  //    runtime cannot route a path it resolves it in the PAGE tree and renders the
+  //    application's not-found page, so its 404 is an HTML DOCUMENT; a handler's
+  //    own 404 is that handler's media type. Neither of these two routes can answer
+  //    404 from its handler at all — the capabilities POST answers 401/400/200 and
+  //    Better Auth's sign-up 400 — so this changes NOTHING about what either probe
+  //    waits for; it changes what the failure is able to say it saw, and it keeps
+  //    the rule true for a route whose handler does 404 (the widget's thread read
+  //    404s across tenants by design).
+  for (const path of ["/api/auth/sign-up/email", "/api/assistants/chat/capabilities"]) {
+    const ready = await waitForRouteReady(
+      `POST ${path}`,
+      async (_attemptIndex, remainingMs) => {
+        // The request carries the REST OF THE BOUND as its own timeout, so the
+        // two-minute promise is a wall-clock promise and not merely a loop
+        // condition: a call begun just inside the bound cannot run past it on the
+        // transport's own default. `remainingMs` is always at least 1 — Playwright
+        // reads a timeout of 0 as "no timeout at all", which is the one value that
+        // would silently undo this.
+        const response = await request.post(path, {
+          data: {},
+          headers,
+          failOnStatusCode: false,
+          timeout: remainingMs,
+        });
+        return { status: response.status(), contentType: response.headers()["content-type"] ?? null };
+      },
+      {
+        timeoutMs: ROUTE_READY_BOUND_MS,
+        // Before the first successful request a refused connection genuinely is
+        // "not up yet", so the PROBE — and only the probe — retries a thrown
+        // attempt too. Every later call site keeps its instant transport failure.
+        retryOnError: true,
+        onRetry: ({ attempts, delayMs, status, contentType, lastError }) =>
+          console.log(
+            `[S9k setup] ${path} is not ready after ${attempts} attempt(s) — ` +
+              (status === null
+                ? `no response at all (${lastError ?? "unknown error"})`
+                : `HTTP ${status}${contentType ? ` (${contentType})` : ""}`) +
+              "; " +
+              (isRuntimeNotFoundDocument(contentType)
+                ? "that is the dev runtime's own not-found PAGE, so the route is not routable yet"
+                : "the dev runtime has not compiled it yet") +
+              `, retrying in ${delayMs}ms`,
+          ),
+      },
+    );
+    console.log(
+      `[S9k setup] ${path} ready — HTTP ${ready.status}` +
+        `${ready.contentType ? ` (${ready.contentType})` : ""} after ${ready.attempts} attempt(s), ` +
+        `${ready.elapsedMs}ms`,
+    );
+  }
+
   // 1. The account. Idempotent — an existing user answers 400/422.
-  const signUp = await request.post("/api/auth/sign-up/email", {
-    data: { email: EMAIL, password: PASSWORD, name: "Chat HITL S9k Owner" },
-    headers,
-    failOnStatusCode: false,
-  });
-  expect([200, 400, 422]).toContain(signUp.status());
+  //
+  //    RETRIED WHILE THE ANSWER IS 404, and only then. The probe above has already
+  //    seen this route answer, so a 404 here is a straggler rather than a cold
+  //    boot, and it gets the shorter in-flight bound. EVERY OTHER STATUS IS LEFT
+  //    EXACTLY AS IT WAS: the assertion below is the same three-status assertion,
+  //    still the thing that decides whether the sign-up was acceptable, and a 500
+  //    or a 403 still reaches it on the first attempt — and a TRANSPORT fault still
+  //    throws out of here immediately, as it did before this change, because
+  //    `retryOnError` is left off everywhere except the readiness probe.
+  const signUp = await retryWhileRouteMissing(
+    async (_attemptIndex, remainingMs) => {
+      const response = await request.post("/api/auth/sign-up/email", {
+        data: { email: EMAIL, password: PASSWORD, name: "Chat HITL S9k Owner" },
+        headers,
+        failOnStatusCode: false,
+        timeout: remainingMs,
+      });
+      return { status: response.status(), contentType: response.headers()["content-type"] ?? null };
+    },
+    {
+      onRetry: ({ attempts, delayMs }) =>
+        console.log(
+          `[S9k setup] POST /api/auth/sign-up/email answered 404 (attempt ${attempts}) — ` +
+            `retrying in ${delayMs}ms`,
+        ),
+    },
+  );
+  expect(
+    [200, 400, 422],
+    `POST /api/auth/sign-up/email answered ` +
+      `${signUp.status === null ? `nothing at all (last error: ${signUp.lastError})` : signUp.status}` +
+      ` after ${signUp.attempts} attempt(s) over ${signUp.elapsedMs}ms`,
+  ).toContain(signUp.status);
 
   // 2. Admin + org, BEFORE the sign-in that gets persisted.
   const c = newClient();

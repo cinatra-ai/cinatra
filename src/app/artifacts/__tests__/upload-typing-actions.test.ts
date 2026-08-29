@@ -13,7 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { matcherManifestRegistry } from "@cinatra-ai/objects/registry";
+import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 const getAuthSession = vi.fn();
 const getActorContext = vi.fn();
@@ -79,6 +79,18 @@ vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
+// The typed promotion road (cinatra#3028 enabler 0.14), dynamic-imported by the
+// action. Mocked here so the ACTION's wiring is what these cases prove — the
+// road's own decisions are proved in its two suites.
+const promoteMatchedArtifactType = vi.fn();
+vi.mock("@/lib/artifacts/typed-promotion-store", () => ({
+  promoteMatchedArtifactType: (...a: unknown[]) => promoteMatchedArtifactType(...a),
+}));
+const verifySessionAuthority = vi.fn();
+vi.mock("@/lib/org-write/authority", () => ({
+  verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
+}));
+
 // `@/lib/artifacts/type-install-request` is deliberately NOT mocked: the real
 // pure notification builder runs (its href-org behavior is asserted in
 // type-install-request.test.ts).
@@ -105,6 +117,86 @@ beforeEach(() => {
   getActorContext.mockResolvedValue(ACTOR);
 });
 afterEach(() => vi.resetModules());
+
+describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, enabler 0.14)", () => {
+  // THE STATE AN INTERRUPTED PROMOTION LEAVES: the row already carries the
+  // extension's own type, and its promotion revision never landed. The candidate
+  // list EXCLUDES every candidate of the extension that defines the row's
+  // current type, so this confirmation can never pass the candidate gate — which
+  // is why the road's convergence has to be reachable from HERE or from nowhere.
+  const PACK = "@acme/voice";
+  const OWN_TYPE = "@acme/voice:brief";
+
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+    objectTypeRegistry.register(
+      {
+        type: OWN_TYPE,
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      PACK,
+    );
+    matcherManifestRegistry._clearForTests();
+    matcherManifestRegistry.register({
+      packageName: PACK,
+      matcherSkillIds: ["@acme/voice:match"],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      // The row ALREADY carries the extension's own type.
+      artifact: { mime: "text/markdown", objectType: OWN_TYPE },
+    });
+    // …so the picker's own exclusion leaves nothing to pick.
+    listInstalledMeaningTypesAcceptingMime.mockReturnValue([]);
+    verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+  });
+
+  it("COMPLETES a promotion an interruption left half-applied, and writes no second meaning", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({
+      ok: true,
+      representationRevisionId: "rep_converged",
+      revision: 2,
+      toType: OWN_TYPE,
+      retyped: false,
+    });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({
+      ok: true,
+      promotion: {
+        promoted: true,
+        toType: OWN_TYPE,
+        representationRevisionId: "rep_converged",
+        revision: 2,
+      },
+    });
+    // The call that retyped the row wrote the person's meaning; a second
+    // identical assertion would stack a duplicate for a choice already recorded.
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("still answers invalid-type when the road refuses — a row that merely CARRIES the type is not converged", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "already-promoted" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("never takes the converging road for an extension that does not define the row's type", async () => {
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: "@acme/unrelated" });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+  });
+});
 
 describe("assertUploadMeaning — B2 write authority", () => {
   it("uses the WRITE gate (readArtifactForMeaningWrite) and rejects a read-only actor", async () => {
