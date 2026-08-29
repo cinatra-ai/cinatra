@@ -20,6 +20,7 @@ import {
   type ReviewRendererProvenance,
   type SubmitDecisionPorts,
 } from "../artifact-review-decision";
+import { REVIEW_REJECT_RETIRED_REASON } from "../review-surface-model";
 import type { SerializedRuntimeRendererDescriptor } from "../runtime-renderer-descriptor";
 import type { ArtifactReviewTarget } from "../artifact-review-target";
 
@@ -89,21 +90,12 @@ describe("submitReviewDecisionCore — terminal approve", () => {
   });
 });
 
-describe("submitReviewDecisionCore — terminal reject", () => {
-  it("records a TOMBSTONE disposition per target (never hard-delete) + a REJECT resume intent", async () => {
-    const p = ports();
-    const r = await submitReviewDecisionCore(decision({ disposition: "reject", comment: "no" }), p);
-    expect(r.ok).toBe(true);
-    const plan = p.commit.mock.calls[0][0];
-    expect(plan.dispositionOps).toEqual([
-      { artifactId: "a", representationRevisionId: "1", kind: "tombstone" },
-      { artifactId: "b", representationRevisionId: "2", kind: "tombstone" },
-    ]);
-    expect(plan.resumeIntent.kind).toBe("reject");
-    expect(plan.resumeIntent.rejectResponse).not.toContain('"approved"');
-    expect(plan.resumeIntent.userResponse).toBeUndefined();
-  });
-});
+// cinatra#3080 — the terminal REJECT plan test MOVED rather than broke. What it
+// used to assert (a tombstone op per target + a reject resume intent) is now
+// unreachable by construction: no decision may carry `reject`, so the plan shape
+// it described can no longer be built. The refusal that replaced it is asserted
+// in "reject is retired" at the foot of this file; the reading of already-stored
+// reject rows is the settled-outcome suite's, not the decision core's.
 
 describe("submitReviewDecisionCore — comment (non-terminal)", () => {
   it("audits without a terminal resume or disposition; gate stays pending", async () => {
@@ -150,8 +142,12 @@ describe("submitReviewDecisionCore — idempotency", () => {
   it("reordered targets emit a BYTE-IDENTICAL plan (canonical order matches the order-independent fingerprint)", async () => {
     const fwd = ports();
     const rev = ports();
-    await submitReviewDecisionCore(decision({ disposition: "reject", reviewedTargets: [t("a", "1"), t("b", "2")] }), fwd);
-    await submitReviewDecisionCore(decision({ disposition: "reject", reviewedTargets: [t("b", "2"), t("a", "1")] }), rev);
+    // Continue (the stored `approve`) — cinatra#3080 retired the reject this
+    // case used to drive; the canonical-order invariant is the decision's, not
+    // the disposition's, so the same two reorderings prove it on the one
+    // terminal decision that still exists.
+    await submitReviewDecisionCore(decision({ disposition: "approve", reviewedTargets: [t("a", "1"), t("b", "2")] }), fwd);
+    await submitReviewDecisionCore(decision({ disposition: "approve", reviewedTargets: [t("b", "2"), t("a", "1")] }), rev);
     const planFwd = fwd.commit.mock.calls[0][0];
     const planRev = rev.commit.mock.calls[0][0];
     // Same fingerprint AND same audit-row / disposition / resume-intent bytes.
@@ -293,11 +289,15 @@ describe("submitReviewDecisionCore — the deciding actor is recorded", () => {
     expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
   });
 
-  it("stamps the acting actor on a REJECT too (every terminal decision has a decider)", async () => {
-    const p = ports({ actingActorId: () => "user-V" });
+  it("never reaches the actor port for a RETIRED reject (cinatra#3080)", async () => {
+    // The companion of the case above: every terminal decision that can still be
+    // taken has a decider, and the one that cannot be taken records nobody.
+    const actingActorId = vi.fn(() => "user-V");
+    const p = ports({ actingActorId });
     const r = await submitReviewDecisionCore(decision({ disposition: "reject" }), p);
-    expect(r.ok).toBe(true);
-    expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
+    expect(r.ok).toBe(false);
+    expect(actingActorId).not.toHaveBeenCalled();
+    expect(p.commit).not.toHaveBeenCalled();
   });
 
   it("takes the actor from the PORT, never from the client decision payload", async () => {
@@ -545,26 +545,29 @@ describe("S6b — a partition can only ride a decision that can carry it", () =>
     expect(p.commit).not.toHaveBeenCalled();
   });
 
-  it("REFUSES accepted suggestions on a reject (they would patch tombstoned work)", async () => {
-    const p = suggestionPorts();
-    const r = await submitReviewDecisionCore(
-      decision({
-        disposition: "reject",
-        suggestionDecisions: { accepted: ["sug_1"], dismissed: [] },
-      }),
-      p,
-    );
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.error.kind).toBe("invalid-decision");
-    expect(p.commit).not.toHaveBeenCalled();
+  // cinatra#3080 — the two reject/partition cases MOVED into one. A reject used
+  // to refuse accepted suggestions (they would patch tombstoned work) and allow
+  // dismissals; now the disposition itself is refused, so BOTH partitions land
+  // on the same answer and neither reaches the snapshot read.
+  it("REFUSES a retired reject whatever partition it carries", async () => {
+    for (const suggestionDecisions of [
+      { accepted: ["sug_1"], dismissed: [] },
+      { accepted: [], dismissed: ["sug_1"] },
+    ]) {
+      const p = suggestionPorts();
+      const r = await submitReviewDecisionCore(decision({ disposition: "reject", suggestionDecisions }), p);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error("unreachable");
+      expect(r.error.kind).toBe("invalid-decision");
+      expect(p.commit).not.toHaveBeenCalled();
+    }
   });
 
-  it("ALLOWS dismissals on a reject — the reviewer looked and declined", async () => {
+  it("ALLOWS dismissals on a CONTINUE — the reviewer looked and declined", async () => {
     const p = suggestionPorts();
     const r = await submitReviewDecisionCore(
       decision({
-        disposition: "reject",
+        disposition: "approve",
         suggestionDecisions: { accepted: [], dismissed: ["sug_1"] },
       }),
       p,
@@ -632,5 +635,49 @@ describe("S6b — the commit plan carries the ledger + intent inputs", () => {
       p,
     );
     expect(p.commit.mock.calls[0][0].suggestionPlan).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3080 — REJECT IS RETIRED AT THE DECISION OPERATION ITSELF.
+//
+// Acceptance item 2: "the decision operation itself refuses `reject` (a negative
+// test at the API, not only at the buttons and the typed road)". Hiding the
+// button would leave the capability reachable by anything that can post a
+// decision; the refusal therefore lives HERE, before any access check, any gate
+// read and any commit, and it carries the platform's one stated reason.
+// ---------------------------------------------------------------------------
+
+describe("submitReviewDecisionCore — reject is retired (cinatra#3080)", () => {
+  it("REFUSES a reject with the stated reason and commits nothing", async () => {
+    const p = ports();
+    const r = await submitReviewDecisionCore(decision({ disposition: "reject", comment: "no" }), p);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("invalid-decision");
+    if (r.error.kind !== "invalid-decision") throw new Error("unreachable");
+    expect(r.error.message).toBe(REVIEW_REJECT_RETIRED_REASON);
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("refuses BEFORE the run-access check, so no reject reaches any port", async () => {
+    const verifyRunAccess = vi.fn(async () => ({ ok: true }) as const);
+    const readGateState = vi.fn(async (): Promise<ReviewGateState> => ({
+      status: "pending",
+      targets: PINNED,
+    }));
+    const p = ports({ verifyRunAccess, readGateState });
+    await submitReviewDecisionCore(decision({ disposition: "reject" }), p);
+    expect(verifyRunAccess).not.toHaveBeenCalled();
+    expect(readGateState).not.toHaveBeenCalled();
+  });
+
+  it("keeps `approve` and `comment` as the only dispositions a new decision may carry", async () => {
+    const p = ports();
+    expect((await submitReviewDecisionCore(decision({ disposition: "approve" }), p)).ok).toBe(true);
+    expect(
+      (await submitReviewDecisionCore(decision({ disposition: "comment", reviewedTargets: [t("a", "1")] }), p)).ok,
+    ).toBe(true);
+    expect((await submitReviewDecisionCore(decision({ disposition: "reject" }), p)).ok).toBe(false);
   });
 });

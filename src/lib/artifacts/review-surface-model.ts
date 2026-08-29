@@ -22,6 +22,7 @@ import type {
 } from "@/lib/artifacts/artifact-review-preparation";
 import type {
   ReviewDisposition,
+  ReviewRunAccessOp,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
@@ -106,11 +107,19 @@ export function reviewSettledCopy(
   const by = decidedByName ? ` by ${decidedByName}` : "";
   switch (outcome) {
     case "approved":
+      // CONTINUED (cinatra#3080). The STORED disposition is still `approve` —
+      // Continue performs the former approve transition and keeps writing the
+      // same value, with no migration — so this is a relabel of the READING and
+      // nothing else: a gate decided before the floor was redrawn and one
+      // decided after it are the same row and read the same way.
       return {
-        title: `Approved${by}`,
+        title: `Continued${by}`,
         body: "The gate is resolved and the run has been released to continue.",
       };
     case "rejected":
+      // LEGACY ONLY (cinatra#3080). No new decision can produce a reject — the
+      // decision operation refuses one — but rows decided before the retirement
+      // must still read as what they were, so the copy stays.
       return {
         title: `Rejected${by}`,
         body: "The gate is resolved and the reviewed work has been turned back.",
@@ -349,6 +358,17 @@ export type ReviewSurfaceModel =
        * pictures are additive context.
        */
       pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+      /**
+       * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080
+       * item 5) — the review SCREEN's own pre-filled field, beside the note.
+       *
+       * On the surface model rather than on a target's `props`, and that is the
+       * point: `props` is what the DISPLAY is handed, and the display shows the
+       * work, never the instructions the work was made from. Null when the gate
+       * pins no single target that records one, and the screen then draws the
+       * note alone exactly as it did before this field existed.
+       */
+      picturePrompt: string | null;
       permissions: ReviewDecisionPermissions;
     };
 
@@ -386,13 +406,16 @@ export type ReviewSubmitOutcome =
   /** A transient failure — the decision did not commit; safe to retry. */
   | { kind: "error"; message: string };
 
-/** The disposition set the decision bar offers (§IV) — exactly three, no
- * separate "request changes". */
-export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = [
-  "approve",
-  "reject",
-  "comment",
-];
+/**
+ * The set a NEW decision may carry (§IV, redrawn by cinatra#3080).
+ *
+ * NOT the floor: the floor is Comment · Regenerate · Continue, and it lives in
+ * `@/lib/artifacts/review-surface-model`. This is what reaches the #1807 decision core
+ * once the floor's vocabulary has been resolved — Continue's stored `approve`
+ * and Comment's `comment`. Regenerate is absent because it takes the change
+ * road, and `reject` is absent because it is retired.
+ */
+export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = ["approve", "comment"];
 
 /**
  * Map the #1807 decision core's typed `SubmitDecisionResult` to the surface's
@@ -480,4 +503,232 @@ export function mapChangesRequestedToOutcome(
       // failure — the decision did not commit; safe to retry.
       return { kind: "error", message: "The change request could not be recorded." };
   }
+}
+
+// ===========================================================================
+// THE REVIEW FLOOR (cinatra#3080, part of epic #3023 — `PLAN: Agents Lifecycle
+// (C)` §6 step 4). The one place the three review actions, their labels, their
+// required access and the words a person may type for them are written down.
+//
+// "On every review the floor offers three things and no more — Comment, the note
+// that decides nothing; Regenerate, which sends the person's words to the
+// producing step for the next revision; Continue, which goes on with the frozen
+// revision — a person who wants neither leaves the run as it is, so there is no
+// Reject; and Regenerate lives only on the review screen, never in an artifact's
+// renderer."
+//
+// THREE THINGS THIS SECTION IS, AND ONE IT IS NOT.
+//
+//   · It is the FLOOR's vocabulary — what is drawn, in what order, under what
+//     access. Every surface (the card in the chat, the review page, the run
+//     page's review step, the card inside a third-party application) reads its
+//     labels from here, so "the same three and no more" is true by construction
+//     rather than by four independent button lists agreeing.
+//   · It is the TYPED ROAD — which floor action a typed word asks for. One pure
+//     function, so "continue" and the compatibility alias "approve" cannot drift
+//     apart, and "reject" has exactly one answer in exactly one place.
+//   · It is the RETIREMENT of Reject, whose one refusal sentence lives below.
+//
+// It is NOT a second decision path. A floor action resolves to the disposition
+// the #1807 decision core already takes (`continue` → the stored `approve`,
+// unchanged and unmigrated) or, for Regenerate, to NO disposition at all —
+// Regenerate rides the change road's canonical `changes_requested` operation,
+// and `floorActionDisposition` deliberately answers null for it rather than
+// inventing a fourth stored value.
+//
+// PERSISTENCE IS UNTOUCHED. Continue keeps storing `approve` in
+// `artifact_review_gates.disposition`; a legacy `approve` row reads as Continued
+// and a legacy `reject` row stays readable. There is no migration here, and none
+// is needed: the change is what the floor OFFERS, not what the store HOLDS.
+//
+// IT LIVES IN THIS MODULE, not in one of its own, and that is a deliberate
+// choice rather than a convenience: this file is already THE pure, client-safe
+// surface model every review host imports, and the route-graph ratchet is a
+// no-new-rot budget — a new leaf on four locked routes' first-party graphs would
+// have to be paid for with a ceiling raise. The vocabulary belongs to the
+// surface model; putting it here costs those graphs nothing.
+// ===========================================================================
+
+/** The three review actions a pending review offers, and no fourth. */
+export type ReviewFloorAction = "comment" | "regenerate" | "continue";
+
+/**
+ * The floor, IN DRAWN ORDER: the note that decides nothing, then the two acts
+ * that settle the gate. The order is part of the drawing, so it is pinned here
+ * and asserted rather than left to each surface's JSX.
+ */
+export const REVIEW_FLOOR_ACTIONS: readonly ReviewFloorAction[] = [
+  "comment",
+  "regenerate",
+  "continue",
+] as const;
+
+/** The words on the buttons. The ONE source every surface renders from. */
+export const REVIEW_FLOOR_LABELS: Record<ReviewFloorAction, string> = {
+  comment: "Comment",
+  regenerate: "Regenerate",
+  continue: "Continue",
+};
+
+/**
+ * THE ANSWER TO A REJECT, wherever it is asked — the button that no longer
+ * exists, the typed word, the API. ONE sentence, defined here with the rest of
+ * the floor's vocabulary and quoted verbatim by the decision operation that
+ * refuses the word, so a person hears the same answer wherever they ask.
+ */
+export const REVIEW_REJECT_RETIRED_REASON =
+  "There is no Reject on a review. Ask for another go with Regenerate, or leave the run as it is.";
+
+/** Regenerate carries the person's words to the producing step, so it cannot be
+ *  pressed with nothing to carry. Refused with the reason, never silently. */
+export const REGENERATE_NEEDS_A_NOTE =
+  "Regenerate needs a note saying what to change — the note is what goes back to the step that made this.";
+
+/**
+ * A gate that still pins MORE THAN ONE target (a legacy row from before
+ * one-review-per-artifact) cannot say which piece of work to remake, so
+ * Regenerate is refused on it WITH THE REASON — and Comment and Continue still
+ * work. No new multi-target gate is minted, so this is a reading of history, not
+ * a state the product can reach again.
+ */
+export const REGENERATE_MULTI_TARGET_REASON =
+  "This review covers more than one piece of work, so Regenerate cannot say which one to make again. Comment or Continue instead.";
+
+/** A review with no producing step behind it (a batch gate, or a review the
+ *  lifecycle road never opened) has nowhere to send the words back to. */
+/**
+ * The ledger-row property a producing step records the prompt it worked from on.
+ * ONE name, read by the surface and never guessed: a row that carries it was
+ * made from a prompt, and that is the whole of what the floor asks.
+ */
+export const RECORDED_PROMPT_PROPERTY = "imagePrompt";
+
+export const REGENERATE_NOT_ON_THIS_REVIEW =
+  "This review has no producing step to send the words back to, so Regenerate is not available on it. Comment or Continue instead.";
+
+/**
+ * What a CALLER may submit. The three floor actions, plus the two retired words
+ * every already-shipped client and every stored row still speaks: `approve`
+ * (a compatibility alias of Continue, decided in the issue so the existing typed
+ * decision tests MOVE rather than break) and `reject` (refused, with the reason).
+ */
+export type ReviewFloorSubmission = ReviewFloorAction | "approve" | "reject";
+
+export type ResolvedFloorSubmission =
+  | { kind: "action"; action: ReviewFloorAction; alias: boolean }
+  | { kind: "retired"; reason: string };
+
+const FLOOR_ACTION_SET: ReadonlySet<string> = new Set(REVIEW_FLOOR_ACTIONS);
+
+/**
+ * Resolve a submitted word to the floor action it asks for.
+ *
+ * `approve` resolves to Continue and says so (`alias: true`), because a caller
+ * that still speaks the old word gets the new behaviour and the surfaces can
+ * still tell the two apart when they report what happened. `reject` resolves to
+ * nothing at all — it is the ONE word with no action behind it.
+ */
+export function resolveReviewFloorSubmission(
+  submission: ReviewFloorSubmission | string,
+): ResolvedFloorSubmission {
+  if (submission === "reject") {
+    return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
+  }
+  if (submission === "approve") {
+    return { kind: "action", action: "continue", alias: true };
+  }
+  if (FLOOR_ACTION_SET.has(submission)) {
+    return { kind: "action", action: submission as ReviewFloorAction, alias: false };
+  }
+  return { kind: "retired", reason: `Unknown review action "${submission}".` };
+}
+
+/**
+ * The gate disposition a floor action STORES.
+ *
+ * Continue keeps storing `approve` — the same value, the same fingerprint
+ * identity, no migration. Comment stores `comment`. Regenerate stores NOTHING
+ * through this road: it settles the gate as superseded through the change road's
+ * own canonical operation, which records `changes_requested` itself, so a null
+ * here is the honest answer and the action that reads it must take the other
+ * road rather than fall back to a disposition.
+ */
+export function floorActionDisposition(action: ReviewFloorAction): ReviewDisposition | null {
+  switch (action) {
+    case "continue":
+      return "approve";
+    case "comment":
+      return "comment";
+    case "regenerate":
+      return null;
+  }
+}
+
+/**
+ * The run access a floor action needs.
+ *
+ * Regenerate SETTLES THE GATE (as superseded), so it needs exactly what a
+ * terminal decision needs — not the reader's respond access. Comment keeps the
+ * respond access it has always had.
+ */
+export function floorActionRunAccessOp(action: ReviewFloorAction): ReviewRunAccessOp {
+  return action === "comment" ? "respondToHitl" : "approveHitl";
+}
+
+/** The typed road's answer for a word that asks for nothing on the floor. */
+export type TypedReviewWord = ResolvedFloorSubmission | { kind: "unknown" };
+
+/**
+ * THE TYPED ROAD (acceptance item 6). Which floor action a person's typed word
+ * asks for, deterministically and in one place.
+ *
+ * A word that is not a floor word is `unknown` — ordinary chat, never a
+ * decision. `reject` is NOT unknown: it is a word the platform recognises and
+ * refuses with the reason, because "we did not understand you" and "there is no
+ * such thing here" are different answers and the person is owed the second one.
+ */
+export function resolveTypedReviewWord(message: string): TypedReviewWord {
+  const word = message.trim().replace(/[.!]+$/, "").toLowerCase();
+  if (word === "reject" || word === "rejected") {
+    return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
+  }
+  if (word === "approve" || word === "approved") {
+    return { kind: "action", action: "continue", alias: true };
+  }
+  if (word === "continue" || word === "continued") {
+    return { kind: "action", action: "continue", alias: false };
+  }
+  if (word === "regenerate") return { kind: "action", action: "regenerate", alias: false };
+  if (word === "comment") return { kind: "action", action: "comment", alias: false };
+  return { kind: "unknown" };
+}
+
+/**
+ * THE PICTURE'S PROMPT (acceptance item 5), read off the reviewed revision's
+ * ledger row.
+ *
+ * TYPE-AGNOSTIC, and deliberately so. It does NOT ask "is this a picture" — the
+ * review surface is G1-clean and may not key on an artifact type, a mime family
+ * or a renderer identity, and a core that sniffed `image/` would be exactly the
+ * identity keying the artifact-UI boundary forbids. What it asks instead is the
+ * only question the floor actually needs answered: DOES THE REVIEWED REVISION'S
+ * LEDGER ROW RECORD THE PROMPT IT WAS MADE FROM? A row that records one has a
+ * prompt to show and re-send; a row that does not shows the note alone.
+ *
+ * That reads the same way for the picture the drawing is about and for anything
+ * else a producing step later records a prompt on, which is the correct
+ * behaviour rather than a lucky one: the field belongs to "made from a prompt",
+ * not to "is an image".
+ *
+ * THE DISPLAY IS NOT GIVEN THIS. The prompt is the review SCREEN's field, beside
+ * the note; the renderer props contract carries no prompt at all, so there is
+ * nothing for a display to show even if one wanted to.
+ */
+export function reviewPicturePrompt(input: {
+  properties: Record<string, unknown> | null | undefined;
+}): string | null {
+  const raw = input.properties?.[RECORDED_PROMPT_PROPERTY];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

@@ -1,4 +1,5 @@
 import "server-only";
+import { reviewPicturePrompt } from "@/lib/artifacts/review-surface-model";
 import type { ActorContext } from "@/lib/authz/actor-context";
 // Canonical `object.*` row authorization (cinatra#1428 RBAC matrix): the
 // artifact surface enforces the SAME object authorization the objects
@@ -126,6 +127,20 @@ export type ArtifactSummary = {
   // are the matcher-draft extensions offered as suggestion chips (A4 UI).
   presentationIdentity: EffectiveIdentity;
   presentationSuggestions: string[];
+  /**
+   * THE PROMPT THE ROW RECORDS IT WAS MADE FROM (cinatra#3080 item 5), projected
+   * straight off the object row exactly like `ownerLevel` and `sourceUrl` — no
+   * new query, no write, and read-only.
+   *
+   * It exists so the REVIEW SCREEN can pre-fill the prompt field beside its note
+   * and send an edited one back with Regenerate. It is deliberately NOT in the
+   * renderer props contract: a display shows the work, not the instructions the
+   * work was made from.
+   *
+   * Optional so every existing caller and fixture keeps compiling; absent and
+   * null mean the same thing — this row records no prompt.
+   */
+  recordedPrompt?: string | null;
   // Validated "Open in source application" URL for connector-ref artifacts,
   // projected from `objects.data.connectorRef.url` via
   // `connectorRefSourceUrl` (http/https only). Null for every artifact
@@ -315,6 +330,10 @@ function toSummary(
     presentationIdentity: presentation?.identity ?? effective,
     presentationSuggestions: presentation?.suggestions ?? [],
     sourceUrl: connectorRefSourceUrl(rec.data),
+    // cinatra#3080 item 5 — the prompt the row records it was made from, for the
+    // review screen's own field. Read from the same `rec.data` bag every other
+    // projection above comes from.
+    recordedPrompt: reviewPicturePrompt({ properties: d as Record<string, unknown> }),
   };
 }
 

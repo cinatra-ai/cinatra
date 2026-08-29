@@ -5,6 +5,7 @@
  * mapping (§IV: a fingerprint conflict / settled gate is a BLOCK, never a silent
  * success). No React / DB — every seam is plain data.
  */
+import { REVIEW_FLOOR_ACTIONS } from "@/lib/artifacts/review-surface-model";
 import { describe, expect, it } from "vitest";
 
 import type { ReviewTargetMount } from "@/lib/artifacts/artifact-review-preparation";
@@ -118,9 +119,17 @@ describe("§V — permission copy + blocked copy", () => {
   });
 });
 
-describe("§IV — the disposition set is exactly three (no 'request changes')", () => {
-  it("approve / reject / comment only", () => {
-    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment", "reject"]);
+describe("§IV — what a NEW decision may carry (cinatra#3080)", () => {
+  it("approve (Continue's stored value) and comment only — reject is retired", () => {
+    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment"]);
+  });
+
+  it("the FLOOR is the three actions, and it is a different set from the dispositions", () => {
+    // The two are deliberately not the same list any more: Regenerate is on the
+    // floor and carries no disposition (it rides the change road), and `approve`
+    // is a stored value that no button says out loud.
+    expect([...REVIEW_FLOOR_ACTIONS]).toEqual(["comment", "regenerate", "continue"]);
+    expect([...REVIEW_DISPOSITIONS]).not.toContain("regenerate");
   });
 });
 
@@ -297,10 +306,15 @@ describe("the settled copy names the outcome and its decider", () => {
   });
 
   it("names the decider when there is one to name", () => {
+    // cinatra#3080 — a gate whose STORED disposition is `approve` reads as
+    // CONTINUED. The row is unmigrated and unmigratable-by-design: what changed
+    // is the word the person is shown, not the value the store holds, so a gate
+    // decided before the relabel and one decided after it read identically.
     expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Approved by Dana Okonkwo",
+      title: "Continued by Dana Okonkwo",
       body: "The gate is resolved and the run has been released to continue.",
     });
+    // A LEGACY reject row stays readable — it simply can no longer be produced.
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
       "Rejected by Dana Okonkwo",
     );
@@ -317,7 +331,7 @@ describe("the settled copy names the outcome and its decider", () => {
       expect(title.endsWith(" by")).toBe(false);
       expect(title.includes(" by ")).toBe(false);
     }
-    expect(reviewSettledCopy("approved").title).toBe("Approved");
+    expect(reviewSettledCopy("approved").title).toBe("Continued");
     expect(reviewSettledCopy("rejected").title).toBe("Rejected");
     expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
   });

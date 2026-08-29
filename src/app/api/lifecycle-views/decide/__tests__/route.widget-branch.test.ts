@@ -189,22 +189,22 @@ describe("no session fallback behind a failed widget consume", () => {
 
 describe("behind the door, the widget and the page are ONE path", () => {
   it("hands the core the SAME arguments in the SAME order as the session branch", async () => {
-    await POST(widgetPost({ ref: REF, disposition: "reject", comment: "not yet" }));
+    await POST(widgetPost({ ref: REF, disposition: "regenerate", comment: "not yet" }));
     const widgetCall = submitReviewDecisionAction.mock.calls[0];
 
     vi.clearAllMocks();
     resolveReviewActorContext.mockResolvedValue(WIDGET_ACTOR);
     enforceReviewRunAccess.mockResolvedValue({ ok: true });
     submitReviewDecisionAction.mockResolvedValue({
-      kind: "decided",
-      disposition: "reject",
+      kind: "changes-requested",
+      status: "requested",
       idempotent: false,
     });
-    await POST(post({ body: { ref: REF, disposition: "reject", comment: "not yet" } }));
+    await POST(post({ body: { ref: REF, disposition: "regenerate", comment: "not yet" } }));
     const sessionCall = submitReviewDecisionAction.mock.calls[0];
 
     expect(widgetCall).toEqual(sessionCall);
-    expect(widgetCall?.slice(0, 4)).toEqual(["run-1", "task-1", "reject", "not yet"]);
+    expect(widgetCall?.slice(0, 4)).toEqual(["run-1", "task-1", "regenerate", "not yet"]);
   });
 
   it("enforces run READ before the decision, exactly as the session branch does", async () => {

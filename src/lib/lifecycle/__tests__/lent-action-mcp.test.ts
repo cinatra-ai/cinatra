@@ -237,11 +237,11 @@ describe("GATE 5 — a card that offers no decision lends none", () => {
   });
 
   it("refuses a control the card does not offer, even with a valid grant", async () => {
-    // A HITL screen lends Submit and nothing else; a grant naming Approve is
+    // A HITL screen lends Submit and nothing else; a grant naming Continue is
     // well-formed and still buys nothing here.
-    setFrame(grantFor({ control: "approve" }));
+    setFrame(grantFor({ control: "continue" }));
     const out = await handleLentAction(
-      { ref: REF, control: "approve" },
+      { ref: REF, control: "continue" },
       deps({
         resolve: vi.fn(async () => ({
           kind: "hitl_screen",
@@ -312,19 +312,18 @@ describe("GATE 6 — consumed by its first use, and at most once per message", (
 
 describe("using the action IS pressing the button", () => {
   it("the review card's three buttons run the card's OWN decision path", async () => {
-    for (const [control, disposition] of [
-      ["comment", "comment"],
-      ["approve", "approve"],
-      ["reject", "reject"],
-    ] as const) {
-      submitReviewDecision = vi.fn(async () => ({ kind: "decided", disposition, idempotent: false }));
+    // cinatra#3080 — the three are Comment, Regenerate and Continue, and the
+    // control the grant names IS the floor action the one decision entry
+    // receives: the grant vocabulary and the floor are the same three words.
+    for (const control of ["comment", "regenerate", "continue"] as const) {
+      submitReviewDecision = vi.fn(async () => ({ kind: "annotated" }));
       spent = new Set();
       setFrame(grantFor({ control, messageId: `msg-${control}` }));
       await handleLentAction({ ref: REF, control }, deps());
       expect(submitReviewDecision).toHaveBeenCalledWith(
         RUN,
         GATE,
-        disposition,
+        control,
         PERSON_WORDS,
         OWN_CREDENTIAL,
         null,

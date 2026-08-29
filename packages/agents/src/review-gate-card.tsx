@@ -153,10 +153,8 @@ import {
   type LifecycleSuggestion,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorAction, ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
@@ -444,6 +442,7 @@ function composerCommentResult(outcome: ReviewSubmitOutcome): ComposerCommentRes
 export function ReviewGateCard({
   view,
   submitAction,
+  picturePrompt,
 }: {
   view: ReviewGateCardView;
   /**
@@ -453,6 +452,18 @@ export function ReviewGateCard({
    * to the gate-scoped, ref-bound endpoint — the same core either way.
    */
   submitAction?: SubmitReviewDecisionAction;
+  /**
+   * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080
+   * item 5), for the floor's own pre-filled field.
+   *
+   * SUPPLIED BY THE REVIEW SCREEN, and by it alone. It is the surface that
+   * resolves it — server-side, under the reader's own access, off the artifact
+   * projection the target was already prepared from — and hands it down; the
+   * card's own resolve carries no such field, so a card in a transcript draws
+   * the note alone. That asymmetry is the drawing's: the prompt is edited on the
+   * review SCREEN, where the person is looking at the picture full size.
+   */
+  picturePrompt?: string | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   // The host's embedding context, when it has one (cinatra#2577). Only an
@@ -545,8 +556,9 @@ export function ReviewGateCard({
   // identity is stable across re-resolves.
   const refBoundSubmit = useMemo<SubmitReviewDecisionAction>(() => {
     return async (input: {
-      disposition: ReviewDisposition;
+      disposition: ReviewFloorSubmission;
       comment: string | null;
+      regeneratePrompt?: string | null;
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
@@ -561,6 +573,10 @@ export function ReviewGateCard({
             ref: view.ref,
             disposition: input.disposition,
             comment: input.comment,
+            // The picture prompt, when Regenerate carried one (cinatra#3080
+            // item 5). Omitted entirely otherwise, so every other press posts
+            // the body it posted before the field existed.
+            ...(input.regeneratePrompt ? { regeneratePrompt: input.regeneratePrompt } : {}),
             // Omitted entirely when there is no partition, so a gate with no
             // chips posts the body it posted before this slice — and lands the
             // identity-version-1 fingerprint S6b pinned.
@@ -703,12 +719,12 @@ export function ReviewGateCard({
     setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
   // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
-  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
-    disposition === "reject"
-      ? rejectPartition(surfaced)
-      : disposition === "approve"
-        ? buildPartition(surfaced, dismissed)
-        : null;
+  // §VIII, cinatra#3080: the marks ride the ONE decision that still decides the
+  // items under the gate — Continue. Regenerate settles the gate as superseded
+  // and Comment settles nothing, so neither carries them; the retired reject's
+  // "record every surfaced suggestion as not taken" partition went with it.
+  const suggestionDecisionsFor = (action: ReviewFloorAction) =>
+    action === "continue" ? buildPartition(surfaced, dismissed) : null;
 
   const frame = HOST_FRAME[host];
   // The server-minted island URL, when this answer carried one (cinatra#2754).
@@ -757,6 +773,7 @@ export function ReviewGateCard({
       }),
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt: picturePrompt ?? null,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
@@ -790,8 +807,9 @@ function renderState(args: {
   dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (action: ReviewFloorAction) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
+  picturePrompt: string | null;
 }): ReactElement | null {
   const {
     state,
@@ -806,6 +824,7 @@ function renderState(args: {
     onToggleMark,
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt,
   } = args;
 
   switch (state.state) {
@@ -938,6 +957,7 @@ function renderState(args: {
           <ReviewDecisionBar
             permissions={permissions}
             submitAction={submit}
+            picturePrompt={picturePrompt}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1107,29 +1127,12 @@ function buildPartition(
   return { accepted, dismissed: notTaken };
 }
 
-/**
- * The partition a REJECT carries: every surfaced suggestion recorded as NOT
- * TAKEN (§VIII, cinatra#2852).
- *
- * The shipped guard refused an immediate Reject while anything was accepted, and
- * with the old unmarked default that was survivable — nothing was accepted until
- * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
- * first press of Reject, on a row the reviewer never touched, which is a control
- * that fails on press.
- *
- * So the rework is here, at the surface that knows what a reject MEANS for these
- * items: a reject tombstones every reviewed revision, so nothing can be applied
- * into them, and the truthful record of that is a dismissal for each surfaced
- * id — the reviewer looked at them and took none. The decision core's rule ("a
- * reject decision cannot accept suggestions") is untouched and still enforced
- * server-side; this simply never asks it for the impossible.
- */
-function rejectPartition(
-  surfaced: ReadonlyArray<LifecycleSuggestion>,
-): SuggestionDecisionPartition | null {
-  if (surfaced.length === 0) return null;
-  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
-}
+// THE REJECT PARTITION IS GONE (cinatra#3080). It recorded every surfaced
+// suggestion as NOT TAKEN, which was the truthful reading of a decision that
+// tombstoned the revisions the marks would have been applied into. With Reject
+// retired there is no such decision to build one for: Continue carries the marks
+// as they stand, Regenerate settles the gate as superseded without deciding the
+// items under it, and Comment decides nothing at all.
 
 /**
  * §VIII's TWO drawn readings, plus the one HISTORY reading a settled gate can

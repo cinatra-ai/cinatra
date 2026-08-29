@@ -294,11 +294,11 @@
    "unitProofs": [
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
-     "testName": "the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate"
+     "testName": "REGENERATE routes to changes_requested — and the Comment overload is gone (cinatra#3080)"
     },
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
-     "testName": "the base Comment path stays byte-identical — a plain comment is still annotated, gate stays pending"
+     "testName": "the Comment path is the annotation and NOTHING else (cinatra#3080)"
     },
     {
      "file": "src/lib/artifacts/__tests__/artifact-review-decision.test.ts",

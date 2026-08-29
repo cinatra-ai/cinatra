@@ -134,8 +134,10 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
   it("keeps the label and the placeholder byte-identical", () => {
     const { container } = renderBar();
     const label = container.querySelector("label[for='review-rationale']")!;
+    // cinatra#3080 — the field is unchanged; the two acts it is optional and
+    // expected on are Continue and Regenerate now.
     expect(label.textContent).toBe(
-      "Decision rationale (optional on approve, expected on reject)",
+      "Decision rationale (optional on Continue, expected on Regenerate)",
     );
     // The drawing's mono, 9px, wide-tracked, uppercase label — unchanged.
     const labelClasses = classesOf(label);
@@ -149,7 +151,7 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
 
   it("DISABLED/SETTLED — keeps the same dashed rule at the platform's standard disabled opacity", async () => {
     renderBar({ kind: "decided", disposition: "approve", idempotent: false });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect((noteField() as HTMLTextAreaElement).disabled).toBe(true),

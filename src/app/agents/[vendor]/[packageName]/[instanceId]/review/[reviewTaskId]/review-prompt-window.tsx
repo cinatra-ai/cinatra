@@ -17,20 +17,25 @@ export type SubmitReviewDecisionAction = (input: {
 }) => Promise<ReviewSubmitOutcome>;
 
 /**
- * The REAL conversational prompt window on the review surface (owner ruling
- * 2026-07-25 (1), cinatra#2063): the changes-request channel is the same live
- * PromptField conversation the pre-migration review HITL used
- * (§X's reading for this surface: "Ask Cinatra about this review, or ask for
- * changes to the work…"), NOT the decision-bar
- * rationale box. It mounts the shared `HitlConversationPanel` (sticky, portalled
- * into <main>) and routes a typed request through the EXISTING Comment path
- * (`submitReviewDecisionAction` with disposition "comment") — which, on a fenced
- * single-target lifecycle gate, the action resolves as `changes_requested` and a
- * repair. It is NOT a fourth decision affordance: the Approve/Reject/Comment floor
- * is untouched; this is where the human asks for changes, and the exchange (the
- * typed request + the resulting repair/annotation state) is shown as conversation
- * entries. When the request resolves the gate (changes-requested / blocked) the
- * page is refreshed to the now-resolved live gate.
+ * The REAL conversational prompt window on the review surface (cinatra#2063):
+ * the same live PromptField conversation the
+ * pre-migration review HITL used (§X's reading for this surface: "Ask Cinatra
+ * about this review…"), NOT the decision-bar rationale box. It mounts the shared
+ * `HitlConversationPanel` (sticky, portalled into <main>) and files what is typed
+ * through the Comment path (`submitReviewDecisionAction` with the `comment`
+ * action).
+ *
+ * WHAT IS TYPED HERE IS A NOTE, AND ONLY A NOTE (cinatra#3080). Until this slice
+ * a non-empty sentence on a single-target lifecycle gate was resolved as
+ * `changes_requested` — the gate closed and a repair opened, from a window whose
+ * whole promise is that it decides nothing. Asking for another go is
+ * REGENERATE's, on the floor above, where it carries the right a terminal
+ * decision needs and a note it refuses to be pressed without. So this window
+ * annotates: the gate stays pending, the run stays parked, the frozen revision
+ * is unchanged and no successor gate opens.
+ *
+ * It is not a fourth decision affordance either — the floor is Comment ·
+ * Regenerate · Continue and this is the conversational reading of the first.
  */
 export function ReviewPromptWindow({
   submitAction,
@@ -102,21 +107,20 @@ export function ReviewPromptWindow({
     } finally {
       setPromptPending(false);
     }
-    // A landed changes-request RESOLVES the base gate, but the EXCHANGE (the typed
-    // request + the repair/lineage reply) must stay visible per the ruling — so we
-    // do NOT blank the surface to the resolved/blocked state here. Only an
-    // UNEXPECTED block (the gate moved under the reviewer) refreshes to live.
+    // A COMMENT LEAVES THE GATE OPEN (cinatra#3080), so there is nothing to
+    // refresh to: the surface the reviewer is looking at is still the live one.
+    // Only an UNEXPECTED block (the gate moved under the reviewer, decided
+    // elsewhere) refreshes to live.
     if (refresh) router.refresh();
   };
 
   return (
-    // The conversational prompt window (owner ruling 2026-07-25, cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
+    // The conversational prompt window (cinatra#2063).
     // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
-    <div data-conformance-id="review-prompt-window" data-action="request-changes -> changes-requested">
+    // `handleSubmit` files the typed sentence through the Comment path, which
+    // since cinatra#3080 records the note and changes nothing else. Asking for
+    // another go is the floor's Regenerate.
+    <div data-conformance-id="review-prompt-window" data-action="comment-review -> annotated">
       <HitlConversationPanel
         portalTarget={portalTarget}
         // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
@@ -134,9 +138,14 @@ export function ReviewPromptWindow({
 }
 
 /** Map the review submit outcome to a conversational reply + whether the surface
- * should refresh to the live gate. A landed changes-request keeps the EXCHANGE
- * visible (no refresh); only an unexpected block refreshes. The copy mirrors the
- * decision bar's changes-requested / annotated / blocked notices. */
+ * should refresh to the live gate. A landed comment keeps the EXCHANGE visible
+ * and the gate open (no refresh); only an unexpected block refreshes. The copy
+ * mirrors the decision bar's own notices.
+ *
+ * The `changes-requested` arm stays because the OUTCOME type carries it — the
+ * floor's Regenerate produces it — even though nothing typed in this window can
+ * reach it any more. A window that could not read an outcome the surface can
+ * produce would be a silent gap the day the two paths are wired together again. */
 function describeOutcome(outcome: ReviewSubmitOutcome): { reply: string; refreshToLive: boolean } {
   switch (outcome.kind) {
     case "changes-requested":

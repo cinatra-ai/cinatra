@@ -525,10 +525,12 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         const card = root.querySelector<HTMLElement>('[data-conformance-id="review-gate-card"]')!;
         expect(card.getAttribute("data-lifecycle-card-state")).toBe("pending");
         expect(card.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+        // cinatra#3080 — the floor a review card carries into every layout is
+        // Comment · Regenerate · Continue.
         for (const action of [
-          "approve-review -> resolved",
-          "reject-review -> resolved",
           "comment-review -> annotated",
+          "regenerate-review -> changes-requested",
+          "continue-review -> resolved",
         ]) {
           const control = card.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
           expect(control, `${cellName(cell)}: no ${action} control`).not.toBeNull();

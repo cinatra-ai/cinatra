@@ -105,10 +105,29 @@ const reviewRequestSchema = z
      *  not is the review shape, which is what it has always been. */
     kind: z.literal("artifact_review_gate").optional(),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    disposition: z.enum(["approve", "reject", "comment"]),
-    // The rationale (§IV) — optional on approve, expected on reject, and the
-    // substance of a comment. Bounded so a card cannot post an essay.
+    /**
+     * WHICH FLOOR ACTION (cinatra#3080) — `comment`, `regenerate` or `continue`.
+     *
+     * `approve` and `reject` STAY IN THE SET, and neither is an oversight. A
+     * shipped card that posts `approve` gets Continue, which is the whole point
+     * of keeping the alias; and a body that asks for a `reject` is answered with
+     * the platform's own sentence ("there is no Reject on a review…") rather
+     * than a bare 400 an old client would render as a fault. The retirement is
+     * real one layer down: the ONE decision entry refuses the word, and the
+     * decision core refuses it again beneath that, so nothing this route accepts
+     * can produce a reject.
+     */
+    disposition: z.enum(["comment", "regenerate", "continue", "approve", "reject"]),
+    // The note (§IV) — optional on Continue, expected on Regenerate, and the
+    // substance of a Comment. Bounded so a card cannot post an essay.
     comment: z.string().max(10_000).nullable().optional(),
+    /**
+     * FOR A PICTURE, THE EDITED PROMPT (cinatra#3080 item 5) — its own value on
+     * the wire, so the note and the prompt never arrive as one string the server
+     * would have to take apart. Bounded like the note; ignored by every action
+     * other than Regenerate.
+     */
+    regeneratePrompt: z.string().max(10_000).nullable().optional(),
     // The reviewer's per-item SUGGESTION choices (cinatra#2571, epic #2564 S6b),
     // carried ON the one terminal decision — there is deliberately no per-item
     // endpoint (#2047 row 8). Bounded here on SHAPE only: which ids are legitimate
@@ -325,6 +344,8 @@ export async function POST(request: Request): Promise<Response> {
     partition
       ? { accepted: partition.accepted ?? [], dismissed: partition.dismissed ?? [] }
       : null,
+    // The picture prompt, as its own argument (cinatra#3080 item 5).
+    parsed.data.regeneratePrompt ?? null,
   );
 
   return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });

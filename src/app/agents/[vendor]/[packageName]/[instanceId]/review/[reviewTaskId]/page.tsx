@@ -47,10 +47,8 @@ import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -221,8 +219,12 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // window (both route through the same server helper; the prompt window is the
   // Comment path — the changes-request channel — not a fourth decision).
   async function submitAction(input: {
-    disposition: ReviewDisposition;
+    /** WHICH FLOOR ACTION (cinatra#3080) — `comment`, `regenerate` or
+     *  `continue`; the ONE entry resolves the vocabulary and refuses a reject. */
+    disposition: ReviewFloorSubmission;
     comment: string | null;
+    /** For a picture, the edited prompt — its own value, carried by Regenerate. */
+    regeneratePrompt?: string | null;
     suggestionDecisions?: SuggestionDecisionPartition | null;
   }): Promise<ReviewSubmitOutcome> {
     "use server";
@@ -243,6 +245,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
       input.comment,
       undefined,
       input.suggestionDecisions ?? null,
+      input.regeneratePrompt ?? null,
     );
   }
 
@@ -344,6 +347,11 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                     ref: gateCardRef,
                   }}
                   submitAction={submitAction}
+                  // cinatra#3080 item 5 — the review SCREEN's own field. Only
+                  // this surface resolves it (server-side, under the reader's
+                  // access) and only this surface hands it down: the prompt is
+                  // edited here, beside the picture, where Regenerate is.
+                  picturePrompt={surface.kind === "ready" ? surface.picturePrompt : null}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>

@@ -75,6 +75,11 @@ export type { RecordChangesRequestedResult } from "./lifecycle-repair-store";
  * idempotency key encodes below. */
 const PROMPT_WINDOW_FINDING_ID = "prompt-window";
 
+/** The stable finding id the PICTURE PROMPT travels under (cinatra#3080 item 5).
+ * Its OWN id is what makes the note and the prompt two values rather than one
+ * concatenated sentence — at the store as well as on the wire. */
+const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+
 export interface RecordReviewSurfaceChangesRequestedInput {
   /** The reviewed gate's run id (the route param — the auto-gate's producing run). */
   runId: string;
@@ -87,10 +92,26 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * surface's `revisionMember` port (the pinned revision when still live; null when
    * tombstoned/removed) — the base-revision CAS witness the entry point re-checks. */
   currentBaseRevisionId: string | null;
-  /** The reviewer's typed prompt-window feedback — becomes the single finding's
-   * message. The caller passes it trimmed + non-empty (empty feedback stays a plain
-   * annotation on the base comment path). */
+  /** The reviewer's typed note — what to change. Becomes the note finding's
+   * message. The caller passes it trimmed + non-empty (an empty note is refused
+   * with a reason at the floor, before this composer is reached). */
   feedback: string;
+  /**
+   * FOR A PICTURE, THE EDITED PROMPT (cinatra#3080 item 5) — what to make.
+   *
+   * Recorded as its OWN finding beside the note rather than appended to it, so
+   * the producing step receives two distinct instructions and never has to guess
+   * where one ends. It also rides the idempotency key below, so editing the
+   * prompt and pressing Regenerate again is a DIFFERENT request — correctly
+   * answered as a gate conflict on an already-repairing gate rather than
+   * silently re-deriving the first repair.
+   *
+   * Null for everything that is not a picture, and the request is then
+   * byte-identical to the one this composer built before the field existed —
+   * the idempotency key included, so a retry that crosses the deploy boundary
+   * still reconciles against its own repair.
+   */
+  prompt?: string | null;
   /** The DECIDING actor (cinatra#2047 D-2) — resolved server-side from the live
    * session by the binder, never a client claim. Stamped on the resolved gate so
    * a `changes_requested` decision carries the same decider of record an
@@ -219,6 +240,7 @@ export async function recordReviewSurfaceChangesRequested(
   input: RecordReviewSurfaceChangesRequestedInput,
 ): Promise<RecordChangesRequestedResult> {
   const { runId, reviewTaskId, baseTarget, currentBaseRevisionId, feedback } = input;
+  const prompt = input.prompt?.trim() ?? "";
 
   if (!isAutoReviewTaskId(reviewTaskId)) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
@@ -265,8 +287,19 @@ export async function recordReviewSurfaceChangesRequested(
   // A stable idempotency key over the gate + the EXACT feedback: a response-lost
   // retry with the same feedback re-derives the same repair (idempotent); different
   // feedback on an already-repairing gate is a gate-conflict (fail-closed).
-  const idempotencyKey = `pw:${createHash("sha256").update(`${gate.id} ${trimmed}`).digest("hex")}`;
-  const findings: RepairFinding[] = [{ id: PROMPT_WINDOW_FINDING_ID, message: trimmed }];
+  // The key material APPENDS the picture prompt ONLY when there is one, so a
+  // request that carries none hashes exactly what it hashed before the field
+  // existed — an in-flight retry across the deploy boundary still reconciles
+  // against its own repair instead of reading as a second decision.
+  const keyMaterial =
+    prompt.length > 0
+      ? `${gate.id} ${trimmed} ${prompt}`
+      : `${gate.id} ${trimmed}`;
+  const idempotencyKey = `pw:${createHash("sha256").update(keyMaterial).digest("hex")}`;
+  const findings: RepairFinding[] = [
+    { id: PROMPT_WINDOW_FINDING_ID, message: trimmed },
+    ...(prompt.length > 0 ? [{ id: PICTURE_PROMPT_FINDING_ID, message: prompt }] : []),
+  ];
   const request: ChangesRequestedRequest = {
     gateId: gate.id,
     decisionId: idempotencyKey,

@@ -3,10 +3,17 @@ import "server-only";
 import {
   ARTIFACT_REVIEW_DECISION_API_VERSION,
   type ArtifactReviewDecision,
-  type ReviewDisposition,
-  type ReviewRunAccessOp,
   type SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
+import {
+  floorActionDisposition,
+  floorActionRunAccessOp,
+  resolveReviewFloorSubmission,
+  REGENERATE_MULTI_TARGET_REASON,
+  REGENERATE_NEEDS_A_NOTE,
+  REGENERATE_NOT_ON_THIS_REVIEW,
+  type ReviewFloorSubmission,
+} from "@/lib/artifacts/review-surface-model";
 import {
   submitReviewDecision,
   readReviewGatePinnedTargets,
@@ -25,6 +32,34 @@ import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lif
 import { resolveReviewActorContext } from "./review-actor";
 
 /**
+ * THE FLOOR'S ONE ENTRY (cinatra#3080, epic #3023). Comment · Regenerate ·
+ * Continue all arrive here, and each takes exactly one road:
+ *
+ *   Comment    — a non-terminal annotation through the #1807 decision core. It
+ *                records the note AND CHANGES NOTHING ELSE: the gate stays
+ *                pending, the run stays parked, the frozen revision is
+ *                unchanged, and no successor gate is opened.
+ *   Regenerate — the change road's CANONICAL `changes_requested` operation (the
+ *                same one the typed changes-requested road calls; never a
+ *                parallel endpoint), targeting the step that produced the
+ *                reviewed revision. It settles the gate as superseded and opens
+ *                exactly one successor, so it needs the right a TERMINAL
+ *                decision needs.
+ *   Continue   — the former Approve, byte for byte: the same `approve`
+ *                disposition, the same fingerprint identity, no migration.
+ *
+ * WHAT WAS REMOVED HERE. Until this slice, a NON-EMPTY COMMENT on a single-target
+ * lifecycle gate was routed into `changes_requested` — the gate closed and a
+ * repair opened, from the affordance that decides nothing. That overload is gone:
+ * the canonical operation now has exactly one caller (the Regenerate branch
+ * below), which is what makes item 3's "changes nothing else" a property of the
+ * code rather than of the copy.
+ *
+ * REJECT IS RETIRED. A submission naming it is refused here with the platform's
+ * one stated reason, before any access check or gate read — and refused again by
+ * the decision core itself, so neither this action nor any other caller can
+ * produce one.
+ *
  * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f
  * §IV/§V). The client sends only the disposition + rationale (display + DECIDE
  * only); the server re-resolves the reviewing actor, assembles the WHOLE-gate
@@ -48,7 +83,12 @@ import { resolveReviewActorContext } from "./review-actor";
 export async function submitReviewDecisionAction(
   runId: string,
   reviewTaskId: string,
-  disposition: ReviewDisposition,
+  /**
+   * WHAT THE FLOOR ASKED FOR — one of `comment` / `regenerate` / `continue`,
+   * plus the two words already-shipped clients still speak: `approve` (the
+   * compatibility alias of Continue) and `reject` (refused, with the reason).
+   */
+  submission: ReviewFloorSubmission,
   comment: string | null,
   /**
    * The ALREADY-RESOLVED reviewing context (cinatra#2566, epic #2564 S2).
@@ -74,7 +114,26 @@ export async function submitReviewDecisionAction(
    * row 8). Omitted by every caller that surfaces no suggestions.
    */
   suggestionDecisions?: SuggestionDecisionPartition | null,
+  /**
+   * FOR A PICTURE, THE EDITED PROMPT (cinatra#3080 acceptance item 5) — its own
+   * value, never folded into the note. The review screen shows it as its own
+   * pre-filled field beside the note; Regenerate carries the two separately so
+   * the producing step is told what to make again AND what to change about how
+   * it was asked. Every other action ignores it, and the DISPLAY is never given
+   * it at all.
+   */
+  regeneratePrompt?: string | null,
 ): Promise<ReviewSubmitOutcome> {
+  // WHAT WAS ASKED FOR, RESOLVED FIRST. A retired word is answered before an
+  // actor is resolved, an access check runs or a gate is read: the refusal is a
+  // statement about the product, not about this run, so it must not depend on
+  // (or disclose) anything about the run.
+  const resolved = resolveReviewFloorSubmission(submission);
+  if (resolved.kind === "retired") {
+    return { kind: "error", message: resolved.reason };
+  }
+  const action = resolved.action;
+
   const actorCtx = resolvedActorCtx ?? (await resolveReviewActorContext());
   if (!actorCtx) {
     return {
@@ -83,10 +142,22 @@ export async function submitReviewDecisionAction(
     };
   }
 
-  // Run access for the decision op FIRST (approve/reject → approveHitl; comment →
-  // respondToHitl) — before any gate read, so gate existence/state is never
-  // side-channeled to an unauthorized caller.
-  const op: ReviewRunAccessOp = disposition === "comment" ? "respondToHitl" : "approveHitl";
+  // A REGENERATE WITH NOTHING TO CARRY IS REFUSED BEFORE ANYTHING ELSE. The note
+  // IS the thing that goes back to the producing step, so an empty one is a
+  // shape error, not a decision — refused with the reason, and no store is
+  // touched (acceptance item 4).
+  const note = comment?.trim() ?? "";
+  if (action === "regenerate" && note.length === 0) {
+    return { kind: "error", message: REGENERATE_NEEDS_A_NOTE };
+  }
+
+  // Run access for the FLOOR ACTION first (Continue and Regenerate both settle
+  // the gate → approveHitl; Comment annotates → respondToHitl) — before any gate
+  // read, so gate existence/state is never side-channeled to an unauthorized
+  // caller. Regenerate sitting on the TERMINAL right is acceptance item 4's
+  // "Regenerate needs the same right a terminal decision needs": it settles the
+  // gate as superseded, so a reader who may respond but not decide cannot press it.
+  const op = floorActionRunAccessOp(action);
   const access = await enforceReviewDecisionAccess({ runId, op, actorCtx });
   if (!access.ok) {
     return {
@@ -104,10 +175,10 @@ export async function submitReviewDecisionAction(
   const carriesSuggestions =
     !!suggestionDecisions &&
     (suggestionDecisions.accepted.length > 0 || suggestionDecisions.dismissed.length > 0);
-  if (carriesSuggestions && disposition === "comment") {
+  if (carriesSuggestions && action !== "continue") {
     return {
       kind: "error",
-      message: "Suggestion decisions require a terminal disposition (approve or reject).",
+      message: "Suggestion decisions require a Continue — the decision they ride on.",
     };
   }
 
@@ -119,31 +190,53 @@ export async function submitReviewDecisionAction(
     return { kind: "blocked", reason: "no-longer-pending" };
   }
 
-  // LIFECYCLE prompt-window path (cinatra#2063; owner ruling 2026-07-25). When the
-  // review-orchestration fence is ON and this is a single-target LIFECYCLE review
-  // gate, typed prompt-window feedback (the Comment path) is a `changes_requested`
-  // decision: it CLOSES the base gate and OPENS a repair through the S2 store entry
-  // point (no parallel write path). The authorization is UNCHANGED — the
-  // `respondToHitl` check above already ran for the comment op. With the fence off,
-  // on a non-lifecycle / batch / multi-target gate, or with empty feedback, the
-  // Comment path falls through to the byte-identical annotation below.
-  const trimmedComment = comment?.trim() ?? "";
-  if (
-    disposition === "comment" &&
-    trimmedComment.length > 0 &&
-    isLifecycleReviewOrchestrationActive() &&
-    isAutoReviewTaskId(reviewTaskId) &&
-    !isBatchAutoReviewTaskId(reviewTaskId) &&
-    pinnedTargets.length === 1
-  ) {
+  // REGENERATE — the change road's canonical operation, and the ONLY caller of it
+  // on this surface (acceptance item 4). It settles the earlier gate as
+  // superseded in the change road's existing representation and opens exactly one
+  // successor gate on the next revision; the store keys its idempotency on the
+  // gate plus the exact words, so a double press re-derives the same repair
+  // rather than opening a second one, and a Continue that lands after it (or the
+  // reverse) loses the gate CAS and is surfaced as a BLOCK — the first decision
+  // stands.
+  if (action === "regenerate") {
+    // A review the lifecycle road never opened — a batch gate, or a plain review
+    // task — has no producing step to send the words back to. Named, not silently
+    // degraded to a comment.
+    if (
+      !isLifecycleReviewOrchestrationActive() ||
+      !isAutoReviewTaskId(reviewTaskId) ||
+      isBatchAutoReviewTaskId(reviewTaskId)
+    ) {
+      return { kind: "error", message: REGENERATE_NOT_ON_THIS_REVIEW };
+    }
+    // A gate that still pins MORE THAN ONE target (a legacy row from before
+    // one-review-per-artifact) cannot say which piece of work to make again.
+    // Refused WITH THE REASON — and Comment and Continue below still work on it.
+    if (pinnedTargets.length !== 1) {
+      return { kind: "error", message: REGENERATE_MULTI_TARGET_REASON };
+    }
     const result = await submitReviewSurfaceChangesRequested({
       runId,
       reviewTaskId,
       baseTarget: pinnedTargets[0],
-      feedback: trimmedComment,
+      feedback: note,
+      // THE PICTURE'S PROMPT, SEPARATELY (item 5). Passed as its own value all
+      // the way to the change road, which records it as its own finding — the
+      // note says what to change, the prompt says what to make.
+      prompt: regeneratePrompt?.trim() ? regeneratePrompt.trim() : null,
       actorCtx,
     });
     return mapChangesRequestedToOutcome(result);
+  }
+
+  // COMMENT and CONTINUE — the #1807 decision core, unchanged. `continue` carries
+  // the stored `approve` (no migration); `comment` stays the non-terminal
+  // annotation it has always been, and — since this slice — nothing else.
+  const disposition = floorActionDisposition(action);
+  if (!disposition) {
+    // Unreachable: `regenerate` is the only action with no disposition and it
+    // returned above. Fail closed rather than submit a decision with no verb.
+    return { kind: "error", message: REGENERATE_NOT_ON_THIS_REVIEW };
   }
 
   const decision: ArtifactReviewDecision = {
