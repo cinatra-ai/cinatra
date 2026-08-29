@@ -56,6 +56,8 @@ import {
   isTombstonedObjectTypeId,
   OBJECT_TYPE_NAMESPACE_RE,
   GENERIC_OBJECT_TYPE_ID,
+  classifyArtifactTypeOwnership,
+  unownedArtifactTypeMessage,
 } from "../namespace";
 import {
   objectTypeRegistry,
@@ -2039,19 +2041,6 @@ const OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED =
 const OBJECTS_COLLISION_ROW_DELETED = "OBJECTS_COLLISION_ROW_DELETED" as const;
 
 /**
- * Derive the DEFINING extension package of a namespaced object-type id
- * (`@scope/pkg:local` → `@scope/pkg`). Under the dependency model exactly one
- * artifact extension defines a type, and the type id is namespaced under that
- * definer — so the package prefix names the definer. Returns null for a
- * non-namespaced / malformed id (nothing to suggest installing).
- */
-function deriveDefinerExtension(typeId: string): string | null {
-  if (!OBJECT_TYPE_NAMESPACE_RE.test(typeId)) return null;
-  const colon = typeId.lastIndexOf(":");
-  return colon > 0 ? typeId.slice(0, colon) : null;
-}
-
-/**
  * Refuse a save whose type has no installed definer (fail-closed write
  * boundary). Throws a structured PrimitiveInvocationError carrying the stable
  * OBJECTS_TYPE_NOT_REGISTERED code and the ratified message
@@ -2066,35 +2055,52 @@ function deriveDefinerExtension(typeId: string): string | null {
  *   null when the classifier produced no installed-type id at all.
  */
 function refuseUnregisteredWrite(attemptedType: string | null): never {
-  const typePhrase = attemptedType ? `"${attemptedType}"` : "this content";
-  // Only suggest an install when the definer is KNOWN-but-not-installed: a
-  // namespaced type id whose defining package currently has zero registered
-  // types (declared/named but not installed). Never invent a suggestion for a
-  // type that is registered (that path never reaches here) or unknowable.
-  let suggestedExtension: string | null = null;
-  if (
-    attemptedType &&
-    attemptedType !== GENERIC_OBJECT_TYPE_ID &&
-    !isTombstonedObjectTypeId(attemptedType) &&
-    !objectTypeRegistry.resolve(attemptedType)
-  ) {
-    const definer = deriveDefinerExtension(attemptedType);
-    if (definer && objectTypeRegistry.getTypesForPackage(definer).length === 0) {
-      suggestedExtension = definer;
-    }
+  // ONE ownership answer, from the classifier this boundary shares with the
+  // artifact write path (enabler 0.16 of `PLAN: Agents Lifecycle (C)`,
+  // cinatra#3028 — "the save boundary refuses a type that no installed extension
+  // and not the host owns, with a named reason"). The NAMED reason rides on
+  // `details` so a caller branches on a token instead of parsing the sentence,
+  // which is precisely what made cinatra#2960's refusal opaque: the run saw
+  // `no installed artifact extension defines "@dynamic/types:..."` and went
+  // looking for an extension to install that by design cannot exist.
+  //
+  // A save that resolved to NO type at all has no id to classify; it keeps the
+  // ratified unclassifiable sentence and carries no reason, because none is
+  // known.
+  if (attemptedType === null) {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_TYPE_NOT_REGISTERED,
+      message: "no installed artifact extension defines this content",
+      retryable: false,
+      details: { attemptedType: null },
+    });
   }
-  const message = suggestedExtension
-    ? `no installed artifact extension defines ${typePhrase}; install ${suggestedExtension}`
-    : `no installed artifact extension defines ${typePhrase}`;
+  const ownership = classifyArtifactTypeOwnership(attemptedType, {
+    isArtifactWritable: (typeId) => (objectTypeRegistry.resolve(typeId) ? true : null),
+    packageHasRegisteredTypes: (pkg) => objectTypeRegistry.getTypesForPackage(pkg).length > 0,
+  });
+  if (ownership.owned) {
+    // Reached only when the caller refused for a reason ownership cannot see.
+    // Keep the ratified sentence and name no reason rather than invent one.
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_TYPE_NOT_REGISTERED,
+      message: `no installed artifact extension defines "${attemptedType}"`,
+      retryable: false,
+      details: { attemptedType },
+    });
+  }
   throw new PrimitiveInvocationError({
     code: OBJECTS_TYPE_NOT_REGISTERED,
-    message,
+    message: unownedArtifactTypeMessage(attemptedType, ownership),
     // A refused write is a client/authoring error, not a transient failure —
     // retrying the identical save will fail identically.
     retryable: false,
     details: {
       attemptedType,
-      ...(suggestedExtension ? { suggestedExtension } : {}),
+      reason: ownership.reason,
+      ...(ownership.suggestedExtension
+        ? { suggestedExtension: ownership.suggestedExtension }
+        : {}),
     },
   });
 }

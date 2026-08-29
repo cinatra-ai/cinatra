@@ -89,6 +89,24 @@ export const SUGGESTION_PRODUCER_LANE_ID = "core-analysis-suggestion-lane";
  * a reader refuses a version it does not know rather than guessing. */
 export const GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION = 1;
 
+/**
+ * The MULTI-TARGET payload version (enabler 0.15 of `PLAN: Agents Lifecycle
+ * (C)`, cinatra#3028 / epic #3023).
+ *
+ * THE PLAN'S SENTENCE, VERBATIM: "The snapshot is multi-target: one snapshot per
+ * gate holding a payload per pinned target, produced by each target's own kind
+ * projector, so a batch gate with several kinds is served alike and the batch
+ * decision stays one all-or-nothing boundary."
+ *
+ * A SECOND VERSION, NOT A REWRITE. Version 1 rows are already stored, and the
+ * reader's own rule is that it refuses a version it does not know rather than
+ * guessing — so narrowing v1 out would make every existing snapshot unreadable
+ * and every recorded decision unresolvable. Both versions verify; every consumer
+ * reads them through the accessors below, which is what keeps "accepted ⊆
+ * surfaced" one statement over both shapes.
+ */
+export const GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION_MULTI_TARGET = 2;
+
 /** Hard bound on the suggestions one snapshot may carry. A gate with more
  * findings than this is a projection problem, not a review problem; the payload
  * records the truncation instead of silently shrinking. */
@@ -134,8 +152,9 @@ export interface ProducedSuggestion {
   message: string;
 }
 
-/** The immutable payload stored in one `gate_suggestion_snapshots` row. */
-export interface GateSuggestionSnapshotPayload {
+/** The immutable SINGLE-TARGET payload — schema version 1, the shape every row
+ * written before enabler 0.15 carries. */
+export interface GateSuggestionSnapshotPayloadV1 {
   schemaVersion: number;
   laneId: string;
   target: CoreAnalysisTarget;
@@ -148,17 +167,105 @@ export interface GateSuggestionSnapshotPayload {
   snapshotHash: string;
 }
 
+/** ONE pinned target's half of a multi-target snapshot. */
+export interface GateSuggestionTargetPayload {
+  target: CoreAnalysisTarget;
+  /**
+   * The KIND the host resolved this target's projector by — the artifact's own
+   * object type. Recorded, not inferred, so a reader can say WHY a target has
+   * no suggestions without re-reading the artifact.
+   */
+  kind: string;
+  /**
+   * The projector the kind declared, or NULL when it declares none. The plan:
+   * "a kind without one yields no suggestions, RECORDED AS SUCH" — this null,
+   * beside an empty `suggestions`, is that record.
+   */
+  projectorId: string | null;
+  provenance: CoreAnalysisProvenance;
+  suggestions: ProducedSuggestion[];
+}
+
+/** The immutable MULTI-TARGET payload — schema version 2, one entry per target
+ * the gate pinned (enabler 0.15). */
+export interface GateSuggestionSnapshotPayloadV2 {
+  schemaVersion: number;
+  laneId: string;
+  targets: GateSuggestionTargetPayload[];
+  /** True when the rule set produced more than `MAX_GATE_SUGGESTIONS` across
+   *  every target together — the bound is on the SNAPSHOT, because the snapshot
+   *  is what a reviewer is handed. */
+  truncated: boolean;
+  snapshotHash: string;
+}
+
+/** The immutable payload stored in one `gate_suggestion_snapshots` row: either
+ *  shape. Read it through the accessors, never by shape-testing at a call site. */
+export type GateSuggestionSnapshotPayload =
+  | GateSuggestionSnapshotPayloadV1
+  | GateSuggestionSnapshotPayloadV2;
+
+/** Is this a multi-target payload? The one shape test, stated once. */
+export function isMultiTargetSnapshotPayload(
+  payload: GateSuggestionSnapshotPayload,
+): payload is GateSuggestionSnapshotPayloadV2 {
+  return payload.schemaVersion === GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION_MULTI_TARGET;
+}
+
+/**
+ * EVERY suggestion the snapshot surfaced, in the snapshot's own order (target
+ * order, then each target's own order).
+ *
+ * The single read behind "accepted ⊆ surfaced": the decision core validates
+ * against this list and the chips are drawn from it, so a batch gate's several
+ * targets are one surfaced set and the batch decision stays one all-or-nothing
+ * boundary — exactly as the plan asks.
+ */
+export function snapshotSuggestions(
+  payload: GateSuggestionSnapshotPayload,
+): ProducedSuggestion[] {
+  return isMultiTargetSnapshotPayload(payload)
+    ? payload.targets.flatMap((t) => t.suggestions)
+    : payload.suggestions;
+}
+
+/**
+ * The snapshot's per-target halves, single-target rows included (as a
+ * one-element list) so a caller drawing chips per target has one shape to read.
+ * A v1 row names no kind and no projector, because neither was recorded when it
+ * was written — reported as the empty string and null rather than guessed.
+ */
+export function snapshotTargetPayloads(
+  payload: GateSuggestionSnapshotPayload,
+): GateSuggestionTargetPayload[] {
+  if (isMultiTargetSnapshotPayload(payload)) return payload.targets;
+  return [
+    {
+      target: payload.target,
+      kind: "",
+      projectorId: null,
+      provenance: payload.provenance,
+      suggestions: payload.suggestions,
+    },
+  ];
+}
+
 export interface BuildGateSuggestionsInput {
   target: CoreAnalysisTarget;
   projection: CoreAnalysisProjection;
   authzDecision: CoreAnalysisAuthzDecision;
   laneId?: string;
+  /** Folded into every derived suggestion id. Empty (the default) derives ids
+   *  exactly as they were derived before the multi-target build existed. */
+  idScope?: string;
 }
 
 export interface BuildGateSuggestionsResult {
   suggestions: ProducedSuggestion[];
   provenance: CoreAnalysisProvenance;
-  payload: GateSuggestionSnapshotPayload;
+  /** ALWAYS the single-target shape. The multi-target build is
+   *  `buildMultiTargetGateSuggestions`, which composes this one per target. */
+  payload: GateSuggestionSnapshotPayloadV1;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +349,9 @@ function canonicalJson(value: unknown): string {
 
 /** The snapshot hash over everything the payload carries except the hash. */
 export function gateSuggestionSnapshotHash(
-  payload: Omit<GateSuggestionSnapshotPayload, "snapshotHash">,
+  payload:
+    | Omit<GateSuggestionSnapshotPayloadV1, "snapshotHash">
+    | Omit<GateSuggestionSnapshotPayloadV2, "snapshotHash">,
 ): string {
   return createHash("sha256").update(canonicalJson(payload)).digest("hex");
 }
@@ -255,8 +364,20 @@ function suggestionId(
   digest: string,
   op: ProducedSuggestion["op"],
   pointer: string,
+  /** An extra scope folded into the material. The multi-target build passes the
+   *  target's own (artifact, revision) so two targets whose projections happen
+   *  to be IDENTICAL do not mint one id twice — a duplicate id makes "which one
+   *  was accepted" unanswerable, which is exactly what the reader refuses. */
+  scope = "",
 ): string {
-  const material = [laneId, digest, op, pointer].join("\u0000");
+  // AN EMPTY SCOPE CHANGES NOTHING. A single-target derivation must hash exactly
+  // as it did before this parameter existed, or every snapshot already stored
+  // stops matching a re-derivation and an idempotent re-write turns into
+  // `already-bound` on a gate a reviewer is holding.
+  const material =
+    scope === ""
+      ? [laneId, digest, op, pointer].join("\u0000")
+      : [laneId, digest, op, pointer, scope].join("\u0000");
   return `sug_${createHash("sha256").update(material).digest("hex").slice(0, 24)}`;
 }
 
@@ -332,12 +453,19 @@ export function buildGateSuggestions(
   const suggestions =
     input.authzDecision === "denied"
       ? []
-      : deriveSuggestions(included, includedFields, laneId, digest, fullyDisclosed);
+      : deriveSuggestions(
+          included,
+          includedFields,
+          laneId,
+          digest,
+          fullyDisclosed,
+          input.idScope ?? "",
+        );
 
   const truncated = suggestions.length > MAX_GATE_SUGGESTIONS;
   const kept = truncated ? suggestions.slice(0, MAX_GATE_SUGGESTIONS) : suggestions;
 
-  const unhashed: Omit<GateSuggestionSnapshotPayload, "snapshotHash"> = {
+  const unhashed: Omit<GateSuggestionSnapshotPayloadV1, "snapshotHash"> = {
     schemaVersion: GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION,
     laneId,
     target: {
@@ -356,12 +484,97 @@ export function buildGateSuggestions(
   };
 }
 
+/** ONE pinned target, with the kind that resolved its projector and the
+ *  disclosure that projector produced. */
+export interface MultiTargetSuggestionInput {
+  target: CoreAnalysisTarget;
+  /** The artifact's own object type — the kind the host resolved by. */
+  kind: string;
+  /** The projector the kind declared, or null when it declares none. */
+  projectorId: string | null;
+  projection: CoreAnalysisProjection;
+  authzDecision: CoreAnalysisAuthzDecision;
+}
+
+export interface BuildMultiTargetGateSuggestionsResult {
+  payload: GateSuggestionSnapshotPayloadV2;
+  /** Every suggestion across every target, in the payload's own order. */
+  suggestions: ProducedSuggestion[];
+}
+
+/**
+ * Build the MULTI-TARGET snapshot payload — one payload per pinned target,
+ * produced by each target's own kind projector (enabler 0.15).
+ *
+ * A target whose kind declares no projector still gets an entry: its
+ * `projectorId` is null and its `suggestions` are empty, which is the plan's
+ * "a kind without one yields no suggestions, recorded as such". Recording the
+ * absence is the point — a gate with no chips for one of its targets must be
+ * readable as "that kind has no projector" and never as "the producer never
+ * ran".
+ *
+ * THE BOUND IS ON THE SNAPSHOT, not per target: `MAX_GATE_SUGGESTIONS` counts
+ * what the reviewer is handed, and the truncation is recorded once. Targets are
+ * filled in order, so a truncated snapshot is a prefix of the same list a
+ * reviewer would otherwise have seen, never a reshuffle.
+ */
+export function buildMultiTargetGateSuggestions(input: {
+  targets: readonly MultiTargetSuggestionInput[];
+  laneId?: string;
+}): BuildMultiTargetGateSuggestionsResult {
+  const laneId = input.laneId ?? SUGGESTION_PRODUCER_LANE_ID;
+  const targets: GateSuggestionTargetPayload[] = [];
+  let budget = MAX_GATE_SUGGESTIONS;
+  let truncated = false;
+
+  for (const entry of input.targets) {
+    const built = buildGateSuggestions({
+      target: entry.target,
+      projection: entry.projection,
+      authzDecision: entry.authzDecision,
+      laneId,
+      // Two targets whose disclosed projections are identical would otherwise
+      // derive one id twice, and a duplicated id makes "which one was accepted"
+      // unanswerable — the reader refuses such a payload outright.
+      idScope: `${entry.target.artifactId}\u0000${entry.target.representationRevisionId}`,
+    });
+    // A kind with NO projector proposes nothing, whatever it was disclosed.
+    const produced = entry.projectorId === null ? [] : built.suggestions;
+    const kept = produced.slice(0, Math.max(0, budget));
+    if (kept.length < produced.length) truncated = true;
+    budget -= kept.length;
+    targets.push({
+      target: {
+        artifactId: entry.target.artifactId,
+        representationRevisionId: entry.target.representationRevisionId,
+      },
+      kind: entry.kind,
+      projectorId: entry.projectorId,
+      provenance: built.provenance,
+      suggestions: kept,
+    });
+  }
+
+  const unhashed: Omit<GateSuggestionSnapshotPayloadV2, "snapshotHash"> = {
+    schemaVersion: GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION_MULTI_TARGET,
+    laneId,
+    targets,
+    truncated,
+  };
+  const payload: GateSuggestionSnapshotPayloadV2 = {
+    ...unhashed,
+    snapshotHash: gateSuggestionSnapshotHash(unhashed),
+  };
+  return { payload, suggestions: targets.flatMap((t) => t.suggestions) };
+}
+
 function deriveSuggestions(
   included: Readonly<Record<string, string>>,
   includedFields: readonly string[],
   laneId: string,
   digest: string,
   fullyDisclosed: boolean,
+  scope = "",
 ): ProducedSuggestion[] {
   // 1. Parse every disclosed path once, dropping the ones no patch may address.
   const fields: DisclosedField[] = [];
@@ -420,7 +633,7 @@ function deriveSuggestions(
     const member = group[0]!.member!;
     const pointer = toPointer([...member.prefixSegments, String(member.index)]);
     removes.push({
-      id: suggestionId(laneId, digest, "remove", pointer),
+      id: suggestionId(laneId, digest, "remove", pointer, scope),
       fieldPath: pointer,
       op: "remove",
       message: MESSAGE_REMOVE,
@@ -451,7 +664,7 @@ function deriveSuggestions(
         if (restSegments.some((s) => s === "" || FORBIDDEN_SEGMENT.test(s))) continue;
         const pointer = toPointer([...prefix.segments, String(index), ...restSegments]);
         adds.push({
-          id: suggestionId(laneId, digest, "add", pointer),
+          id: suggestionId(laneId, digest, "add", pointer, scope),
           fieldPath: pointer,
           op: "add",
           value: "",
@@ -469,7 +682,7 @@ function deriveSuggestions(
     if (canonical === f.value) continue;
     if (canonical.length > MAX_SUGGESTION_VALUE_CHARS) continue;
     replaces.push({
-      id: suggestionId(laneId, digest, "replace", f.pointer),
+      id: suggestionId(laneId, digest, "replace", f.pointer, scope),
       fieldPath: f.pointer,
       op: "replace",
       value: canonical,
@@ -543,32 +756,80 @@ export function verifyGateSuggestionSnapshotPayload(
 ): GateSuggestionSnapshotPayload | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const p = raw as Record<string, unknown>;
-  if (p.schemaVersion !== GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION) return null;
   if (typeof p.laneId !== "string" || p.laneId === "") return null;
   if (typeof p.snapshotHash !== "string" || p.snapshotHash === "") return null;
   if (typeof p.truncated !== "boolean") return null;
-  if (!isTarget(p.target) || !isProvenance(p.provenance)) return null;
-  if (!Array.isArray(p.suggestions) || p.suggestions.length > MAX_GATE_SUGGESTIONS) return null;
-  if (!p.suggestions.every(isProducedSuggestion)) return null;
+
+  // BOTH VERSIONS VERIFY, and a version outside the two is refused rather than
+  // guessed at — the reader's rule since the payload existed. The version test
+  // comes first so a v2 row is never walked as a v1 one (its `suggestions` field
+  // does not exist, and "absent" would read as "empty" — a smaller surfaced set
+  // than the one the reviewer was shown).
+  const suggestions: ProducedSuggestion[] = [];
+  if (p.schemaVersion === GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION) {
+    if (!isTarget(p.target) || !isProvenance(p.provenance)) return null;
+    if (!Array.isArray(p.suggestions)) return null;
+    if (!p.suggestions.every(isProducedSuggestion)) return null;
+    // INTERNAL BINDINGS. The hash proves the bytes did not move; it does not
+    // prove they were CONSISTENT when they were written. A payload whose
+    // provenance names a different revision or a different lane than its own
+    // target would pass a gate-membership check on `target` while the audit
+    // record underneath said something else — so the two must agree here, before
+    // anything stores or trusts the row.
+    if (p.laneId !== p.provenance.laneId) return null;
+    if (p.target.artifactId !== p.provenance.targetArtifactId) return null;
+    if (p.target.representationRevisionId !== p.provenance.targetRevisionId) return null;
+    suggestions.push(...(p.suggestions as ProducedSuggestion[]));
+  } else if (p.schemaVersion === GATE_SUGGESTION_SNAPSHOT_SCHEMA_VERSION_MULTI_TARGET) {
+    if (!Array.isArray(p.targets) || p.targets.length === 0) return null;
+    const targetKeys = new Set<string>();
+    for (const rawEntry of p.targets) {
+      if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry)) return null;
+      const t = rawEntry as Record<string, unknown>;
+      if (!isTarget(t.target) || !isProvenance(t.provenance)) return null;
+      if (typeof t.kind !== "string") return null;
+      if (t.projectorId !== null && typeof t.projectorId !== "string") return null;
+      if (!Array.isArray(t.suggestions)) return null;
+      if (!t.suggestions.every(isProducedSuggestion)) return null;
+      // A kind with NO projector proposes nothing. A payload claiming both is
+      // internally inconsistent and reads as unreadable, not as suggestions
+      // nobody produced.
+      if (t.projectorId === null && t.suggestions.length > 0) return null;
+      if (p.laneId !== t.provenance.laneId) return null;
+      if (t.target.artifactId !== t.provenance.targetArtifactId) return null;
+      if (t.target.representationRevisionId !== t.provenance.targetRevisionId) return null;
+      // ONE ENTRY PER TARGET. Two entries for one pinned target would make
+      // "what was surfaced for this target" ambiguous, and the card draws chips
+      // per target.
+      const key = `${t.target.artifactId}\u0000${t.target.representationRevisionId}`;
+      if (targetKeys.has(key)) return null;
+      targetKeys.add(key);
+      suggestions.push(...(t.suggestions as ProducedSuggestion[]));
+    }
+  } else {
+    return null;
+  }
+
+  // The bound is on the SNAPSHOT — what the reviewer is handed — so it is
+  // checked over every target together.
+  if (suggestions.length > MAX_GATE_SUGGESTIONS) return null;
 
   // Suggestion ids must be unique: the whole downstream contract is "accepted is
   // a subset of surfaced", and a duplicated id makes "which one was accepted"
   // unanswerable.
-  const ids = new Set((p.suggestions as ProducedSuggestion[]).map((x) => x.id));
-  if (ids.size !== p.suggestions.length) return null;
-
-  // INTERNAL BINDINGS. The hash proves the bytes did not move; it does not prove
-  // they were CONSISTENT when they were written. A payload whose provenance
-  // names a different revision or a different lane than its own target would
-  // pass a gate-membership check on `target` while the audit record underneath
-  // said something else — so the two must agree here, before anything stores or
-  // trusts the row.
-  if (p.laneId !== p.provenance.laneId) return null;
-  if (p.target.artifactId !== p.provenance.targetArtifactId) return null;
-  if (p.target.representationRevisionId !== p.provenance.targetRevisionId) return null;
+  const ids = new Set(suggestions.map((x) => x.id));
+  if (ids.size !== suggestions.length) return null;
 
   const { snapshotHash, ...unhashed } = p as unknown as GateSuggestionSnapshotPayload;
-  if (gateSuggestionSnapshotHash(unhashed) !== snapshotHash) return null;
+  if (
+    gateSuggestionSnapshotHash(
+      unhashed as
+        | Omit<GateSuggestionSnapshotPayloadV1, "snapshotHash">
+        | Omit<GateSuggestionSnapshotPayloadV2, "snapshotHash">,
+    ) !== snapshotHash
+  ) {
+    return null;
+  }
   return p as unknown as GateSuggestionSnapshotPayload;
 }
 
