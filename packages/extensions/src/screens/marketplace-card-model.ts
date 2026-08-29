@@ -651,6 +651,40 @@ export function workspaceReachLabel(audience: "workspace" | "admin"): string {
     : "Installed (Workspace: All)";
 }
 
+/**
+ * The install map, corrected by the RUN GATE'S OWN VERDICT (cinatra#2944).
+ *
+ * The template-derived map is built from the visible extension templates, and a
+ * template whose package has NO canonical `installed_extension` row is
+ * grandfathered to "active" by the shared template read. For a catalog-governed
+ * opt-in package that grandfather is a CLAIM THE RUN GATE CONTRADICTS: the gate
+ * treats a `guardedOptional` catalog record with no canonical row as provably
+ * not installed and refuses the run with the opt-in message, while the card
+ * showed a disabled "Installed" pill and offered no way to install it.
+ *
+ * The two surfaces are made to agree BY CONSTRUCTION rather than by a second
+ * copy of the rule: the caller resolves availability with the gate's own
+ * resolver, and every package the gate calls `not-installed` is dropped from the
+ * map, so {@link resolveMarketplaceCardCta} sees `undefined` and renders the
+ * Install control. Only `not-installed` is acted on — `archived` keeps its
+ * Restore state, and every fail-open state the gate reports (`runnable` on an
+ * unreadable catalog or a store outage) leaves the map exactly as it was.
+ *
+ * Pure and client-safe: the verdicts travel in, no read happens here.
+ */
+export function applyRunGateInstallTruth(
+  installedVersionByName: Map<
+    string,
+    { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+  >,
+  availabilityByPackageName: ReadonlyMap<string, { state: string }>,
+): void {
+  for (const [packageName, availability] of availabilityByPackageName) {
+    if (availability.state !== "not-installed") continue;
+    installedVersionByName.delete(packageName);
+  }
+}
+
 export function resolveMarketplaceCardCta(
   card: Pick<MarketplaceCardData, "packageVersion">,
   installedInfo:
