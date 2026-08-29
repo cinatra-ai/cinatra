@@ -25,30 +25,48 @@
 //   * a walk MERGES: it replaces what it rewrote, retires what it replaced, and
 //     leaves every other record where it stood.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 
-import { validateCaptureRecord as validateCanonicalRecord } from "../../ci/lib/capture-record-contract.mjs";
+import {
+  CAPTURE_INDEX_PATH,
+  validateCaptureRecord as validateCanonicalRecord,
+} from "../../ci/lib/capture-record-contract.mjs";
 import {
   CAPTURE_FRAMINGS,
+  CAPTURE_OUTPUT_ROOT,
+  HISTORICAL_OUTPUT_ROOT,
   RECORDER_ID,
   WALK_ACTIONS,
   captureRequirementsFor,
   mergeWalkRecords,
   observeWalkCell,
+  readWalkPlan,
+  rerootWalkPlanOutputs,
+  screenshotPathViolation,
   validateWalkPlan,
   walkCellState,
   walkCellsOf,
 } from "../lib/chat-hitl-capture-recorder.mjs";
+import { WALK_PLAN_PATH, loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const WALK_PLAN_PATH = join(REPO_ROOT, "evidence", "2788-s9d-rework", "capture-walk.json");
-const S9D_WALK = JSON.parse(readFileSync(WALK_PLAN_PATH, "utf8"));
+// The committed round-5 plan, byte for byte, with its OUTPUT paths on the
+// current capture root — see the loader for why that one rewrite happens.
+const S9D_WALK = loadWalkPlan();
 
-const PNG = "evidence/2821-fixture/walk.png";
+const PNG = "test-results/capture-fixture/walk.png";
 const BYTES = Buffer.from("walk-fixture-bytes");
 const HASH = createHash("sha256").update(BYTES).digest("hex");
 const READ = () => BYTES;
@@ -83,6 +101,7 @@ function pageAnswering(requirements, { url, overrides = {} } = {}) {
   const page = {
     log,
     shots: [],
+    shotOptions: [],
     url: async () => url,
     count: async (selector) => countOf(selector),
     countVisible: async (selector) => countOf(selector),
@@ -102,6 +121,13 @@ function pageAnswering(requirements, { url, overrides = {} } = {}) {
     screenshot: async (abs, options = {}) => {
       log.push(`screenshot:${options.framing ?? "(none)"}`);
       page.shots.push(abs);
+      // What the shutter was ASKED for, so a suite can assert the format was
+      // stated rather than left to the file name.
+      page.shotOptions.push(options);
+      // A REAL SHUTTER LEAVES A FILE. The recorder writes to a temp name in the
+      // resolved directory and renames it into place, so a stub that writes
+      // nothing is not standing in for a shutter at all.
+      writeFileSync(abs, BYTES);
     },
   };
   return page;
@@ -127,8 +153,22 @@ const RUN_DECIDED = {
   screenshot: PNG,
 };
 
-const observe = (cell, page) =>
-  observeWalkCell({ page, cell, repoRoot: "/anywhere", readImpl: READ, now: NOW });
+
+// A REAL capture root for the observer. `observeCapture` resolves its
+// destination before the shutter — the root, the parent directory and any
+// existing target — so a suite that drives it needs a real tree to write into.
+// The fake page's "shutter" just drops the fixture bytes at the path it is
+// handed, which is what a real one does at the point this suite cares about.
+// NOTHING IS PRE-CREATED. Not the run directories and not `test-results/`
+// itself — the recorder creates what a run needs, and a suite that made them
+// first would not notice when it stopped. That is exactly the regression this
+// harness now covers.
+const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-root-"));
+afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
+
+// NO INJECTED READER: the stub shutter writes the fixture bytes, and the
+// recorder hashes them back off real disk — which is what a real walk does.
+const observe = (cell, page) => observeWalkCell({ page, cell, repoRoot: OBSERVE_ROOT, now: NOW });
 
 describe("the walk plan is judged before the browser opens", () => {
   it("accepts the committed S9d plan and reads its ten cells in walk order", () => {
@@ -160,7 +200,7 @@ describe("the walk plan is judged before the browser opens", () => {
     // asserts `[data-lifecycle-card-host]`, and neither screen draws a card —
     // one is the shipped trigger screen, the other lists the schedule as a rail
     // ROW. Both are photographed as PAGE CONTROLS instead
-    // (`evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
+    // (`https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
     // same reader, filed with their hashes, and given no record.
     const cardless = S9D_WALK.steps.filter((s) => s.id === "setup-scheduling-step");
     expect(cardless).toHaveLength(1);
@@ -272,7 +312,7 @@ describe("the walk plan is judged before the browser opens", () => {
     );
   });
 
-  it("REFUSES two cells writing one image, and a screenshot outside evidence/", () => {
+  it("REFUSES two cells writing one image, and a screenshot outside the capture output root", () => {
     const plan = structuredClone(S9D_WALK);
     const withCells = plan.steps.filter((s) => (s.cells ?? []).length > 0);
     withCells[1].cells[0].screenshot = withCells[0].cells[0].screenshot;
@@ -318,6 +358,7 @@ describe("the walk cell is OBSERVED, and refused if it did not come out", () => 
     expect(
       validateCanonicalRecord(record, {
         repoRoot: "/anywhere",
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -384,6 +425,7 @@ describe("the kind is measured wherever it is drawn — the run-page cell", () =
     expect(
       validateCanonicalRecord(record, {
         repoRoot: "/anywhere",
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -462,6 +504,328 @@ describe("the preflight and the walk derive ONE state", () => {
     // the assertions below is itself the audit tier accepting it.
     const record = await observe(ADVISORY_CELL, page);
     expect(record.declaredState).toBe("advisory");
-    expect(validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })).toEqual([]);
+    expect(validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE DOCUMENTED COMMAND HAS TO RUN. `scripts/ci/chat-hitl-capture-index.json`
+// tells a reader to drive this exact fixture with
+// `chat-hitl-capture-driver.mjs --walk <it>`. The driver used to read the file
+// raw while only the suites re-rooted its outputs, so that command died in
+// preflight with ten output-root violations and the suites graded a plan the
+// real CLI never saw. These cases load through the DRIVER'S OWN call.
+// ---------------------------------------------------------------------------
+describe("the committed fixture is executable exactly as documented", () => {
+  it("the capture index documents this fixture path, and no path that is gone", () => {
+    const prose = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8")).$comment.join("\n");
+    const relative = WALK_PLAN_PATH.slice(WALK_PLAN_PATH.indexOf("scripts/"));
+    expect(prose).toContain(`--walk ${relative}`);
+    // The path it USED to document no longer exists in any tree this repo has.
+    expect(prose).not.toContain("evidence/2788-s9d-rework/capture-walk.json");
+  });
+
+  it("the driver's own loader preflights the fixture with ZERO violations", () => {
+    // readWalkPlan is what `--walk` calls; nothing here re-implements it.
+    const plan = readWalkPlan(WALK_PLAN_PATH);
+    expect(validateWalkPlan(plan)).toEqual([]);
+  });
+
+  it("loads TEN cells, every output re-rooted onto the live capture root", () => {
+    const shots = walkCellsOf(readWalkPlan(WALK_PLAN_PATH)).map((c) => c.screenshot);
+    expect(shots).toHaveLength(10);
+    for (const shot of shots) {
+      expect(shot.startsWith(CAPTURE_OUTPUT_ROOT), shot).toBe(true);
+      expect(screenshotPathViolation(shot)).toBe(null);
+    }
+    expect(shots).toEqual([
+      "test-results/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
+      "test-results/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
+      "test-results/2788-s9d-rework/captures/C2__chat-configured__light.png",
+      "test-results/2788-s9d-rework/captures/C2__chat-configured__dark.png",
+      "test-results/2788-s9d-rework/captures/C3__run-page-configured__light.png",
+      "test-results/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
+      "test-results/2788-s9d-rework/captures/C6__chat-ran__light.png",
+      "test-results/2788-s9d-rework/captures/C6__chat-ran__dark.png",
+      "test-results/2788-s9d-rework/captures/C5__chat-expired__light.png",
+      "test-results/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+    ]);
+  });
+
+  it("the FIXTURE BYTES are untouched — only the loaded copy is re-rooted", () => {
+    const raw = readFileSync(WALK_PLAN_PATH, "utf8");
+    expect(raw).toContain("evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png");
+    expect(raw).not.toContain("test-results/");
+    // ...and the loader hands back a COPY, so a mutating suite cannot poison it.
+    const a = readWalkPlan(WALK_PLAN_PATH);
+    a.steps[0].cells = [];
+    expect(walkCellsOf(readWalkPlan(WALK_PLAN_PATH))).toHaveLength(10);
+  });
+
+  it("re-rooting touches ONLY the output paths — every graded field is as committed", () => {
+    const committed = JSON.parse(readFileSync(WALK_PLAN_PATH, "utf8"));
+    const loaded = readWalkPlan(WALK_PLAN_PATH);
+    const strip = (plan) =>
+      JSON.stringify(plan, (key, value) => (key === "screenshot" ? undefined : value));
+    expect(strip(loaded)).toBe(strip(committed));
+    // ...and each output differs by its ROOT alone.
+    const outs = (plan) => walkCellsOf(plan).map((c) => c.screenshot);
+    expect(outs(loaded)).toEqual(
+      outs(committed).map((s) => CAPTURE_OUTPUT_ROOT + s.slice(HISTORICAL_OUTPUT_ROOT.length)),
+    );
+  });
+
+  it("a plan ALREADY on the live root is passed through unchanged", () => {
+    // The re-rooting is a rescue for committed plans, not a transform every
+    // plan is subject to: anything authored since the cleanup is untouched.
+    const modern = {
+      slice: "modern",
+      steps: [{ id: "s", cells: [{ ...walkCellsOf(readWalkPlan(WALK_PLAN_PATH))[0] }] }],
+    };
+    expect(rerootWalkPlanOutputs(modern)).toEqual(modern);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SHUTTER IS A WRITE. These drive the real observer against real temp trees
+// and assert it refuses BEFORE anything is written — the file the redirect
+// aimed at is still untouched afterwards, which is what "refused" has to mean.
+// ---------------------------------------------------------------------------
+describe("the observer refuses a redirected write before the shutter", () => {
+  const shot = (root, rel) =>
+    observeWalkCell({
+      page: pageAnswering(captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"), {
+        url: "http://localhost:3000/chat/org/agent/t-1",
+      }),
+      cell: { ...CHAT_PENDING, screenshot: rel },
+      repoRoot: root,
+      now: NOW,
+    });
+
+  it("a SYMLINKED CAPTURE ROOT is refused, and nothing is written through it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-root-"));
+    try {
+      // A `.png` victim, so this case is judged on the ROOT rather than being
+      // turned away earlier for its extension — the rule under test is the
+      // symlinked root, and the file it would clobber has to be a plausible one.
+      writeFileSync(join(root, "victim.png"), "OLD");
+      symlinkSync(".", join(root, "test-results"), "dir");
+      await expect(shot(root, "test-results/victim.png")).rejects.toThrow(/capture root must be a real directory/);
+      expect(readFileSync(join(root, "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a SYMLINKED INTERMEDIATE DIRECTORY is refused, and its target is untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-parent-"));
+    try {
+      mkdirSync(join(root, "test-results"), { recursive: true });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      symlinkSync(join(root, "outside"), join(root, "test-results", "sneaky"), "dir");
+      await expect(shot(root, "test-results/sneaky/victim.png")).rejects.toThrow(/is a symlink/);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an EXISTING SYMLINKED TARGET is refused, and the file it points at is untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-target-"));
+    try {
+      mkdirSync(join(root, "test-results", "c"), { recursive: true });
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      symlinkSync(join(root, "outside", "victim.png"), join(root, "test-results", "c", "x.png"));
+      await expect(shot(root, "test-results/c/x.png")).rejects.toThrow(/already exists as a symlink/);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the honest destination IS written, and atomically — no temp file left behind", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-ok-"));
+    try {
+      mkdirSync(join(root, "test-results", "c"), { recursive: true });
+      const record = await shot(root, "test-results/c/ok.png");
+      expect(record.screenshot).toBe("test-results/c/ok.png");
+      expect(readFileSync(join(root, "test-results", "c", "ok.png"))).toEqual(BYTES);
+      const left = readdirSync(join(root, "test-results", "c"));
+      expect(left).toEqual(["ok.png"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE MID-CAPTURE SWAP. The destination is resolved, then real DOM work runs,
+// then the shutter fires and the file is renamed. An ancestor swapped for a
+// symlink in that window redirects both. Node has no `openat`, so the gap
+// cannot be closed — it is re-checked immediately before each step and fails
+// closed. The stub shutter below performs the swap at exactly that moment.
+// ---------------------------------------------------------------------------
+describe("a parent swapped DURING the capture fails closed", () => {
+  const cellFor = (rel) => ({ ...CHAT_PENDING, screenshot: rel });
+  const req = captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending");
+
+  it("REFUSES the rename when the shutter's own directory is swapped mid-capture", async () => {
+    const root = mkdtempSync(join(tmpdir(), "swap-mid-"));
+    try {
+      mkdirSync(join(root, "outside"), { recursive: true });
+      writeFileSync(join(root, "outside", "victim.png"), "OLD");
+      const page = pageAnswering(req, { url: "http://localhost:3000/chat/org/agent/t-1" });
+      // THE SWAP HAPPENS INSIDE THE SHUTTER — after the pre-shutter re-check
+      // and before the pre-rename one, which is the window being tested.
+      page.screenshot = async (abs) => {
+        writeFileSync(abs, BYTES);
+        const parent = join(root, "test-results", "run");
+        rmSync(parent, { recursive: true, force: true });
+        symlinkSync(join(root, "outside"), parent, "dir");
+      };
+      await expect(
+        observeWalkCell({ page, cell: cellFor("test-results/run/x.png"), repoRoot: root, now: NOW }),
+      ).rejects.toThrow(/mid-capture/);
+      // The directory the swap pointed at is untouched: nothing was renamed in.
+      expect(readdirSync(join(root, "outside"))).toEqual(["victim.png"]);
+      expect(readFileSync(join(root, "outside", "victim.png"), "utf8")).toBe("OLD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the honest run through the same path still lands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "swap-none-"));
+    try {
+      const page = pageAnswering(req, { url: "http://localhost:3000/chat/org/agent/t-1" });
+      const record = await observeWalkCell({
+        page,
+        cell: cellFor("test-results/run/x.png"),
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(record.screenshot).toBe("test-results/run/x.png");
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["x.png"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SHUTTER IS AN IMAGE WRITER. It infers its format from the file name, so
+// the exclusive random temp file must still LOOK like an image — an
+// extensionless temp path made the real producer fail outright with
+// `unsupported mime type "null"`. Belt and braces: the name keeps the
+// extension AND the format is stated explicitly.
+// ---------------------------------------------------------------------------
+describe("the temp file is still an image, by name and by declaration", () => {
+  it("the shutter is handed a .png temp path and an explicit type", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shutter-type-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/shot.png" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shots).toHaveLength(1);
+      const handed = page.shots[0];
+      // It is the TEMP name — random, hidden, and still a .png.
+      expect(handed.endsWith(".png")).toBe(true);
+      expect(basename(handed)).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.png$/);
+      expect(page.shotOptions[0].type).toBe("png");
+      // ...and the file that survives is the real name, with nothing beside it.
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["shot.png"]);
+      expect(readFileSync(join(root, "test-results", "run", "shot.png"))).toEqual(BYTES);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE EXTENSION IS CHECKED BEFORE ANY DIRECTORY IS MADE. A capture that is
+// never going to be taken should not leave a run directory behind.
+// ---------------------------------------------------------------------------
+describe("an unsupported image extension is refused before the run directory exists", () => {
+  const shootInto = (root, rel) =>
+    observeWalkCell({
+      page: pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      ),
+      cell: { ...CHAT_PENDING, screenshot: rel },
+      repoRoot: root,
+      now: NOW,
+    });
+
+  it("REFUSES .webp, and creates nothing on the way to refusing it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-webp-"));
+    try {
+      await expect(shootInto(root, "test-results/run/shot.webp")).rejects.toThrow(
+        /a capture is one of \.png, \.jpg, \.jpeg/,
+      );
+      // Not even the capture root: the format is judged before preparation.
+      expect(existsSync(join(root, "test-results"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ACCEPTS .PNG as a png, and names the temp file canonically", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-upper-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/SHOT.PNG" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shotOptions[0].type).toBe("png");
+      expect(basename(page.shots[0])).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.png$/);
+      // The DESTINATION keeps the name the record spells; only the temp file is
+      // canonicalised.
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["SHOT.PNG"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a .jpeg capture is declared jpeg and gets a .jpeg temp suffix", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fmt-jpeg-"));
+    try {
+      const page = pageAnswering(
+        captureRequirementsFor("chat_thread", "trigger_schedule_proposal", "pending"),
+        { url: "http://localhost:3000/chat/org/agent/t-1" },
+      );
+      await observeWalkCell({
+        page,
+        cell: { ...CHAT_PENDING, screenshot: "test-results/run/shot.jpeg" },
+        repoRoot: root,
+        now: NOW,
+      });
+      expect(page.shotOptions[0].type).toBe("jpeg");
+      expect(basename(page.shots[0])).toMatch(/^\.capture-[0-9a-f]{24}\.tmp\.jpeg$/);
+      expect(readdirSync(join(root, "test-results", "run"))).toEqual(["shot.jpeg"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

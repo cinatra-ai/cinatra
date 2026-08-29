@@ -133,7 +133,7 @@ const HOST_STANDARD_IDS = new Set([
   // a card (maybe even an empty review screen) with a spinning icon" — and its
   // own conformance is pinned where it is drawn
   // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
-  // photographed (evidence/2790-s9f-host-parity, the S5a / R7a cells).
+  // photographed (https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity, the S5a / R7a cells).
   "review-gate-placeholder",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under

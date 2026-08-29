@@ -76,6 +76,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   CAPTURE_INDEX_PATH,
+  isHistoricalPermalink,
+  parsePermalink,
+  readPinnedArtifact,
+  repoPathOf,
   validateCaptureIndex as validateCanonicalIndex,
 } from "../ci/lib/capture-record-contract.mjs";
 import {
@@ -88,7 +92,6 @@ import {
 } from "./lib/anchor-contract.mjs";
 import {
   chatThreadRequirementsFor,
-  hashFile,
   hostTokenInCell,
   kindTokenInCell,
   stateTokenInCell,
@@ -160,11 +163,47 @@ function loadManifest(manifestPath = MANIFEST_PATH) {
  * catches is the case that actually happens — the file was renamed, or the test
  * was deleted.
  */
-export function proofExists(proof, repoRoot = DEFAULT_REPO_ROOT, readFileImpl = null) {
+export function proofExists(
+  proof,
+  repoRoot = DEFAULT_REPO_ROOT,
+  readFileImpl = null,
+  readPinnedImpl = null,
+  virtualFilesystem = false,
+) {
+  // THE SAME RULE AS EVERY OTHER READER OVERRIDE: honoured only under the
+  // explicit flag. The positional signature is kept so an existing positional
+  // caller still type-checks, but passing a reader WITHOUT the flag no longer
+  // buys anything -- the overrides are dropped and the document is read from
+  // where it really lives. Production passes neither.
+  const readFile = virtualFilesystem === true ? readFileImpl : null;
+  const readPinned = virtualFilesystem === true ? readPinnedImpl : null;
+  // A PINNED PROOF. Once a proof document leaves the working tree, the row cites
+  // it as a historical permalink into this repository at a full 40-char commit.
+  // The document is READ BACK FROM THAT COMMIT with `git cat-file`, and the
+  // lexical check below runs on those bytes exactly as it runs on a file in the
+  // tree -- same rule, different source. A blob that cannot be produced is
+  // reported, never waved through.
+  if (isHistoricalPermalink(proof.file)) {
+    const got = (readPinned ?? readPinnedArtifact)(proof.file, { repoRoot });
+    if (!got.ok) {
+      return { ok: false, reason: `pinned proof unreachable: ${got.reason}` };
+    }
+    const pinnedSource = got.bytes.toString("utf8");
+    if (!pinnedSource.includes(proof.testName)) {
+      return { ok: false, reason: `no "${proof.testName}" in ${proof.file}` };
+    }
+    return { ok: true, pinned: true };
+  }
+  if (proof.file?.startsWith("http://") || proof.file?.startsWith("https://")) {
+    return {
+      ok: false,
+      reason: `"${proof.file}" is a URL but not a pinned permalink into this repository`,
+    };
+  }
   const abs = resolve(repoRoot, proof.file);
   let source;
   try {
-    source = readFileImpl ? readFileImpl(proof.file) : readFileSync(abs, "utf8");
+    source = readFile ? readFile(proof.file) : readFileSync(abs, "utf8");
   } catch {
     return { ok: false, reason: `file not found: ${proof.file}` };
   }
@@ -191,6 +230,10 @@ export function auditManifest({
   manifest = loadManifest(),
   repoRoot = DEFAULT_REPO_ROOT,
   readFileImpl = null,
+  // TEST-ONLY, and the ONE name that unlocks every reader override in this
+  // module. Without it an injected reader is ignored and every cited proof is
+  // read from the tree or from git history, as it is in production.
+  virtualFilesystem = false,
 } = {}) {
   const violations = [];
   const rows = manifest.rows ?? [];
@@ -240,7 +283,7 @@ export function auditManifest({
         violations.push(`${where}: a ${p.kind} entry is missing file/testName`);
         continue;
       }
-      const found = proofExists(p, repoRoot, readFileImpl);
+      const found = proofExists(p, repoRoot, readFileImpl, null, virtualFilesystem);
       if (!found.ok) violations.push(`${where}: ${found.reason}`);
     }
 
@@ -276,7 +319,12 @@ export function loadCaptureIndex(indexPath = CAPTURE_INDEX_PATH) {
 export function auditCaptureIndex({
   index = loadCaptureIndex(),
   repoRoot = DEFAULT_REPO_ROOT,
-  hashOf = (rel) => hashFile(resolve(repoRoot, rel)),
+  // NO DEFAULT HASHER. It used to default to a plain "hash whatever is at this
+  // path" reader, and injecting a hasher is what tells the validator its caller
+  // is supplying a virtual filesystem -- so this entrypoint was opting itself
+  // out of the resolved-path check on every run. Left undefined, the validator
+  // hashes from disk AND resolves the path first. A suite may still pass one.
+  hashOf,
   tier = "graded",
 } = {}) {
   // THE CANONICAL FLOOR, FIRST, for EVERY record. The ratified contract owns
@@ -287,7 +335,7 @@ export function auditCaptureIndex({
   const canonical = validateCanonicalIndex(index, { repoRoot }).violations.map(
     (v) => `[canonical] ${v.cell ? `record "${v.cell}": ` : ""}${v.code} — ${v.detail}`,
   );
-  return [...canonical, ...validateCaptureIndex({ index, hashOf, tier })];
+  return [...canonical, ...validateCaptureIndex({ index, hashOf, repoRoot, tier })];
 }
 
 /** A cell name without its image extension. */
@@ -399,14 +447,37 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
-    // The image must live where the citing proof lives. Without this the row
-    // cites `evidence/A/README.md` while its record points at a screenshot in
-    // `evidence/B`, and the two halves of the claim never meet.
-    const claimDir = claim.file.slice(0, claim.file.lastIndexOf("/"));
-    if (claimDir && !record.screenshot.startsWith(`${claimDir}/`)) {
+    // THE IMAGE MUST LIVE WHERE THE CITING PROOF LIVES, in the same PLACE and
+    // at the same MOMENT. Without the place, the row cites one proof folder's
+    // README while its record points at a screenshot in another and the two
+    // halves of the claim never meet. Both sides are read as the IN-REPOSITORY
+    // PATH first, so a pinned permalink and a live path compare on one axis.
+    const claimPath = repoPathOf(claim.file);
+    const shotPath = repoPathOf(record.screenshot);
+    const claimDir = claimPath.slice(0, claimPath.lastIndexOf("/"));
+    if (claimDir && !shotPath.startsWith(`${claimDir}/`)) {
       violations.push(
         `manifest row ${claim.row} cites "${claim.cell}" from ${claim.file}, but its record's ` +
           `screenshot is ${record.screenshot} — the image must sit with the proof that cites it`,
+      );
+      continue;
+    }
+    // ...AND AT THE SAME MOMENT. Reading both halves as paths is what makes the
+    // place comparable, and on its own it throws the COMMIT away: a README
+    // pinned at one commit and a screenshot pinned at another satisfy the
+    // directory rule while never having coexisted in any tree, which is a
+    // bundle assembled after the fact rather than a round that happened. When
+    // both halves are pinned they must name the SAME commit. Every file of one
+    // proof directory is pinned at that directory's own last commit, so an
+    // honest bundle satisfies this by construction; a hand-assembled one does
+    // not. A live path is exempt: it has no commit to agree with.
+    const claimPin = parsePermalink(claim.file);
+    const shotPin = parsePermalink(record.screenshot);
+    if (claimPin && shotPin && claimPin.sha !== shotPin.sha) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" from a proof pinned at ${claimPin.sha}, ` +
+          `but its record's screenshot is pinned at ${shotPin.sha} — the two halves of the claim ` +
+          "were never in the same tree, so they are not one round",
       );
       continue;
     }
