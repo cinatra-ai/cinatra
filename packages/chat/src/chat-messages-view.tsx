@@ -20,7 +20,7 @@
 // components that emit byte-identical DOM.
 
 import { isRunStartToolName } from "./run-start-tool-names";
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -79,6 +79,13 @@ import {
   useRunMomentCard,
   type RunMomentCardReader,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
+// The one wording a start answers with, and the correction the conversation
+// applies to a sentence that has been outlived by its own card (cinatra#3044).
+// The zero-dependency run-status leaf, reached by its own subpath.
+import {
+  correctRunStartSentenceForScheduleWait,
+  runIsWaitingForItsSchedule,
+} from "@cinatra-ai/agents/run-status";
 import { useConversationCredential } from "./conversation-credential";
 import { runSeedRequest } from "./run-seed-request";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -260,6 +267,7 @@ function AgentRunTurnSlot({
   slot,
   views,
   onActiveGateChange,
+  onScheduleWaitChange,
   children,
 }: {
   runId: string;
@@ -276,6 +284,11 @@ function AgentRunTurnSlot({
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /** THE TURN'S SENTENCE, TOLD WHAT THIS RUN IS DOING (cinatra#3044). The run's
+   *  own row is read HERE, so the line above the card learns from the same
+   *  reading the card itself is drawn from — never from a second poller and
+   *  never from the frozen text. */
+  onScheduleWaitChange?: (runId: string, waiting: boolean) => void;
   /** The renderable views this same step produced, drawn under the run card. */
   children?: ReactNode;
 }) {
@@ -386,6 +399,32 @@ function AgentRunTurnSlot({
   // comes back and the turn draws what it drew before this rule existed.
   const runCardStandsDown =
     momentIsOpen || (turnCarriesMomentCard && stillLooking);
+
+  // THE SENTENCE ABOVE THE CARD MAY NOT CONTRADICT IT (cinatra#3044).
+  //
+  // The line that introduces this card was written when the run was dispatched
+  // — before the schedule moment existed — and it says the run started. The
+  // card beneath it is still asking when the run should happen, and the row
+  // says the run has not run. One of the two readings is false, and it is not
+  // the card's: "where the sentence and the card could disagree, the card is
+  // right". So the run's own reading, already read here for the card, is
+  // reported UP to the parts list, which corrects the platform's own sentence
+  // for this run and leaves everything else in the turn alone.
+  //
+  // IT IS THE SAME READING, not a second one. Nothing extra is fetched, no
+  // second poller is started, and a turn whose run never parks at a schedule
+  // reports `false` once and is never touched again.
+  const waitingForSchedule = momentIsOpen && runIsWaitingForItsSchedule(momentCard);
+  useEffect(() => {
+    onScheduleWaitChange?.(runId, waitingForSchedule);
+    // A SLOT THAT LEAVES TAKES ITS ANSWER WITH IT: a run whose container
+    // unmounts while still waiting must not leave the turn correcting a
+    // sentence for a card that is no longer drawn.
+    if (!waitingForSchedule) return;
+    return () => {
+      onScheduleWaitChange?.(runId, false);
+    };
+  }, [onScheduleWaitChange, runId, waitingForSchedule]);
 
   // WHEN THE RUN STARTS ASKING, AND HOW THIS TURN HEARS ABOUT IT
   // (cinatra#2930, lifecycle-b W3).
@@ -585,6 +624,7 @@ function OrderedPartsSection({
   onMarkdownClick,
   onActiveGateChange,
   onApplyIntent,
+  onWaitingRunsChange,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -608,13 +648,46 @@ function OrderedPartsSection({
    *  produced so a SLOTTED card keeps the one gesture the widget owns. Absent
    *  (`/chat`) ⇒ display-only, exactly as for the turn-level list. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
+  /** cinatra#3044 — the same answer, reported OUT, for the layouts that render
+   *  the turn's prose as flat `content` beside this list rather than inside it
+   *  (the pinned Slack layout, and any turn that carries no ordered trace). */
+  onWaitingRunsChange?: (runIds: readonly string[]) => void;
 }) {
+  // WHICH RUNS IN THIS TURN ARE WAITING FOR A SCHEDULE (cinatra#3044). Each
+  // run's own container reads its row for the card it draws and reports the
+  // answer here, because the sentence that has to be corrected is a SIBLING of
+  // that container, not a child of it — the platform writes the line and the
+  // dispatch part into one turn, and only the run's row can say which of the
+  // two readings the person is looking at is still true.
+  //
+  // A LIST, not a boolean: one turn can start more than one run, and a
+  // correction is addressed to the run it names.
+  const [scheduleWaitRunIds, setScheduleWaitRunIds] = useState<readonly string[]>([]);
+  const onScheduleWaitChange = useCallback((runId: string, waiting: boolean) => {
+    setScheduleWaitRunIds((prev) => {
+      const known = prev.includes(runId);
+      // Identity is preserved when nothing changed, so a run that reports the
+      // same answer on every read cannot re-render the transcript.
+      if (waiting === known) return prev;
+      return waiting ? [...prev, runId] : prev.filter((id) => id !== runId);
+    });
+  }, []);
+  useEffect(() => {
+    onWaitingRunsChange?.(scheduleWaitRunIds);
+  }, [onWaitingRunsChange, scheduleWaitRunIds]);
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
         if (part.kind === "text") {
-          const raw = trimContent ? trimContent(part.content) : part.content;
+          let raw = trimContent ? trimContent(part.content) : part.content;
+          // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
+          // construction: only the sentence this platform minted, only for a
+          // run this turn is drawing a schedule card for, and only while that
+          // run is waiting. Prose the model wrote is not touched.
+          for (const waitingRunId of scheduleWaitRunIds) {
+            raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+          }
           // Skip pure-whitespace text parts (they're separator artifacts).
           if (!raw.replace(/\s+/g, "").length) return null;
           return (
@@ -679,6 +752,7 @@ function OrderedPartsSection({
               slot={idx}
               views={momentViews}
               onActiveGateChange={onActiveGateChange}
+              onScheduleWaitChange={onScheduleWaitChange}
             >
               {slottedViews}
             </AgentRunTurnSlot>
@@ -1318,6 +1392,85 @@ function MessageRenderableViews({
  * whether that branch already drew them, which is what keeps ONE rendered
  * instance per kind per host however many ladder branches mount this.
  */
+// ---------------------------------------------------------------------------
+// THE ONE CORRECTION, IN THE LAYOUTS THAT DO NOT RENDER AN ORDERED TRACE
+// (cinatra#3044).
+//
+// `OrderedPartsSection` corrects the platform's dispatch sentence where the
+// sentence is a text PART of the trace it renders. Two shipped layouts do not
+// render that trace: the pinned Slack layout projects the turn's prose as flat
+// `content` and carries only the lifecycle SLOTS beside it, and an older turn
+// with no trace falls through the same way. There the sentence and the card are
+// siblings in the message body, so the answer the run's own container reads has
+// to travel one level up — a turn-scoped context, written by the slot list that
+// draws the card and read by the block that renders the prose.
+// ---------------------------------------------------------------------------
+const ScheduleWaitContext = createContext<{
+  waitingRunIds: readonly string[];
+  reportWaitingRunIds: (runIds: readonly string[]) => void;
+} | null>(null);
+
+/** The assistant turn's body, and the scope of the correction inside it. */
+function ScheduleWaitTurnBody({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
+  const reportWaitingRunIds = useCallback((next: readonly string[]) => {
+    // Identity is preserved when the answer did not change, so a run that
+    // reports the same reading on every poll cannot re-render the transcript.
+    setWaitingRunIds((prev) =>
+      prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
+    );
+  }, []);
+  const value = useMemo(
+    () => ({ waitingRunIds, reportWaitingRunIds }),
+    [waitingRunIds, reportWaitingRunIds],
+  );
+  return (
+    <ScheduleWaitContext.Provider value={value}>
+      <div className={className}>{children}</div>
+    </ScheduleWaitContext.Provider>
+  );
+}
+
+/** The turn's flat prose, corrected for every run this turn is drawing a
+ *  pending schedule card for. Identical bytes to the trace's own correction —
+ *  both call the one function in the run-status leaf. */
+function FlatAssistantContent({
+  message,
+  theme,
+  detectWidgets,
+  streaming,
+  onMarkdownClick,
+}: {
+  message: UiMessage;
+  theme: ThemeName;
+  detectWidgets: (content: string) => DetectedWidget[];
+  streaming: boolean;
+  onMarkdownClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  const waitingRunIds = useContext(ScheduleWaitContext)?.waitingRunIds;
+  // While streaming, trim incomplete embed prefixes so partial JSON/mermaid
+  // never flashes as raw text in the markdown output.
+  let raw = streaming ? trimIncompleteEmbeds(message.content) : message.content;
+  for (const runId of waitingRunIds ?? []) {
+    raw = correctRunStartSentenceForScheduleWait({ text: raw, runId });
+  }
+  return (
+    <div
+      data-embed-content
+      className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
+      /* renderMarkdown strips mermaid blocks; they are rendered separately below */
+      onClick={onMarkdownClick}
+    />
+  );
+}
+
 function MessageLifecycleSlots({
   message,
   theme,
@@ -1333,6 +1486,9 @@ function MessageLifecycleSlots({
     instanceId: string,
   ) => void;
 }) {
+  // The answer this mount reports OUT to the turn's prose, which is a sibling
+  // of this block in these layouts and not a child of it (cinatra#3044).
+  const reportWaitingRunIds = useContext(ScheduleWaitContext)?.reportWaitingRunIds;
   // The ordered-parts branch condition, restated: when it ran, it already drew
   // every slot in the trace and this mount must draw nothing.
   if (message.parts && message.parts.length > 0 && !message.error) return null;
@@ -1344,6 +1500,7 @@ function MessageLifecycleSlots({
       theme={theme}
       detectWidgets={detectWidgets}
       onActiveGateChange={onActiveGateChange}
+      {...(reportWaitingRunIds ? { onWaitingRunsChange: reportWaitingRunIds } : {})}
     />
   );
 }
@@ -1693,7 +1850,7 @@ export function ChatMessagesView({
                     mentionables={mentionables}
                   />
                 ) : (
-                  <div className="group min-w-0 max-w-full flex-1">
+                  <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
                     {/* Ordered parts: when an assistant message
                         has a `parts` trace, render text + tool badges
                         chronologically interleaved. Replaces the
@@ -1765,17 +1922,12 @@ export function ChatMessagesView({
                       </>
                     ) : message.content ? (
                       <>
-                        <div
-                          data-embed-content
-                          className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                          dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                            isStreaming(message.id)
-                              ? trimIncompleteEmbeds(message.content)
-                              : message.content,
-                            theme,
-                            widgetRuntime.detectWidgets,
-                          ) }}
-                          onClick={handleAssistantMarkdownClick}
+                        <FlatAssistantContent
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          streaming={isStreaming(message.id)}
+                          onMarkdownClick={handleAssistantMarkdownClick}
                         />
                         <MessageWidgetEmbeds
                           message={message}
@@ -1825,7 +1977,7 @@ export function ChatMessagesView({
                     ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                       <ThinkingIndicator label={getLiveProgressStatus(message)} />
                     ) : null}
-                  </div>
+                  </ScheduleWaitTurnBody>
                 )}
               </div>
             </div>
@@ -1876,7 +2028,7 @@ export function ChatMessagesView({
                 mentionables={mentionables}
               />
             ) : (
-              <div className="group min-w-0 max-w-full flex-1">
+              <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
                 {/* Ordered parts — see comment at the first render site
                     above. Same conditional applies here in slack-mode
                     view. */}
@@ -1940,20 +2092,12 @@ export function ChatMessagesView({
                   </>
                 ) : message.content ? (
                   <>
-                    <div
-                      data-embed-content
-                      className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                        // While streaming, trim incomplete embed prefixes so partial
-                        // JSON/mermaid never flashes as raw text in the markdown output.
-                        isStreaming(message.id)
-                          ? trimIncompleteEmbeds(message.content)
-                          : message.content,
-                        theme,
-                        widgetRuntime.detectWidgets,
-                      ) }}
-                      /* renderMarkdown strips mermaid blocks; they are rendered separately below */
-                      onClick={handleAssistantMarkdownClick}
+                    <FlatAssistantContent
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      streaming={isStreaming(message.id)}
+                      onMarkdownClick={handleAssistantMarkdownClick}
                     />
                     <MessageWidgetEmbeds
                       message={message}
@@ -2015,7 +2159,7 @@ export function ChatMessagesView({
                 ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                   <ThinkingIndicator label={getLiveProgressStatus(message)} />
                 ) : null}
-              </div>
+              </ScheduleWaitTurnBody>
             )}
           </div>
         );

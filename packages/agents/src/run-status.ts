@@ -503,6 +503,47 @@ export const RUN_START_PARKED_CLAUSE =
 export const RUN_START_STARTED_CLAUSE = "The run started.";
 
 /**
+ * The clause for a start whose run is waiting for its schedule (cinatra#3044).
+ *
+ * THE TURN THAT INTRODUCES THE CARD MAY NOT CONTRADICT IT. A run that reaches
+ * its schedule moment has not started: it stands at a card that is still asking
+ * "When should this run?", and a line above that card reading "The run started."
+ * — with a status token of `queued` beside it — is the one reading in the turn
+ * that is false. This clause says what is true of the run AND points at the
+ * thing that decides it, which is the card itself: where the sentence and the
+ * card could disagree, the card is right, so the sentence defers to it in words.
+ *
+ * IT STAYS TRUE FOR THE WHOLE WAIT. The wait does not end at Confirm — a
+ * confirmed schedule is armed, not started — so the same clause is correct
+ * while the card is pending and after it has settled, and the turn does not
+ * change its wording underneath a person who is reading it.
+ */
+export const RUN_START_SCHEDULE_WAIT_CLAUSE =
+  "The run has not started: it is waiting for its schedule, and the card in " +
+  "this conversation is where that schedule is decided.";
+
+/**
+ * Is this reading of a run one of a run WAITING FOR ITS SCHEDULE?
+ *
+ * ONE definition, so the sentence the start mints and the correction the
+ * conversation applies cannot disagree about which runs are waiting. The
+ * moment must be the schedule's own, and the run must be in one of the statuses
+ * it holds before it has ever run (`PRE_EXECUTION_RUN_STATUSES` above) — which
+ * is what keeps a `pending_trigger` reached for another reason, and a run that
+ * has moved on past its schedule, out of it.
+ */
+export function runIsWaitingForItsSchedule(reading: {
+  status: string | null | undefined;
+  moment: string | null | undefined;
+}): boolean {
+  return (
+    reading.moment === "schedule" &&
+    typeof reading.status === "string" &&
+    PRE_EXECUTION_RUN_STATUSES.has(reading.status)
+  );
+}
+
+/**
  * The platform's own report for a started run — the sentence the assistant says
  * back, on every host.
  *
@@ -515,11 +556,103 @@ export function describeStartedRun(input: {
   packageName: string;
   runId: string;
   status: string;
+  /**
+   * The lifecycle moment the run stands at, where the caller already knows it.
+   * Absent means "not known here", which is the ordinary dispatch case: the
+   * schedule moment opens later, and the turn's own correction below is what
+   * reconciles the sentence with the card when it does.
+   */
+  moment?: string | null;
 }): string {
+  // THE SENTENCE MAY NOT OUTRANK THE CARD BENEATH IT. A run waiting for its
+  // schedule has not started and is not queued, so neither word is said and
+  // the status token — the one that read `queued` over a card still asking
+  // "When should this run?" — is not printed at all.
+  if (runIsWaitingForItsSchedule({ status: input.status, moment: input.moment ?? null })) {
+    return (
+      `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`). ` +
+      RUN_START_SCHEDULE_WAIT_CLAUSE
+    );
+  }
   const clause =
     input.status === "pending_input" ? RUN_START_PARKED_CLAUSE : RUN_START_STARTED_CLAUSE;
   return (
     `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
     `status: \`${input.status}\`). ${clause}`
+  );
+}
+
+/**
+ * THE SENTENCE THE PLATFORM ALREADY MINTED, CORRECTED AT THE CARD
+ * (cinatra#3044).
+ *
+ * WHY A CORRECTION AND NOT A BETTER CHOICE AT THE START. The start answers the
+ * instant the run is dispatched, and the schedule moment opens later — after
+ * the setup card's own Continue, in the executor. The sentence is frozen into
+ * the turn before the park exists, so no clause chosen at that instant can know
+ * about it. What the conversation CAN know, at the moment it draws the card, is
+ * that this very run is standing at its schedule moment; so the turn's line is
+ * re-read against the run's own row there, and a line that claims a tense the
+ * row does not support is replaced with the one it does.
+ *
+ * NARROW BY CONSTRUCTION. It rewrites only the platform's OWN sentence, only
+ * for the run named in it, and only where that sentence carries one of the two
+ * clauses this module mints. Prose the model wrote, another run's sentence, and
+ * a sentence already corrected are all returned untouched — a correction that
+ * could reach arbitrary text would be a second author of the turn.
+ *
+ * PURE, and in this leaf, so the surface that draws the card and the primitive
+ * that mints the sentence say the same words without either pulling a graph.
+ */
+export function correctRunStartSentenceForScheduleWait(input: {
+  text: string;
+  runId: string;
+}): string {
+  const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // THE WAIT CLAUSE IS IN THE SET TOO, which is what makes this idempotent: a
+  // turn that has already been corrected matches WHOLE and is replaced by the
+  // identical bytes, rather than matching its head and growing a second clause.
+  const clauses = [
+    RUN_START_STARTED_CLAUSE,
+    RUN_START_PARKED_CLAUSE,
+    RUN_START_SCHEDULE_WAIT_CLAUSE,
+  ]
+    .map(escape)
+    .join("|");
+  const pattern = new RegExp(
+    "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
+      escape(input.runId) +
+      "`(?:,\\s*status:\\s*`[^`\\n]*`)?\\)\\.(?:[ \\t]*(" +
+      clauses +
+      "))?",
+    "g",
+  );
+  return input.text.replace(
+    pattern,
+    (
+      match: string,
+      packageName: string,
+      clause: string | undefined,
+      offset: number,
+    ) => {
+      // A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE.
+      // One door mints the head with no clause after it, and that door writes
+      // the sentence as the whole line. The same characters INSIDE prose are a
+      // quotation of the line, not the line, and a corrector that rewrote a
+      // quotation would be a second author of the turn — so a clause-less match
+      // is taken only when nothing but whitespace shares its line.
+      if (clause === undefined) {
+        const before = input.text.slice(0, offset);
+        const after = input.text.slice(offset + match.length);
+        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+        if (!ownsTheLine) return match;
+      }
+      return describeStartedRun({
+        packageName,
+        runId: input.runId,
+        status: "pending_trigger",
+        moment: "schedule",
+      });
+    },
   );
 }
