@@ -3472,6 +3472,18 @@ jobs:
         shell: bash
         run: pnpm test:lifecycle-c-w3
 
+      # cinatra#3026 (epic #3023, lifecycle-c W2). THE EDITOR'S SAVE needs a real
+      # Postgres for the same reason: its whole subject is that the unique index
+      # on (organisation, artifact, revision) IS the compare-and-set — a save
+      # naming a base another save already built on has to be refused BY THE
+      # DATABASE — and that the edit's ledger row commits with the revision it
+      # describes or not at all. Wired here on arrival, in the same job and by
+      # the same convention as the tiers above.
+      - name: The editor's save with an expected base — real-DB tier (cinatra#3026, lifecycle-c W2)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-c-w2
+
       # cinatra#3031 (epic #3023 W7). Same reasoning as the four tiers above,
       # and the same harness: this tier's three suites need the postgres:18 this
       # job already runs, because everything W7 claims is a claim about what the

@@ -46,6 +46,7 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import {
   prepareReviewTargetsCore,
@@ -286,6 +287,12 @@ export function bindArtifactReviewPorts(ctx: {
       : null;
     return buildArtifactRendererProps({
       artifact,
+      // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
+      // NAMED REFUSAL rather than an edit capability, so the SAME display draws
+      // there with no editing affordance and no save address — and "a review's
+      // pinned revision never moves under an edit" holds because there is no road
+      // from this surface to a write at all.
+      edit: readOnlyArtifactEdit("read-only-surface"),
       representation: { revisionId: representationRevisionId, mime },
       previewHref,
       downloadHref,

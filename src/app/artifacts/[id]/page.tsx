@@ -46,7 +46,20 @@ import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  grantArtifactEdit,
+  readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  buildArtifactContentProjection,
+  resolveArtifactContentClass,
+} from "@/lib/artifacts/artifact-content-channel";
+import { artifactTextChannelPorts } from "@/lib/artifacts/artifact-pinned-text";
+import { getRepresentationByIdForReplay } from "@/lib/artifacts/representation-store";
+import { can } from "@/lib/authz/enforce";
+import {
+  ARTIFACT_EDIT_IDLE_PAUSE_MS,
+  ARTIFACT_EDIT_TEXT_CAP_BYTES,
+} from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
@@ -181,6 +194,66 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
 
   const title = artifact.title ?? artifact.artifactId;
 
+  // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS CONSUMER
+  // (enabler 0.20, cinatra#3026). The markdown editor draws the document from
+  // the props and never fetches, so the page has to read the pinned revision on
+  // the server and carry it. The class comes from the FORM the substrate
+  // recorded, never from a guess about the mime.
+  const representationForm = revisionId
+    ? (getRepresentationByIdForReplay(orgId, revisionId)?.form ?? null)
+    : null;
+  const contentClass =
+    revisionId && representationForm && mime
+      ? resolveArtifactContentClass({ form: representationForm, mime })
+      : null;
+  const content =
+    contentClass === "text" && revisionId && representationForm
+      ? await buildArtifactContentProjection(
+          {
+            orgId,
+            artifactId: id,
+            representationRevisionId: revisionId,
+            form: representationForm,
+            mime,
+          },
+          artifactTextChannelPorts,
+        )
+      : // The other two classes have their own readers and their own consumers;
+        // this page carries the text class and says so by name for the rest,
+        // rather than letting an unwired class read as an empty document.
+        absentArtifactContent(revisionId ?? null, contentClass ? "unsupported-form" : "absent");
+
+  // THE EDIT CAPABILITY (enabler 0.20). Minted HERE and nowhere else: this is
+  // the artifact's own page, the one surface the plan makes editable. The
+  // affordance question is the pure decision (`can`) so a page view is not an
+  // authorization event; the SAVE ENDPOINT asks the same question through
+  // `requireAccess`, which is the boundary and audits. They ask it of the same
+  // permission and the same resource, so the drawn affordance and the enforced
+  // right can never disagree.
+  const mayEditArtifact = can(actor, "artifact.update", {
+    resourceType: "artifact",
+    resourceId: id,
+    organizationId: orgId,
+  });
+  const edit =
+    revisionId && content.kind === "text" && !content.truncated && mayEditArtifact
+      ? grantArtifactEdit({
+          artifactId: id,
+          baseRevisionId: revisionId,
+          saveUrl: `/api/artifacts/${id}/edit`,
+          idlePauseMs: ARTIFACT_EDIT_IDLE_PAUSE_MS,
+          capBytes: ARTIFACT_EDIT_TEXT_CAP_BYTES,
+        })
+      : readOnlyArtifactEdit(
+          !revisionId
+            ? "no-representation"
+            : content.kind !== "text"
+              ? "unsupported-form"
+              : content.truncated
+                ? "content-truncated"
+                : "no-write-rights",
+        );
+
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
   const rendererProps = buildArtifactRendererProps({
@@ -188,11 +261,8 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     representation: revisionId ? { revisionId, mime } : null,
     previewHref,
     downloadHref,
-    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
-    // wired to it yet — "each a contract defined here and wired for its
-    // consumers in the sibling plan" — so it says so, by name, instead of
-    // letting an absent projection read as a wired one that found nothing.
-    content: absentArtifactContent(revisionId ?? null),
+    content,
+    edit,
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.
