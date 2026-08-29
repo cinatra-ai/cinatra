@@ -36,6 +36,7 @@
       "@cinatra-ai/audio-artifact": "https://github.com/cinatra-ai/audio-artifact.git",
       "@cinatra-ai/author-agent": "https://github.com/cinatra-ai/author-agent.git",
       "@cinatra-ai/automation-authoring-skill": "https://github.com/cinatra-ai/automation-authoring-skill.git",
+      "@cinatra-ai/binary-artifact": "https://github.com/cinatra-ai/binary-artifact.git",
       "@cinatra-ai/blog-connector": "https://github.com/cinatra-ai/blog-connector.git",
       "@cinatra-ai/blog-content-skill": "https://github.com/cinatra-ai/blog-content-skill.git",
       "@cinatra-ai/blog-draft-writer-agent": "https://github.com/cinatra-ai/blog-draft-writer-agent.git",
@@ -100,6 +101,7 @@
       "@cinatra-ai/lint-policy-agent": "https://github.com/cinatra-ai/lint-policy-agent.git",
       "@cinatra-ai/list-curation-skill": "https://github.com/cinatra-ai/list-curation-skill.git",
       "@cinatra-ai/list-curator-agent": "https://github.com/cinatra-ai/list-curator-agent.git",
+      "@cinatra-ai/markdown-artifact": "https://github.com/cinatra-ai/markdown-artifact.git",
       "@cinatra-ai/marketing-icp-artifact": "https://github.com/cinatra-ai/marketing-icp-artifact.git",
       "@cinatra-ai/marketing-icp-authoring-skill": "https://github.com/cinatra-ai/marketing-icp-authoring-skill.git",
       "@cinatra-ai/marketing-icp-matcher-skill": "https://github.com/cinatra-ai/marketing-icp-matcher-skill.git",
@@ -165,7 +167,9 @@
       "@cinatra-ai/text-artifact",
       "@cinatra-ai/document-artifact",
       "@cinatra-ai/json-artifact",
-      "@cinatra-ai/dashboard-artifact"
+      "@cinatra-ai/dashboard-artifact",
+      "@cinatra-ai/markdown-artifact",
+      "@cinatra-ai/binary-artifact"
     ],
     "extensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
@@ -191,7 +195,9 @@
       "@cinatra-ai/text-artifact@^0.1.0",
       "@cinatra-ai/document-artifact@^0.1.0",
       "@cinatra-ai/json-artifact@^0.1.0",
-      "@cinatra-ai/dashboard-artifact@^0.1.0"
+      "@cinatra-ai/dashboard-artifact@^0.1.0",
+      "@cinatra-ai/markdown-artifact@^0.1.0",
+      "@cinatra-ai/binary-artifact@^0.1.0"
     ],
     "registryPolicy": {
       "temporary": false,
@@ -340,6 +346,16 @@
     "@better-auth/oauth-provider": "^1.6.23",
     "@better-auth/passkey": "^1.6.23",
     "@cfworker/json-schema": "^4.1.1",
+    "@cinatra-ai/audio-artifact": "workspace:*",
+    "@cinatra-ai/binary-artifact": "workspace:*",
+    "@cinatra-ai/document-artifact": "workspace:*",
+    "@cinatra-ai/image-artifact": "workspace:*",
+    "@cinatra-ai/json-artifact": "workspace:*",
+    "@cinatra-ai/markdown-artifact": "workspace:*",
+    "@cinatra-ai/pdf-artifact": "workspace:*",
+    "@cinatra-ai/text-artifact": "workspace:*",
+    "@cinatra-ai/video-artifact": "workspace:*",
+    "@cinatra-ai/zip-artifact": "workspace:*",
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/connectors": "workspace:*",
     "@cinatra-ai/connectors-catalog": "workspace:*",
