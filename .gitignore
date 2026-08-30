@@ -151,3 +151,7 @@ evidence/2824-s9k/.run/
 /verification/
 proofs/
 proof/
+
+# Instance-local runtime state written at boot (the development admin
+# bypass credential lives here, 0600). Never tracked.
+/.cinatra/

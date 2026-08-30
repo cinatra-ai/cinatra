@@ -93,14 +93,18 @@ This is intentional OAuth 2.0 design. Better Auth provides no `defaultAudience` 
 
 ## Dev-admin bypass
 
-`src/dev-admin-bypass.ts` owns the dev-only MCP admin bypass policy. Three guards (`NODE_ENV != production`, `CINATRA_MCP_DEV_ADMIN_BYPASS=true`, request reaches a trusted dev host) must all hold for the MCP transport to skip OAuth verification AND stamp `platformRole: "platform_admin"` on the request.
+`src/dev-admin-bypass.ts` owns the dev-only MCP admin bypass policy. Four guards must all hold for the MCP transport to skip OAuth verification AND stamp `platformRole: "platform_admin"` on the request:
 
-The "trusted dev host" tier covers:
+1. `NODE_ENV != production`.
+2. `CINATRA_MCP_DEV_ADMIN_BYPASS=true`.
+3. NO forwarded header ON THE CONNECTION AS IT ARRIVED — `x-forwarded-for`, `x-forwarded-host`, `x-forwarded-proto` and `forwarded` each refuse outright, present at any value. Presence is read from the INGRESS snapshot taken with the socket peer, NEVER from the route handler's own `Request` headers: the dev server synthesises the forwarded chain on the way in, so a handler always sees one and a check there would refuse every request, the local operator's included.
+4. The CONNECTING SOCKET's peer address is loopback AND the request carries this boot's local credential in `x-cinatra-dev-local-token`.
 
-- **Loopback** — `localhost`, `127.0.0.1`, `::1`, `host.docker.internal`. URL hostname must match; `x-forwarded-host` is a VETO signal only (present-and-non-loopback or present-and-malformed rejects).
-- **Env-allowlisted external hostname** — operator names hostnames in `CINATRA_MCP_DEV_TRUSTED_HOSTS=foo,bar`. URL hostname must literally match an entry; `x-forwarded-host` is ignored on this branch so spoofing it cannot widen trust. DB-stored `externalUrl` is intentionally NOT consulted.
+**No hostname is read.** A request's `Host` (and the URL authority derived from it) is written by the caller, and the dev server synthesises the forwarded chain from that same header, so a request whose headers all say "localhost" proves nothing — anyone who can reach a loopback listener through a proxy that terminates on this machine can compose one. The socket peer comes from the runtime's connection info (`src/local-connection.ts`), and the credential is minted at boot `0600` into the instance data directory (`src/dev-local-token.ts`, `CINATRA_DATA_DIR` else `.cinatra/`). An unknown peer, a missing ingress snapshot, or an unminted credential REFUSES.
 
-`shouldGrantDevAdminBypass` and `isTrustedDevHost` are pure helpers — keep them that way. The bypass extends ONLY to the OAuth-skip + admin-bypass paths in `index.tsx`. The localhost-admin actor identity fallback (`actor-identity.ts`) and the A2A_DEV_BYPASS org fallback (`index.tsx`) deliberately stay strict-loopback — extending those would impersonate the first admin user from non-loopback callers.
+`isTrustedDevPeer` and `shouldGrantDevAdminBypass` are pure helpers — keep them that way. `src/dev-admin-bypass-request.ts` is the ONE request-level composition; both consumers (`index.tsx` and `src/lib/cli-api/route-guard.ts`) call `grantDevAdminBypassForRequest` and nothing else, so the two surfaces cannot drift into two trust boundaries. On the bypass path the OAuth verify is skipped, so `bearerSignatureVerified` is false and every header-derived identity arm in `actor-identity.ts` stays shut: the caller is the anonymous local operator, never a named user. The credential header is in the MCP log redaction set (`src/lib/mcp-logging.ts`) — an enabled server log writes every request header to disk, so leaving it out would copy the `0600` credential into a plain-text file. The A2A_DEV_BYPASS org fallback (`index.tsx`) is a SEPARATE opt-in with its own switch and is untouched here.
+
+The CLIENT half of the contract lives in `packages/cli/src/dev-local-token-client.mjs`: it locates and reads the credential file, sends it ONLY to a loopback target, and sends no forwarded header. Its suite pins the header name, the file name and the forwarded-header set to this package's exported constants, so the two halves cannot drift apart, and the round-trip suite drives the whole contract over a real loopback socket.
 
 See `https://docs.cinatra.ai/references/mcp/patterns/` § "Local-dev MCP admin bypass" for the security implications and operator guidance.
 

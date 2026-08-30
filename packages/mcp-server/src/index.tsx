@@ -62,11 +62,9 @@ import {
   type DelegatedChatAdmissionSnapshot,
 } from "./delegated-chat-admission";
 import {
-  isTrustedDevHost,
-  parseTrustedHosts,
-  shouldGrantDevAdminBypass,
-  urlRequestHost,
-} from "./dev-admin-bypass";
+  emitDevAdminBypassReadinessNoticeOnce,
+  grantDevAdminBypassForRequest,
+} from "./dev-admin-bypass-request";
 import { PageHeader } from "@/components/page-header";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getTrustedTokenOrigins, DEFAULT_MCP_AUTH_SCOPES } from "./llm-credentials";
@@ -305,68 +303,6 @@ function isLocalhostRequest(request: Request): boolean {
   }
   const hostname = new URL(request.url).hostname;
   return isLocalhostHostname(hostname);
-}
-
-/**
- * Request-level trust check for the MCP dev-admin bypass.
- *
- * Returns true when the request hits a host the operator has declared
- * trusted (loopback by default, plus any hostname in
- * `CINATRA_MCP_DEV_TRUSTED_HOSTS`) AND the env opt-ins are set AND we are
- * not in production. Used ONLY by the OAuth-skip + admin-bypass paths.
- * All other `isLocalhostRequest` call sites (actor identity fallback, A2A
- * dev-bypass org fallback) keep strict loopback semantics.
- */
-function isTrustedDevHostRequest(request: Request): boolean {
-  return isTrustedDevHost({
-    nodeEnv: process.env.NODE_ENV,
-    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-    trustedHostsEnv: process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS,
-    urlHost: urlRequestHost(request.url),
-    // Pass the RAW `x-forwarded-host` header value (or null when absent).
-    // The helper distinguishes "absent" (veto inactive) from "present but
-    // malformed" (veto rejects) — collapsing them here would silently
-    // disable the veto against malformed-spoof headers.
-    forwardedHostRaw: request.headers.get("x-forwarded-host"),
-  });
-}
-
-/**
- * Emits a one-time loud startup warning when the dev-admin bypass is
- * active and a non-empty `CINATRA_MCP_DEV_TRUSTED_HOSTS`
- * allowlist is configured. Lists each normalized host so misconfigured
- * entries (typos, scheme prefixes that won't match) are visible.
- *
- * Skipped entirely in production builds; never logs per-request to keep
- * server log noise bounded.
- */
-let devTrustedHostsWarningEmitted = false;
-function emitDevTrustedHostsWarningOnce(): void {
-  if (devTrustedHostsWarningEmitted) return;
-  devTrustedHostsWarningEmitted = true;
-  if (process.env.NODE_ENV === "production") return;
-  if (process.env.CINATRA_MCP_DEV_ADMIN_BYPASS !== "true") return;
-  const raw = process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS;
-  if (!raw || raw.trim() === "") return;
-  const hosts = Array.from(parseTrustedHosts(raw)).sort();
-  if (hosts.length === 0) {
-    // A fully-malformed allowlist (e.g.
-    // `CINATRA_MCP_DEV_TRUSTED_HOSTS=https://foo.ts.net`) yields no normalized
-    // entries. Surface the raw value so the operator sees the typo.
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[mcp-dev-admin-bypass] CINATRA_MCP_DEV_TRUSTED_HOSTS is set but no entries normalized to valid hostnames — extra-loopback trust is INACTIVE. Raw value: " +
-        JSON.stringify(raw) +
-        ". Bare hostnames only (e.g. `foo.ts.net`); URL-shaped entries with `://` are rejected.",
-    );
-    return;
-  }
-  // eslint-disable-next-line no-console
-  console.warn(
-    "[mcp-dev-admin-bypass] CINATRA_MCP_DEV_TRUSTED_HOSTS active — requests reaching the following hostnames will SKIP OAuth and run as platform_admin: " +
-      hosts.join(", ") +
-      ". Never list a publicly-reachable hostname unless you accept unauthenticated admin access.",
-  );
 }
 
 async function getRequestHeaders() {
@@ -826,16 +762,27 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       delegatedActor = null;
     }
 
-    // Surface trusted-hosts allowlist visibility on first request.
-    emitDevTrustedHostsWarningOnce();
+    // Surface the bypass readiness notice on first request.
+    emitDevAdminBypassReadinessNoticeOnce();
 
-    // Requests arriving directly at localhost (or an env-allowlisted trusted
-    // dev host; see CINATRA_MCP_DEV_TRUSTED_HOSTS) bypass OAuth —
-    // auth is handled at the network level (only callers who reach a trusted
-    // host can hit it). Requests tunnelled through any other public proxy
-    // must carry a valid Bearer token — UNLESS a valid delegated actor token
-    // is present, which is itself the auth.
-    if (!isTrustedDevHostRequest(request) && !delegatedActor) {
+    // The dev-only admin bypass, resolved ONCE per request: a loopback SOCKET
+    // PEER presenting this boot's local credential, with no forwarded header
+    // on the request. It reads no hostname — see `./dev-admin-bypass.ts` for
+    // why a Host header cannot carry this decision.
+    const devAdminBypassActive = grantDevAdminBypassForRequest(request.headers);
+
+    // The local operator's own client bypasses OAuth — the connection and the
+    // per-boot credential ARE the auth. Every other request must carry a valid
+    // Bearer token — UNLESS a valid delegated actor token is present, which is
+    // itself the auth.
+    //
+    // `bearerSignatureVerified` records whether THIS request's Authorization
+    // header actually had its signature checked. It is threaded into actor
+    // identity below so an UNVERIFIED token can never name a user: on the
+    // bypass path the verify is skipped, so the identity is the anonymous
+    // local operator rather than whatever subject the token claims.
+    let bearerSignatureVerified = false;
+    if (!devAdminBypassActive && !delegatedActor) {
       try {
         const verified = await verifyMcpAccessToken({
           auth: options.auth,
@@ -848,6 +795,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         if (!verified) {
           return createUnauthorizedResponse(resourceMetadataUrl);
         }
+        bearerSignatureVerified = true;
       } catch {
         return createUnauthorizedResponse(resourceMetadataUrl);
       }
@@ -976,16 +924,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
           ? "platform_admin"
           : "member")
       : undefined;
-    // Dev-only MCP admin bypass for loopback or an env-allowlisted trusted dev
-    // host. See `./dev-admin-bypass.ts` for the policy + rationale.
-    const devAdminBypassActive = shouldGrantDevAdminBypass({
-      nodeEnv: process.env.NODE_ENV,
-      envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-      isTrustedDevHost: isTrustedDevHostRequest(request),
-    });
     // A delegated actor token's platformRole/org win over the (absent)
-    // hosted-MCP session. devAdminBypass still wins over everything when
-    // explicitly enabled for loopback/trusted-dev-host.
+    // hosted-MCP session. The dev bypass (resolved above) still wins over
+    // everything when explicitly enabled for the local operator.
     const resolvedPlatformRole: "platform_admin" | "member" | undefined =
       devAdminBypassActive
         ? "platform_admin"
@@ -1006,8 +947,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // unauthenticated remote calls and the env flag is dev-mode-only.
     let trustedDevAdminUserId: string | null = null;
     if (
-      process.env.CINATRA_MCP_DEV_ADMIN_BYPASS === "true" &&
-      isTrustedDevHostRequest(request) &&
+      devAdminBypassActive &&
       !delegatedActor &&
       !sessionUser?.id &&
       !requestClientId
@@ -1049,6 +989,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         sessionUser,
         requestClientId,
         authHeader: delegatedActor ? null : authHeader,
+        bearerSignatureVerified,
         request,
         a2aDevBypass: process.env.A2A_DEV_BYPASS,
         isLocalhost: isLocalhostRequest(request),
