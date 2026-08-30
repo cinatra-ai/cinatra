@@ -487,48 +487,97 @@ export function parseAgentPackageManifestForInstall(
 // runnable materialization edge"; the runtime OAS-lint view is
 // `scanOasForArtifactParityFindings` (validate-oas-runtime-invariants.ts).
 //
-// Ratchet (must NOT red un-migrated agent repos):
+// THE THREE MATERIALIZATION ROADS. A declared extension is reached by an
+// EndNode `outputs[].cinatra.artifact` binding, by an `artifact_materialize`
+// passthrough ApiNode, or by the AUTHORING EMIT — the road a publisher mints
+// an edited revision on, through the required `artifact_authoring_emit`
+// consumed primitive and with no terminal binding of its own. All three are
+// named side by side as the roads that resolve a produces entry; the third is
+// read from `cinatra.consumes` because it is a capability edge, not a node
+// annotation. A publisher on that road has a resolving declaration, so a gate
+// that cannot see it refuses a package that is correct.
+//
+// Ratchet (R3 — the adoption gate blocks):
 //   - Grammar violations (malformed `cinatra.artifact`, binding.extension ∉
-//     produces) are NET-NEW shapes — no existing repo has a binding, so
-//     nothing existing reddens; they are BLOCKER (already hard-blocked by the
-//     compile gate — this is the defense-in-depth publish view).
-//   - A produces entry with no materialization edge is a check EXISTING repos
-//     trip (blog-draft-writer, blog-idea-generator), so it is WARNING day one.
-//   - `ARTIFACT_PRODUCES_ENFORCEMENT` is the single WARN→BLOCK phase switch;
-//     the Phase-2 flip to "block" (republish refusal) is a dedicated owner-gated
-//     PR AFTER the fleet migration completes. This file ships "warn".
+//     produces) are BLOCKER (already hard-blocked by the compile gate — this
+//     is the defense-in-depth publish view).
+//   - A produces entry no materialization road resolves "names nothing": its
+//     severity follows `ARTIFACT_PRODUCES_ENFORCEMENT`, so the flip below is
+//     what turns the finding itself from advisory into refusal.
+//   - `ARTIFACT_PRODUCES_ENFORCEMENT` is the single WARN→BLOCK phase switch
+//     and this file now ships "block": the declarations wave brings the fleet's
+//     producers to the shape the ratchet asks for, and a declaration that does
+//     not resolve is refused at publish.
 // The single binding-grammar source (#923 `artifact-binding.ts`) is reused —
 // there is no duplicate parser.
 // ---------------------------------------------------------------------------
 
 /**
- * The WARN→BLOCK phase for the produces-materialization publish contract.
+ * The WARN→BLOCK phase for the produces-materialization publish contract —
+ * the adoption gate.
  * "warn": findings are advisory (the publish path logs them, never refuses).
  * "block": the caller refuses republish of a produces-declaring package whose
- * contract has any finding. Flipped only in a dedicated owner-gated PR once all
- * agent-repo migrations have merged and republished (cinatra#924, Phase 2).
+ * contract has any finding, and an unresolved declaration is itself a blocker.
+ * Flipped to "block" by the declarations wave (cinatra#924 Phase 2; ratchet R3
+ * of the review plan) once the fleet's producers carry a resolving declaration.
  */
-export const ARTIFACT_PRODUCES_ENFORCEMENT: "warn" | "block" = "warn";
+export const ARTIFACT_PRODUCES_ENFORCEMENT: "warn" | "block" = "block";
+
+/**
+ * The consumed primitive that IS the authoring-emit materialization road. A
+ * required claim on it resolves the produces entry of a SINGLE-ENTRY
+ * declaration — the emit targets the one artifact type the manifest declares.
+ * Which entry of a MULTI-entry declaration it reaches cannot be decided from
+ * statics, so the claim resolves nothing there: a multi-entry producer states
+ * a per-entry road (a binding or a materialize node) or is refused.
+ */
+export const ARTIFACT_AUTHORING_EMIT_PRIMITIVE = "artifact_authoring_emit" as const;
 
 /**
  * Evaluate the produces-materialization contract for a package at publish time.
  * Pure: no I/O, no registry. `produces` = the manifest `cinatra.produces`
  * extension ids; `oasDoc` = the parsed `cinatra/oas.json` Flow document.
  *
+ * `consumes` = the manifest `cinatra.consumes` entries, read for the
+ * authoring-emit road (a required `artifact_authoring_emit` claim). An absent
+ * `consumes` means the caller knows of no claim, never that the claim is absent
+ * from a manifest it did not read — pass the block wherever it is available.
+ *
  * Returns `ReviewFinding[]`:
  *   - BLOCKER `ARTIFACT-CONTRACT-BINDING` — an invalid binding/materialize
- *     annotation (NET-NEW; safe — no existing repo has one).
- *   - WARNING `ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED` — a produces entry
- *     with no valid materialization edge (existing repos trip this).
+ *     annotation.
+ *   - `ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED` — a produces entry no
+ *     materialization road resolves. BLOCKER while
+ *     `ARTIFACT_PRODUCES_ENFORCEMENT` is "block", advisory while it is "warn".
  * Empty `produces` ⇒ no findings (nothing declared, nothing to materialize).
  */
 export function evaluateProducesMaterializationContract(args: {
   produces: readonly string[];
   oasDoc: Record<string, unknown>;
+  consumes?: readonly { primitive: string; requirement: string }[] | null;
 }): ReviewFinding[] {
-  const { produces, oasDoc } = args;
+  const { produces, oasDoc, consumes } = args;
   const findings: ReviewFinding[] = [];
   if (produces.length === 0) return findings;
+
+  // The authoring-emit road — a REQUIRED claim only: an optional claim leaves
+  // the emit possibly absent at run time, the same false sense of safety a
+  // non-required artifact dependency gives.
+  //
+  // AND a SINGLE-ENTRY declaration only. The claim names a capability, not a
+  // target: the emit picks its extension at call time, so from statics alone it
+  // attributes to exactly one declared extension — the only one there is. On a
+  // multi-entry declaration the claim would absolve entries it may never reach,
+  // which is precisely the escape hatch this gate exists to close. A
+  // multi-entry producer takes a per-entry road (a binding or a materialize
+  // node), and the emit road resolves nothing for it.
+  const authoringEmitClaimed = (consumes ?? []).some(
+    (c) =>
+      c != null &&
+      c.primitive === ARTIFACT_AUTHORING_EMIT_PRIMITIVE &&
+      c.requirement === "required",
+  );
+  const authoringEmitResolves = authoringEmitClaimed && produces.length === 1;
 
   const bindingResult = collectArtifactBindingsFromOasDocument(oasDoc, { produces });
   const materializeResult = collectArtifactMaterializeNodesFromOasDocument(oasDoc, {
@@ -548,16 +597,17 @@ export function evaluateProducesMaterializationContract(args: {
   for (const b of bindingResult.bindings) covered.add(b.binding.extension);
   for (const n of materializeResult.nodes) covered.add(n.extension);
   for (const ext of produces) {
-    if (covered.has(ext)) continue;
+    if (covered.has(ext) || authoringEmitResolves) continue;
     findings.push({
       code: "ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED",
-      severity: "warning",
+      severity: ARTIFACT_PRODUCES_ENFORCEMENT === "block" ? "blocker" : "warning",
       message:
-        `cinatra.produces declares "${ext}" but no EndNode output binding ` +
-        `(outputs[].cinatra.artifact) or artifact_materialize passthrough node ` +
-        `materializes it — the declared artifact is never persisted at run completion. ` +
-        `Add a binding/materialize node for "${ext}" before the republish BLOCK flip ` +
-        `(cinatra#924).`,
+        `cinatra.produces declares "${ext}" but no materialization road reaches it — ` +
+        `no EndNode output binding (outputs[].cinatra.artifact), no ` +
+        `artifact_materialize passthrough node, and no required ` +
+        `${ARTIFACT_AUTHORING_EMIT_PRIMITIVE} claim in cinatra.consumes — so the ` +
+        `declared artifact is never persisted. Add one of the three roads for ` +
+        `"${ext}", or declare nothing (cinatra#924).`,
       source: "deterministic",
     });
   }
