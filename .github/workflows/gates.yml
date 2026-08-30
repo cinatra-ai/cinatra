@@ -56,6 +56,17 @@ jobs:
         run: |
           node scripts/ci/product-tree-hygiene.mjs
 
+      # No provider credential in a file under docker/ — tracked OR generated.
+      # The sibling above asserts against the TRACKED tree by design; this one
+      # also walks what is on disk, because the defect it exists for was a
+      # gitignored file the bring-up wrote (a decrypted key at rest that no gate
+      # could see). Dependency-free, so it runs in this no-install job; its unit
+      # suite (scripts/ci/__tests__/no-keys-in-docker-tree.test.mjs) is vitest
+      # and rides the root include.
+      - name: No Provider Key Under docker/
+        run: |
+          node scripts/ci/no-keys-in-docker-tree.mjs
+
       # No new source reference to the historical admin route prefix as a Cinatra
       # route. Touch-ratchet: computes the diff base, then scans.
       - name: Administration Route Banned

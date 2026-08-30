@@ -30,11 +30,17 @@ check:
 	node scripts/check-services.mjs
 
 # Start infrastructure and the app.
-# The knowledge-graph provider key is resolved from the app's stored
-# configuration into docker/graphiti/.graphiti.env FIRST (cinatra#2582), so the
-# indexer container starts with the key the operator actually configured instead
-# of the empty shell interpolation it used to get. Non-fatal: a keyless or
-# not-yet-reachable database reports "indexing OFF" and the bring-up continues.
+# The knowledge-graph provider key reaches the indexer AFTER the stack is up,
+# and never through a file (cinatra#2582): `npm run kg:up` resolves the key from
+# the app's stored configuration in memory and re-runs `docker compose up` for
+# the graphiti service alone with the key set in that command's environment.
+# `docker/graphiti/.graphiti.env` is not written and is never present; any
+# leftover from the old road is deleted on sight and announced.
+# It runs AFTER the whole-stack `up` on purpose: the app database is part of
+# this stack, so resolving the key before it starts asked a database that was
+# not up yet and a first cold bring-up always came out keyless. Non-fatal (`-`):
+# a keyless install, or one whose configuration cannot be read, reports the
+# state and the bring-up continues.
 # The `wayflow` profile brings up the agent runtime with the stack (cinatra#2654):
 # agent runs hit it on :3010 and fail with ECONNREFUSED when it is absent, so it
 # belongs to the default bring-up, not to an undocumented extra command.
@@ -63,9 +69,14 @@ check:
 # target still collides on the stack's other fixed host ports — wayflow 3010,
 # verdaccio 4873, postgres 5434, neo4j, graphiti. Two-lane whole-stack bring-up
 # is not supported yet; `pnpm dev` per lane is.
+# The shared step also UNSETS the provider variables the graphiti service takes
+# from the compose process's environment, so this whole-stack `up` starts the
+# knowledge-graph indexer KEYLESS whatever the operator's shell holds, and
+# `kg:up` below is the one step that hands it the key the app actually stored
+# (cinatra#2582).
 dev:
-	-npm run --silent gen:graphiti-env
 	CINATRA_COMPOSE_ENV="$$(node scripts/dev-compose-env.mjs --require-manageable)" && eval "$$CINATRA_COMPOSE_ENV" && docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
+	-npm run --silent kg:up
 	pnpm dev
 
 # Stop infrastructure (keeps data).
