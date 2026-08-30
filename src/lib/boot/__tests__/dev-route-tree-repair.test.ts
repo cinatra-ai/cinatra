@@ -114,16 +114,33 @@ describe("the readiness endpoint is routable before the first boot phase runs", 
 });
 
 describe("the boot entry point is wired to both rules", () => {
-  const source = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
+  const startBoot = readFileSync(path.join(REPO_ROOT, "src", "lib", "boot", "start-boot.ts"), "utf8");
+  const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
+
+  // The framework's entry point stays a shim: it hands the boot over rather
+  // than carrying the decision itself.
+  it("hands the boot to the module that decides who waits for it", () => {
+    expect(entry).toContain("startBoot()");
+    expect(entry).not.toContain("runBoot()");
+  });
 
   it("decides who waits for the boot through the shared policy", () => {
-    expect(source).toContain("shouldAwaitBootInRegister");
+    expect(startBoot).toContain("shouldAwaitBootInRegister");
   });
 
   it("resolves the route tree BEFORE the first boot phase runs", () => {
-    const ensureIdx = source.indexOf("ensureDevRouteTreeResolves()");
-    const bootIdx = source.indexOf("runBoot()", ensureIdx);
+    const ensureIdx = startBoot.indexOf("ensureDevRouteTreeResolves()");
+    const bootIdx = startBoot.indexOf("runBoot()", ensureIdx);
     expect(ensureIdx).toBeGreaterThan(-1);
     expect(bootIdx).toBeGreaterThan(ensureIdx);
+  });
+
+  // Production must still be able to abort startup on a fatal phase, which only
+  // works while the framework is waiting on the hook.
+  it("awaits the boot on the branch the policy says waits", () => {
+    const awaitIdx = startBoot.indexOf("await runBoot()");
+    const policyIdx = startBoot.indexOf("shouldAwaitBootInRegister(env)");
+    expect(policyIdx).toBeGreaterThan(-1);
+    expect(awaitIdx).toBeGreaterThan(policyIdx);
   });
 });
