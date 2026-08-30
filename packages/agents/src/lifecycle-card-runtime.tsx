@@ -759,13 +759,33 @@ export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
  * card: `focus` still refreshes it afterwards, which is the same backstop every
  * lifecycle card has always had.
  */
-const RESOLVE_POLL_LIMIT = 60;
+/**
+ * THE CADENCE ITSELF, EXPORTED (cinatra#3051).
+ *
+ * It was module-private, and then a second reader needed it: the embedded
+ * column on a third-party page has to keep re-reading its own conversation
+ * while it is open, for exactly the reason a card keeps looking — the answer it
+ * wants may arrive minutes after it asked the first time. Two hand-tuned sets of
+ * numbers for the same discipline would drift apart the first time either was
+ * touched, and neither reader would know. So there is ONE statement of it, here,
+ * where the first reader that needed it already lives, and both spend it.
+ *
+ * It stays in THIS file rather than moving to a leaf of its own on purpose: a
+ * new module reachable from the locked route graphs costs a module in each of
+ * them, and those ceilings may only ever shrink.
+ */
+export const BOUNDED_LOOK_LIMIT = 60;
 
-function resolvePollDelay(reads: number): number {
+export function boundedLookDelay(reads: number): number {
   if (reads < 5) return 2000;
   if (reads < 15) return 5000;
   return 10_000;
 }
+
+/** This file's own names for them, unchanged, so the poll below reads as it
+ *  always did. Aliases — not a second set of numbers. */
+const RESOLVE_POLL_LIMIT = BOUNDED_LOOK_LIMIT;
+const resolvePollDelay = boundedLookDelay;
 
 /**
  * The readings a further look could not improve on.

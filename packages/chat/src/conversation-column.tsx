@@ -716,6 +716,15 @@ export function useConversationColumnTurns({
   // array's object identity. Insertion order is the assertion order, which is
   // what makes "evict the oldest" meaningful at the cap below.
   const removedMessageIdsRef = useRef<Map<string, number>>(new Map());
+  /** THE REMOVALS THAT ARE SETTLED (cinatra#3051 convergence). An assertion
+   *  leaves the pending map the moment a save that carried it lands — but the
+   *  server read that was already in flight when that save landed still has the
+   *  turn in it, and it answers AFTER the assertion is gone. Adopting that
+   *  answer would put a removal the reader already saved straight back, which is
+   *  the same permanent undo the pending map exists to prevent, one beat later.
+   *  So a confirmed removal is remembered here for the life of the mount: ids
+   *  only, never messages, and only ever consulted by the adoption below. */
+  const settledRemovalIdsRef = useRef<Set<string>>(new Set());
   /** THE RUN HALF of the same outstanding intent, held on exactly the same terms
    *  — one revision per assertion, the same counter, the same cap, released by
    *  the same confirm. Separate map because the two are different names for one
@@ -952,7 +961,12 @@ export function useConversationColumnTurns({
     (saveToken: RemovedMessageIdsSaveToken) => {
       const pending = removedMessageIdsRef.current;
       for (const [id, carried] of saveToken?.revisions ?? []) {
-        if (pending.get(id) === carried) pending.delete(id);
+        if (pending.get(id) === carried) {
+          pending.delete(id);
+          // SETTLED, not forgotten — a read still in flight from before this
+          // save will answer with the turn still in it.
+          settledRemovalIdsRef.current.add(id);
+        }
       }
       const pendingRuns = removedRunIdsRef.current;
       for (const [runId, carried] of saveToken?.runRevisions ?? []) {
@@ -992,6 +1006,101 @@ export function useConversationColumnTurns({
     };
   }, [turnStreams]);
 
+  /**
+   * THE ONE WAY A LATER SERVER READING MAY ENTER AN ALREADY-MOUNTED COLUMN
+   * (cinatra#3051).
+   *
+   * Until this existed, a column's list was seeded ONCE — at mount, from
+   * `initialMessages` — and nothing could ever add to it but a turn taken in
+   * this browser. On a third-party page that is the whole defect: a panel opened
+   * at ten past cannot learn that a run was released at twenty past, however
+   * long the person leaves it open, because the only reading it ever took was
+   * the one it took before the run existed.
+   *
+   * IT IS THE WEAKEST THING THAT CLOSES THAT, and each of the three rules below
+   * is a different way of losing somebody's work if it is left out:
+   *
+   *   • IT ONLY EVER ADDS. A server reading never replaces, re-orders or edits a
+   *     message already on screen. The list a reader is looking at is the one
+   *     they have been reading and writing into; a wholesale swap for a snapshot
+   *     taken somewhere else is how an unsaved edit disappears.
+   *
+   *   • IT ADOPTS NOTHING WHILE A TURN IS LIVE. A streaming turn is folding into
+   *     this list token by token, and a server reading taken mid-stream is a
+   *     picture of a conversation that is still moving. The look that answered
+   *     during a turn is simply dropped; the next one, after the turn settled,
+   *     carries the same news.
+   *
+   *   • IT NEVER FOLDS BACK A TURN AN OPEN EDIT REMOVED. An edit truncates the
+   *     transcript and holds a standing removal assertion until a save that
+   *     carried it lands. The server still has those turns until then, so
+   *     adopting blind would put the reader's edit straight back — the permanent
+   *     undo the truncation intent exists to prevent, arrived at from a new
+   *     direction.
+   *
+   *   • IT TAKES THE TAIL AND NOTHING BUT THE TAIL. Additions are appended, so
+   *     the part of a server reading this seam may take is the part after the
+   *     last message the column already knows. A message the server holds
+   *     BEFORE that point would arrive at the end of the list and read as a
+   *     conversation nobody had in that order.
+   *
+   *   • IT NEVER FOLDS BACK A REMOVAL THAT WAS ALREADY SAVED. A read that set
+   *     off before the save that carried a removal answers after it, with the
+   *     removed turn still in it. The assertion has gone by then, so the
+   *     settled-removal ids are what refuse it.
+   *
+   * Returns HOW MANY it took, so a caller can tell "nothing new" from "nothing
+   * happened"; when it took none, the list keeps its identity and no render
+   * follows.
+   */
+  const adoptServerMessages = useCallback(
+    (serverMessages: readonly UiMessage[] | null | undefined): number => {
+      if (!Array.isArray(serverMessages) || serverMessages.length === 0) return 0;
+      // A live turn owns the list. Say nothing and let the next look carry it.
+      if (turnStreams.size() > 0) return 0;
+      const current = listRef.current;
+      const known = new Set(
+        current
+          .map((m) => m.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      );
+      // THE TAIL, AND ONLY THE TAIL. Everything this column takes is appended,
+      // so the only part of the server's reading it may take is the part that
+      // comes AFTER the last message it already knows: taking one from the
+      // middle would append a turn that belongs earlier and leave the reader
+      // looking at a conversation in an order nobody spoke it in. An unknown
+      // message the server has BEFORE that point is not lost — it is simply not
+      // this seam's to place, and a reload puts the whole reading in order.
+      let tailStart = 0;
+      for (let i = 0; i < serverMessages.length; i += 1) {
+        const id = serverMessages[i]?.id;
+        if (typeof id === "string" && known.has(id)) tailStart = i + 1;
+      }
+      const removed = removedMessageIdsRef.current;
+      const settled = settledRemovalIdsRef.current;
+      const additions: UiMessage[] = [];
+      for (let i = tailStart; i < serverMessages.length; i += 1) {
+        const message = serverMessages[i];
+        const id = message?.id;
+        if (typeof id !== "string" || id.length === 0) continue;
+        if (known.has(id)) continue;
+        // A standing removal assertion is a reader's edit that has not been
+        // saved yet. The server has not heard about it; this column has.
+        if (removed.has(id)) continue;
+        // A SETTLED removal is a reader's edit that HAS been saved. A read that
+        // set off before that save still carries the turn; the column does not
+        // take it back.
+        if (settled.has(id)) continue;
+        known.add(id);
+        additions.push(message);
+      }
+      if (additions.length === 0) return 0;
+      writeMessages([...current, ...additions]);
+      return additions.length;
+    },
+    [turnStreams, writeMessages],
+  );
+
   const onEditStarted = useCallback(() => setRequestEditMessageId(null), []);
   const onTogglePause = useCallback(() => {}, []);
 
@@ -1012,6 +1121,7 @@ export function useConversationColumnTurns({
     onEditAndResend,
     peekRemovedMessageIds,
     confirmRemovedMessageIds,
+    adoptServerMessages,
     widgetRuntime,
     widgetSubmitRef,
     widgetRefreshKey,
