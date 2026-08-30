@@ -1042,6 +1042,27 @@ export function useRunReviewSlot({
     setProbe({ answered: false, reads: 0 });
   }
   const answered = probe.answered;
+  // THE UNHEARD WINDOW, named once because two statuses hold it. It is the span
+  // between "the run reports it is waiting" and "this surface has heard back
+  // under that status": the budget is the mount's, because a mount that arrived
+  // WITH a slot has been told a review is expected here and holds through a few
+  // transport failures, while a mount that arrived with nothing holds for its
+  // one immediate first look and no longer.
+  const unheardUnderThisStatus =
+    !probe.answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1);
+  // AND THE WAITING STATUS HOLDS ONLY ITS FIRST LOOK, whatever the mount was
+  // handed. The budget above asks "was this mount given a slot object", and
+  // every first-party mount is given one whether or not it says anything — the
+  // run screen builds it for every run it renders and the seed route emits it
+  // unconditionally — so under the waiting status that budget would resolve to
+  // the five-look hold on every mount there is. Under `completed` that hold is
+  // cheap: it delays a completion notice. Under the waiting status it withholds
+  // a LIVE QUESTION and every control on it, and it is spent only when the
+  // transport is failing, which is not evidence of a park. So the waiting
+  // status holds for the one immediate look that decides the matter — the route
+  // that reports this status reports the park with it, in the same payload — and
+  // a look that never answers gives the question back rather than burying it.
+  const unheardOnTheFirstLookOnly = !probe.answered && probe.reads < 1;
   // Is this run held on the review of what it produced? Read off the slot's own
   // answer beside the status, because the two together are what the park is.
   const isProducedReviewPark =
@@ -1133,11 +1154,28 @@ export function useRunReviewSlot({
     // gate is converged by the recurring sweep, which moves the run's status and
     // re-keys this reader, and until then the surface must not be a spinner
     // nothing can end.
+    // AND THE PARK IS HELD FOR ITS FIRST LOOK TOO (cinatra#3007). The park's own
+    // reading is the ANSWER to a look, not a fact this reader is handed:
+    // `isProducedReviewPark` reads it off `slot`, and `slot` is emptied in the
+    // very render the status changes. So between the tick a run enters the
+    // parked status and the tick its first look lands, a run parked on its
+    // produced output's review answers NO to every question this hook is asked
+    // — and the surface above, which reads "not working, and not a review" as "a
+    // question", drew the run's own progress badge with a status word on it and
+    // an empty transcript under it, where the quiet placeholder belongs. That
+    // window is the one moment the placeholder exists for.
+    //
+    // It is the SAME unheard window a finished run already holds, held on the
+    // same belt — but on the SHORTER of the two budgets, its first look only.
+    // The first look is immediate and the route that reports this status reports
+    // the park in the same payload, so in production the window is milliseconds
+    // wide; and a look that fails does not stretch it, because withholding a
+    // live question behind a broken transport is a worse reading than the one
+    // this window exists to prevent.
     mayStillOpen:
       probe.reads < SLOT_READ_LIMIT &&
-      ((status === "completed" &&
-        (slot.awaiting ||
-          (!answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1)))) ||
-        isProducedReviewPark),
+      ((status === "completed" && (slot.awaiting || unheardUnderThisStatus)) ||
+        isProducedReviewPark ||
+        (status === PARKED_RUN_STATUS && unheardOnTheFirstLookOnly)),
   };
 }

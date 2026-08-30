@@ -470,6 +470,25 @@ export function AgenticRunPanel({
   // finished with. `isPendingApproval` still bounds both — a released run has
   // left the parked status and neither reading is consulted.
   const [rowProducedReviewPark, setRowProducedReviewPark] = useState(false);
+  // The same fact, readable INSIDE the tick. The tick is a `useCallback` keyed
+  // on the run's identity alone (re-keying it on the park would restart the
+  // interval on the very tick the park lands), so it cannot read the state above
+  // without going a render stale — and the classifier it feeds must be told
+  // about the park on the SAME tick that discovers it.
+  const producedReviewParkRef = useRef(false);
+  // AND IT IS THIS RUN'S FACT, not the panel's. Both readings above are keyed to
+  // nothing but the mount, and this panel is exported: a host that keeps it
+  // mounted across a change of run would carry one run's park onto the next,
+  // where — the next run being genuinely stopped on a question in the same
+  // status — it would hide that question. Adjusted DURING render, the way the
+  // shared slot reader adjusts its own answer to the status, because an effect
+  // runs a frame too late to stop the wrong drawing being painted once.
+  const [seenRunId, setSeenRunId] = useState(runId);
+  if (seenRunId !== runId) {
+    setSeenRunId(runId);
+    setRowProducedReviewPark(false);
+    producedReviewParkRef.current = false;
+  }
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   // Seeded from the server when the caller already derived the gate (see
@@ -786,6 +805,51 @@ export function AgenticRunPanel({
   const parkedOnProducedReview =
     isPendingApproval &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+
+  // AND A PAUSE WHOSE KIND IS NOT KNOWN YET IS NOT A QUESTION (cinatra#3007).
+  //
+  // The reading above is an answer this surface has to GO AND GET: the park
+  // lives on the run's row and arrives on a look. Between the tick the run
+  // enters `pending_approval` and the tick that look lands it is false — and
+  // every reader below then took the pause for the remaining case, a QUESTION,
+  // which is the one reading that draws a whole other card. That is what the
+  // third capture photographed on both surfaces at once: in the conversation
+  // the run's own progress badge with `pending approval` on it and "No messages
+  // yet." under it, and on the run page the paused banner with "its approval
+  // step could not be loaded" and a Re-check beside it — a status word and an
+  // error, in the seconds the drawing at the contract's pin gives to a quiet
+  // placeholder.
+  //
+  // So the unheard window is NAMED rather than defaulted into the question.
+  // `reviewMayStillOpen` is exactly it and nothing else is invented here: the
+  // ONE shared reader holds it for a parked run's FIRST look and drops it the
+  // moment that look answers, so a genuine question is drawn one immediate look
+  // later and every other pause reads precisely as it did.
+  const parkKindUnheard =
+    isPendingApproval && !parkedOnProducedReview && reviewMayStillOpen;
+  //
+  // NEITHER A PARK NOR ITS UNHEARD WINDOW IS A STRANDED RUN. A run parked on the
+  // review of what it produced is paused with NO approval step BY CONSTRUCTION —
+  // the park withholds the run's terminal write instead of minting a gate to
+  // answer — so "paused and carrying no context" is this pause's ordinary shape
+  // rather than evidence that a step failed to load. The window before the park
+  // is read travels with it for the same reason: nothing has been asked yet, so
+  // nothing has failed yet.
+  const parkedPause = parkedOnProducedReview || parkKindUnheard;
+
+  // AND THE TICK IS TOLD, on the transport that cannot tell itself. The A2A
+  // snapshot carries no gate reading, so on that branch — the one a run
+  // dispatched from a conversation actually takes — the park arrives only
+  // through the shared slot reader, which is not the tick's own payload. Without
+  // this the tick's classifier was handed a reading nothing on that branch ever
+  // wrote, so it booked every park tick as a run whose approval step had failed
+  // to load: invisible while the park lasts, and then a stranding already on the
+  // book, ready to surface at once on the next pause. Mirrored after the render
+  // that read it, so the tick's own same-payload write on the fallback branch
+  // still wins on the tick that discovers the park.
+  useEffect(() => {
+    producedReviewParkRef.current = parkedOnProducedReview;
+  }, [parkedOnProducedReview]);
 
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -1214,7 +1278,15 @@ export function AgenticRunPanel({
           const next =
             s.cinatraStatus === "pending_approval" ? (s.hitlContext ?? null) : null;
           setHitlContext(next);
-          outcome = classifyHitlDerivation(s.cinatraStatus, next);
+          // The park's own reading cannot ride this snapshot (`TaskSnapshot`
+          // carries no gate reading), so the classifier is handed the last one
+          // this panel read off the row — which is what a park's tick has, and
+          // what stops the park's own window being classified as a failure.
+          outcome = classifyHitlDerivation(
+            s.cinatraStatus,
+            next,
+            producedReviewParkRef.current,
+          );
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
@@ -1235,7 +1307,8 @@ export function AgenticRunPanel({
           // mute.
           if (typeof data?.status === "string") setRowStatus(data.status);
           if (data?.reviewGate !== undefined) {
-            setRowProducedReviewPark(Boolean(data.reviewGate?.producedReviewPark));
+            producedReviewParkRef.current = Boolean(data.reviewGate?.producedReviewPark);
+            setRowProducedReviewPark(producedReviewParkRef.current);
           }
           if (!streamEnabled) {
             if (data?.status) {
@@ -1252,6 +1325,11 @@ export function AgenticRunPanel({
           outcome = classifyHitlDerivation(
             typeof data?.status === "string" ? data.status : null,
             data?.hitlContext ?? null,
+            // The SAME answer this tick just recorded, off the same payload —
+            // never a re-derivation, and never a render behind.
+            data?.reviewGate !== undefined
+              ? Boolean(data.reviewGate?.producedReviewPark)
+              : producedReviewParkRef.current,
           );
         }
       }
@@ -1297,10 +1375,12 @@ export function AgenticRunPanel({
 
   // Is this paused run degraded (no usable gate context) rather than merely
   // hydrating? Bounded — see hitl-recovery-state.ts.
+  // `parkedPause` — the park and its unheard window, read beside the park above.
   const hitlRecoveryVisible = isHitlRecoveryVisible({
     isPendingApproval,
     hasContext: effectiveHitlContext !== null,
     state: derivation,
+    isProducedReviewPark: parkedPause,
   });
 
   // BOUNDED telemetry. `hitlContext` is null on every healthy
@@ -1315,6 +1395,7 @@ export function AgenticRunPanel({
       isPendingApproval,
       hasContext: effectiveHitlContext !== null,
       state: derivation,
+      isProducedReviewPark: parkedPause,
     });
     if (!violation) return;
     hitlInvariantLoggedRef.current = true;
@@ -1718,8 +1799,14 @@ export function AgenticRunPanel({
   const markedReviewGate =
     isPendingApproval &&
     effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID;
+  //
+  // AND A PAUSE WHOSE KIND IS NOT KNOWN YET IS NOT A QUESTION (cinatra#3007) —
+  // `parkKindUnheard`, read beside the park itself above.
   const blockedOnInputGate =
-    isPendingApproval && !markedReviewGate && !parkedOnProducedReview;
+    isPendingApproval &&
+    !markedReviewGate &&
+    !parkedOnProducedReview &&
+    !parkKindUnheard;
   //
   // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
   // deliberately NOT enough on its own: a run carries its gate for ever, so a
