@@ -9,14 +9,17 @@
     "app": [
       "tests/e2e/design/conformance/manifests/app.json",
       "tests/e2e/design/conformance/contract.ts",
-      "src/app/design-fixtures/conformance/page.tsx"
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/sidebar-assistants-fixture.tsx"
     ],
     "app-components": [
       "tests/e2e/design/conformance/manifests/app-components.json",
       "tests/e2e/design/conformance/contract.ts",
       "src/app/design-fixtures/conformance/page.tsx",
       "src/app/design-fixtures/conformance/approvals-scheduling-fixtures.tsx",
-      "src/app/design-fixtures/conformance/marketplace-not-connected-group.tsx"
+      "src/app/design-fixtures/conformance/marketplace-not-connected-group.tsx",
+      "src/app/design-fixtures/conformance/breadcrumb-conformance-fixtures.tsx",
+      "src/app/design-fixtures/conformance/breadcrumb-conformance-seed.ts"
     ],
     "app-extensions": [
       "tests/e2e/design/conformance/manifests/app-extensions.json",
