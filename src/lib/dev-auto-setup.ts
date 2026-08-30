@@ -884,6 +884,8 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
       `${tag}:connect could not mark the dev UAT user as a machine fixture (${err instanceof Error ? err.message : "unknown"}) — ` +
         "not wiring the actor; it must never count as the first human (cinatra#1135)",
     );
+    // The account is not being wired, so nothing may hold its password.
+    removeDevFixturePasswordFile();
     return null;
   }
 
@@ -918,6 +920,9 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
   }
   if (!orgId) {
     console.log(`${tag}:connect dev UAT user has no resolvable org membership yet`);
+    // Same rule as above: an actor this boot did not wire leaves no password
+    // file behind for a harness to sign in with.
+    removeDevFixturePasswordFile();
     return null;
   }
 

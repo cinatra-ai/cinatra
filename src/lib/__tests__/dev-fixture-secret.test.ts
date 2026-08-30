@@ -200,6 +200,42 @@ describe("the boot writes the secret to one 0600 file instead of printing it", (
   it("never throws on an instance root it cannot write", () => {
     expect(writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", "/dev/null/nope")).toBeNull();
   });
+
+  // The value must never be readable by anyone else, not even for the instant
+  // between the write and a narrowing chmod: the descriptor is narrowed first.
+  it("never lets the value exist in a file anybody else can read", () => {
+    const cwd = tempInstanceRoot();
+    const file = devFixturePasswordFilePath(cwd);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "older", { mode: 0o666 });
+    writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(file, "utf8").trim()).toBe("a-value-long-enough-for-the-floor");
+  });
+
+  // A link left in the file's place must be REFUSED, not followed: following it
+  // would write this boot's secret into a file of somebody else's choosing and
+  // chmod that file.
+  it("refuses to follow a link left in the file's place", () => {
+    const cwd = tempInstanceRoot();
+    const file = devFixturePasswordFilePath(cwd);
+    const elsewhere = path.join(cwd, "elsewhere");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(elsewhere, "untouched", { mode: 0o644 });
+    fs.symlinkSync(elsewhere, file);
+    expect(writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd)).toBeNull();
+    expect(fs.readFileSync(elsewhere, "utf8")).toBe("untouched");
+  });
+
+  // mkdir's mode applies only when the directory is CREATED.
+  it("narrows a directory an earlier boot left behind wide open", () => {
+    const cwd = tempInstanceRoot();
+    const dir = path.dirname(devFixturePasswordFilePath(cwd));
+    fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    fs.chmodSync(dir, 0o755);
+    writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd);
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -479,7 +515,22 @@ describe("the development boot is wired to the fixture-secret rules", () => {
     expect(orgIdx).toBeGreaterThan(printIdx);
   });
 
+  // Every path that decides NOT to wire the actor takes the password away with
+  // it: an account this boot will not wire must leave no credential behind for
+  // a harness — or anybody else — to sign in with.
+  it("takes the password file away on every path that refuses to wire the actor", () => {
+    const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
+    const printIdx = body.indexOf("printDevFixtureSecretOnce");
+    expect(printIdx).toBeGreaterThan(-1);
+    const after = body.slice(printIdx);
+    const refusalReturns = after.split("return null;").length - 1;
+    const removals = after.split("removeDevFixturePasswordFile()").length - 1;
+    expect(refusalReturns).toBeGreaterThan(0);
+    expect(removals).toBe(refusalReturns);
+  });
+
   it("takes an earlier boot\u2019s password file away when it refuses to seed", () => {
+
     const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
     const refusalIdx = body.indexOf("devFixtureSeedRefusal");
     const removeIdx = body.indexOf("removeDevFixturePasswordFile");

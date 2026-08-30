@@ -53,6 +53,14 @@ export const DEV_ROUTE_TREE_MAX_ATTEMPTS = 24;
 /** How long to wait between asks. */
 export const DEV_ROUTE_TREE_RETRY_MS = 250;
 
+/**
+ * How long ONE ask may take. The attempt count alone does not bound this step:
+ * a server that accepts the connection and then never answers would hold the
+ * ask open for as long as it liked, and the boot behind it with it. Every ask
+ * carries its own deadline, so the whole step is bounded in wall-clock time.
+ */
+export const DEV_ROUTE_TREE_ASK_TIMEOUT_MS = 2_000;
+
 const LOG = "[dev-route-tree]";
 
 /**
@@ -69,6 +77,8 @@ export type EnsureDevRouteTreeOptions = {
   invalidate?: (file: string) => void;
   sleep?: (ms: number) => Promise<void>;
   env?: Record<string, string | undefined>;
+  /** The command line the server was started with, for the port it names. */
+  argv?: readonly string[];
   cwd?: string;
   log?: (message: string) => void;
 };
@@ -76,11 +86,43 @@ export type EnsureDevRouteTreeOptions = {
 /** Read a status without ever throwing: an unreachable server is not an error here. */
 async function defaultFetchStatus(url: string): Promise<number | null> {
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(DEV_ROUTE_TREE_ASK_TIMEOUT_MS),
+    });
     return response.status;
   } catch {
+    // A refused connection, a reset and an expired deadline are the same thing
+    // here: no answer yet. An unanswered ask is never an error.
     return null;
   }
+}
+
+/**
+ * The port this instance is actually listening on.
+ *
+ * The dev launcher resolves a port into `PORT` before it spawns the server, but
+ * a server started by hand carries it on the command line instead
+ * (`next dev --port 3126`, or `-p 3126`). Reading only `PORT` would ask a
+ * DIFFERENT server on the framework's default port, and an unrelated service
+ * answering there would end this step with the real route still unrepaired.
+ */
+export function resolveDevProbePort(
+  env: Record<string, string | undefined> = process.env,
+  argv: readonly string[] = process.argv,
+): string {
+  const fromEnv = env.PORT?.trim();
+  if (fromEnv) return fromEnv;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--port" || arg === "-p") {
+      const next = argv[i + 1]?.trim();
+      if (next && /^[0-9]+$/.test(next)) return next;
+    }
+    const inline = /^--port=([0-9]+)$/.exec(arg ?? "");
+    if (inline) return inline[1];
+  }
+  return "3000";
 }
 
 /**
@@ -109,7 +151,7 @@ export async function ensureDevRouteTreeResolves(
 
   // The port the dev launcher resolved into the environment before it spawned
   // the server (scripts/dev-server.mjs), falling back to the framework default.
-  const url = `http://127.0.0.1:${env.PORT ?? "3000"}${DEV_ROUTE_TREE_PROBE_PATH}`;
+  const url = `http://127.0.0.1:${resolveDevProbePort(env, options.argv ?? process.argv)}${DEV_ROUTE_TREE_PROBE_PATH}`;
   const routeSource = path.join(options.cwd ?? process.cwd(), DEV_ROUTE_TREE_ROUTE_SOURCE);
 
   let repaired = false;
@@ -128,7 +170,8 @@ export async function ensureDevRouteTreeResolves(
       invalidate(routeSource);
       repaired = true;
     }
-    await sleep(DEV_ROUTE_TREE_RETRY_MS);
+    // No wait after the last ask: nothing follows it but giving up.
+    if (attempt < DEV_ROUTE_TREE_MAX_ATTEMPTS) await sleep(DEV_ROUTE_TREE_RETRY_MS);
   }
 
   log(

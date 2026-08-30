@@ -17,6 +17,11 @@
  * then answers 404 for as long as the instance runs while the boot itself
  * completes normally; only a filesystem change under `src/app` clears it.
  *
+ * ANY OTHER MODE WAITS. The detachment is a development-server rule, so it is
+ * spelled as one: only an explicit `development` detaches. A test run, an unset
+ * value or a mode nobody anticipated keeps the old behaviour — it waits, and it
+ * never reaches the route-tree repair, which writes to the working tree.
+ *
  * Detaching removes the wait, so the development server builds its route tree
  * the way it does with no instrumentation at all. Nothing is skipped and no
  * readiness claim is weakened: the boot still runs in the same order, still
@@ -28,5 +33,5 @@
 export function shouldAwaitBootInRegister(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return env.NODE_ENV === "production";
+  return env.NODE_ENV !== "development";
 }

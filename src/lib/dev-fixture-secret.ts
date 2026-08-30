@@ -28,7 +28,17 @@
 // -----------------------------------------------------------------------------
 
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import path from "node:path";
 
 import { isPrivateUrl } from "@/lib/url-policy";
@@ -72,22 +82,48 @@ export function devFixturePasswordFilePath(cwd: string = process.cwd()): string 
  * can read it. Returns the path written, or null when the instance could not
  * write it — a boot that cannot write the file still boots, and says so.
  *
- * The mode is set on the write AND again afterwards: the mode argument only
- * applies when the file is CREATED, so a file an earlier boot left behind with
- * a wider mode would otherwise keep it.
+ * THE VALUE IS NEVER WIDELY READABLE, not even for an instant, and it never
+ * follows a link:
+ *   - the file is opened with `O_NOFOLLOW`, so a symbolic link an earlier run
+ *     (or anybody else with write access to the directory) left in its place is
+ *     refused rather than followed and overwritten;
+ *   - the descriptor is narrowed to 0600 BEFORE a byte is written, so a file an
+ *     earlier boot left behind at a wider mode cannot expose this boot's value
+ *     in the window between the write and a later `chmod`;
+ *   - the directory is narrowed to 0700 on every boot, because the `mode` of
+ *     `mkdirSync` applies only when the directory is CREATED.
  */
 export function writeDevFixturePasswordFile(
   password: string,
   cwd: string = process.cwd(),
 ): string | null {
   const file = devFixturePasswordFilePath(cwd);
+  let fd: number | null = null;
   try {
-    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(file, `${password}\n`, { encoding: "utf8", mode: 0o600 });
-    chmodSync(file, 0o600);
+    const dir = path.dirname(file);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    fd = openSync(
+      file,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_TRUNC |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `${password}\n`);
     return file;
   } catch {
     return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* best-effort */
+      }
+    }
   }
 }
 

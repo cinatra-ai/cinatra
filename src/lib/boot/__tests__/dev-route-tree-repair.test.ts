@@ -18,17 +18,20 @@
 //      `/api/health`, and a 404 for a route that exists is repaired by
 //      invalidating that route's entry.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  DEV_ROUTE_TREE_ASK_TIMEOUT_MS,
   DEV_ROUTE_TREE_MAX_ATTEMPTS,
   DEV_ROUTE_TREE_PROBE_PATH,
   DEV_ROUTE_TREE_ROUTE_SOURCE,
   ensureDevRouteTreeResolves,
+  resolveDevProbePort,
 } from "@/lib/boot/dev-route-tree-repair";
+import { resetStartBootForTests, startBoot } from "@/lib/boot/start-boot";
 import { shouldAwaitBootInRegister } from "@/lib/boot/register-await-policy";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
@@ -66,7 +69,11 @@ describe("the boot does not hold the development server open", () => {
 
   it("does NOT await it on the development server, whose route tree the wait starves", () => {
     expect(shouldAwaitBootInRegister({ NODE_ENV: "development" })).toBe(false);
-    expect(shouldAwaitBootInRegister({})).toBe(false);
+    // Only an explicit development server detaches. A runtime nobody
+    // anticipated keeps the old behaviour and never reaches the repair, which
+    // writes to the working tree.
+    expect(shouldAwaitBootInRegister({})).toBe(true);
+    expect(shouldAwaitBootInRegister({ NODE_ENV: "test" })).toBe(true);
   });
 });
 
@@ -113,34 +120,150 @@ describe("the readiness endpoint is routable before the first boot phase runs", 
   });
 });
 
-describe("the boot entry point is wired to both rules", () => {
-  const startBoot = readFileSync(path.join(REPO_ROOT, "src", "lib", "boot", "start-boot.ts"), "utf8");
-  const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
+describe("the boot entry point starts exactly one boot, and the right one", () => {
+  beforeEach(() => {
+    resetStartBootForTests();
+  });
 
-  // The framework's entry point stays a shim: it hands the boot over rather
-  // than carrying the decision itself.
-  it("hands the boot to the module that decides who waits for it", () => {
+  /** A boot that never settles on its own, so a caller that WAITS is visible. */
+  function pendingBoot() {
+    let release: () => void = () => undefined;
+    let reject: (err: unknown) => void = () => undefined;
+    let calls = 0;
+    const boot = () => {
+      calls += 1;
+      return new Promise<void>((res, rej) => {
+        release = () => res();
+        reject = (err) => rej(err);
+      });
+    };
+    return {
+      boot,
+      release: () => release(),
+      fail: (err: unknown) => reject(err),
+      get calls() {
+        return calls;
+      },
+    };
+  }
+
+  const settled = <T,>(promise: Promise<T>) =>
+    Promise.race([promise.then(() => "settled" as const), Promise.resolve("pending" as const)]);
+
+  it("returns on the development server WITHOUT waiting for the boot", async () => {
+    const b = pendingBoot();
+    await expect(
+      startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" }),
+    ).resolves.toBeUndefined();
+    b.release();
+  });
+
+  it("waits for the boot in production, and a fatal phase still propagates", async () => {
+    const b = pendingBoot();
+    const started = startBoot({ NODE_ENV: "production" }, { boot: b.boot });
+    await expect(settled(started)).resolves.toBe("pending");
+    const boom = new Error("fatal phase");
+    b.fail(boom);
+    await expect(started).rejects.toBe(boom);
+  });
+
+  it("waits for the boot in every runtime that is not the development server", async () => {
+    for (const NODE_ENV of ["test", undefined]) {
+      resetStartBootForTests();
+      const b = pendingBoot();
+      const started = startBoot({ NODE_ENV }, { boot: b.boot });
+      await expect(settled(started)).resolves.toBe("pending");
+      b.release();
+      await started;
+    }
+  });
+
+  it("resolves the route tree BEFORE the first boot phase runs", async () => {
+    const order: string[] = [];
+    await startBoot(
+      { NODE_ENV: "development" },
+      {
+        ensureRouteTree: async () => {
+          order.push("route-tree");
+          return "resolved";
+        },
+        boot: async () => {
+          order.push("boot");
+        },
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["route-tree", "boot"]);
+  });
+
+  // The development server re-invokes the hook (a hot reload does it, and the
+  // repair above touches a file under src/app on purpose). A second concurrent
+  // boot would run migrations and extension activation twice, each pass
+  // resetting the other's phase log.
+  it("runs ONE boot per process however many times it is called", async () => {
+    const b = pendingBoot();
+    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
+    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
+    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(b.calls).toBe(1);
+    b.release();
+  });
+
+  // Nothing is waiting to catch it on the development server, so a failed boot
+  // is REPORTED rather than left as an unhandled rejection.
+  it("reports a failed development boot instead of rejecting into nothing", async () => {
+    const reported: unknown[] = [];
+    await startBoot(
+      { NODE_ENV: "development" },
+      {
+        ensureRouteTree: async () => "resolved",
+        boot: async () => {
+          throw new Error("a phase failed");
+        },
+        logError: (_message, err) => reported.push(err),
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reported).toHaveLength(1);
+  });
+
+  it("hands the boot over from the framework entry point", () => {
+    const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
     expect(entry).toContain("startBoot()");
     expect(entry).not.toContain("runBoot()");
   });
+});
 
-  it("decides who waits for the boot through the shared policy", () => {
-    expect(startBoot).toContain("shouldAwaitBootInRegister");
+describe("the ask itself is bounded and asks the right server", () => {
+  it("carries a deadline on every ask, so an answer that never comes cannot hold the boot", () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, "src", "lib", "boot", "dev-route-tree-repair.ts"),
+      "utf8",
+    );
+    expect(source).toContain("AbortSignal.timeout(DEV_ROUTE_TREE_ASK_TIMEOUT_MS)");
+    expect(DEV_ROUTE_TREE_ASK_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(DEV_ROUTE_TREE_MAX_ATTEMPTS * DEV_ROUTE_TREE_ASK_TIMEOUT_MS).toBeLessThanOrEqual(120_000);
   });
 
-  it("resolves the route tree BEFORE the first boot phase runs", () => {
-    const ensureIdx = startBoot.indexOf("ensureDevRouteTreeResolves()");
-    const bootIdx = startBoot.indexOf("runBoot()", ensureIdx);
-    expect(ensureIdx).toBeGreaterThan(-1);
-    expect(bootIdx).toBeGreaterThan(ensureIdx);
+  it("asks the port the launcher resolved", () => {
+    expect(resolveDevProbePort({ PORT: "3126" }, [])).toBe("3126");
   });
 
-  // Production must still be able to abort startup on a fatal phase, which only
-  // works while the framework is waiting on the hook.
-  it("awaits the boot on the branch the policy says waits", () => {
-    const awaitIdx = startBoot.indexOf("await runBoot()");
-    const policyIdx = startBoot.indexOf("shouldAwaitBootInRegister(env)");
-    expect(policyIdx).toBeGreaterThan(-1);
-    expect(awaitIdx).toBeGreaterThan(policyIdx);
+  it("asks the port the command line names when nothing resolved one", () => {
+    expect(resolveDevProbePort({}, ["node", "next", "dev", "--port", "3126"])).toBe("3126");
+    expect(resolveDevProbePort({}, ["node", "next", "dev", "-p", "3131"])).toBe("3131");
+    expect(resolveDevProbePort({}, ["node", "next", "dev", "--port=3141"])).toBe("3141");
+  });
+
+  it("falls back to the framework default when neither names one", () => {
+    expect(resolveDevProbePort({}, ["node", "next", "dev"])).toBe("3000");
+  });
+
+  it("does not wait after the last ask", async () => {
+    const d = driver([404]);
+    const slept: number[] = [];
+    await ensureDevRouteTreeResolves({ ...d.options, sleep: async (ms) => void slept.push(ms) });
+    expect(slept).toHaveLength(DEV_ROUTE_TREE_MAX_ATTEMPTS - 1);
   });
 });

@@ -227,9 +227,10 @@ export type DevActor = { userId: string; orgId: string; email: string };
 
 /**
  * The fixture account's password for this run. The dev boot mints one per boot,
- * shows it once and stores it nowhere, so whatever starts the dev server for
- * this suite passes the same value in through the environment. There is nothing
- * to fall back to — a missing value says exactly which setting to supply.
+ * writes it to a 0600 file beside the instance and names that file at startup —
+ * it never prints the value. A run that was handed a USABLE value in the
+ * environment uses exactly it (the boot uses it too); anything the boot would
+ * itself have refused falls through to the file the running instance wrote.
  */
 /** The password the running instance wrote beside itself, or null. */
 function readDevFixturePasswordFile(): string | null {
@@ -242,10 +243,16 @@ function readDevFixturePasswordFile(): string | null {
 }
 
 export function readDevActorPassword(): string {
-  // The setting first: a run that was handed the password uses exactly it.
-  // Otherwise the file the boot wrote and named at startup — the boot never
-  // prints the value, so those two are the only places it exists.
-  const value = process.env[DEV_FIXTURE_PASSWORD_ENV] ?? readDevFixturePasswordFile() ?? undefined;
+  // The setting first, but only when the BOOT would have used it too: a value
+  // below the length floor is ignored by the server, which mints one and writes
+  // it to the file instead, so preferring the setting there would sign in with
+  // a password no account carries. Anything unusable falls through to the file.
+  const supplied = process.env[DEV_FIXTURE_PASSWORD_ENV];
+  const usable =
+    typeof supplied === "string" && supplied.length >= MIN_DEV_FIXTURE_PASSWORD_LENGTH
+      ? supplied
+      : undefined;
+  const value = usable ?? readDevFixturePasswordFile() ?? undefined;
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(
       `[wp-drupal-uat] the dev UAT account's password is not available. Set ${DEV_FIXTURE_PASSWORD_ENV} to ` +
