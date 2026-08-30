@@ -96,7 +96,7 @@ marker) and writes their IDs to `.uat/seed.json` (gitignored).
 | `UAT_WP_ADMIN_USER` / `_PASS` | `admin` / `admin` | WP admin login (matches compose `WP_DEV_ADMIN_PASS`) |
 | `UAT_DRUPAL_ADMIN_USER` / `_PASS` | `admin` / `cinatra` | Drupal admin login |
 | `UAT_CEREMONY_BUDGET_MS` | `60000` | Bound on the protocol-2 sign-in ceremony (~20s measured) |
-| `CINATRA_DEV_FIXTURE_PASSWORD` | *(none)* | The dev UAT account's password — set it on the dev server AND on this run (the boot mints one per boot and prints it once). At least 24 characters: a shorter value is ignored by the boot, which mints its own, and this suite refuses it rather than signing in with a password the instance never had |
+| `CINATRA_DEV_FIXTURE_PASSWORD` | *(none)* | The dev UAT account's password — set it on the dev server AND on this run. Leave it unset beside a local instance and this suite reads the 0600 file the boot writes and names (`data/dev-fixture-account/password`); the value is never printed. At least 24 characters: a shorter value is ignored by the boot, which mints its own, and this suite refuses it rather than signing in with a password the instance never had |
 
 If the widget DOM selectors drift, refine them in `helpers.ts` (`SEL`). The
 CMS-origin shell contract is `#cinatra-root` + the `.cw-*` launcher/panel chrome
@@ -105,8 +105,9 @@ live INSIDE the iframe (`[data-embed-state="signin"]`, `[data-embed-signin]`,
 `[data-embed-assistant]`, `[data-embed-content]`) — drive them via
 `page.frameLocator(SEL.frame)`. The sign-in popup is a separate top-level page on
 the Cinatra origin; it is driven with the seeded actor from `.uat/dev-actor.json`
-and that boot's password from `CINATRA_DEV_FIXTURE_PASSWORD` — the handoff file
-carries the account's identity only — typed key-by-key (`fill()` does not
+and that boot's password from `CINATRA_DEV_FIXTURE_PASSWORD`, or from the 0600
+file the boot writes it to — the handoff file carries the account's identity
+only — typed key-by-key (`fill()` does not
 register with the popup's controlled inputs under Firefox).
 
 One honest limit of that typing: Playwright records the typed value in the

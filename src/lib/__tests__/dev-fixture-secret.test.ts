@@ -7,28 +7,38 @@
 // that, and each one is exercised here:
 //
 //   1. the password is minted fresh on every boot, is crypto-strong, and is
-//      shown to the operator exactly once — never written anywhere in clear;
+//      NEVER PRINTED — the boot writes it to one 0600 file under the local
+//      runtime data directory and names that file instead, because a boot log
+//      is read by whoever can read the log and this boot runs on runners whose
+//      logs are public;
 //   2. seeding is REFUSED, with a printed sentence, whenever any origin the
 //      instance is configured to serve is not loopback or private-network;
 //   3. a fixture row an earlier boot left behind has its password rotated to
 //      this boot's secret, so a password from an earlier boot stops working;
 //   4. the end-to-end harnesses read the secret from the environment the
-//      instance was started with, never from a literal or from a file.
+//      instance was started with, or from the file the boot names — never from
+//      a literal in this repository.
 //
 // Behaviour first (the rules are a pure module so they can be driven directly),
 // then SOURCE WIRING pins in the house style — the boot and the harnesses must
 // actually be wired to those rules, and no literal credential may return.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import {
   DEV_FIXTURE_PASSWORD_ENV,
+  DEV_FIXTURE_PASSWORD_FILE_RELATIVE,
   MIN_DEV_FIXTURE_PASSWORD_LENGTH,
+  devFixturePasswordFilePath,
   devFixtureSeedRefusal,
   generateDevFixturePassword,
+  readDevFixturePasswordFile,
+  removeDevFixturePasswordFile,
+  writeDevFixturePasswordFile,
   isLoopbackOrPrivateOrigin,
   requireInjectedDevFixturePassword,
   resolveDevFixturePassword,
@@ -80,22 +90,115 @@ describe("the fixture password is a per-boot secret, never a source literal", ()
     expect(resolved.password.length).toBeGreaterThanOrEqual(MIN_DEV_FIXTURE_PASSWORD_LENGTH);
   });
 
-  it("shows the secret to the operator exactly once per boot", async () => {
+  // THE VALUE IS NEVER PRINTED. A boot log is read by whoever can read the log,
+  // and this boot runs on continuous-integration runners whose logs are public:
+  // printing it published the credential of every instance the job booted.
+  it("never prints the secret — it names the file it wrote it to, and the setting", async () => {
     vi.resetModules();
     const boot = await import("@/lib/dev-fixture-secret");
-    const secret = "printed-exactly-once-and-long-enough";
+    const secret = "never-printed-and-long-enough-x";
+    const cwd = tempInstanceRoot();
     const lines: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(" "));
     });
     try {
-      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated");
-      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated");
-      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated");
+      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated", cwd);
+      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated", cwd);
     } finally {
       spy.mockRestore();
     }
-    expect(lines.filter((line) => line.includes(secret))).toHaveLength(1);
+    const printed = lines.join("\n");
+    expect(printed).not.toContain(secret);
+    expect(printed).toContain(boot.devFixturePasswordFilePath(cwd));
+    expect(printed).toContain(DEV_FIXTURE_PASSWORD_ENV);
+    // Once for the whole boot: the second call says nothing.
+    expect(lines).toHaveLength(1);
+  });
+
+  it("puts the value in that file, readable by nobody else", async () => {
+    vi.resetModules();
+    const boot = await import("@/lib/dev-fixture-secret");
+    const secret = "written-to-the-file-and-long-enough";
+    const cwd = tempInstanceRoot();
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      boot.printDevFixtureSecretOnce("fixture@example.com", secret, "generated", cwd);
+    } finally {
+      spy.mockRestore();
+    }
+    const file = boot.devFixturePasswordFilePath(cwd);
+    expect(fs.readFileSync(file, "utf8").trim()).toBe(secret);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. The file the boot names — written, read back, and taken away with the
+//     account it belongs to.
+// ---------------------------------------------------------------------------
+
+const tempRoots: string[] = [];
+
+function tempInstanceRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cinatra-dev-fixture-"));
+  tempRoots.push(root);
+  return root;
+}
+
+afterEach(() => {
+  while (tempRoots.length > 0) {
+    const root = tempRoots.pop();
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("the boot writes the secret to one 0600 file instead of printing it", () => {
+  it("lives under the gitignored local runtime data directory", () => {
+    expect(DEV_FIXTURE_PASSWORD_FILE_RELATIVE).toBe(
+      path.join("data", "dev-fixture-account", "password"),
+    );
+    const gitignore = fs.readFileSync(path.join(__dirname, "..", "..", "..", ".gitignore"), "utf8");
+    expect(gitignore).toMatch(/^\/data\/$/m);
+  });
+
+  it("writes the value, and nothing else, at mode 0600", () => {
+    const cwd = tempInstanceRoot();
+    const secret = "a-value-long-enough-for-the-floor";
+    expect(writeDevFixturePasswordFile(secret, cwd)).toBe(devFixturePasswordFilePath(cwd));
+    expect(fs.readFileSync(devFixturePasswordFilePath(cwd), "utf8").trim()).toBe(secret);
+    expect(fs.statSync(devFixturePasswordFilePath(cwd)).mode & 0o777).toBe(0o600);
+  });
+
+  // The mode argument only applies when a file is CREATED, so a file an earlier
+  // boot left behind with a wider mode would otherwise keep it.
+  it("narrows a file an earlier boot left behind with a wider mode", () => {
+    const cwd = tempInstanceRoot();
+    fs.mkdirSync(path.dirname(devFixturePasswordFilePath(cwd)), { recursive: true });
+    fs.writeFileSync(devFixturePasswordFilePath(cwd), "older", { mode: 0o644 });
+    writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd);
+    expect(fs.statSync(devFixturePasswordFilePath(cwd)).mode & 0o777).toBe(0o600);
+  });
+
+  it("reads back exactly what was written, and says nothing when there is no file", () => {
+    const cwd = tempInstanceRoot();
+    expect(readDevFixturePasswordFile(cwd)).toBeNull();
+    writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd);
+    expect(readDevFixturePasswordFile(cwd)).toBe("a-value-long-enough-for-the-floor");
+  });
+
+  it("takes the file away when the account it belongs to is taken away", async () => {
+    const cwd = tempInstanceRoot();
+    writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", cwd);
+    removeDevFixturePasswordFile(cwd);
+    expect(readDevFixturePasswordFile(cwd)).toBeNull();
+    // And removing one that is not there is not an error: the paths that call
+    // it are already refusing.
+    expect(() => removeDevFixturePasswordFile(cwd)).not.toThrow();
+  });
+
+  it("never throws on an instance root it cannot write", () => {
+    expect(writeDevFixturePasswordFile("a-value-long-enough-for-the-floor", "/dev/null/nope")).toBeNull();
   });
 });
 
@@ -374,6 +477,14 @@ describe("the development boot is wired to the fixture-secret rules", () => {
     expect(printIdx).toBeGreaterThan(-1);
     expect(orgIdx).toBeGreaterThan(-1);
     expect(orgIdx).toBeGreaterThan(printIdx);
+  });
+
+  it("takes an earlier boot\u2019s password file away when it refuses to seed", () => {
+    const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
+    const refusalIdx = body.indexOf("devFixtureSeedRefusal");
+    const removeIdx = body.indexOf("removeDevFixturePasswordFile");
+    expect(refusalIdx).toBeGreaterThan(-1);
+    expect(removeIdx).toBeGreaterThan(refusalIdx);
   });
 
   it("never writes the secret into the handoff file", () => {

@@ -32,11 +32,26 @@ export const DRUPAL_TITLE = "Cinatra UAT Article";
 export const SEED_FILE = path.join(__dirname, ".uat", "seed.json");
 // dev-auto-setup writes the deterministic dev UAT user's IDENTITY here
 // (gitignored). It never carries a password: the dev boot mints one per boot and
-// prints it once, and this suite reads that value from the environment below.
+// writes it to the 0600 file below, which this suite reads when it was not
+// handed the value through the setting.
 export const DEV_ACTOR_FILE = path.join(__dirname, ".uat", "dev-actor.json");
 // The setting the instance was started with, carrying the fixture account's
 // password. Mirrors DEV_FIXTURE_PASSWORD_ENV in src/lib/dev-fixture-secret.ts.
 export const DEV_FIXTURE_PASSWORD_ENV = "CINATRA_DEV_FIXTURE_PASSWORD";
+// The 0600 file the dev boot writes that password to and names at startup —
+// the boot NEVER prints the value, so this is where a run that was not handed
+// one reads it. Mirrors DEV_FIXTURE_PASSWORD_FILE_RELATIVE in
+// src/lib/dev-fixture-secret.ts, resolved against the repository root (the
+// working directory the dev server runs in).
+export const DEV_FIXTURE_PASSWORD_FILE = path.join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "data",
+  "dev-fixture-account",
+  "password",
+);
 // The floor the dev boot applies to that value. Mirrors
 // MIN_DEV_FIXTURE_PASSWORD_LENGTH in src/lib/dev-fixture-secret.ts: a shorter
 // value is IGNORED by the boot, which mints its own instead, so a harness that
@@ -216,13 +231,27 @@ export type DevActor = { userId: string; orgId: string; email: string };
  * this suite passes the same value in through the environment. There is nothing
  * to fall back to — a missing value says exactly which setting to supply.
  */
+/** The password the running instance wrote beside itself, or null. */
+function readDevFixturePasswordFile(): string | null {
+  try {
+    const value = readFileSync(DEV_FIXTURE_PASSWORD_FILE, "utf8").trim();
+    return value === "" ? null : value;
+  } catch {
+    return null;
+  }
+}
+
 export function readDevActorPassword(): string {
-  const value = process.env[DEV_FIXTURE_PASSWORD_ENV];
+  // The setting first: a run that was handed the password uses exactly it.
+  // Otherwise the file the boot wrote and named at startup — the boot never
+  // prints the value, so those two are the only places it exists.
+  const value = process.env[DEV_FIXTURE_PASSWORD_ENV] ?? readDevFixturePasswordFile() ?? undefined;
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(
       `[wp-drupal-uat] the dev UAT account's password is not available. Set ${DEV_FIXTURE_PASSWORD_ENV} to ` +
-        `the value the dev server was started with — the boot mints one per boot and prints it once, and ` +
-        `setting this before the boot chooses it instead. It is deliberately absent from ${DEV_ACTOR_FILE}.`,
+        `the value the dev server was started with, or run this beside the instance that wrote ` +
+        `${DEV_FIXTURE_PASSWORD_FILE}. The boot mints one per boot and writes it there; setting the ` +
+        `variable before the boot chooses it instead. It is deliberately absent from ${DEV_ACTOR_FILE}.`,
     );
   }
   if (value.length < MIN_DEV_FIXTURE_PASSWORD_LENGTH) {

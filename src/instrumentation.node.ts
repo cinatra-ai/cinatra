@@ -111,6 +111,8 @@ import "@/lib/register-run-wait-notifier";
 
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { runBoot } from "@/lib/boot/boot-orchestrator";
+import { shouldAwaitBootInRegister } from "@/lib/boot/register-await-policy";
+import { ensureDevRouteTreeResolves } from "@/lib/boot/dev-route-tree-repair";
 
 export async function register() {
   // Process-level safety nets (engineering #302). The fatal-error policy routes
@@ -143,5 +145,30 @@ export async function register() {
   // outcome in the boot-state readiness surface. A `fatal` phase that throws
   // propagates out here exactly as the original inline rethrows did (e.g. core
   // migrations / required-activation assert / closure gate in production).
+  //
+  // WHO WAITS FOR IT is decided by `shouldAwaitBootInRegister`, which carries
+  // the whole reasoning: production holds `register()` open so a fatal phase
+  // still aborts startup, and the DEVELOPMENT SERVER does not, because holding
+  // it open is what leaves that server answering 404 for the life of the
+  // process, `/api/health` included. The boot itself is identical either way,
+  // and the readiness surface still reports `starting` until it is ready.
+  if (!shouldAwaitBootInRegister()) {
+    // FIRST, the route tree. One loopback ask for `/api/health` while the main
+    // thread is still free, and an invalidation if the server answers 404 for a
+    // route that exists — src/lib/boot/dev-route-tree-repair.ts carries the
+    // measurement and the reasoning. It is bounded and it gates nothing.
+    void ensureDevRouteTreeResolves()
+      .catch(() => "unresolved" as const)
+      .then(() => runBoot())
+      .catch((err: unknown) => {
+        console.error(
+          "[boot] the boot sequence failed. The readiness surface carries the failing phase and " +
+            "/api/health answers 503 until it is fixed.",
+          err,
+        );
+      });
+    return;
+  }
+
   await runBoot();
 }

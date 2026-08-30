@@ -68,6 +68,7 @@ import { DEV_UAT_FIXTURE_USER_TYPE } from "@/lib/initial-admin-bootstrap-policy"
 import {
   devFixtureSeedRefusal,
   printDevFixtureSecretOnce,
+  removeDevFixturePasswordFile,
   resolveDevFixturePassword,
   retireDevFixturePassword,
   rotateDevFixturePassword,
@@ -668,9 +669,10 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
 // ---------------------------------------------------------------------------
 
 // Deterministic dev UAT end-user. Its IDENTITY is fixed; its PASSWORD is not —
-// that is minted fresh on every boot by `@/lib/dev-fixture-secret`, shown to the
-// operator once, and written nowhere in clear. The Playwright suite reads the
-// same value from the environment the instance was started with.
+// that is minted fresh on every boot by `@/lib/dev-fixture-secret`, which writes
+// it to ONE 0600 file under the local runtime data directory and NEVER prints
+// it. The boot names that file; a harness reads it from there, or is handed the
+// value through the setting the instance was started with.
 const DEV_UAT_USER = {
   // Dot-domain literal: better-auth's (zod) email schema rejects no-dot
   // domains like `@localhost`, which would make this seed fail on every
@@ -769,6 +771,8 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
   const refusal = devFixtureSeedRefusal();
   if (refusal) {
     console.log(`${tag}:connect ${refusal}`);
+    // Nothing on this instance may hold a fixture password it refuses to use.
+    removeDevFixturePasswordFile();
     // Refusing to seed is not enough on an instance that used to be private:
     // an account an earlier boot created is still sitting there answering to
     // that boot's password. Take the password away before returning.

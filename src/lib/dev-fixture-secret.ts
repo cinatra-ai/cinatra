@@ -7,23 +7,29 @@
 // every instance that had ever booted it, and the account was seeded even when
 // the instance was served to the whole internet.
 //
-// This module holds the four rules that replace that, as pure environment and
-// crypto logic — no server-only APIs and no IO — so the boot, the harnesses and
-// the tests all read exactly the same rules:
+// This module holds the four rules that replace that, as environment, crypto and
+// one file — no server-only APIs — so the boot, the harnesses and the tests all
+// read exactly the same rules:
 //
 //   1. the password is minted fresh on every boot, from a crypto source, past a
-//      length floor, and is shown to the operator EXACTLY ONCE. Nothing writes
-//      it to a file or to the database in clear; the account keeps a hash;
+//      length floor. It is NEVER PRINTED: a boot log is read by whoever can read
+//      the log, and on a continuous-integration runner that is the public. The
+//      boot writes the value to ONE file instead — under the local runtime data
+//      directory, at file mode 0600 — and says where it put it. The database
+//      only ever holds a hash;
 //   2. seeding is REFUSED, with a sentence the operator can read, whenever any
 //      origin the instance is configured to be served on is not a loopback or
 //      private-network address;
 //   3. an account an earlier boot left behind is rotated onto this boot's
 //      secret, so a password from an earlier boot stops working;
 //   4. a harness that needs the password reads the value the instance was
-//      started with, from the environment — never a literal, never a file.
+//      started with — from the environment, or from the 0600 file the boot
+//      names; never from a literal in this repository.
 // -----------------------------------------------------------------------------
 
 import { randomBytes } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 import { isPrivateUrl } from "@/lib/url-policy";
 
@@ -38,6 +44,79 @@ export const DEV_FIXTURE_PASSWORD_ENV = "CINATRA_DEV_FIXTURE_PASSWORD";
 
 /** No fixture password, minted or supplied, is ever shorter than this. */
 export const MIN_DEV_FIXTURE_PASSWORD_LENGTH = 24;
+
+/**
+ * Where this boot writes the fixture account's password, relative to the
+ * instance's working directory.
+ *
+ * `data/` is the local runtime data directory — generated, gitignored, and
+ * already the home of everything an instance writes about itself. The file
+ * holds the value and nothing else, so a reader needs no parser, and it is
+ * written at mode 0600 so only the account that started the instance can read
+ * it. It replaces PRINTING the value: a log line is read by whoever can read
+ * the log, and on a continuous-integration runner that is the public.
+ */
+export const DEV_FIXTURE_PASSWORD_FILE_RELATIVE = path.join(
+  "data",
+  "dev-fixture-account",
+  "password",
+);
+
+/** The absolute path of that file for a given instance working directory. */
+export function devFixturePasswordFilePath(cwd: string = process.cwd()): string {
+  return path.join(cwd, DEV_FIXTURE_PASSWORD_FILE_RELATIVE);
+}
+
+/**
+ * Write this boot's password where the operator, a harness or the command line
+ * can read it. Returns the path written, or null when the instance could not
+ * write it — a boot that cannot write the file still boots, and says so.
+ *
+ * The mode is set on the write AND again afterwards: the mode argument only
+ * applies when the file is CREATED, so a file an earlier boot left behind with
+ * a wider mode would otherwise keep it.
+ */
+export function writeDevFixturePasswordFile(
+  password: string,
+  cwd: string = process.cwd(),
+): string | null {
+  const file = devFixturePasswordFilePath(cwd);
+  try {
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, `${password}\n`, { encoding: "utf8", mode: 0o600 });
+    chmodSync(file, 0o600);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The password the running instance wrote, for a harness or the command line
+ * beside it. Null when there is no file, or when it is empty — a caller then
+ * says which setting to supply rather than guessing a value.
+ */
+export function readDevFixturePasswordFile(cwd: string = process.cwd()): string | null {
+  try {
+    const value = readFileSync(devFixturePasswordFilePath(cwd), "utf8").trim();
+    return value === "" ? null : value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Take the file away. Called wherever the fixture account itself is being taken
+ * away, so a password an earlier boot wrote cannot outlive the account it
+ * belonged to. Best-effort and silent on absence.
+ */
+export function removeDevFixturePasswordFile(cwd: string = process.cwd()): void {
+  try {
+    rmSync(devFixturePasswordFilePath(cwd), { force: true });
+  } catch {
+    /* best-effort */
+  }
+}
 
 /**
  * Every setting that can name the origin this instance is served on. The
@@ -169,24 +248,34 @@ export function resolveDevFixturePassword(
 let alreadyPrinted = false;
 
 /**
- * Show the operator the fixture account's password — once for the whole boot.
- * This console line is the ONLY place the password appears in clear; no file
- * and no database column ever holds it.
+ * Tell the operator where the fixture account's password is — once for the whole
+ * boot — and put it there.
+ *
+ * THE VALUE IS NEVER PRINTED. A boot log is read by whoever can read the log,
+ * and this boot runs on continuous-integration runners whose logs are public, so
+ * printing it published the credential of every instance that job booted. What
+ * is printed is the FILE the value was written to and the setting that chooses
+ * it; whoever may read the file may have the password, and nobody else.
  */
 export function printDevFixtureSecretOnce(
   email: string,
   password: string,
   source: DevFixtureSecret["source"],
+  cwd: string = process.cwd(),
 ): void {
   if (alreadyPrinted) return;
   alreadyPrinted = true;
   const origin = source === "injected" ? "the password you supplied" : "a password minted for this boot";
+  const file = writeDevFixturePasswordFile(password, cwd);
+  const whereItIs = file
+    ? `The value is never printed: it is in ${file}, readable only by the account that started this ` +
+      `instance (mode 0600). A harness or the command line reads it from there.`
+    : `The value is never printed, and it could NOT be written to ${devFixturePasswordFilePath(cwd)} on ` +
+      `this boot, so nothing on this machine holds it. Restart with ${DEV_FIXTURE_PASSWORD_ENV} set to ` +
+      `a value of your own if you need to know it.`;
   console.log(
-    `${TAG} the development fixture account ${email} uses ${origin}. It is shown here once and is ` +
-      `stored nowhere in clear:\n` +
-      `${TAG}   ${password}\n` +
-      `${TAG} set ${DEV_FIXTURE_PASSWORD_ENV} before starting the instance to choose it yourself — ` +
-      `the end-to-end harnesses read it from there.`,
+    `${TAG} the development fixture account ${email} uses ${origin}. ${whereItIs}\n` +
+      `${TAG} set ${DEV_FIXTURE_PASSWORD_ENV} before starting the instance to choose it yourself.`,
   );
 }
 
@@ -202,8 +291,9 @@ export function requireInjectedDevFixturePassword(
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(
       `The development fixture account's password is not available. Set ${DEV_FIXTURE_PASSWORD_ENV} to the ` +
-        `value the instance was started with: the boot mints one per boot and prints it once, and setting ` +
-        `this before the instance starts chooses it instead. It is deliberately written nowhere.`,
+        `value the instance was started with, or read it from the file the boot names at startup ` +
+        `(${DEV_FIXTURE_PASSWORD_FILE_RELATIVE}, mode 0600). Setting this before the instance starts ` +
+        `chooses the password instead of letting the boot mint one. It is never printed.`,
     );
   }
   // The SAME floor the boot applies. A shorter value is ignored by the boot,
@@ -268,6 +358,9 @@ export async function retireDevFixturePassword(
   userId: string,
   store: DevFixtureCredentialStore,
 ): Promise<boolean> {
+  // Whatever happens to the row, the file goes: a password an earlier boot
+  // wrote must not outlive the account it belonged to.
+  removeDevFixturePasswordFile();
   try {
     return await rotateDevFixturePassword(userId, generateDevFixturePassword(), store);
   } catch {
