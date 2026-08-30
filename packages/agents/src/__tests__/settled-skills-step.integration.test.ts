@@ -66,12 +66,14 @@ vi.mock("@/lib/generated/field-renderer-components", () => ({
   GENERATED_FIELD_RENDERER_COMPONENTS: {},
 }));
 
-// THE ONE SEAM THIS TIER SUBSTITUTES, and it substitutes only the SESSION.
+// THE ONE BEHAVIOURAL SEAM THIS TIER SUBSTITUTES, and it substitutes only the
+// SESSION (the two generated registries above are module-graph stand-ins with
+// no behaviour of this road in them).
 // `getRunRecommendationHoldStateAction` is a `"use server"` wrapper whose whole
 // body is "resolve the cookie session into an actor, then ask the core". There
 // is no cookie jar in a test process, so the actor is supplied here and the
 // call goes on to the REAL `resolveRecommendationHoldStateForActor` against the
-// REAL database. Nothing else on the road is stood in for.
+// REAL database. No other behaviour on the road is stood in for.
 let resolveForTestActor: ((runId: string) => Promise<unknown>) | null = null;
 /** Runs whose CLIENT read does not land — the condition the empty column was
  *  photographed under. The page's own server-side reading is the only source
