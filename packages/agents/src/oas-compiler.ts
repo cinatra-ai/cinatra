@@ -776,6 +776,12 @@ async function readSiblingPackageJson(
    *  can cross-check a binding's declared type against a typed produces entry.
    *  Same fail-closed all-or-nothing parse as `produces`. */
   producesRefs: Array<{ extension: string; objectTypeId?: string }>;
+  /** FALSE when the manifest carried a `cinatra.produces` block the tolerant
+   *  parse above could not read whole (a non-array, or an entry it had to drop).
+   *  `producesRefs` then collapses to [] — indistinguishable from "declares
+   *  nothing" — so the mirror-parity check below must NOT compare against it
+   *  and call the difference a disagreement (cinatra#3095, convergence). */
+  producesReadable: boolean;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -803,7 +809,13 @@ async function readSiblingPackageJson(
       // a silent skip (codex round 0).
       let produces: string[] = [];
       let producesRefs: Array<{ extension: string; objectTypeId?: string }> = [];
+      // An ABSENT block is readable (it says "nothing"); a present block is
+      // readable only when the tolerant parse below keeps every entry.
+      let producesReadable = true;
       const producesRaw = parsed.cinatra?.produces;
+      if (producesRaw !== undefined && producesRaw !== null && !Array.isArray(producesRaw)) {
+        producesReadable = false;
+      }
       if (Array.isArray(producesRaw)) {
         const collectedRefs = producesRaw
           .map((r) => {
@@ -821,6 +833,8 @@ async function readSiblingPackageJson(
         if (collectedRefs.length === producesRaw.length) {
           producesRefs = collectedRefs;
           produces = collectedRefs.map((r) => r.extension);
+        } else {
+          producesReadable = false;
         }
       }
       return {
@@ -829,12 +843,134 @@ async function readSiblingPackageJson(
         agentDependencies: parsed.cinatra?.agentDependencies ?? {},
         produces,
         producesRefs,
+        producesReadable,
       };
     } catch {
       // try next candidate
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// THE PRODUCES MIRROR — parity with the package manifest.
+// (Lifecycle D W7, cinatra#3095 — plan §3.4 wave 7 item 2, §6.2 "The produces
+// mirror".)
+//
+// A service description MAY repeat the package manifest's `cinatra.produces`
+// block at `metadata.cinatra.produces`. The MANIFEST is the one authority —
+// publish, install, the binding/materialize parity above and the run-completion
+// materializer all read `package.json#cinatra.produces` and never the mirror —
+// so a mirror is a convenience copy for readers of the service description
+// alone (the produced-artifact dependency audit reads either source). A copy
+// that says something DIFFERENT is a second, silently wrong statement of what
+// the agent produces, and it disagreed on two of this fleet's agents.
+//
+// The rule: when the mirror is present it must be entry-for-entry equal to the
+// manifest's block. An ABSENT mirror asserts nothing and stays legal — the
+// mirror is optional, its DISAGREEMENT is not. A mirror the compiler cannot
+// parse is refused for the same reason a malformed manifest block is
+// fail-closed: an unparseable copy is a copy nothing can check.
+// ---------------------------------------------------------------------------
+
+/** One `produces` entry as an UNAMBIGUOUS comparison key. A formatted label
+ * (`ext (typeId)`) can collide across two different entries, so equality is
+ * decided on the JSON tuple and the label is used for the message alone
+ * (cinatra#3095, convergence). */
+function producesRefKey(ref: { extension: string; objectTypeId?: string }): string {
+  return JSON.stringify([ref.extension, ref.objectTypeId ?? null]);
+}
+
+/** One `produces` entry, formatted for a human-readable diagnostic. */
+function normalizeProducesRef(ref: { extension: string; objectTypeId?: string }): string {
+  return `${ref.extension}${ref.objectTypeId ? ` (${ref.objectTypeId})` : ""}`;
+}
+
+function sortedProducesKeys(refs: Array<{ extension: string; objectTypeId?: string }>): string[] {
+  return refs.map(producesRefKey).sort();
+}
+
+function sortedProducesLabels(refs: Array<{ extension: string; objectTypeId?: string }>): string[] {
+  return refs.map(normalizeProducesRef).sort();
+}
+
+/**
+ * Compare a service description's `metadata.cinatra.produces` MIRROR with the
+ * sibling manifest's `cinatra.produces` entries. Pure and exported so the
+ * negative fixture can drive it directly as well as through the compiler.
+ *
+ * Returns `{ ok: true }` when the mirror is absent, or present and equal.
+ */
+export function compareAgentProducesMirror(
+  mirrorRaw: unknown,
+  manifestRefs: Array<{ extension: string; objectTypeId?: string }>,
+  manifestReadable = true,
+): { ok: true } | { ok: false; error: string } {
+  if (mirrorRaw === undefined || mirrorRaw === null) return { ok: true };
+  // The manifest block itself did not survive the tolerant parse, so
+  // `manifestRefs` is [] for a reason that has nothing to do with the mirror.
+  // Comparing against it would report a FAITHFUL mirror as a disagreement and
+  // name the wrong side. Refuse — fail-closed, like every other unreadable
+  // declaration here — and say which side is unreadable (cinatra#3095).
+  if (!manifestReadable) {
+    return {
+      ok: false,
+      error:
+        "package.json cinatra.produces could not be read whole (it is not an array, or it " +
+        "carries an entry without a non-empty `extension`), so the mirror at " +
+        "metadata.cinatra.produces cannot be checked against it. Fix the MANIFEST block first — " +
+        "it is the authority.",
+    };
+  }
+  if (!Array.isArray(mirrorRaw)) {
+    return {
+      ok: false,
+      error:
+        "metadata.cinatra.produces is not an array — a mirror the compiler cannot read is a mirror " +
+        "nothing can check; remove it or write it as the manifest's produces array",
+    };
+  }
+  const mirrorRefs: Array<{ extension: string; objectTypeId?: string }> = [];
+  for (const entry of mirrorRaw) {
+    if (!entry || typeof entry !== "object") {
+      return {
+        ok: false,
+        error: "metadata.cinatra.produces carries an entry that is not an object",
+      };
+    }
+    const ext = (entry as { extension?: unknown }).extension;
+    if (typeof ext !== "string" || ext.length === 0) {
+      return {
+        ok: false,
+        error: "metadata.cinatra.produces carries an entry without a non-empty `extension`",
+      };
+    }
+    const otid = (entry as { objectTypeId?: unknown }).objectTypeId;
+    if (otid !== undefined && (typeof otid !== "string" || otid.length === 0)) {
+      return {
+        ok: false,
+        error: `metadata.cinatra.produces entry "${ext}" carries a non-string \`objectTypeId\``,
+      };
+    }
+    mirrorRefs.push(
+      typeof otid === "string" && otid.length > 0 ? { extension: ext, objectTypeId: otid } : { extension: ext },
+    );
+  }
+  const mirrorKeys = sortedProducesKeys(mirrorRefs);
+  const manifestKeys = sortedProducesKeys(manifestRefs);
+  if (mirrorKeys.length === manifestKeys.length && mirrorKeys.every((v, i) => v === manifestKeys[i])) {
+    return { ok: true };
+  }
+  const mirror = sortedProducesLabels(mirrorRefs);
+  const manifest = sortedProducesLabels(manifestRefs);
+  return {
+    ok: false,
+    error:
+      `the service description's produces mirror disagrees with the package manifest:\n` +
+      `  cinatra/oas.json metadata.cinatra.produces: [${mirror.join(", ") || "(empty)"}]\n` +
+      `  package.json cinatra.produces:              [${manifest.join(", ") || "(empty)"}]\n` +
+      `  The manifest is the authority. Make the mirror equal to it, or delete the mirror.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2026,6 +2162,25 @@ export async function compileOasAgentJson(opts: {
   // 10. Load sibling package.json
   const sibling = await readSiblingPackageJson(oasSourcePath);
   const cinatraConfig = await readSiblingCinatraJson(oasSourcePath);
+
+  // 10a. The produces MIRROR may not disagree with the manifest (cinatra#3095).
+  // Checked BEFORE the binding/materialize parity below so a run of the two
+  // readings that differ is named for what it is — a disagreeing copy — rather
+  // than surfacing later as a confusing binding error. Skipped when no sibling
+  // package.json is readable, exactly as the binding parity is.
+  if (sibling) {
+    const mirror = compareAgentProducesMirror(
+      (parsed.metadata as { cinatra?: { produces?: unknown } } | undefined)?.cinatra?.produces,
+      sibling.producesRefs,
+      sibling.producesReadable,
+    );
+    if (!mirror.ok) {
+      return {
+        ok: false,
+        error: `artifact produces-mirror validation failed for ${opts.packageName}:\n${mirror.error}`,
+      };
+    }
+  }
 
   // 10b. Declarative artifact bindings (cinatra#923) — grammar + graph-local
   // reference validation, plus binding↔`cinatra.produces` parity when the

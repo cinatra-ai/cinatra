@@ -246,7 +246,13 @@ export function readGeneratedRendererEntries(text) {
     const key = line.match(/^"([^"]+)":/)[1];
     const resolution = line.match(/resolution:\s*"([a-zA-Z]+)"/);
     const packageName = line.match(/"packageName":"([^"]+)"/);
-    const slot = line.match(/"slot":"([a-z]+)"/);
+    // The v1 slot enum is CAMEL-CASED (`listRow`, since S7/M2) — this reader
+    // must admit every slot the generator can emit. A lowercase-only class
+    // made the gate fail closed the moment ANY extension adopted the list-row
+    // slot (Lifecycle D W7, cinatra#3095): the slot is a per-extension OPTION
+    // and is never part of this gate's rule set, so it must PARSE here and
+    // then be ignored by the classifier, which reads the `detail` slot alone.
+    const slot = line.match(/"slot":"([A-Za-z]+)"/);
     const reps = line.match(/"representations":\[([^\]]*)\]/);
     if (!resolution || !packageName || !slot || !reps) {
       throw new InfraError(`generated renderer entry "${key}" does not parse — this gate cannot derive its providers`);
