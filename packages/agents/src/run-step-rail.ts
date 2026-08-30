@@ -78,6 +78,22 @@ export type RailSource =
  * more will happen) and not "completed" (no work was done). */
 export type RailStatus = "completed" | "pending" | "resolved" | "upcoming" | "skipped";
 
+/**
+ * The rail statuses that are TERMINAL — an entry the reader owes nothing on.
+ * `completed` (the step ran), `resolved` (the gate/record was settled) and
+ * `skipped` (the policy decided not to fire) all say "this one is behind you".
+ *
+ * There is exactly ONE definition because the rail must read ONE way: the
+ * "you are here" anchor below and the run's own record above both ask this
+ * same question, and the second capture measured what happens when two places
+ * answer it differently — a resolved "Done" under a pending "Review".
+ */
+export const TERMINAL_RAIL_STATUSES: ReadonlySet<RailStatus> = new Set<RailStatus>([
+  "completed",
+  "resolved",
+  "skipped",
+]);
+
 /** One merged rail entry. */
 export interface RunStepRailEntry {
   /** Stable identity — dedup key AND React key. */
@@ -510,11 +526,28 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   //     lists the run's work." It carries no gate, no submission and no step
   //     result, so it dedupes with nothing; it takes the ordinal AFTER everything
   //     already on the rail, which is what makes it the LAST entry however the
-  //     spine was merged. Its status is `resolved` — terminal history, never the
-  //     "you are here" anchor of a run that has already finished.
+  //     spine was merged.
+  //
+  //     ITS STATUS IS NOT UNCONDITIONALLY `resolved`. A run reaches its terminal
+  //     status on its own, and the default road's pickup opens the review gate
+  //     that follows AFTERWARDS — so a finished run legitimately coexists with an
+  //     open gate. That is real product state, not a data fault. What is NOT
+  //     legitimate is the rail reading two ways at once about it: the second
+  //     capture measured "Done" resolved sitting under a "Review" entry that was
+  //     still pending, on a page that also said "Awaiting your decision". The
+  //     rail is ORDERED — once an entry is open, nothing after it may read as
+  //     finished. So the run's record is `resolved` only when every entry before
+  //     it is terminal, and `upcoming` (the rail's own "not reached yet") while
+  //     any of them is still open. Either way it is never the "you are here"
+  //     anchor: `activeOrdinal` takes the FIRST open entry, which is the gate
+  //     that is actually waiting on the reader.
   if (runMade) {
     let maxOrdinal = 0;
-    for (const { entry } of byKey.values()) maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
+    let openEntryBefore = false;
+    for (const { entry } of byKey.values()) {
+      maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
+      if (!TERMINAL_RAIL_STATUSES.has(entry.status)) openEntryBefore = true;
+    }
     const key = `runMade:${runMade.runId}`;
     upsert(
       key,
@@ -523,7 +556,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         ordinal: maxOrdinal + 1,
         kind: "runMade" as const,
         label: "Done",
-        status: "resolved" as RailStatus,
+        status: (openEntryBefore ? "upcoming" : "resolved") as RailStatus,
         runMade: { artifactCount: runMade.artifactCount },
       }),
       "runMade",
@@ -538,10 +571,8 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   }
   entries.sort((a, b) => (a.ordinal !== b.ordinal ? a.ordinal - b.ordinal : a.key.localeCompare(b.key)));
 
-  // `skipped` is TERMINAL (the policy decided not to fire) — like completed and
-  // resolved it can never be the "you are here" anchor.
-  const active = entries.find(
-    (e) => e.status !== "completed" && e.status !== "resolved" && e.status !== "skipped",
-  );
+  // The "you are here" anchor is the FIRST entry that is not terminal — read
+  // through `TERMINAL_RAIL_STATUSES`, the same set the run's own record asks.
+  const active = entries.find((e) => !TERMINAL_RAIL_STATUSES.has(e.status));
   return { entries, activeOrdinal: active ? active.ordinal : null };
 }

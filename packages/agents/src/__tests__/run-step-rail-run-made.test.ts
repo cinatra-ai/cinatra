@@ -80,4 +80,106 @@ describe("the run's own record on the rail", () => {
     expect(runMadeEntries).toHaveLength(1);
     expect(runMadeEntries[0].sources).toEqual(["runMade"]);
   });
+
+  // -------------------------------------------------------------------------
+  // THE RAIL CANNOT READ TWO WAYS AT ONCE (second capture, 2026-08-30).
+  //
+  // Measured on the default road: the rail's last entry read "Done" RESOLVED
+  // while the "Review" entry ABOVE it read pending and the page said "Awaiting
+  // your decision". Both underlying facts are real — the run reached its
+  // terminal status, and the review gate the default-road pickup opened after
+  // it is genuinely still open — so the defect is not in the data. It is in
+  // this derivation: the run's own record claimed TERMINAL history while an
+  // EARLIER entry on the same ordered rail was still open, and a stepper whose
+  // step 3 is finished while its step 2 is not tells the reader nothing true.
+  //
+  // The rail is ORDERED. The invariant asserted here is exactly that: once an
+  // entry is not terminal, nothing after it may read as terminal.
+  // -------------------------------------------------------------------------
+
+  const TERMINAL_RAIL_STATUSES = new Set(["completed", "resolved", "skipped"]);
+
+  /** No terminal entry may sit after a non-terminal one. */
+  function readsOneWay(entries: readonly { status: string; label: string }[]) {
+    const firstOpen = entries.findIndex((e) => !TERMINAL_RAIL_STATUSES.has(e.status));
+    if (firstOpen === -1) return true;
+    return entries.slice(firstOpen + 1).every((e) => !TERMINAL_RAIL_STATUSES.has(e.status));
+  }
+
+  it("does NOT read resolved while an earlier gate is still pending", () => {
+    const rail = buildRunStepRail({
+      templateSteps: steps,
+      stepResults: [{}, {}],
+      gates: [
+        {
+          gateId: "g-open",
+          reviewTaskId: "t-open",
+          status: "pending",
+          disposition: null,
+          createdAt: new Date("2026-08-30T22:08:52Z"),
+        },
+      ],
+      // The run itself reached its terminal status BEFORE the default-road
+      // pickup opened that gate — the exact ten-second ordering the capture's
+      // database trace recorded.
+      runMade: { runId: "9ba0cb98", artifactCount: 1 },
+    });
+
+    const last = rail.entries[rail.entries.length - 1];
+    expect(last.kind).toBe("runMade");
+    expect(last.status).not.toBe("resolved");
+    expect(last.status).not.toBe("completed");
+
+    // The whole rail reads one way, top to bottom.
+    expect(readsOneWay(rail.entries)).toBe(true);
+
+    // The open gate is still the "you are here" anchor — untouched.
+    const gate = rail.entries.find((e) => e.kind === "gate");
+    expect(gate!.status).toBe("pending");
+    expect(rail.activeOrdinal).toBe(gate!.ordinal);
+  });
+
+  it("still reads resolved once every earlier entry is terminal", () => {
+    const rail = buildRunStepRail({
+      templateSteps: steps,
+      stepResults: [{}, {}],
+      gates: [
+        {
+          gateId: "g-done",
+          reviewTaskId: "t-done",
+          status: "resolved",
+          disposition: "approved",
+          createdAt: new Date("2026-08-30T22:08:52Z"),
+        },
+      ],
+      runMade: { runId: "9ba0cb98", artifactCount: 1 },
+    });
+    const last = rail.entries[rail.entries.length - 1];
+    expect(last.status).toBe("resolved");
+    expect(rail.activeOrdinal).toBeNull();
+    expect(readsOneWay(rail.entries)).toBe(true);
+  });
+
+  it("a SKIPPED review is terminal — it does not hold the run's record open", () => {
+    const rail = buildRunStepRail({
+      templateSteps: steps,
+      stepResults: [{}, {}],
+      lifecycleDecisions: [
+        {
+          eventId: "e1",
+          artifactId: "a1",
+          outcome: "skipped",
+          gateId: null,
+          decidedBy: "policy",
+          latticeOutcome: null,
+          reason: "the policy did not fire this checkpoint",
+          createdAt: new Date("2026-08-30T22:08:52Z"),
+        },
+      ],
+      runMade: { runId: "9ba0cb98", artifactCount: 1 },
+    });
+    const last = rail.entries[rail.entries.length - 1];
+    expect(last.status).toBe("resolved");
+    expect(readsOneWay(rail.entries)).toBe(true);
+  });
 });
