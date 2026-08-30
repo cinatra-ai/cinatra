@@ -80,15 +80,40 @@ const SEED_BASE_URL =
 let seedOnce: Promise<void> | undefined;
 
 /**
+ * The capability the seed endpoint requires
+ * (src/lib/test-support/conformance-seed-fence.ts). The endpoint drives REAL
+ * extension-lifecycle writes and is exempt from the sign-in redirect, so the
+ * token — not the build shape — is what authorizes this harness. CI mints one
+ * per run and hands it to the server and to this process alike; a local run
+ * must arm the SAME value in both places before `pnpm test:e2e:design`.
+ *
+ * Read at call time, never at module load, so a Playwright worker that inherits
+ * the value later still sees it.
+ */
+const SEED_CAPABILITY_ENV = "CINATRA_CONFORMANCE_SEED_TOKEN";
+
+/**
  * Idempotent, converging seed provisioning: POSTs the seed endpoint, which
  * makes the run namespace equal EXACTLY the committed kit (extra/stale rows
  * removed). Memoized per worker; a retry re-runs it and converges again.
  */
 export function ensureSeeded(): Promise<void> {
   seedOnce ??= (async () => {
+    const capability = process.env[SEED_CAPABILITY_ENV] ?? "";
+    if (capability.length === 0) {
+      // Named explicitly rather than left to surface as a bare 404: an unarmed
+      // capability and a missing route are deliberately indistinguishable to
+      // the CALLER, so the harness has to say which one it is looking at.
+      throw new Error(
+        `seed provisioning cannot run: ${SEED_CAPABILITY_ENV} is unset in this process, so ${SEED_ENDPOINT} answers 404 by design. Arm the SAME value (at least 32 characters) on the server under test and here.`,
+      );
+    }
     const ctx = await playwrightRequest.newContext({ baseURL: SEED_BASE_URL });
     try {
-      const res = await ctx.post(SEED_ENDPOINT, { data: { runId: RUN_ID } });
+      const res = await ctx.post(SEED_ENDPOINT, {
+        data: { runId: RUN_ID },
+        headers: { authorization: `Bearer ${capability}` },
+      });
       if (!res.ok()) {
         throw new Error(
           `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}`,
