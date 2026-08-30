@@ -84,7 +84,14 @@ function TabsListRow({
       <TabsList className={cn('border-b-0', className)} {...props}>
         {children}
       </TabsList>
-      <Separator major decorative className='mb-[11px] self-end' />
+      {/* cinatra#3106 — the rule this row carries REPLACES the plain list's
+          own `border-b`, which paints on the list's bottom edge, so it has to
+          sit on that same edge: end-aligned in the grid with NO bottom offset.
+          The former `mb-[11px]` lifted it eleven pixels clear of the row
+          baseline, so it read as a second horizontal mark floating above the
+          active tab's underline instead of continuing it. Position only — the
+          etched paired-line paint is unchanged. */}
+      <Separator major decorative className='self-end' />
     </div>
   )
 }
