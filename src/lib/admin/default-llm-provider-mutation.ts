@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { writeDefaultLlmProviderToDatabase } from "@/lib/database";
 import { logAuditEventStrict } from "@/lib/authz/audit";
-import type { ActorContext } from "@/lib/authz/actor-context";
+import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +74,56 @@ export async function updateDefaultLlmProvider(args: {
       policyVersion: actor.policyVersion,
       requestId: requestId ?? randomUUID(),
       metadata: { provider },
+    });
+  } catch {
+    throw new DefaultLlmProviderAuditError();
+  }
+
+  writeDefaultLlmProviderToDatabase(provider);
+}
+
+/**
+ * The system principal that performs the boot-time provider bootstrap. Named,
+ * so an auditor reading `audit_events` sees WHAT wrote the default rather than
+ * a blank or — far worse — a person's id.
+ */
+export const PROVIDER_BOOTSTRAP_ACTOR_ID = "system:provider-connection-bootstrap";
+
+/**
+ * The BOOT-TIME arm of the same chokepoint: the environment bootstrap's audited
+ * write of the global default LLM provider.
+ *
+ * There is no session and no human at boot, so the platform-admin authority
+ * check above cannot apply — and must not be FAKED. Attributing this write to a
+ * human principal would put a name on a change that person never made, which is
+ * a worse failure than the one the check exists to prevent. What the chokepoint
+ * actually guarantees is kept exactly: a STRICT audit lands BEFORE the write and
+ * a failed audit means NO write; only the actor differs, and it is recorded
+ * honestly as the system principal that performed it.
+ *
+ * AUTHORITY, stated: this is not a request-reachable path. Its only caller is
+ * the provider-connection bootstrap boot phase, which is itself gated on the
+ * host operator having placed the credential in the instance environment — the
+ * same operator authority that provisions the encryption key and the database.
+ */
+export async function updateDefaultLlmProviderAtBoot(args: {
+  provider: LlmProvider;
+  requestId?: string;
+}): Promise<void> {
+  const { provider, requestId } = args;
+
+  try {
+    await logAuditEventStrict({
+      actorPrincipalId: PROVIDER_BOOTSTRAP_ACTOR_ID,
+      actorPrincipalType: "system",
+      authSource: "worker",
+      resourceType: "administration",
+      resourceId: "llm_default_provider",
+      operation: "settings.default_llm_provider.update",
+      decision: "allowed",
+      policyVersion: POLICY_VERSION,
+      requestId: requestId ?? randomUUID(),
+      metadata: { provider, source: "environment-bootstrap" },
     });
   } catch {
     throw new DefaultLlmProviderAuditError();
