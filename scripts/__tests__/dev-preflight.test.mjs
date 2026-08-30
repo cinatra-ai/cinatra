@@ -71,6 +71,10 @@ import {
   parseHostPort,
   shouldDiagnoseDrift,
 } from "../lib/docker-port-drift.mjs";
+// The one list of provider variables the graphiti service takes from the
+// compose process's environment. Imported rather than re-typed so the strip the
+// entry points perform cannot drift from what the service declares.
+import { GRAPHITI_GENERATED_NAMES } from "../gen-graphiti-env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -3033,8 +3037,17 @@ describe("scripts/dev-compose-env.mjs — the shared derivation step", () => {
     expect(lines).toContain("export CINATRA_NANGO_CONNECT_HOST_PORT='13009'");
     expect(lines).toContain("export CINATRA_NANGO_DB_HOST_PORT='15435'");
     expect(lines).toContain("export CINATRA_REDIS_HOST_PORT='16379'");
-    // Every line is an assignment; nothing else can leak into the `eval`.
-    for (const line of lines) expect(line).toMatch(/^export [A-Z0-9_]+='[^']*'$/);
+    // Every line is an assignment, or the ONE provider strip — nothing else can
+    // leak into the `eval`. The strip is pinned by name rather than admitted as
+    // a shape: `unset` may remove exactly the variables the graphiti service
+    // takes from the compose process's environment (cinatra#2582) and nothing
+    // else, so this stays as strict as the assignment-only rule it replaces.
+    const STRIP = `unset ${[...GRAPHITI_GENERATED_NAMES].sort().join(" ")}`;
+    expect(lines.filter((line) => line.startsWith("unset "))).toEqual([STRIP]);
+    for (const line of lines) {
+      if (line === STRIP) continue;
+      expect(line).toMatch(/^export [A-Z0-9_]+='[^']*'$/);
+    }
   });
 
   // Docker reads COMPOSE_PROJECT_NAME from its own env but not from
@@ -3133,13 +3146,56 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
 
   // Plain throws, not `expect`, and called from inside the tests: an entry point
   // that loses the guard must fail a NAMED test, not the file's collection.
-  /** The `assign → eval` prefix of one recipe, up to (not including) the `up`. */
+
+  /**
+   * Expand every `npm run <script>` into the script it runs.
+   *
+   * An entry point may DELEGATE its `docker compose up` to a sibling npm script
+   * — `kg:refresh` hands the graphiti bring-up to `kg:up`, which resolves the
+   * provider key in memory and runs compose with it in that process's
+   * environment (cinatra#2582). The invariant being asserted is unchanged: the
+   * assign-then-eval guard must still fence a real compose invocation, so the
+   * indirection is FOLLOWED rather than treated as a missing `up`.
+   */
+  const expandNpmRun = (commandLine) => {
+    const seen = new Set();
+    let out = commandLine;
+    for (;;) {
+      const match = out.match(/npm run ([a-z0-9:-]+)/);
+      if (!match) return out;
+      const name = match[1];
+      // A script that (transitively) runs itself would loop forever; stop and
+      // let the caller's own check speak.
+      if (seen.has(name)) return out;
+      seen.add(name);
+      const target = PKG.scripts[name];
+      if (!target) throw new Error(`no ${name} script in package.json`);
+      out = out.replace(match[0], target);
+    }
+  };
+
+  /** The `assign → eval` prefix of one recipe, up to (not including) the step
+   *  that runs compose. Split on `&&` rather than searched for a literal
+   *  ` && docker compose`, because the compose call may be the tail of a step
+   *  that execs it (`node …/gen-graphiti-env.mjs -- docker compose … up`). */
   const guardOf = (commandLine) => {
-    const start = commandLine.indexOf("CINATRA_COMPOSE_ENV=");
-    const end = commandLine.indexOf(" && docker compose", start);
+    const expanded = expandNpmRun(commandLine);
+    const start = expanded.indexOf("CINATRA_COMPOSE_ENV=");
     if (start < 0) throw new Error(`no compose-env guard in: ${commandLine}`);
-    if (end <= start) throw new Error(`no docker compose up after the guard in: ${commandLine}`);
-    return commandLine.slice(start, end);
+    const segments = expanded.slice(start).split(" && ");
+    // A real COMPOSE INVOCATION, not merely the words: `docker compose` has to
+    // be a command word and it has to reach a subcommand that acts on the
+    // stack. Accepting any segment that merely MENTIONS compose would let an
+    // entry point that stopped running one (an `echo`, a step that only prints)
+    // keep this guard green — which is the one failure this whole block exists
+    // to catch. The subcommand is not pinned to `up` here because the same
+    // helper fences `services:down`, `logs` and `clean`; the entry point that
+    // must reach an `up` is asserted by name below.
+    const upIndex = segments.findIndex((segment) =>
+      /(^|\s)docker compose\s[^|;]*\b(up|down|logs|restart|stop|start)\b/.test(segment),
+    );
+    if (upIndex <= 0) throw new Error(`no docker compose up after the guard in: ${commandLine}`);
+    return segments.slice(0, upIndex).join(" && ");
   };
 
   // The recipe line of one target, as the SHELL sees it: make doubles every `$`
@@ -3174,6 +3230,54 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
     expect(KG_REFRESH_GUARD()).toContain('CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs)"');
     expect(KG_REFRESH_GUARD()).toContain('eval "$CINATRA_COMPOSE_ENV"');
     expect(KG_REFRESH_GUARD()).not.toContain("--require-manageable");
+  });
+
+  // …and the step it fences really is a compose bring-up. `kg:refresh` delegates
+  // it to `kg:up`, which resolves the provider key in memory and EXECS compose
+  // with it set in that command's environment — the road that replaced the
+  // decrypted key file the indexer used to read (cinatra#2582). Pinned here so
+  // the indirection cannot quietly become a step that starts nothing.
+  it("delegates the graphiti bring-up to a step that execs compose with the key", () => {
+    expect(PKG.scripts["kg:refresh"]).toContain("npm run kg:up");
+    expect(PKG.scripts["kg:up"]).toContain("scripts/gen-graphiti-env.mjs -- docker compose");
+    expect(PKG.scripts["kg:up"]).toContain("up -d graphiti");
+  });
+
+  // …and the whole-stack `up` that runs BEFORE the key is handed over must not
+  // be able to pick a provider key up from the shell. Every provider variable
+  // the graphiti service declares is value-less — "take it from the environment
+  // of the compose process" — and `npm run services` does
+  // `set -a && source .env.local` first, so a stray `OPENAI_API_KEY` there would
+  // otherwise start the indexer on a key the app's resolver never approved (the
+  // wrong vendor on an Anthropic install, or one the operator disconnected).
+  // The shared step strips them, so every caller of the guarded chain is
+  // covered at once; the list is read from the generator so a variable added
+  // there cannot escape the strip (cinatra#2582).
+  it("strips every provider variable in the step the whole-stack bring-ups eval", () => {
+    const emitted = spawnSync("node", [SHARED_STEP], { encoding: "utf8" });
+    expect(emitted.status).toBe(0);
+    const unset = emitted.stdout.split("\n").find((line) => line.startsWith("unset "));
+    expect(unset, "the shared step should unset the provider variables").toBeDefined();
+    for (const name of GRAPHITI_GENERATED_NAMES) expect(unset.split(/\s+/)).toContain(name);
+  });
+
+  // The same, as BEHAVIOUR rather than as text: a provider key exported in the
+  // shell is gone by the time the recipe reaches its `up`.
+  it("leaves no ambient provider key in the environment the up would run with", () => {
+    const AMBIENT = "sk-not-a-real-key-strip-me-2582";
+    const result = runGuard(MAKE_DEV_GUARD(), { extraEnv: { OPENAI_API_KEY: AMBIENT } });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.stdout).not.toContain(AMBIENT);
+  });
+
+  // setup.sh brings the stack up without the shared step, so it does the strip
+  // itself, with the same list.
+  it("strips them in the setup script's whole-stack up as well", () => {
+    const setup = readFileSync(path.join(REPO_ROOT, "scripts", "setup.sh"), "utf8");
+    const line = setup.split("\n").find((l) => l.startsWith("env -u ") && l.includes("docker compose"));
+    expect(line, "setup.sh should strip the provider variables before its up").toBeDefined();
+    for (const name of GRAPHITI_GENERATED_NAMES) expect(line).toContain(`-u ${name}`);
   });
 
   // The shape that swallowed the exit status must not come back anywhere.
