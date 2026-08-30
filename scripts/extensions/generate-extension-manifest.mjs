@@ -3152,7 +3152,7 @@ function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs =
 // "requires rebuild", never a blank. Empty on day one (no bundled artifact
 // declares `cinatra.artifact.ui` yet) — an intentionally empty seam like
 // GENERATED_CLIENT_WIDGETS.
-function emitArtifactRenderers(artifactRenderers) {
+export function emitArtifactRenderers(artifactRenderers) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = artifactRenderers
     .map((a) => {
