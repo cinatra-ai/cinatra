@@ -108,7 +108,7 @@ import "@/lib/register-pm-work-store-providers";
 import "@/lib/register-blog-providers";
 // Wire the run human-wait notifier seam (cinatra #1559 / E9); worker path in background-jobs.ts.
 import "@/lib/register-run-wait-notifier";
-
+import "@/lib/boot/arm-local-caller-gate"; // socket-peer stamp + boot credential
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { runBoot } from "@/lib/boot/boot-orchestrator";
 

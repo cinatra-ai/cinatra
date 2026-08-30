@@ -4,8 +4,8 @@
     "/sign-in": 223,
     "/api/mcp": 1746,
     "/chat": 1847,
-    "/api/a2a": 1751,
-    "/api/llm-bridge": 1761
+    "/api/a2a": 1754,
+    "/api/llm-bridge": 1764
   },
   "absorbs": {
     "/sign-in": {
@@ -27,15 +27,15 @@
       "pr": 0
     },
     "/api/a2a": {
-      "from": 1743,
-      "to": 1751,
-      "reason": "The two new artifact bases of the readiness plan's item 0.19 — markdown (text/markdown) and binary (application/octet-stream) — enter the required set of the root manifest and the acquisition lock in this change, so their three renderer entries and the first-party leaves behind them join the generated display map, which all four of these routes already reach through the artifact renderer dispatch spine. ATTRIBUTED BY MEASUREMENT, not argued: with the two bases' source trees absent the same scanner on this same tree measures 1743 (/api/a2a), 1753 (/api/llm-bridge), 1738 (/api/mcp) and 1839 (/chat) — each route's committed ceiling EXACTLY — and reports 3 missing modules, the two bases' three renderer entries; restoring them returns each route to its raised ceiling. So the whole +8 is the two bases entering the map and nothing else: it is identical on all four routes, and the thirteen display aliases this change deletes move only HOW a renderer resolves (through the package's own exports instead of a host path alias), never WHICH modules the graph reaches. Measured the way CI measures, with the companion extension fleet cloned PINNED at this change's lock SHAs (114/114, missingCount 0). Narrowing is not available: an installed base's display is reached by design — the dispatch spine is the one road the artifact page, the review card and a third-party application share.",
+      "from": 1751,
+      "to": 1754,
+      "reason": "The A2A development bypass now takes the shared local-caller decision (src/lib/local-caller-gate.ts) instead of reading the Host header, and that decision brings exactly three first-party leaves onto this route: the gate itself, the socket-peer helper (src/lib/request-peer.ts) and the boot-credential reader (src/lib/boot-credential.ts). ATTRIBUTED BY MEASUREMENT, not argued: the same scanner on this same tree measures each route's committed ceiling EXACTLY with the bypass still on its old Host-header check, and exactly +3 once the three leaves are reachable — so the whole growth is those three modules and nothing else. Measured with the companion extension fleet cloned PINNED (114/114, missingCount 0). All three are deliberately dependency-light: no barrel imports and no app graph behind them, which is why a change that hardens three separate surfaces costs three modules in total rather than three per surface. Narrowing is not available and would be the wrong trade: the alternative is a per-route copy of the local-caller decision, which is the divergence this change exists to remove. This raise RETIRES the carried-forward artifact-bases record for this route, the one lifecycle the gate allows for an annotation whose ceiling moves.",
       "pr": 0
     },
     "/api/llm-bridge": {
-      "from": 1753,
-      "to": 1761,
-      "reason": "The two new artifact bases of the readiness plan's item 0.19 — markdown (text/markdown) and binary (application/octet-stream) — enter the required set of the root manifest and the acquisition lock in this change, so their three renderer entries and the first-party leaves behind them join the generated display map, which all four of these routes already reach through the artifact renderer dispatch spine. ATTRIBUTED BY MEASUREMENT, not argued: with the two bases' source trees absent the same scanner on this same tree measures 1743 (/api/a2a), 1753 (/api/llm-bridge), 1738 (/api/mcp) and 1839 (/chat) — each route's committed ceiling EXACTLY — and reports 3 missing modules, the two bases' three renderer entries; restoring them returns each route to its raised ceiling. So the whole +8 is the two bases entering the map and nothing else: it is identical on all four routes, and the thirteen display aliases this change deletes move only HOW a renderer resolves (through the package's own exports instead of a host path alias), never WHICH modules the graph reaches. Measured the way CI measures, with the companion extension fleet cloned PINNED at this change's lock SHAs (114/114, missingCount 0). Narrowing is not available: an installed base's display is reached by design — the dispatch spine is the one road the artifact page, the review card and a third-party application share.",
+      "from": 1761,
+      "to": 1764,
+      "reason": "The A2A development bypass now takes the shared local-caller decision (src/lib/local-caller-gate.ts) instead of reading the Host header, and that decision brings exactly three first-party leaves onto this route: the gate itself, the socket-peer helper (src/lib/request-peer.ts) and the boot-credential reader (src/lib/boot-credential.ts). ATTRIBUTED BY MEASUREMENT, not argued: the same scanner on this same tree measures each route's committed ceiling EXACTLY with the bypass still on its old Host-header check, and exactly +3 once the three leaves are reachable — so the whole growth is those three modules and nothing else. Measured with the companion extension fleet cloned PINNED (114/114, missingCount 0). All three are deliberately dependency-light: no barrel imports and no app graph behind them, which is why a change that hardens three separate surfaces costs three modules in total rather than three per surface. Narrowing is not available and would be the wrong trade: the alternative is a per-route copy of the local-caller decision, which is the divergence this change exists to remove. This raise RETIRES the carried-forward artifact-bases record for this route, the one lifecycle the gate allows for an annotation whose ceiling moves.",
       "pr": 0
     }
   }

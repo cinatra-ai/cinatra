@@ -151,3 +151,6 @@ evidence/2824-s9k/.run/
 /verification/
 proofs/
 proof/
+
+# Per-instance runtime data (the 0600 per-boot local credential lives here).
+/.cinatra/
