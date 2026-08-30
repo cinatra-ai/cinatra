@@ -1311,7 +1311,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   reading covers a run that kept nothing, so it is never an empty
                   panel. Every row is a pointer into the artifact's own page. */}
               {runMadeSaysSomething ? (
-                <RunMadePanel records={runMadeRecords} />
+                <RunMadePanel records={runMadeRecords} runStatus={run.status} />
               ) : null}
               {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own

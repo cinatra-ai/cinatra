@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import {
   RUN_MADE_PANEL_TITLE,
   buildRunArtifactList,
   runArtifactListSummary,
   type RunArtifactRecord,
 } from "./run-artifact-list";
+import type { AgentRunStatus } from "./run-status";
 
 // ---------------------------------------------------------------------------
 // "What this run made" — the panel of the rail's last entry (cinatra#3029, epic
@@ -16,16 +18,64 @@ import {
 // drawing of that model and holds no reading of its own. A row is a POINTER —
 // title, the type that owns it, the revision the run filed or read, and the
 // control that opens it on its own page.
+//
+// Two things live in the DRAWING rather than in the model, and are pinned in
+// `__tests__/run-made-panel.test.tsx`:
+//
+//   * the panel title is PAIRED WITH THE RUN'S STATE, so the panel says whose
+//     record this is and in what state that run ended; and
+//   * the row's muted line WRAPS. It carries the identity, the revision and the
+//     MIME, and a reader who needs to know the form an artifact took cannot get
+//     it from a line that ends "text/markdo…". The rail's own lifecycle reason
+//     already states the house rule ("it WRAPS inside the narrow rail (never
+//     truncates) — a clipped reason answers nothing").
 // ---------------------------------------------------------------------------
 
-export function RunMadePanel({ records }: { records: readonly RunArtifactRecord[] }) {
+/** The run's own state, as the pill draws it. One entry per `AgentRunStatus`,
+ *  so a new run state cannot reach this panel without a reading of its own. */
+const RUN_STATE_PILL: Record<AgentRunStatus, { pill: StatusPillStatus; label: string }> = {
+  queued: { pill: "queued", label: "Queued" },
+  running: { pill: "running", label: "Running" },
+  completed: { pill: "approved", label: "Completed" },
+  failed: { pill: "failed", label: "Failed" },
+  stopped: { pill: "archived", label: "Stopped" },
+  pending_approval: { pill: "needs-review", label: "Needs review" },
+  pending_input: { pill: "hold", label: "Awaiting input" },
+  pending_trigger: { pill: "hold", label: "Awaiting trigger" },
+  armed: { pill: "scheduled", label: "Armed" },
+  waiting_trigger: { pill: "scheduled", label: "Waiting on trigger" },
+};
+
+export function RunMadePanel({
+  records,
+  runStatus,
+}: {
+  records: readonly RunArtifactRecord[];
+  /** The run whose record this panel is — `agent_runs.status` as the row
+   *  carries it. Drawn beside the title as the state pill the ratified drawing
+   *  pairs with the heading. */
+  runStatus: string;
+}) {
   const list = buildRunArtifactList(records, (id) => `/artifacts/${encodeURIComponent(id)}`);
+  // A status outside the union still gets a pill reading its own raw value —
+  // the panel never goes silent about whose record it is showing.
+  const state =
+    RUN_STATE_PILL[runStatus as AgentRunStatus] ??
+    ({ pill: "idle", label: runStatus } as { pill: StatusPillStatus; label: string });
   return (
     <section
       aria-label={RUN_MADE_PANEL_TITLE}
       className="rounded-lg border border-border bg-card p-4"
     >
-      <h3 className="text-sm font-semibold text-foreground">{RUN_MADE_PANEL_TITLE}</h3>
+      <div
+        data-run-made-header=""
+        className="flex flex-wrap items-center justify-between gap-2"
+      >
+        <h3 className="text-sm font-semibold text-foreground">{RUN_MADE_PANEL_TITLE}</h3>
+        <StatusPill status={state.pill} data-run-made-run-status={runStatus}>
+          {state.label}
+        </StatusPill>
+      </div>
       <p className="mt-1 text-sm text-muted-foreground">{runArtifactListSummary(list)}</p>
       {list.kind === "rows" ? (
         <ul className="mt-3 flex flex-col gap-2">
@@ -46,7 +96,12 @@ export function RunMadePanel({ records }: { records: readonly RunArtifactRecord[
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-0.5 truncate font-mono text-badge-xs text-muted-foreground">
+                {/* The muted line WRAPS. `truncate` clipped the MIME off the end
+                    of the row on the measured surface; the row grows instead. */}
+                <div
+                  data-run-made-detail=""
+                  className="mt-0.5 font-mono text-badge-xs leading-4 whitespace-normal break-words text-muted-foreground"
+                >
                   {row.detail}
                 </div>
               </div>
