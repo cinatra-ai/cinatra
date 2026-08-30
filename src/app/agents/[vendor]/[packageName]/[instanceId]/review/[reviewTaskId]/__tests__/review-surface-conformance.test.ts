@@ -53,6 +53,8 @@ const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
 // route-local files are now re-export shims, so this suite follows the source to
 // its new home rather than asserting against a two-line re-export.
 const REVIEW_GATE_CARD = readRepo("packages/agents/src/review-gate-card.tsx");
+/** The artifact-side binder that builds the card's display props. */
+const PREPARE = read(path.join(SRC_ROOT, "app", "artifacts", "[id]", "review-target-prepare.ts"));
 const DECISION_BAR = readRepo("packages/agents/src/review-decision-bar.tsx");
 const GATE_STATES = readRepo("packages/agents/src/review-gate-states.tsx");
 const TARGET_ISLAND = read(
@@ -86,8 +88,12 @@ const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
  */
 const SPEC_CONFORMANCE = {
   "review-target": ["loading", "error"],
-  "review-provenance-native": ["loading", "error"],
-  "review-provenance-marketplace": ["loading", "error"],
+  // THE TWO RENDERER-PROVENANCE ANCHORS ARE GONE. The ratified drawing removed
+  // the provenance chrome from every surface an artifact display is drawn on —
+  // no renderer name, no package identity, no "build-time"/"runtime" line above
+  // the reviewed work — so the surface annotates neither anchor and neither may
+  // reappear. The floor's own anchor is not provenance and stays: it says that
+  // NOTHING rendered this target, which the reviewer has to be told.
   "review-target-floor": ["error"],
   "review-decision-bar": [],
   "review-decision-disabled": ["loading"],
@@ -232,10 +238,11 @@ describe("§I–VI — render→spec: the route invents no anchor outside the cl
 
 describe("§I — one type-agnostic surface (G1-clean: no concrete type / renderer id)", () => {
   it("the model + panel key on the OPAQUE mount kind, never a concrete type/binding/renderer id", () => {
-    // The provenance/floor anchor is derived from the mount kind union only.
-    expect(MODEL).toMatch(/case "build-map":/);
-    expect(MODEL).toMatch(/case "runtime":/);
-    expect(MODEL).toMatch(/case "floor":/);
+    // The floor anchor is derived from the mount kind union only — the model
+    // reads `mount.kind`, and nothing narrower.
+    expect(MODEL).toMatch(/mount\.kind === "floor"/);
+    // The region resolution reads the mount kind and nothing about the artifact.
+    expect(MODEL).toMatch(/mount: ReviewTargetMount,?\s*\n?\s*\): ReviewProvenanceConformanceId \| null/);
     // No renderer-id / concrete-type prop is threaded through the surface.
     expect(stripComments(TARGET_PANEL)).not.toMatch(/rendererId|generatedKey=|packageName=/);
     expect(stripComments(PAGE)).not.toMatch(/rendererId/);
@@ -264,33 +271,56 @@ describe("§II — the immutable target header is inert (no edit control, no rev
   });
 });
 
-describe("§III — renderer provenance is host-derived; the floor is never blank", () => {
-  it("maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor", () => {
-    expect(MODEL).toMatch(/"review-provenance-native"/);
-    expect(MODEL).toMatch(/"review-provenance-marketplace"/);
-    expect(MODEL).toMatch(/"review-target-floor"/);
-    // build-map → native, runtime → marketplace, floor → floor.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
-    expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
-    expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+describe("§III — NO renderer provenance above the work; the floor is never blank", () => {
+  // THE DRAWING'S RULE, pinned at the source: a reviewer is shown the work, not
+  // the machinery that drew it. Neither renderer tier is named, neither carries
+  // a region, and no package identity reaches the surface at all.
+  it("names no renderer tier and no package identity anywhere on the surface", () => {
+    const model = stripComments(MODEL);
+    expect(model).not.toMatch(/review-provenance-native|review-provenance-marketplace/);
+    expect(model).not.toMatch(/"build-time"|"runtime"/);
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/build-time|provenance\.packageName|provenance\.slot/);
   });
 
-  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
-  // all above the reviewed work for the built-in markdown / plain-text
-  // rendering. §V's three drawn provenance regions belong to the two renderer
-  // tiers a PACKAGE supplies and to the floor; the host's own text rendering
-  // takes none of them and is given no fourth one. The strip is therefore
-  // OPTIONAL in the panel — rendered only when there is a provenance to state.
-  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
-    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+  it("the FLOOR keeps its anchor and its reading — a target nothing rendered says so", () => {
+    expect(MODEL).toMatch(/"review-target-floor"/);
+    expect(MODEL).toMatch(/mount\.kind === "floor"/);
+    expect(TARGET_PANEL).toMatch(/data-conformance-id=\{provenanceConformanceId\}/);
+    expect(TARGET_PANEL).toMatch(/Floor/);
+  });
+
+  it("the region is drawn ONLY behind the resolved-region null check", () => {
     const panel = stripComments(TARGET_PANEL);
-    // The strip exists only behind a null check on the resolved region id.
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
-  it("a runtime provenance additionally shows its package identity (§III)", () => {
-    expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
-    expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
+  // cinatra#2931 W4 already gave the host's own text rendering no region. It
+  // still has none; it is now one of three rungs with none rather than the only.
+  it("every non-floor rung resolves to no region at all", () => {
+    expect(MODEL).toMatch(/ReviewProvenanceConformanceId = "review-target-floor"/);
+  });
+
+  // THE CARD IS WIRED TO THE CONTENT CHANNEL. A display draws from its props and
+  // never fetches, so a card handed an ABSENT projection draws its named floor
+  // over a document whose text is in the store — which is what a reviewer saw.
+  // The binder reads the PINNED revision on the server and carries it.
+  it("the binder projects the PINNED revision's content — never a hardcoded absence", () => {
+    const prepare = stripComments(PREPARE);
+    expect(prepare).toMatch(/buildArtifactContentProjection/);
+    expect(prepare).toMatch(/artifactTextChannelPorts/);
+    // Read at the revision the gate froze, never at a latest.
+    expect(prepare).toMatch(/representationRevisionId,/);
+    // THE CONTENT FIELD IS THE PROJECTION, never an unconditional absence. The
+    // named absence still appears once — as the DEGRADE for a read that fails,
+    // so one target's store fault cannot blank a card that carries several (the
+    // binder suite pins that behaviour) — but it may never be what the field is
+    // built from.
+    expect(prepare).not.toMatch(/content: absentArtifactContent/);
+    expect(prepare.match(/absentArtifactContent\(/g) ?? []).toHaveLength(1);
+    expect(prepare).toMatch(/catch[\s\S]{0,400}absentArtifactContent\(/);
+    // And the card stays read-only by construction while carrying that content.
+    expect(prepare).toMatch(/readOnlyArtifactEdit\("read-only-surface"\)/);
   });
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {

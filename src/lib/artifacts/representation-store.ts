@@ -123,6 +123,54 @@ export function getLatestRepresentation(orgId: string, artifactId: string): Repr
   return all.length ? all[all.length - 1] : null;
 }
 
+/**
+ * THE REVISION A FRESHLY OPENED EDITOR OPENS ON.
+ *
+ * The artifact row carries a CACHED pointer at its latest representation
+ * (`data.latestRepresentationRevisionId`), written once when the artifact is
+ * created. The edit-save road appends revisions through
+ * `appendRepresentationWithExpectedBase`, which deliberately does not touch that
+ * pointer — the revision series lives in the representation table and the
+ * append's compare-and-set is an index on it, not on a cached field. So after
+ * the first edit the cached pointer names a revision that is no longer the head.
+ *
+ * An editor opened on that pointer would name a base the store has already built
+ * on, and the very next save would be refused as stale — telling a reader their
+ * own first change collided with someone else. That is why the editor asks the
+ * STORE for its revision.
+ *
+ * THE PINNED REVIEW READING IS UNTOUCHED, and deliberately so: a review surface
+ * is handed the revision its gate froze and never asks for a latest at all, so
+ * it keeps showing what was approved while the artifact's own page shows what
+ * the artifact has become. The two readings differ on purpose.
+ *
+ * The cached pointer is still the answer when the store holds no revision at all
+ * — an artifact whose metadata exists without a materialized representation
+ * reads exactly as it did before.
+ */
+export function resolveEditorRevisionId(
+  orgId: string,
+  artifactId: string,
+  cachedLatestRevisionId: string | null,
+): string | null {
+  ensurePostgresSchema();
+  // ONE ROW, not the series. This runs on every open of an artifact's page, and
+  // the page needs the head's identity — not its history, which the revision
+  // list is for.
+  const r = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT id FROM "${q()}"."representation"
+WHERE org_id=$1 AND artifact_id=$2 ORDER BY revision DESC LIMIT 1`,
+        values: [orgId, artifactId],
+      },
+    ],
+  });
+  const head = (r?.[0]?.rows?.[0] as { id?: string } | undefined)?.id;
+  return head ?? cachedLatestRevisionId ?? null;
+}
+
 /** Replay pin: a representation revision by id, regardless of how many newer revisions exist. */
 export function getRepresentationByIdForReplay(orgId: string, id: string): RepresentationRecord | null {
   ensurePostgresSchema();

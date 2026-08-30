@@ -75,6 +75,9 @@ let store: typeof import("@/lib/artifacts/representation-store");
 let audit: typeof import("@/lib/artifacts/artifact-edit-audit");
 let reader: typeof import("@/lib/artifacts/artifact-read");
 let ports: typeof import("@/lib/artifacts/artifact-edit-save-ports");
+let blobs: typeof import("@/lib/artifacts/local-disk-blob-store");
+let channel: typeof import("@/lib/artifacts/artifact-content-channel");
+let pinnedText: typeof import("@/lib/artifacts/artifact-pinned-text");
 let runPostgresQueriesAsync: typeof import("@/lib/postgres-async").runPostgresQueriesAsync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
 
@@ -175,6 +178,9 @@ beforeAll(async () => {
   audit = await import("@/lib/artifacts/artifact-edit-audit");
   reader = await import("@/lib/artifacts/artifact-read");
   ports = await import("@/lib/artifacts/artifact-edit-save-ports");
+  blobs = await import("@/lib/artifacts/local-disk-blob-store");
+  channel = await import("@/lib/artifacts/artifact-content-channel");
+  pinnedText = await import("@/lib/artifacts/artifact-pinned-text");
 });
 
 afterAll(async () => {
@@ -473,5 +479,258 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the base-revision read is scoped
 
   it("reads NOTHING for an artifact that does not exist at all", async () => {
     expect(await readLatest(ORG, nextId("art-absent"))).toBeNull();
+  });
+});
+
+/**
+ * THE REVISION A FRESHLY OPENED EDITOR OPENS ON (enabler 0.20).
+ *
+ * The artifact row carries a CACHED pointer at its latest representation,
+ * written once when the artifact is created. The edit-save road appends
+ * revisions without touching it, so after any edit the cached pointer names a
+ * revision that is no longer the head — and an editor that opened on it would
+ * hand every later save a base the store has already built on, which the
+ * compare-and-set above correctly refuses. The reader would then be told their
+ * own first save was stale.
+ *
+ * So the editor resolves its revision from the STORE, not from the cache. This
+ * suite pins both halves against the real substrate: the cache does go stale
+ * (it is not a hypothetical), and the resolver ignores it and answers the head.
+ *
+ * The review surfaces are unaffected by construction — they are handed the
+ * revision the gate pinned and never ask for a latest at all; the suite above
+ * ("leaves a REVIEW'S PINNED REVISION exactly where it was under an edit")
+ * holds that line.
+ */
+describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the editor opens on the HEAD revision", () => {
+  /** Seed the cached pointer the way artifact creation writes it. */
+  async function cachePointer(orgId: string, artifactId: string, revisionId: string) {
+    await sql(
+      `UPDATE "${S()}"."objects"
+         SET data = jsonb_set(data, '{latestRepresentationRevisionId}', to_jsonb($3::text), true)
+       WHERE id = $1 AND org_id = $2`,
+      [artifactId, orgId, revisionId],
+    );
+  }
+
+  async function cachedPointer(orgId: string, artifactId: string): Promise<string | null> {
+    const res = await sql(
+      `SELECT data->>'latestRepresentationRevisionId' AS ptr FROM "${S()}"."objects"
+       WHERE id = $1 AND org_id = $2`,
+      [artifactId, orgId],
+    );
+    return (res.rows[0] as { ptr: string | null } | undefined)?.ptr ?? null;
+  }
+
+  /** Append `count` further revisions, returning the head revision's id. */
+  async function appendRevisions(
+    orgId: string,
+    artifactId: string,
+    from: string,
+    count: number,
+  ): Promise<string> {
+    let base = from;
+    for (let n = 0; n < count; n += 1) {
+      const resourceId = await seedResource(orgId, `# Revision ${n + 2}\n`);
+      const appended = await store.appendRepresentationWithExpectedBase({
+        orgId,
+        artifactId,
+        baseRevisionId: base,
+        resourceId,
+        form: "file",
+        createdBy: "user-1",
+      });
+      if (appended.kind !== "appended") throw new Error(`append ${n + 2} was ${appended.kind}`);
+      base = appended.record.id;
+    }
+    return base;
+  }
+
+  it("THE CACHED POINTER GOES STALE — it still names revision 1 after two edits", async () => {
+    const seeded = await seedArtifact();
+    await cachePointer(ORG, seeded.artifactId, seeded.revisionId);
+
+    const head = await appendRevisions(ORG, seeded.artifactId, seeded.revisionId, 2);
+
+    expect(store.listRepresentations(ORG, seeded.artifactId).map((r) => r.revision)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(head).not.toBe(seeded.revisionId);
+    // The defect, stated as a fact about the substrate rather than about a page.
+    expect(await cachedPointer(ORG, seeded.artifactId)).toBe(seeded.revisionId);
+  });
+
+  it("resolves the HEAD revision for the editor, not the cached pointer", async () => {
+    const seeded = await seedArtifact();
+    await cachePointer(ORG, seeded.artifactId, seeded.revisionId);
+    const head = await appendRevisions(ORG, seeded.artifactId, seeded.revisionId, 2);
+
+    // THREE independent resolutions, the way three fresh loads ask.
+    for (let load = 0; load < 3; load += 1) {
+      expect(
+        store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId),
+      ).toBe(head);
+    }
+  });
+
+  it("falls back to the cached pointer only when the store holds no revision at all", async () => {
+    const artifactId = nextId("art-empty");
+    await sql(
+      `INSERT INTO "${S()}"."objects" (id, org_id, type, data) VALUES ($1, $2, $3, '{}'::jsonb)`,
+      [artifactId, ORG, GENERIC_ARTIFACT_TYPE],
+    );
+    expect(store.listRepresentations(ORG, artifactId)).toEqual([]);
+    expect(store.resolveEditorRevisionId(ORG, artifactId, "rev-cached")).toBe("rev-cached");
+    expect(store.resolveEditorRevisionId(ORG, artifactId, null)).toBeNull();
+  });
+
+  it("never crosses organizations — another org's head is not this org's", async () => {
+    const foreign = await seedArtifact(OTHER_ORG);
+    await appendRevisions(OTHER_ORG, foreign.artifactId, foreign.revisionId, 1);
+
+    expect(store.resolveEditorRevisionId(ORG, foreign.artifactId, null)).toBeNull();
+  });
+});
+
+/**
+ * THE REVIEW CARD DRAWS THE PINNED REVISION'S DOCUMENT (enabler 0.3 wired for
+ * this consumer, enabler 0.20).
+ *
+ * The card's props builder used to hand every display an ABSENT content
+ * projection. A markdown display handed one draws its named floor — no document
+ * body, and no tabs, because a floor has nothing to switch between — over a
+ * revision whose text was in the store the whole time. This suite reads the real
+ * bytes off the real blob store through the real binder, so "the card shows the
+ * work" is a property of the wiring rather than of a fixture.
+ *
+ * AND IT READS THE PINNED REVISION, NOT THE HEAD: the artifact is edited twice
+ * after the gate pins revision 1, and the card still carries revision 1's own
+ * characters. That is the difference between showing what was approved and
+ * showing whatever the artifact became.
+ */
+describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the review card carries the pinned revision's text", () => {
+  /** A resource whose bytes are REALLY on the blob store, addressable by key. */
+  async function seedRealResource(orgId: string, artifactId: string, revisionId: string, text: string) {
+    const record = await blobs.createLocalDiskBlobStore().put({
+      orgId,
+      artifactId,
+      representationRevisionId: revisionId,
+      stream: (async function* () {
+        yield new TextEncoder().encode(text);
+      })(),
+      declaredMime: "text/markdown",
+      maxBytes: 1024 * 1024,
+    });
+    const resourceId = nextId("res");
+    await sql(
+      `INSERT INTO "${S()}"."artifact_blobs" (id, org_id, storage_backend, storage_key, sha256, size_bytes, mime_detected)
+       VALUES ($1, $2, 'local-disk', $3, $4, $5, 'text/markdown')`,
+      [record.blobId, orgId, record.storageKey, record.sha256, record.sizeBytes],
+    );
+    await sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, malware_scan_status, metadata)
+       VALUES ($1, $2, 'blob', $3, 'text/markdown', $4, 'clean', jsonb_build_object('storageKey', $5::text, 'blobId', $6::text))`,
+      [resourceId, orgId, `blob:${record.sha256}`, record.sizeBytes, record.storageKey, record.blobId],
+    );
+    return resourceId;
+  }
+
+  /** Unique per seed: the resource table dedupes on the substance key, so two
+   *  artifacts seeded with byte-identical text would share one resource row. */
+  const pinnedTextFor = (marker: string) =>
+    `# The pinned draft ${marker}\n\nThe paragraph a reviewer decides on.\n`;
+
+  async function seedReviewableArtifact() {
+    const artifactId = nextId("art");
+    const revisionId = nextId("rev");
+    const PINNED_TEXT = pinnedTextFor(revisionId);
+    await sql(
+      `INSERT INTO "${S()}"."objects" (id, org_id, type, data)
+       VALUES ($1, $2, $3, jsonb_build_object('mime', 'text/markdown', 'artifactType', 'file'))`,
+      [artifactId, ORG, GENERIC_ARTIFACT_TYPE],
+    );
+    const resourceId = await seedRealResource(ORG, artifactId, revisionId, PINNED_TEXT);
+    await sql(
+      `INSERT INTO "${S()}"."representation" (id, org_id, artifact_id, resource_id, revision, form)
+       VALUES ($1, $2, $3, $4, 1, 'file')`,
+      [revisionId, ORG, artifactId, resourceId],
+    );
+    return { artifactId, revisionId, text: PINNED_TEXT };
+  }
+
+  /** The read road the review binder now takes for a pinned revision: the
+   *  content channel's projection over the real text port. */
+  const projectPinned = (artifactId: string, revisionId: string, mime = "text/markdown") =>
+    channel.buildArtifactContentProjection(
+      { orgId: ORG, artifactId, representationRevisionId: revisionId, form: "file", mime },
+      pinnedText.artifactTextChannelPorts,
+    );
+
+  it("the projection carries the revision's TEXT — not a named absence", async () => {
+    const seeded = await seedReviewableArtifact();
+
+    expect(await projectPinned(seeded.artifactId, seeded.revisionId)).toMatchObject({
+      kind: "text",
+      representationRevisionId: seeded.revisionId,
+      text: seeded.text,
+      truncated: false,
+    });
+  });
+
+  it("keeps the PINNED revision's text after the artifact has moved on twice", async () => {
+    const seeded = await seedReviewableArtifact();
+    let base = seeded.revisionId;
+    const later = [`# Second ${seeded.revisionId}\n`, `# Third ${seeded.revisionId}\n`];
+    for (const text of later) {
+      const revisionId = nextId("rev");
+      const resourceId = await seedRealResource(ORG, seeded.artifactId, revisionId, text);
+      const appended = await store.appendRepresentationWithExpectedBase({
+        orgId: ORG,
+        artifactId: seeded.artifactId,
+        baseRevisionId: base,
+        resourceId,
+        form: "file",
+        createdBy: "user-1",
+      });
+      if (appended.kind !== "appended") throw new Error(`append was ${appended.kind}`);
+      base = appended.record.id;
+    }
+
+    // The EDITOR opens on the head; the CARD stays on the revision the gate pinned.
+    expect(store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId)).toBe(base);
+    expect(await projectPinned(seeded.artifactId, seeded.revisionId)).toMatchObject({
+      kind: "text",
+      text: seeded.text,
+    });
+    expect(await projectPinned(seeded.artifactId, base)).toMatchObject({
+      kind: "text",
+      text: later[1],
+    });
+  });
+
+  it("a revision whose class this port does not carry says so BY NAME, never as an empty document", async () => {
+    const seeded = await seedReviewableArtifact();
+
+    expect(await projectPinned(seeded.artifactId, seeded.revisionId, "image/png")).toMatchObject({
+      kind: "none",
+      reason: "unsupported-form",
+    });
+  });
+
+  it("never crosses organizations — another org cannot project this revision", async () => {
+    const seeded = await seedReviewableArtifact();
+
+    expect(
+      await channel.buildArtifactContentProjection(
+        {
+          orgId: OTHER_ORG,
+          artifactId: seeded.artifactId,
+          representationRevisionId: seeded.revisionId,
+          form: "file",
+          mime: "text/markdown",
+        },
+        pinnedText.artifactTextChannelPorts,
+      ),
+    ).toMatchObject({ kind: "none" });
   });
 });

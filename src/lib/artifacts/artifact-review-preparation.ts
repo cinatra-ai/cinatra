@@ -270,13 +270,31 @@ export interface PrepareReviewPorts {
    *  AT THE VERSION THE DISPLAY NEGOTIATED (enabler 0.4), and with the member's
    *  own form so a non-file revision carries no preview or download address
    *  (enabler 0.10). */
+  /**
+   * Build the display props for ONE pinned revision.
+   *
+   * ASYNCHRONOUS BY CONTRACT, like the artifact page's own builder: the props
+   * carry the versioned content channel's projection, and reading the pinned
+   * revision's substance is a server read off the store. A binder that needs no
+   * read may still answer synchronously — the core awaits either.
+   *
+   * IT MUST RESOLVE, NEVER REJECT. Everything else this core reads is answered
+   * with the never-blank floor FOR ONE TARGET, because a card carries several
+   * and one bad row must not blank the others. A rejection here would escape the
+   * whole preparation and take the card down with it, so the read's failure is
+   * the BINDER's to name: the content channel already carries a named absence
+   * for exactly that, and the display draws its own reading from it. The binder
+   * suite pins this; the core deliberately does not catch, so a binder that
+   * throws is a defect in the binder rather than a silently floored card whose
+   * cause nobody sees.
+   */
   buildProps(input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
-  }): ArtifactRendererProps;
+  }): ArtifactRendererProps | Promise<ArtifactRendererProps>;
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +469,7 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  const props = ports.buildProps({
+  const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,
     mime,

@@ -56,31 +56,45 @@ const floor: ReviewTargetMount = {
   reason: "requires-rebuild",
 };
 
-describe("§III — provenance conformance id from the OPAQUE mount kind", () => {
-  it("build-map → native, runtime → marketplace, floor → generic-floor anchor", () => {
-    expect(reviewProvenanceConformanceId(buildMap)).toBe("review-provenance-native");
-    expect(reviewProvenanceConformanceId(runtime)).toBe("review-provenance-marketplace");
+describe("§III — NO renderer provenance above the reviewed work", () => {
+  // THE RATIFIED DRAWING REMOVED THIS CHROME FROM EVERY SURFACE THE DISPLAY IS
+  // DRAWN ON: no renderer name, no package identity, no provenance line above a
+  // rendering — on the artifact's own page, on the review card, anywhere. The
+  // reviewer is shown the work, not the machinery that drew it.
+  //
+  // WHAT SURVIVES IS THE NEVER-BLANK FLOOR'S DIAGNOSTIC, and only that. A floor
+  // is not provenance: it is the display saying that NOTHING rendered this
+  // target, which a reviewer deciding on it has to be told. So the floor keeps
+  // its region and its reading, and the two renderer tiers lose theirs.
+  it("a build-time renderer has NO provenance region", () => {
+    expect(reviewProvenanceConformanceId(buildMap)).toBeNull();
+    expect(reviewProvenanceLabel(buildMap)).toBeNull();
+  });
+
+  it("a runtime (marketplace-installed) renderer has NO provenance region — and never names its package", () => {
+    expect(reviewProvenanceConformanceId(runtime)).toBeNull();
+    expect(reviewProvenanceLabel(runtime)).toBeNull();
+  });
+
+  it("the FLOOR keeps its diagnostic — a target nothing rendered still says so", () => {
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
-  });
-
-  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
-  // markdown / plain-text rendering carries NO label above the reviewed work.
-  // §V of the pinned review spec draws a provenance strip for the two renderer
-  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
-  // none of those three, and it is not given a fourth strip — it is given none.
-  // The reviewer sees the draft, and nothing above the draft.
-  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
-    expect(reviewProvenanceConformanceId(form)).toBeNull();
-  });
-
-  it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
-    expect(reviewProvenanceLabel(buildMap)).toMatchObject({ kind: "build-time" });
-    expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
     expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
   });
 
-  it("the form rung has no provenance label to print", () => {
+  // cinatra#2931 W4 — the built-in markdown / plain-text rendering carried no
+  // label before this change either. It still carries none; it is now one of
+  // three rungs that carry none rather than the only one.
+  it("the form rung has no provenance region and no label to print", () => {
+    expect(reviewProvenanceConformanceId(form)).toBeNull();
     expect(reviewProvenanceLabel(form)).toBeNull();
+  });
+
+  // The floor is the ONLY reading left, so the model can never again hand the
+  // panel a package name to draw above a rendering.
+  it("no mount kind but the floor yields a label at all", () => {
+    for (const mount of [buildMap, runtime, form]) {
+      expect(reviewProvenanceLabel(mount)).toBeNull();
+    }
   });
 });
 

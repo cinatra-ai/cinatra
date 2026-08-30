@@ -128,58 +128,42 @@ export function reviewSettledCopy(
 // The conformance anchor is derived from the OPAQUE mount kind, never a type id.
 // ---------------------------------------------------------------------------
 
-export type ReviewProvenanceConformanceId =
-  | "review-provenance-native"
-  | "review-provenance-marketplace"
-  | "review-target-floor";
+export type ReviewProvenanceConformanceId = "review-target-floor";
 
-/** The design conformance id for a target's provenance region, from its host
- * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
- * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). `null` means the target has NO provenance region — the strip is
- * not rendered at all.
+/** The design conformance id for a target's provenance region.
  *
- * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
- * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
- * the work, or that nothing did. The host's own rendering of a declared text
- * form is neither: there is no package to name, and the work did render. Rather
- * than reuse a package tier that would name an extension that never ran, or
- * invent a fourth strip the drawing does not carry, the reviewer is shown the
- * draft with nothing above it. */
+ * THE RATIFIED DRAWING REMOVED THE RENDERER-PROVENANCE CHROME from every surface
+ * an artifact display is drawn on: no renderer name, no package identity, no
+ * "build-time" or "runtime" line above the work. A reviewer decides on the work;
+ * which package's code painted it is not part of that decision, and naming it
+ * above the draft put machinery between the reviewer and the thing reviewed.
+ * So a build-time renderer and a runtime (marketplace-installed) one both draw
+ * with NOTHING above them, exactly as the host's own text rendering already did.
+ *
+ * WHAT SURVIVES IS THE NEVER-BLANK FLOOR'S DIAGNOSTIC. A floor is not
+ * provenance: it is the surface saying that nothing rendered this target at all,
+ * which is a fact about the reviewed work and one a reviewer must be told before
+ * deciding. It keeps its region and its anchor.
+ *
+ * `null` means the target has NO provenance region — the strip is not rendered.
+ */
 export function reviewProvenanceConformanceId(
   mount: ReviewTargetMount,
 ): ReviewProvenanceConformanceId | null {
-  switch (mount.kind) {
-    case "build-map":
-      return "review-provenance-native";
-    case "form":
-      return null;
-    case "runtime":
-      return "review-provenance-marketplace";
-    case "floor":
-      return "review-target-floor";
-  }
+  return mount.kind === "floor" ? "review-target-floor" : null;
 }
 
-/** The provenance label shown beside the chip (§III). build-time / runtime carry
- * the extension chip; a runtime additionally shows its package identity; a floor
- * reads "Floor". `null` for the form rung, which has no region to label at all
- * (see `reviewProvenanceConformanceId`). Pure copy — no type keying. */
+/** The label for the one region that remains: the floor's own diagnostic, which
+ * reads "Floor". Every other mount kind answers `null` — there is no region to
+ * label, and no package identity is exposed to the surface at all. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
-  kind: "build-time" | "runtime" | "floor";
+  kind: "floor";
   slot: string;
   packageName: string | null;
 } | null {
-  switch (mount.kind) {
-    case "build-map":
-      return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
-    case "form":
-      return null;
-    case "runtime":
-      return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
-    case "floor":
-      return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
-  }
+  return mount.kind === "floor"
+    ? { kind: "floor", slot: mount.slot, packageName: mount.packageName }
+    : null;
 }
 
 // ---------------------------------------------------------------------------

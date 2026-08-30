@@ -34,6 +34,28 @@ export function Toaster({ ...props }: ToasterProps) {
           // wrapper through Sonner `action` and `cancel` slots; this primitive
           // owns the CSS chrome only.
 
+          // THE CLOSE CONTROL SITS ON THE RIGHT, beside the toast's action.
+          // Sonner's left-to-right defaults anchor it at
+          // `--toast-close-button-start: 0` with the end unset, which draws the
+          // X outside the top-LEFT corner — away from the Copy action the
+          // wrapper puts on the right, and away from where a reader reaches for
+          // it. The wrapper owns the controls; this primitive owns their chrome,
+          // so the placement is stated here once for every toast.
+          //
+          // LEFT-TO-RIGHT ONLY, DELIBERATELY. The three variables below are read
+          // by the toast library as PHYSICAL left/right, and it sets them from
+          // its own direction blocks; an inline value outrules both. The
+          // application renders no direction attribute anywhere and declares
+          // English, so no toast can reach the right-to-left block today. If a
+          // right-to-left reading is ever added, these three lines must move out
+          // of the inline style and become direction-keyed with the values
+          // MIRRORED — the close control belongs beside the action on the inline
+          // END, which is the physical left there. The suite beside this file
+          // pins that statement so the limitation cannot travel unnoticed.
+          '--toast-close-button-start': 'unset',
+          '--toast-close-button-end': '0',
+          '--toast-close-button-transform': 'translate(35%, -35%)',
+
           // Default toast — popover surface, foreground text.
           '--normal-bg': 'var(--popover)',
           '--normal-text': 'var(--popover-foreground)',

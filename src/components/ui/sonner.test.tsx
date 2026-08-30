@@ -82,3 +82,66 @@ describe("Sonner Toaster wrapper — opacity contract", () => {
     expect(src).not.toMatch(/theme=\{theme as ToasterProps\['theme'\]\}/);
   });
 });
+
+/**
+ * THE CLOSE CONTROL SITS ON THE RIGHT, beside the toast's own action.
+ *
+ * The wrapper's contract has always said so in its own words — "every toast
+ * carries a Copy action and a Close (X) on the right" — but it never said so in
+ * CSS. Sonner's own left-to-right defaults place the close control at
+ * `--toast-close-button-start: 0` with `--toast-close-button-end: unset`, which
+ * draws it outside the top-LEFT corner of the toast, away from the action it
+ * belongs beside. The chrome is this primitive's to own (the wrapper injects the
+ * controls; this component owns the CSS), so the placement is set here, once,
+ * for every toast in the application.
+ *
+ * Sonner exposes the placement as three custom properties, so this is a token
+ * override rather than a rule fighting the library's own stylesheet.
+ */
+describe("Sonner Toaster wrapper — the Close control's placement", () => {
+  const src = readFileSync(path.join(__dirname, "sonner.tsx"), "utf8");
+
+  it("anchors the close control to the RIGHT edge, not the left", () => {
+    expect(src).toMatch(/'--toast-close-button-start':\s*'unset'/);
+    expect(src).toMatch(/'--toast-close-button-end':\s*'0'/);
+  });
+
+  it("mirrors the offset transform so it sits outside the right corner", () => {
+    expect(src).toMatch(/'--toast-close-button-transform':\s*'translate\(35%, ?-35%\)'/);
+  });
+
+  /**
+   * THE OVERRIDE IS LEFT-TO-RIGHT ONLY, AND THAT IS PINNED HERE.
+   *
+   * The three properties above are read by the toast library as PHYSICAL left
+   * and right, and the library sets them from its own direction blocks; an
+   * inline value outrules both, so this placement would survive into a
+   * right-to-left reading and put the close control opposite the action instead
+   * of beside it. That is unreachable today — the application renders no
+   * direction attribute at all and declares English — and this test is what
+   * says so: the day a direction attribute is added to the document, this goes
+   * red and the placement has to become direction-keyed with the values
+   * mirrored, rather than silently drawing on the wrong side.
+   */
+  it("is unreachable by a right-to-left reading — the document declares none", () => {
+    const layout = readFileSync(
+      path.join(__dirname, "..", "..", "app", "layout.tsx"),
+      "utf8",
+    );
+    expect(layout).toMatch(/<html\s+lang="en"/);
+    expect(layout).not.toMatch(/<html[^>]*\sdir=/);
+  });
+
+  it("records the limitation where the override is written", () => {
+    // A reader who changes these three lines must find the direction note
+    // beside them, not in a review thread.
+    expect(src).toMatch(/LEFT-TO-RIGHT ONLY/);
+  });
+
+  it("states the placement in the component that owns the toast chrome", () => {
+    // The wrapper (packages/sdk-ui/src/toast.ts) injects Copy and turns the
+    // close control on; where that control is drawn belongs here, so the two
+    // cannot disagree about a toast's anatomy.
+    expect(src).toMatch(/close/i);
+  });
+});

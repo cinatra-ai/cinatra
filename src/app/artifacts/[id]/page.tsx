@@ -54,7 +54,10 @@ import {
   resolveArtifactContentClass,
 } from "@/lib/artifacts/artifact-content-channel";
 import { artifactTextChannelPorts } from "@/lib/artifacts/artifact-pinned-text";
-import { getRepresentationByIdForReplay } from "@/lib/artifacts/representation-store";
+import {
+  getRepresentationByIdForReplay,
+  resolveEditorRevisionId,
+} from "@/lib/artifacts/representation-store";
 import { can } from "@/lib/authz/enforce";
 import {
   ARTIFACT_EDIT_IDLE_PAUSE_MS,
@@ -136,7 +139,25 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     );
   }
 
-  const revisionId = artifact.latestRepresentationRevisionId;
+  // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
+  //
+  // The artifact row's own `latestRepresentationRevisionId` is a pointer cached
+  // at creation, and the edit-save road appends revisions without moving it —
+  // so on this page, the one surface that edits, it names revision 1 forever
+  // after the first save. Opening there hands the next save a base the store has
+  // already built on, and the save is refused as stale: the reader is told their
+  // first change collided with someone else, on a document nobody else touched.
+  //
+  // The REVIEW surfaces keep their own reading and are not touched by this: a
+  // review is handed the revision its gate pinned and never asks for a latest,
+  // which is the whole point of the pin. The two readings differ by design —
+  // this page shows what the artifact has become, a review shows what was
+  // approved.
+  const revisionId = resolveEditorRevisionId(
+    orgId,
+    id,
+    artifact.latestRepresentationRevisionId,
+  );
   // Latest representation is required for any in-page rendering. Without
   // it (rare — artifact metadata without a materialized representation),
   // fall through to the fallback handler.

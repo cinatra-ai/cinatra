@@ -93,34 +93,21 @@ export function ReviewTargetPanel({
         </p>
       </div>
 
-      {/* §III — renderer provenance chip. NOTHING is drawn above the reviewed
-          work when the host itself rendered a declared text form: that target
-          has no provenance region at all (cinatra#2931 W4). */}
+      {/* §III — THE FLOOR'S DIAGNOSTIC, and nothing else.
+          The ratified drawing removed the renderer-provenance chrome from every
+          surface an artifact display is drawn on: no renderer name, no package
+          identity, no "build-time"/"runtime" line above the reviewed work. What
+          remains is the never-blank floor saying that NOTHING rendered this
+          target — a fact about the work, which a reviewer has to be told before
+          deciding on it. The model yields a label for that case and for no
+          other, so a rendering can never again be introduced by its machinery. */}
       {provenanceConformanceId !== null && provenance !== null ? (
         <div
           data-conformance-id={provenanceConformanceId}
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
         >
-          {provenance.kind === "floor" ? (
-            <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
-              Floor
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
-              {typeLabel}
-            </span>
-          )}
-          {provenance.kind === "runtime" && provenance.packageName ? (
-            <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
-              {provenance.packageName}
-            </span>
-          ) : null}
-          <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
-            {provenance.kind === "build-time"
-              ? `build-time · ${provenance.slot}`
-              : provenance.kind === "runtime"
-                ? `runtime · ${provenance.slot}`
-                : "structured data"}
+          <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
+            Floor
           </span>
         </div>
       ) : null}
