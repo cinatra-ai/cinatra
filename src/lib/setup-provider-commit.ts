@@ -103,7 +103,13 @@ export type SetupProviderClaimRecord = {
 export type SetupProviderCommitProvenance =
   | "setup"
   | "administration"
-  | "migrated-from-receipt";
+  | "migrated-from-receipt"
+  /**
+   * Sealed and committed by the boot-time bootstrap from the instance
+   * environment (no operator ran the wizard). Distinct so the record never
+   * claims a human completed a step nobody performed.
+   */
+  | "environment-bootstrap";
 
 export type SetupProviderCommitmentRecord = {
   recordVersion: 1;
@@ -385,6 +391,12 @@ export async function commitSetupProviderClaim(input: {
   credentialFingerprint: string | null;
   /** The AUDITED platform-admin mutation (injected by the server action). */
   writeAuditedDefault: (provider: LlmProvider) => Promise<void>;
+  /**
+   * WHO earned this commitment. Defaults to `"setup"` — the wizard's Continue,
+   * which is every pre-existing caller — so a boot-time environment bootstrap
+   * can be told apart in the record instead of masquerading as an operator run.
+   */
+  provenance?: SetupProviderCommitProvenance;
   now?: Date;
   readStoredDefault?: () => string;
   restoreDefault?: (provider: string) => void;
@@ -429,7 +441,7 @@ export async function commitSetupProviderClaim(input: {
     provider: record.provider,
     credentialFingerprint: input.credentialFingerprint,
     committedAt: now.toISOString(),
-    provenance: "setup",
+    provenance: input.provenance ?? "setup",
     actorId: record.actorId,
   };
   const swapped = compareAndSwapMetadataValueFromDatabase(

@@ -131,9 +131,9 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "61e91277486dad625fb030a204519d08281a0025",
+      "resolvedSha": "1255c4083c78930f6086b2cb7b855461a74f8558",
       "packageVersion": "0.1.7",
-      "treeSha256": "3f0b7f51437ae389403efe3c4fdd512993537b03b018d6d854f5551a7b49174d"
+      "treeSha256": "9510259a45c834945d1cd6eadce1c596f4b65da3bddd7d3cbe376c2463e667db"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",

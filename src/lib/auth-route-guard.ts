@@ -163,6 +163,14 @@ const PUBLIC_EXACT_PATHS = [
 // and the suite's assertions then fail on a fixture that never rendered — which
 // is exactly what design-visual-verify reported at 7ba5e7fc (all 8 cases:
 // "element(s) not found" waiting for the rail's rows).
+// "/design-fixtures/overlay-header-band" (cinatra#3105): the overlay-vs-header
+// GEOMETRY harness — the REAL shared select mounted under the app shell's own
+// sticky header geometry, so the gate can assert an open panel never occupies
+// the header band. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data). It is listed here for the SAME
+// reason the header-rule entry above is: without it guardAppRoute 307s the
+// unauthenticated harness to /sign-in before the fixture renders, and every
+// assertion then fails on a fixture that never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -173,6 +181,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/header-rule",
   "/design-fixtures/extension-settings",
   "/design-fixtures/run-step-rail",
+  "/design-fixtures/overlay-header-band",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
