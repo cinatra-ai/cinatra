@@ -118,7 +118,7 @@ function TabsListRow({
         aria-hidden
         data-slot="separator"
         data-major
-        className="divider-etched mb-[11px] self-end bg-transparent"
+        className="divider-etched self-end bg-transparent"
       />
     </div>
   )

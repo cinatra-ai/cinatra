@@ -54,6 +54,23 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
         };
       },
     },
+    // THE DECLARED SLOT, at the identities a real declaration carries
+    // (Lifecycle D W7, cinatra#3095): the email pack declares
+    // `cinatra.artifact.ui.renderers.listRow`, the generator emits this exact
+    // key, and the pack's claimed TYPES sit in a namespace of their own
+    // (`@cinatra-ai/email:*`) that is NOT its package name.
+    "@cinatra-ai/email-artifacts::listRow": {
+      resolution: "guardedOptional",
+      packageName: "@cinatra-ai/email-artifacts",
+      slot: "listRow",
+      representations: [],
+      propsApiVersion: 1,
+      load: async () => ({
+        default: (props: { artifact: { objectType: string } }) => (
+          <span data-email-glyph={props.artifact.objectType} />
+        ),
+      }),
+    },
     "@fixture/losing-ext::listRow": {
       resolution: "guardedOptional",
       packageName: "@fixture/losing-ext",
@@ -391,5 +408,63 @@ describe("glyph presents the PRESENTATION identity (A6)", () => {
     );
     expect(html).toContain('data-glyph-source="generic"');
     expect(execCounts().row).toBe(0); // the extension listRow module never executes
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SLOT AS A PER-EXTENSION OPTION (Lifecycle D W7, cinatra#3095 — plan §3.4
+// wave 7 item 1). An extension DECLARES the slot; the library consumes the
+// declaration. Driven here at the identities a real declaration carries: the
+// email pack's package name and one of the four types it claims, whose
+// namespace is its own and not the package's — so the row resolves through the
+// type-precise registration, never through a package-shaped guess.
+// ---------------------------------------------------------------------------
+
+const EMAIL_PACK = "@cinatra-ai/email-artifacts";
+const EMAIL_BODY_TYPE = "@cinatra-ai/email:body";
+
+describe("a declared listRow slot draws the row (cinatra#3095)", () => {
+  it("draws the declaring extension's glyph for a type it claims", async () => {
+    semanticRendererRegistry.register({
+      objectTypeId: EMAIL_BODY_TYPE,
+      packageName: EMAIL_PACK,
+      slot: "listRow",
+    });
+    const html = await renderGlyph(
+      summaryOf({
+        objectType: EMAIL_BODY_TYPE,
+        mime: "text/markdown",
+        primaryExtension: EMAIL_PACK,
+        effectiveIdentity: winner(EMAIL_PACK),
+        presentationIdentity: winner(EMAIL_PACK),
+      }),
+    );
+    expect(html).toContain('data-glyph-source="extension"');
+    expect(html).toContain(`data-email-glyph="${EMAIL_BODY_TYPE}"`);
+  });
+
+  it("resolves the declaration through the semantic registry at slot listRow", () => {
+    semanticRendererRegistry.register({
+      objectTypeId: EMAIL_BODY_TYPE,
+      packageName: EMAIL_PACK,
+      slot: "listRow",
+    });
+    const resolved = resolveSemanticListRowDispatch(EMAIL_BODY_TYPE, winner(EMAIL_PACK));
+    expect(resolved?.packageName).toBe(EMAIL_PACK);
+    expect(resolved?.generatedKey).toBe(`${EMAIL_PACK}::listRow`);
+    expect(resolved?.built).toBe(true);
+  });
+
+  it("keeps the host's generic glyph for a row whose extension declares no slot", async () => {
+    const html = await renderGlyph(
+      summaryOf({
+        objectType: EMAIL_BODY_TYPE,
+        mime: "text/markdown",
+        primaryExtension: EMAIL_PACK,
+        effectiveIdentity: winner(EMAIL_PACK),
+        presentationIdentity: winner(EMAIL_PACK),
+      }),
+    );
+    expect(html).toContain('data-glyph-source="generic"');
   });
 });
