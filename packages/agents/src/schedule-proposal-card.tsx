@@ -1133,7 +1133,7 @@ function ScheduleOptionRows({
                     type="button"
                     // THE SELECTED DAYS HAVE TO BE LEGIBLE ON BOTH GROUNDS, and
                     // the variant is what decides that rather than the class
-                    // list. `variant="outline"` carries its own `dark:bg-input/30`,
+                    // list. `variant="outline"` carries its own `dark:bg-input-fill/30`,
                     // which tailwind-merge keeps beside a caller's unprefixed
                     // `bg-primary` (different modifier, different group) and
                     // which therefore PAINTS OVER the selection in the dark
