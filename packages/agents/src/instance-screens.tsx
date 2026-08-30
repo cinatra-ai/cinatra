@@ -899,15 +899,28 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // interrupt rather than the status: a setup-loop pause and a mid-run review
   // gate are both `pending_approval`.
   //
+  // AND THE WHOLE DESCRIPTOR IS HANDED OVER, not the task id alone (cinatra#2928).
+  // The moment is read by the one classifier every other surface asks, and that
+  // reader needs the run's own recorded moment beside the derived gate context
+  // — the same pair the status badge is handed. Narrowing this to a review-task
+  // id would leave the rail re-deriving the moment from the retired `setup-`
+  // prefix, so a run that STATES it waits at a field, and a setup payload
+  // carried as a field name, would draw no first step while the badge beside it
+  // already read "Awaiting input".
+  //
   // THE RESOLVED SCHEMA, not the stored one: `execution.ts` walks
   // `resolveTemplateInputSchema(template)`, which derives the fields from the
   // installed agent's OAS when the row's own schema is empty. Reading
   // `template.inputSchema` here would name no step for precisely the agents
   // whose form the loop still asks (cinatra#3068 convergence).
   const resolvedInputSchema = await resolveTemplateInputSchema(template);
+  const runLifecycleMoment = run?.lifecycleMoment ?? null;
   const atInputMoment = runAtInputMoment({
     runStatus: run?.status ?? null,
-    interruptReviewTaskId: initialHitlContext?.reviewTaskId ?? null,
+    interrupt:
+      initialHitlContext === null && runLifecycleMoment === null
+        ? null
+        : { ...(initialHitlContext ?? {}), lifecycleMoment: runLifecycleMoment },
   });
   const runInputSteps = buildRunInputSteps({
     required: resolvedInputSchema.required,

@@ -31,7 +31,10 @@
 // ---------------------------------------------------------------------------
 
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
-import { isSetupInterruptTaskId } from "./run-surface-status";
+import {
+  classifyRunWaitInterrupt,
+  type RunWaitInterruptDescriptor,
+} from "./run-surface-status";
 // ONE definition of the key, in the module that owns the rail's selection type,
 // so this projection and the frame that renders it cannot drift into two.
 import type { RunInputStepKey } from "./run-surface-rail-step";
@@ -220,18 +223,29 @@ export function openRunInputStepKey(
 /**
  * IS THE RUN STANDING AT ITS OWN INPUT FORM?
  *
- * THE DISCRIMINATOR IS THE INTERRUPT, NEVER THE STATUS — the same rule the
- * badge copy already follows (`run-surface-status.ts`). A setup-loop pause and
- * a mid-run review gate are both `pending_approval`; only the synthetic
- * `setup-` review-task id tells them apart, and reading the status alone would
- * put the input step under a reviewer's decision.
+ * THE DISCRIMINATOR IS THE INTERRUPT, NEVER THE STATUS — a setup-loop pause and
+ * a mid-run review gate are both `pending_approval`, so reading the status
+ * alone would put the input step under a reviewer's decision.
+ *
+ * AND THE INTERRUPT IS READ BY THE ONE CLASSIFIER (cinatra#2928). This asks
+ * `classifyRunWaitInterrupt` — the same call the status badge
+ * (`runStatusBadgeLabel`) and the wait notification
+ * (`waitNotificationLandsInConversation`) make — rather than re-checking the
+ * synthetic `setup-` task identity here. That prefix is a STAND-IN the plan
+ * retired: the run itself now records the moment it waits at, and a screen that
+ * re-derives the moment from the prefix answers a narrower question than the
+ * badge beside it. The two would then disagree on exactly the runs the recorded
+ * fact was added for — a run stating `lifecycleMoment: "hitl"`, and a setup
+ * payload carried as a `fieldName`, both of which the prefix test misses.
+ *
+ * Fails CLOSED with the classifier: nothing readable stays an approval.
  */
 export function runStandsAtInputGate(params: {
   runStatus: string | null | undefined;
-  interruptReviewTaskId: string | null | undefined;
+  interrupt: RunWaitInterruptDescriptor | null | undefined;
 }): boolean {
   if (params.runStatus !== "pending_approval") return false;
-  return isSetupInterruptTaskId(params.interruptReviewTaskId);
+  return classifyRunWaitInterrupt(params.interrupt) === "input";
 }
 
 /**
@@ -247,7 +261,7 @@ export function runStandsAtInputGate(params: {
  */
 export function runAtInputMoment(params: {
   runStatus: string | null | undefined;
-  interruptReviewTaskId: string | null | undefined;
+  interrupt: RunWaitInterruptDescriptor | null | undefined;
 }): boolean {
   if (params.runStatus === "pending_input") return true;
   return runStandsAtInputGate(params);

@@ -176,7 +176,7 @@ describe("runStandsAtInputGate — the discriminator is the interrupt, never the
     expect(
       runStandsAtInputGate({
         runStatus: "pending_approval",
-        interruptReviewTaskId: "setup-run-bdwa40",
+        interrupt: { reviewTaskId: "setup-run-bdwa40" },
       }),
     ).toBe(true);
   });
@@ -185,14 +185,14 @@ describe("runStandsAtInputGate — the discriminator is the interrupt, never the
     expect(
       runStandsAtInputGate({
         runStatus: "pending_approval",
-        interruptReviewTaskId: "rt-9f2",
+        interrupt: { reviewTaskId: "rt-9f2" },
       }),
     ).toBe(false);
   });
 
   it("does NOT read an undispatched run as one — nothing is asking yet", () => {
     expect(
-      runStandsAtInputGate({ runStatus: "pending_input", interruptReviewTaskId: null }),
+      runStandsAtInputGate({ runStatus: "pending_input", interrupt: null }),
     ).toBe(false);
   });
 });
@@ -248,7 +248,7 @@ describe("the grouped form's field list is the list the loop asks (cinatra#3068 
 describe("runAtInputMoment — asking now, or about to (cinatra#3068 convergence)", () => {
   it("reads an undispatched run as an input moment, so the rail draws from the FIRST render", () => {
     expect(
-      runAtInputMoment({ runStatus: "pending_input", interruptReviewTaskId: null }),
+      runAtInputMoment({ runStatus: "pending_input", interrupt: null }),
     ).toBe(true);
   });
 
@@ -256,7 +256,7 @@ describe("runAtInputMoment — asking now, or about to (cinatra#3068 convergence
     expect(
       runAtInputMoment({
         runStatus: "pending_approval",
-        interruptReviewTaskId: "setup-run-bdwa40",
+        interrupt: { reviewTaskId: "setup-run-bdwa40" },
       }),
     ).toBe(true);
   });
@@ -265,7 +265,7 @@ describe("runAtInputMoment — asking now, or about to (cinatra#3068 convergence
     expect(
       runAtInputMoment({
         runStatus: "pending_approval",
-        interruptReviewTaskId: "rt-9f2",
+        interrupt: { reviewTaskId: "rt-9f2" },
       }),
     ).toBe(false);
   });
@@ -280,7 +280,7 @@ describe("runAtInputMoment — asking now, or about to (cinatra#3068 convergence
       inputParams: {},
       atInputMoment: runAtInputMoment({
         runStatus: "pending_input",
-        interruptReviewTaskId: null,
+        interrupt: null,
       }),
     });
 
@@ -302,7 +302,7 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
   it("carries them while the run stands at its form", () => {
     const atInputMoment = runAtInputMoment({
       runStatus: "pending_approval",
-      interruptReviewTaskId: "setup-run-bdwa40",
+      interrupt: { reviewTaskId: "setup-run-bdwa40" },
     });
     expect(runCarriesInputSteps(stepsFor({}, atInputMoment), atInputMoment)).toBe(true);
   });
@@ -310,7 +310,7 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
   it("carries them on an undispatched run — the rail exists before anything has run", () => {
     const atInputMoment = runAtInputMoment({
       runStatus: "pending_input",
-      interruptReviewTaskId: null,
+      interrupt: null,
     });
     expect(runCarriesInputSteps(stepsFor({}, atInputMoment), atInputMoment)).toBe(true);
   });
@@ -324,7 +324,7 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
       // would take that run's only status badge away with the panel heading.
       const atInputMoment = runAtInputMoment({
         runStatus,
-        interruptReviewTaskId: null,
+        interrupt: null,
       });
       expect(atInputMoment).toBe(false);
       expect(runCarriesInputSteps(stepsFor({}, atInputMoment), atInputMoment)).toBe(false);
@@ -334,7 +334,7 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
   it("does NOT carry them at a mid-run review gate with an input never supplied", () => {
     const atInputMoment = runAtInputMoment({
       runStatus: "pending_approval",
-      interruptReviewTaskId: "rt-9f2",
+      interrupt: { reviewTaskId: "rt-9f2" },
     });
     expect(runCarriesInputSteps(stepsFor({}, atInputMoment), atInputMoment)).toBe(false);
   });
@@ -342,10 +342,72 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
   it("stops carrying them once every form is answered", () => {
     const atInputMoment = runAtInputMoment({
       runStatus: "pending_approval",
-      interruptReviewTaskId: "setup-run-bdwa40",
+      interrupt: { reviewTaskId: "setup-run-bdwa40" },
     });
     const steps = stepsFor({ idea: { title: "human purpose" } }, atInputMoment);
     expect(runOwesInputStep(steps)).toBe(false);
     expect(runCarriesInputSteps(steps, atInputMoment)).toBe(false);
+  });
+});
+
+describe("the moment is read by the ONE classifier, not re-derived here (cinatra#2928)", () => {
+  // The synthetic `setup-` task identity and the presence of a field name are
+  // STAND-INS the plan retired: the run itself now records the moment it waits
+  // at, and every surface that asks "input, or approval?" asks
+  // `classifyRunWaitInterrupt`. A screen that re-checks the task-id prefix
+  // instead answers a narrower question than the badge beside it, and the two
+  // disagree on exactly the runs the recorded fact was added for.
+
+  it("reads a run that STATES its hitl moment as an input moment, with no `setup-` prefix to recognize", () => {
+    expect(
+      runStandsAtInputGate({
+        runStatus: "pending_approval",
+        interrupt: { reviewTaskId: "rt-9f2", lifecycleMoment: "hitl" },
+      }),
+    ).toBe(true);
+  });
+
+  it("reads a setup-payload interrupt — a field name, no prefix — as an input moment", () => {
+    expect(
+      runAtInputMoment({
+        runStatus: "pending_approval",
+        interrupt: { reviewTaskId: "rt-9f2", fieldName: "idea" },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a run that STATES its review moment an approval, even under a `setup-` identity", () => {
+    // Fails CLOSED the way the classifier does: the recorded fact outranks the
+    // prefix, so a stated review can never be relabelled an input step here.
+    expect(
+      runAtInputMoment({
+        runStatus: "pending_approval",
+        interrupt: { reviewTaskId: "setup-run-bdwa40", lifecycleMoment: "review" },
+      }),
+    ).toBe(false);
+  });
+
+  it("still reads the legacy prefix alone, for a run created before the column existed", () => {
+    expect(
+      runAtInputMoment({
+        runStatus: "pending_approval",
+        interrupt: { reviewTaskId: "setup-run-bdwa40" },
+      }),
+    ).toBe(true);
+  });
+
+  it("carries the rail for a stated hitl moment the prefix check would have missed", () => {
+    const atInputMoment = runAtInputMoment({
+      runStatus: "pending_approval",
+      interrupt: { reviewTaskId: "rt-9f2", lifecycleMoment: "hitl" },
+    });
+    const steps = buildRunInputSteps({
+      required: ["idea"],
+      properties: { idea: IDEA },
+      inputParams: {},
+      atInputMoment,
+    });
+    expect(runCarriesInputSteps(steps, atInputMoment)).toBe(true);
+    expect(openRunInputStepKey(steps)).toBe("input:0");
   });
 });
