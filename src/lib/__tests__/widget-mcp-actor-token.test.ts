@@ -426,18 +426,17 @@ describe("widget-mcp-actor-token verify — exact-expiry boundary", () => {
     const t = PINNED_S;
     // iat = t-120, exp = t → lifetime is exactly 120 s AND exp === now.
     expect(verify(signClaims(baseClaims({ iat: t - 120, exp: t })))).toBeNull();
-    // One second earlier still verifies (exp = now+1).
-    expect(
-      verify(signClaims(baseClaims({ iat: t - 119, exp: t + 1 }))),
-    ).not.toBeNull();
-    // The far side of the same boundary: the SAME token, refused the moment
-    // the clock reaches its `exp` second. `<` would accept it here, and that
-    // acceptance is the whole point of the `<=` the verifier spells out.
+    // One second earlier still verifies (exp = now+1). Bound to a variable so
+    // the far side below re-verifies literally THIS token rather than an
+    // equivalent re-signing of it.
+    const oneSecondLeft = signClaims(baseClaims({ iat: t - 119, exp: t + 1 }));
+    expect(verify(oneSecondLeft)).not.toBeNull();
+    // The far side of the same boundary: that same token string, refused the
+    // moment the clock reaches its `exp` second. `<` would accept it here, and
+    // that acceptance is the whole point of the `<=` the verifier spells out.
     clockMs = PINNED_MS + 1000;
     expect(now()).toBe(PINNED_S + 1);
-    expect(
-      verify(signClaims(baseClaims({ iat: t - 119, exp: t + 1 }))),
-    ).toBeNull();
+    expect(verify(oneSecondLeft)).toBeNull();
   });
 });
 

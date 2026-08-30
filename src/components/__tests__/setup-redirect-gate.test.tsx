@@ -115,6 +115,22 @@ describe("a STALE snapshot (the #2544 loop)", () => {
     await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("complete"));
     // A second refresh here is a request loop traded for a redirect loop.
     expect(refresh).toHaveBeenCalledTimes(1);
+
+    // ...and now the arm that actually has TEETH against the once-only latch.
+    // The acting effect's deps are the snapshot flag and the verdict, not the
+    // transport, so a fresh `confirm` identity alone never re-runs it — the
+    // rerenders above cannot tell a latched refresh from an unlatched one. A
+    // genuine SECOND episode can: leave the redirect-wanting state and come
+    // back to it, which resets the verdict to "pending", re-asks, and lands on
+    // "complete" a second time with the hook still mounted. Without the
+    // `snapshotRepaired` latch this is refresh number two — the request loop
+    // #2503 refused.
+    rerender(<Probe snapshotSaysIncomplete={false} confirm={() => confirm()} />);
+    await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("pending"));
+    rerender(<Probe snapshotSaysIncomplete confirm={() => confirm()} />);
+    await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("complete"));
+    await act(async () => {});
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(replaceToSetup).not.toHaveBeenCalled();
   });
 
@@ -213,8 +229,9 @@ describe("the confirmation must not itself go stale", () => {
     // further up already does.
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     // ...and it is still one once the queue is fully drained. This is a
-    // settling check on THIS arm only — the once-only guard itself is fenced
-    // by the sibling arm above, which re-renders the hook.
+    // settling check on THIS arm only; the once-only latch itself is fenced by
+    // the second-episode arm in "repairs the lying snapshot with exactly one
+    // refresh" above, which is the one that goes red if the latch is deleted.
     await act(async () => {});
     expect(refresh).toHaveBeenCalledTimes(1);
   });
