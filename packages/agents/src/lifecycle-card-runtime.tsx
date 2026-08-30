@@ -962,6 +962,32 @@ const SLOT_READ_LIMIT = 30;
 const SLOT_HOLD_LIMIT = 5;
 const SLOT_READ_TIMEOUT_MS = 8000;
 
+/**
+ * THE PARK'S OWN BUDGETS (cinatra#3007). A park is not the completed settle
+ * window and is not belted with it, but it is not unbounded either, and the two
+ * ways it can fail to end are different questions.
+ *
+ * `PARK_READ_LIMIT` is how long the surface keeps looking at a row that keeps
+ * saying "parked" while no gate ever appears. That is a real held condition
+ * rather than a transport fault - a gate the hold cannot resolve stays held -
+ * and a spinner nothing can end is the wrong drawing for it, so the looking is
+ * given a generous ceiling (an hour at the widened cadence, against the longest
+ * park measured at about half of one) and the surface then falls back to the
+ * run's own rendering instead of spinning for the life of the tab.
+ *
+ * `PARK_READ_FAILURE_LIMIT` is the other question: a transport that is not
+ * answering at all. Consecutive failures only - one answer resets it - because
+ * a park that lasts an hour will cross a flaky minute and must not be given up
+ * for it. When the transport is dead this reader does not know whether the park
+ * is still real, so it stops asking and stops holding the placeholder rather
+ * than retrying every ten seconds for the life of the tab.
+ *
+ * Both are re-keyed by the run LEAVING the status, which resets the probe in
+ * render - the event every surface is waiting for anyway.
+ */
+const PARK_READ_LIMIT = 360;
+const PARK_READ_FAILURE_LIMIT = 5;
+
 function slotReadDelay(reads: number): number {
   if (reads < 5) return 2000;
   if (reads < 15) return 5000;
@@ -1032,14 +1058,19 @@ export function useRunReviewSlot({
 }): { slot: RunReviewSlot; answered: boolean; mayStillOpen: boolean } {
   const [seenStatus, setSeenStatus] = useState(status);
   const [slot, setSlot] = useState<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
-  const [probe, setProbe] = useState<{ answered: boolean; reads: number }>({
+  const [probe, setProbe] = useState<{
+    answered: boolean;
+    reads: number;
+    failures: number;
+  }>({
     answered: initial != null,
     reads: 0,
+    failures: 0,
   });
   if (seenStatus !== status) {
     setSeenStatus(status);
     setSlot(EMPTY_RUN_REVIEW_SLOT);
-    setProbe({ answered: false, reads: 0 });
+    setProbe({ answered: false, reads: 0, failures: 0 });
   }
   const answered = probe.answered;
   // THE UNHEARD WINDOW, named once because two statuses hold it. It is the span
@@ -1067,6 +1098,10 @@ export function useRunReviewSlot({
   // answer beside the status, because the two together are what the park is.
   const isProducedReviewPark =
     status === PARKED_RUN_STATUS && slot.producedReviewPark === true;
+  // AND THE STATUS ITSELF, NAMED ONCE (cinatra#3007). Two rules below turn on it
+  // rather than on the park, for the reason set out at the effect: under this
+  // status the slot's answer can change with no status change to key on.
+  const parkedStatus = status === PARKED_RUN_STATUS;
 
   useEffect(() => {
     // WHEN THERE IS SOMETHING TO FIND. After the work is done, as before — and
@@ -1077,7 +1112,7 @@ export function useRunReviewSlot({
     // the surface it fed drew the question the run had already answered. While
     // the run is still working there is nothing to find and the placeholder is
     // already the right drawing.
-    if (status !== "completed" && status !== PARKED_RUN_STATUS) return;
+    if (status !== "completed" && !parkedStatus) return;
     // Answered under this status, with nothing further owed. A run parked on its
     // PRODUCED OUTPUT'S review always owes another look (cinatra#3046): its gate
     // can be minted or repaired while the run's status does not move at all, and
@@ -1085,11 +1120,54 @@ export function useRunReviewSlot({
     // once under such a park would be believed for as long as the park lasted. The
     // belt below still ends it.
     //
-    // A run parked on a QUESTION pays nothing for this: the exception is the
-    // PARK's, read off the slot's own answer, not the status's — an ordinary
-    // approval pause answers once and stops, exactly as it did.
-    if (answered && !slot.awaiting && !isProducedReviewPark) return;
-    if (probe.reads >= SLOT_READ_LIMIT) return;
+    // A run parked on a QUESTION was meant to pay nothing for this: the
+    // exception was the PARK's, read off the slot's own answer rather than off
+    // the status, so an ordinary approval pause answered once and stopped. That
+    // is exactly what the rule below now changes, and why.
+    //
+    // AND THE PARKED STATUS OWES ANOTHER LOOK WHATEVER IT ANSWERED
+    // (cinatra#3007). The exception above is the PARK'S, read off the slot's own
+    // answer — so it only ever applied to a run this reader had ALREADY been
+    // told was parked. The run shape that was measured never reaches it: a run
+    // that asks a setup question is already in this status while it asks, and
+    // when its produced output later opens a review the park is written onto
+    // that same row with no status edge at all — the park write takes its
+    // already-parked branch and records only the withheld terminal write. So the
+    // one look this reader spends is spent during the QUESTION, answering "not
+    // parked, no gate", which was true then; and this early return ended its
+    // looking for ever. From that tick the park is invisible to every surface
+    // that asks this reader, which is all of them: the panel drew its own
+    // progress badge with a status word and an empty transcript where the quiet
+    // placeholder belongs, kept publishing the answered question as a live gate,
+    // drew no review card at all, and produced one only after a page reload —
+    // which re-seeds this hook from the row. Measured on the fourth capture:
+    // 966 s of it, on both surfaces at once.
+    //
+    // So under THIS status the answer is never final, and the reader keeps
+    // looking on its own backing-off cadence. It is not a second poller: the
+    // cadence widens to ten seconds, and the surface that mounts this reader is
+    // already reading the same run every two to five seconds for its status.
+    if (answered && !slot.awaiting && !isProducedReviewPark && !parkedStatus) return;
+    // THE BELT IS THE COMPLETED SETTLE WINDOW'S, and only its (cinatra#3007). It
+    // exists so a dead transport cannot hold a spinner in front of a FINISHED run
+    // for minutes — a window worth about 210 s of looking. A park is not that
+    // window: it lasts exactly as long as a person takes to decide, and the three
+    // parks the capture measured lasted 966 s, 1789 s and 203 s. Belting the
+    // parked status at thirty looks is what stopped the reader dead in the middle
+    // of two of them. What ends the looking here is the run LEAVING the status,
+    // which is the event every surface is waiting for anyway; the per-look
+    // deadline beside it still stops any one look from pinning the loop.
+    if (!parkedStatus && probe.reads >= SLOT_READ_LIMIT) return;
+    // AND THE PARK HAS BELTS OF ITS OWN, because "not the completed window's
+    // belt" is not the same as "no belt" (cinatra#3007). The ceiling ends a row
+    // that keeps saying parked while no gate ever arrives - a held condition the
+    // hold itself can reach, and one no read count should be asked to spin
+    // through for the life of the tab. The failure belt ends a transport that
+    // has stopped answering: a reader that cannot read does not know the park is
+    // still real, so it stops asking rather than retrying for ever, and one
+    // answer resets it so a flaky minute inside a long park costs nothing.
+    if (parkedStatus && probe.reads >= PARK_READ_LIMIT) return;
+    if (parkedStatus && probe.failures >= PARK_READ_FAILURE_LIMIT) return;
     let cancelled = false;
     const timer = window.setTimeout(
       () => {
@@ -1115,6 +1193,10 @@ export function useRunReviewSlot({
               setProbe((prev) => ({
                 answered: prev.answered || landed,
                 reads: prev.reads + 1,
+                // CONSECUTIVE, not cumulative: one answer clears the count, so
+                // only a transport that has actually stopped answering reaches
+                // the park's failure belt.
+                failures: landed ? 0 : prev.failures + 1,
               }));
             }
           }
@@ -1128,7 +1210,16 @@ export function useRunReviewSlot({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [status, slot.awaiting, answered, probe.reads, read, isProducedReviewPark]);
+  }, [
+    status,
+    parkedStatus,
+    slot.awaiting,
+    answered,
+    probe.reads,
+    probe.failures,
+    read,
+    isProducedReviewPark,
+  ]);
 
   return {
     slot,
@@ -1149,11 +1240,12 @@ export function useRunReviewSlot({
     //
     // AND A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW HOLDS IT TOO
     // (cinatra#3046) — that IS the window the placeholder is for: the run is held
-    // for a review whose gate row does not exist yet. It is held on the SAME belt
-    // as every other reading rather than for ever: a park that never resolves to a
-    // gate is converged by the recurring sweep, which moves the run's status and
-    // re-keys this reader, and until then the surface must not be a spinner
-    // nothing can end.
+    // for a review whose gate row does not exist yet. It is not held for ever
+    // either, and what ends it is the ROW first of all: a park that resolves is
+    // converged by the recurring sweep, which moves the run's status and re-keys
+    // this reader. A park that does NOT resolve is a held condition the sweep
+    // cannot move, so the park's own ceiling and its failure belt end the hold
+    // instead, and until then the surface must not be a spinner nothing can end.
     // AND THE PARK IS HELD FOR ITS FIRST LOOK TOO (cinatra#3007). The park's own
     // reading is the ANSWER to a look, not a fact this reader is handed:
     // `isProducedReviewPark` reads it off `slot`, and `slot` is emptied in the
@@ -1172,10 +1264,25 @@ export function useRunReviewSlot({
     // wide; and a look that fails does not stretch it, because withholding a
     // live question behind a broken transport is a worse reading than the one
     // this window exists to prevent.
+    //
+    // AND THE PARK'S OWN READING IS NOT ON THIS BELT (cinatra#3007). Every
+    // reading in this expression except one is a GUESS that expires — "the gate may still
+    // open", "this surface has not heard back yet" — and the read belt is what
+    // stops such a guess holding a placeholder for ever. The park is not one of
+    // them: it is a fact read off the run's own row, and it stays true until the
+    // row says otherwise. Belting it on THIS budget withdrew the placeholder AND
+    // the swap from a run the row still said was parked, about 210 s in, which is
+    // inside every park the capture measured. It carries the PARK's budgets
+    // instead: the placeholder is held while the reader is still able to read and
+    // the row has not been saying parked past all reason, and when either of
+    // those ends the surface falls back to the run's own rendering rather than
+    // holding a spinner nothing can end.
     mayStillOpen:
-      probe.reads < SLOT_READ_LIMIT &&
-      ((status === "completed" && (slot.awaiting || unheardUnderThisStatus)) ||
-        isProducedReviewPark ||
-        (status === PARKED_RUN_STATUS && unheardOnTheFirstLookOnly)),
+      (isProducedReviewPark &&
+        probe.reads < PARK_READ_LIMIT &&
+        probe.failures < PARK_READ_FAILURE_LIMIT) ||
+      (probe.reads < SLOT_READ_LIMIT &&
+        ((status === "completed" && (slot.awaiting || unheardUnderThisStatus)) ||
+          (parkedStatus && unheardOnTheFirstLookOnly))),
   };
 }
