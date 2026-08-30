@@ -27,6 +27,31 @@
 // pre-envelope capture, byte for byte, which is what keeps this guard honest:
 // the redraw had to move exactly the states that carry suggestions and no
 // others, and that is what the regeneration diff showed.
+//
+// THE SAME FOUR ENTRIES WERE RE-TAKEN AGAIN (cinatra#3107). Raising the dark
+// `--input` boundary to the 3:1 contrast floor changed what `--input` means,
+// so the tinted control FILLS that used to draw from it were moved onto their
+// own `--input-fill` token, pinned at the value `--input` carried before. The
+// shared outline-variant Button therefore renames its dark fill classes
+// `dark:bg-input/30 dark:hover:bg-input/50` to `dark:bg-input-fill/30
+// dark:hover:bg-input-fill/50`, and the review card's suggestion chip IS an
+// outline Button. The four `*/pending-with-suggestions` captures are the only
+// entries that carry a chip, and the ONLY bytes that moved in them are those
+// two class names — the painted colour is unchanged and no other byte of DOM
+// differs. Every other entry is still its earlier capture, byte for byte.
+//
+// TWENTY-EIGHT ENTRIES CARRY THE REVIEW FLOOR (cinatra#3080, PR #3100). The
+// pending review floor is now Comment, Regenerate and Continue on every host:
+// Reject is retired and Approve is relabelled Continue, so every capture that
+// draws a decision control or a settled decision word legitimately moved. The
+// four `*/pending-with-suggestions` entries carry BOTH that redraw and the
+// cinatra#3107 `--input-fill` rename above; the twenty-four other moved entries
+// (`pending`, `pending-no-comment`, `restricted`, `settled-approved`,
+// `settled-approved-no-decider`, `settled-rejected` on each of the four hosts)
+// carry the floor alone. The sixteen entries that draw no decision control
+// (`loading`, `settled`, `advisory`, `absent`) are still their earlier capture,
+// byte for byte — which is what keeps this guard honest here too: the floor had
+// to move exactly the states that draw a decision and no others.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";

@@ -122,10 +122,20 @@
      Consumed via `text-attention-foreground` through @theme inline. */
   --attention-foreground: #ffffff;
   --border: var(--line);
-  /* Input chrome carries the strong navy line, not the low-alpha hairline.
-     Cascades through every shadcn primitive that uses `border-input`
+  /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
+     held at or above the 3:1 non-text contrast floor against the grounds a
+     control sits on. In the light palette that is the full navy, unchanged;
+     the dark palette declares its own value. Cascades through every shadcn
+     primitive that uses `border-input`
      (Input / Textarea / Select trigger / InputGroup). */
-  --input: var(--line-strong);
+  --line-control: var(--line-strong);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line-strong);
   --ring: var(--accent);
   --radius: 0.625rem;
 
@@ -197,10 +207,20 @@
      below. */
   --brand-mustard: #c79545;
   --border: var(--line);
-  /* Input chrome carries the strong navy line, not the low-alpha hairline.
-     Cascades through every shadcn primitive that uses `border-input`
+  /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
+     held at or above the 3:1 non-text contrast floor against the grounds a
+     control sits on. In the light palette that is the full navy, unchanged;
+     the dark palette declares its own value. Cascades through every shadcn
+     primitive that uses `border-input`
      (Input / Textarea / Select trigger / InputGroup). */
-  --input: var(--line-strong);
+  --line-control: var(--line-strong);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line-strong);
   --ring: var(--accent);
   --radius: 0.5rem;
 
@@ -409,10 +429,24 @@
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
-  /* Dark mode overrides --input back to the subtle hairline. The full navy
-     line used for light-mode input chrome is invisible against dark
-     surfaces, so dark controls keep the softer border. */
-  --input: var(--line);
+  /* Control chrome (cinatra#3107). The light palette's full navy IS invisible
+     against dark surfaces, so the dark control boundary stays in the same
+     white-over-ground vocabulary as --line — but STRENGTHENED, because --line
+     is the section-divider hairline and a divider's job is to be barely there
+     while a control's boundary has to be findable. --line itself is unchanged.
+     Composited over each ground a control sits on, measured: 3.72:1 on
+     --background, 3.78:1 on --card (= --surface), 3.79:1 on --surface-strong
+     (the control's own fill). The former `--input: var(--line)` read
+     1.23 / 1.27 / 1.32 to 1 — no boundary at all. Pinned by
+     src/app/__tests__/control-border-contrast.test.ts. */
+  --line-control: oklch(1 0 0 / 40%);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line);
   --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
   --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
 
@@ -531,6 +565,7 @@
   --color-rating-star-muted: var(--rating-star-muted);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-input-fill: var(--input-fill);
   --color-ring: var(--ring);
 
   /* ink/primary shorthand for cinatra's dark action color */

@@ -106,12 +106,14 @@ When `requiresApproval` is true, build your workflow to always call `agent_run_r
 
 `connector_inventory_list` is the read-only inventory of this workspace's connectors. Call it whenever a user asks which connectors are connected, live, configured, or available. It takes **no arguments**: scope and identity come from the request context, never from your input.
 
-Each row carries the connector key, its display name, `hasAuthorizedConnection`, and the connection ids you are authorized to use.
+Each row carries the connector key, its display name, `hasAuthorizedConnection`, the connection ids you are authorized to use, and `consumesConnectionFrom`.
 
 Rules for reading the result:
 
 - **Never report the negative from a missing tool.** Do not answer "no connectors are connected" because a connector exposes no operational tool of its own. Several connectors (OpenAI, Tailscale, Google OAuth, and others) are connect-only. They have no `*_list` or `*_send` tool at all, and they are still connected. `connector_inventory_list` is how you see them.
 - `hasAuthorizedConnection: false` means **"no connection you are authorized to use"**. It does not mean nobody connected it. Say the first, never the second.
+- **A connector may hold no connection of its own.** When `consumesConnectionFrom` names another connector, this row's `hasAuthorizedConnection` is read from THAT connector's connection: true means this connector's tools work for you, false means the NAMED connector is what needs connecting. Such a connector has no connect road of its own, so never tell the user to connect it — name the connector it consumes instead. `consumesConnectionFrom: null` means the connector holds its own connection.
+- A row may therefore read `hasAuthorizedConnection: true` with an empty `authorizedConnectionIds`. That is the shape above, not a fault: the ids behind the reading belong to the connector the declaration names and are listed on ITS row.
 - The inventory is a catalog answer, not a health check. It reports authorized-connection presence, not whether the remote service responded. It also does not list a connector installed at runtime with no build-time catalog entry.
 - The ids it returns are authorized targets, not credentials. Every later use is re-authorized server-side.
 

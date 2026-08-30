@@ -328,6 +328,7 @@ export type {
   WidgetMcpActor,
   WidgetMcpActorTokenIssuer,
   PublicMcpReachability,
+  PublicMcpUnreachableKind,
 } from "./mcp-access";
 
 // Provider-neutral structured-JSON extraction (relocated from the openai
