@@ -28,7 +28,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
 
 // The mounted list reaches two cookie-bound server actions and the AG-UI run
 // panel. Replaced here for the same reasons set out in
@@ -278,6 +278,42 @@ describe("§I — the chat box is the one primary input, on every host (#2865)",
     for (const surface of ["chat", "widget"] as const) {
       const { container } = await mountSurface(surface);
       expect(container.querySelectorAll(COMPOSER)).toHaveLength(1);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // THE DOCKED COMPOSER'S CLEARANCE IS MEASURED (cinatra#3080).
+  // -------------------------------------------------------------------------
+  // The composer is absolutely positioned over the foot of the scrolling list,
+  // and the list cleared it with `pb-24` — 96 fixed pixels. A card whose FOOT is
+  // the thing a person has to reach — a review card's decision floor — then sits
+  // under the composer wherever the composer is taller than the guess, which is
+  // what a 1440x900 reading found: Comment, Regenerate and Continue painted over
+  // and unreachable. The class string stays (it is this file's golden, and it is
+  // still the pre-measurement paint); what must be true is that the list's real
+  // padding comes from the composer's own height.
+  it("clears the docked composer by MEASURING it, never by the fixed guess", async () => {
+    const measured = 180;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      height: measured,
+      width: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: measured,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    try {
+      const { container } = await mountSurface("chat");
+      const column = container.querySelector<HTMLElement>("[data-parity-surface='chat'] > div");
+      const list = column!.children[0] as HTMLElement;
+      // 96px of guess would leave the floor under the composer; the measurement
+      // plus the gap is what puts it above.
+      await waitFor(() => expect(list.style.paddingBottom).toBe(`${measured + 16}px`));
+    } finally {
+      rect.mockRestore();
     }
   });
 });

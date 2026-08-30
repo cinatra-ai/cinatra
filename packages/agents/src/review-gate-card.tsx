@@ -1384,8 +1384,8 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
-              : "Deciding these needs approve access on this run."}
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you decide below."
+              : "Deciding these needs decision access on this run."}
         </p>
       ) : null}
     </div>
@@ -1403,7 +1403,13 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
       <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      {/* THE HEADING FOLLOWS THE GATE (cinatra#3080). It read "Review
+          requested" on every reading, so a gate that had already been continued
+          or superseded still headed its card with a request nobody was being
+          asked for — above a settled panel that said the opposite. */}
+      <span className="font-sans text-sm font-bold text-foreground">
+        {pending ? "Review requested" : "Review settled"}
+      </span>
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-logo/40 bg-logo/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-logo" aria-hidden="true" />

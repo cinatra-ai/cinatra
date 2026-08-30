@@ -159,7 +159,7 @@ describe("no oracle", () => {
     submitReviewDecisionAction.mockResolvedValue({
       kind: "not-permitted",
       message:
-        "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+        "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
     });
     const refused = await POST(post({ ref: REF, disposition: "approve" }));
     const forged = await POST(post({ ref: "nope", disposition: "approve" }));

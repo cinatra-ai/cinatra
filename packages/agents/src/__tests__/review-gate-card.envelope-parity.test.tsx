@@ -116,7 +116,7 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Approving or rejecting needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
     },
   },
   { name: "settled", state: { state: "settled" } },

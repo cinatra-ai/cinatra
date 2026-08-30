@@ -323,6 +323,12 @@ export async function submitReviewSurfaceChangesRequested(args: {
     // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
     // approve/reject commit stamps, from the context run access was enforced against.
     decidedBy: args.actorCtx.actor.userId ?? null,
+    // THE FLOOR'S REGENERATE (cinatra#3080 item 4). This binder has exactly one
+    // caller — the Regenerate branch of the floor's one entry — so the road is
+    // named here rather than guessed downstream: the canonical operation refuses
+    // a Regenerate it cannot raise a successor for, instead of settling the gate
+    // and escalating to a person the reviewer was never told about.
+    origin: "regenerate",
   });
 }
 

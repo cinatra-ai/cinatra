@@ -490,17 +490,33 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     expect(observers.created[0]!.disconnected).toBe(true);
   });
 
+  /**
+   * The SETTLE PASSES, in the order they were armed.
+   *
+   * The column runs a second observer of its own since cinatra#3080 — the one
+   * that measures the docked composer so a card's decision floor clears it — and
+   * that one watches the composer, never the scroll container. So the two are
+   * told apart by WHAT THEY WERE POINTED AT rather than by the order they happen
+   * to be constructed in, which is the only discriminator that stays true when a
+   * third observer is added for a third reason.
+   */
+  function settlePasses() {
+    return observers.created.filter((o) =>
+      o.targets.some((t) => (t as HTMLElement).classList?.contains("overflow-y-auto")),
+    );
+  }
+
   it("re-arms on a thread switch — a second cold load gets its own pass", async () => {
     const { view } = await mountChatThread("thread-cold-c");
     frames.flush();
-    expect(observers.created).toHaveLength(1);
+    expect(settlePasses()).toHaveLength(1);
 
     view.rerender(chatSurfaceElement({ threadId: "thread-cold-d" }));
-    await waitFor(() => expect(observers.created.length).toBeGreaterThan(1));
+    await waitFor(() => expect(settlePasses().length).toBeGreaterThan(1));
 
     // The first thread's pass is over; the second thread has a live one.
-    expect(observers.created[0]!.disconnected).toBe(true);
-    expect(observers.created[1]!.disconnected).toBe(false);
+    expect(settlePasses()[0]!.disconnected).toBe(true);
+    expect(settlePasses()[1]!.disconnected).toBe(false);
 
     const scroller = view.container.querySelector<HTMLElement>(
       "[data-parity-surface='chat'] > div > div.overflow-y-auto",
@@ -508,7 +524,7 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     const metrics = stubScrollMetrics(scroller, 800, 400);
     frames.flush();
     metrics.growTo(2900);
-    observers.created[1]!.fire();
+    settlePasses()[1]!.fire();
     frames.flush();
     expect(metrics.scrollTop).toBe(2900);
   });

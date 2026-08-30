@@ -208,7 +208,7 @@ const requestSchema = z.union([reviewRequestSchema, scheduleRequestSchema]);
 const UNIFORM_REFUSAL = {
   kind: "not-permitted" as const,
   message:
-    "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+    "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
 };
 
 /** The `cwu_` proof header — the discriminant for the widget branch. */

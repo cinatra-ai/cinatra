@@ -129,6 +129,28 @@ async function expectTheFloor(page: Page): Promise<void> {
   }
 }
 
+/**
+ * DECLARE THE RUN'S PRODUCING STEP REPAIR-CAPABLE (cinatra#3080 item 4).
+ *
+ * Regenerate promises one thing: this work, made again, under a successor gate.
+ * Since the canonical operation refuses a Regenerate it cannot keep that promise
+ * for, a test that presses Regenerate has to be on a run that HAS a producing
+ * step to send the words back to — otherwise it is measuring the refusal, which
+ * is a different test. The declaration lives on the run's template, which is
+ * exactly where the change road reads it from.
+ */
+async function declareProducerRepairCapable(runId: string): Promise<void> {
+  await withPg(async (c) => {
+    await c.query(
+      `UPDATE ${SCHEMA}.agent_templates
+          SET lifecycle_config = COALESCE(lifecycle_config::jsonb, '{}'::jsonb)
+                                 || '{"repairCapable": true}'::jsonb
+        WHERE id = (SELECT template_id FROM ${SCHEMA}.agent_runs WHERE id = $1)`,
+      [runId],
+    );
+  });
+}
+
 /** A gate of the fixture agent, or null when this instance cannot make one. */
 async function openGate(): Promise<{ runId: string; reviewTaskId: string } | null> {
   if (!USER_ID || !ORG_ID) return null;
@@ -200,6 +222,7 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
   test("item 4 — REGENERATE refuses an empty note, then sends the words back", async ({ page }) => {
     const gate = await openGate();
     test.skip(gate === null, "no seedable review gate on this instance");
+    await declareProducerRepairCapable(gate!.runId);
     await page.goto(reviewPageUrl(gate!.runId, gate!.reviewTaskId));
 
     // An empty note is refused WITH A REASON, and nothing settles.
@@ -217,6 +240,34 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     expect(after.status).toBe("resolved");
     expect(after.disposition).toBe("changes_requested");
     expect(await repairCount(gate!.runId)).toBe(1);
+  });
+
+  test("item 4 — REGENERATE is REFUSED, with the gate left open, when nothing can make the work again", async ({
+    page,
+  }) => {
+    const gate = await openGate();
+    test.skip(gate === null, "no seedable review gate on this instance");
+    // No `declareProducerRepairCapable` here — that IS the arm. The fixture's
+    // producing step declares no repair capability, so a Regenerate has nowhere
+    // to send the words and no successor to open.
+    const before = await gateDisposition(gate!.runId);
+    test.skip(before.status !== "pending", "the seeded gate is not pending");
+    await page.goto(reviewPageUrl(gate!.runId, gate!.reviewTaskId));
+
+    await page.getByTestId("review-rationale").fill("make the opening tighter");
+    await page.locator(FLOOR.regenerate).click();
+
+    // A stated refusal on screen …
+    await expect(page.locator('[data-review-outcome="error"]')).toContainText(
+      "Comment or Continue instead",
+    );
+    // … and the review is still open, with its floor still live: nothing was
+    // settled for a revision that was never coming.
+    const after = await gateDisposition(gate!.runId);
+    expect(after.status).toBe("pending");
+    expect(after.disposition).toBeNull();
+    expect(await repairCount(gate!.runId)).toBe(0);
+    await expectTheFloor(page);
   });
 
   test("item 2 — CONTINUE resolves the gate and KEEPS STORING `approve`", async ({ page }) => {
@@ -239,6 +290,7 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
   }) => {
     const gate = await openGate();
     test.skip(gate === null, "no seedable review gate on this instance");
+    await declareProducerRepairCapable(gate!.runId);
     const url = reviewPageUrl(gate!.runId, gate!.reviewTaskId);
     await page.goto(url);
 
@@ -261,6 +313,45 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     expect(after.disposition).toBe("changes_requested");
     expect(await repairCount(gate!.runId)).toBe(1);
     await stale.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE FLOOR MUST BE REACHABLE, not merely present (cinatra#3080 item 1).
+  // -------------------------------------------------------------------------
+  // A 1440x900 reading of the chat thread found the docked composer painted over
+  // the lower part of the review card's decision floor: the three controls were
+  // in the DOM, visible to a locator, and could not be pressed. So this measures
+  // GEOMETRY — every floor control's box must end above the composer's top edge
+  // — which is the only assertion that can tell "drawn" from "reachable".
+  test("item 1 — at 1440x900 the card's floor is reachable ABOVE the chat composer", async ({
+    page,
+  }) => {
+    const gate = await openGate();
+    test.skip(gate === null, "no seedable review gate on this instance");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/chat?run=${gate!.runId}`);
+    await expect(page.locator('[data-conformance-id="review-gate-card"]')).toBeVisible();
+    await expectTheFloor(page);
+
+    const composer = page.locator('[data-conformance-id="chat-composer-primary"]').first();
+    const composerBox = await composer.boundingBox();
+    expect(composerBox, "the docked composer").not.toBeNull();
+
+    for (const [name, selector] of Object.entries(FLOOR)) {
+      const box = await page.locator(selector).first().boundingBox();
+      expect(box, `${name} has a box`).not.toBeNull();
+      expect(
+        box!.y + box!.height,
+        `${name} ends above the composer instead of under it`,
+      ).toBeLessThanOrEqual(composerBox!.y);
+    }
+
+    // …and it is not only clear of the composer, it actually takes a press: a
+    // Comment leaves the gate open, which is the cheapest live proof that the
+    // control received the click rather than the composer swallowing it.
+    await page.locator(FLOOR.comment).click();
+    await expect(page.locator('[data-review-outcome="annotated"]')).toBeVisible();
+    expect((await gateDisposition(gate!.runId)).status).toBe("pending");
   });
 });
 

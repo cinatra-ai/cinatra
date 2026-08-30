@@ -139,7 +139,7 @@ describe("§IV the review states", () => {
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Continuing or regenerating needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
     });
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
@@ -1262,7 +1262,7 @@ describe("§VIII read-only presentations", () => {
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Continuing or regenerating needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
       suggestions: CHIPS,
     });
     const { container } = renderOn("chat_thread");
@@ -1702,7 +1702,9 @@ describe("a settled card that knows its outcome", () => {
     const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
       ["approved", "Continued by Dana Okonkwo"],
       ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
+      // cinatra#3080 item 4 — the gate the change road settled reads SUPERSEDED.
+      // The stored disposition is untouched; the WORD is the drawing's.
+      ["changes_requested", "Superseded by Dana Okonkwo"],
     ];
     for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
@@ -1820,7 +1822,7 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   const DISPOSITIONS = [
     ["approved", "Continued by Dana Okonkwo"],
     ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ["changes_requested", "Superseded by Dana Okonkwo"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {

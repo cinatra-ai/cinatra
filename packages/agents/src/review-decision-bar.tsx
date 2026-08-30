@@ -205,10 +205,11 @@ export function ReviewDecisionBar({
         >
           {`${suggestionSummary.accepted} of ${suggestionSummary.total} ${
             suggestionSummary.total === 1 ? "suggestion" : "suggestions"
-          } accepted — they ride this decision. A reject records them as not taken.`}
+          } accepted — they ride this decision.`}
         </p>
       ) : null}
-      {/* Decision rationale (§IV) — optional on approve, expected on reject, the
+      {/* The note (§IV) — optional on Continue, the words a Regenerate works
+          from, the
           substance of a comment. Travels into the audit trail + the resume note.
 
           §I INPUT HIERARCHY — SUBORDINATE (design specs/app-lifecycle-cards.html
@@ -231,8 +232,8 @@ export function ReviewDecisionBar({
           htmlFor="review-rationale"
           className="mb-1.5 block font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
         >
-          Decision rationale{" "}
-          <span className="normal-case tracking-normal">(optional on Continue, expected on Regenerate)</span>
+          Note{" "}
+          <span className="normal-case tracking-normal">(optional on Continue · the words a Regenerate works from)</span>
         </label>
         <Textarea
           id="review-rationale"
@@ -240,7 +241,7 @@ export function ReviewDecisionBar({
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           disabled={pending || settled}
-          placeholder="Add a note for the run and the audit trail…"
+          placeholder="Add a note, or say what to change before Regenerate…"
           className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
         />
       </div>

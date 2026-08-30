@@ -5,6 +5,7 @@ import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 import { cn } from "@/lib/utils";
+import { reviewSettledWord } from "@/lib/artifacts/review-surface-model";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 
@@ -56,8 +57,20 @@ export function RailExtraEntry({
     <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
       {entry.label}
       {isGate && isResolved ? (
-        <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          {entry.gate?.disposition ?? "resolved"}
+        // THE SETTLED WORD, NEVER THE STORED TOKEN (cinatra#3080). This row used
+        // to print `entry.gate.disposition` straight out of the column, so a
+        // settled Review entry read APPROVE after a Continue and
+        // CHANGES_REQUESTED after a Regenerate — uppercased by the badge's own
+        // CSS, which made a machine value look like a deliberate label. The
+        // drawing's rail "records how it was settled (continued, superseded by a
+        // regeneration, changes requested)", so the word comes from the floor's
+        // one vocabulary and keeps its sentence case: a settled reading is a
+        // word a person reads, not a token they decode.
+        <span
+          className="ms-1.5 text-badge-2xs tracking-wide text-muted-foreground"
+          data-rail-gate-settled={reviewSettledWord(entry.gate?.disposition)}
+        >
+          {reviewSettledWord(entry.gate?.disposition)}
         </span>
       ) : null}
       {isVerification ? (

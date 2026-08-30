@@ -215,7 +215,7 @@ describe("behind the door, the widget and the page are ONE path", () => {
       outcome: {
         kind: "not-permitted",
         message:
-          "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+          "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
       },
     });
     expect(submitReviewDecisionAction).not.toHaveBeenCalled();

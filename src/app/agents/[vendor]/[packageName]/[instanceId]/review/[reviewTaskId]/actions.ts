@@ -163,7 +163,7 @@ export async function submitReviewDecisionAction(
     return {
       kind: "not-permitted",
       message:
-        "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+        "You do not have the run access this decision needs — Continue and Regenerate require the run's decision access, a comment requires respond access.",
     };
   }
 

@@ -94,7 +94,7 @@ function absentEnvelope<K extends LifecycleDataPartViewType>(
  * requires it to be non-enumerating, and a fixed sentence satisfies both.
  */
 export const LIFECYCLE_RESTRICTED_REASON =
-  "Approving or rejecting needs approve access on this run.";
+  "Continuing or regenerating needs decision access on this run.";
 
 // ---------------------------------------------------------------------------
 // The ref codec now lives in `@/lib/lifecycle/lifecycle-card-ref` (cinatra#2566)
@@ -141,9 +141,10 @@ async function resolveReviewGateState(
   if (gate.status === "unavailable") return ABSENT;
   if (gate.status !== "pending") return { state: "settled" };
 
-  // 3. The decision axis (§IV `restricted`): a terminal decision needs approve
-  //    access; commenting needs respond access. Resolved against the ACTUAL
-  //    reader, never a role guess.
+  // 3. The decision axis (§IV `restricted`): a terminal decision — Continue or
+  //    Regenerate — needs the run's approve access; commenting needs respond
+  //    access. Resolved against the ACTUAL reader, never a role guess. The RIGHT
+  //    is unchanged by cinatra#3080; only the words the reader is given are.
   const [decide, comment] = await Promise.all([
     enforceReviewRunAccess(runId, actorCtx.actor, "approveHitl", actorCtx.roleHints),
     enforceReviewRunAccess(runId, actorCtx.actor, "respondToHitl", actorCtx.roleHints),

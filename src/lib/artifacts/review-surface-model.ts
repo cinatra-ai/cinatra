@@ -125,10 +125,45 @@ export function reviewSettledCopy(
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
+      // SUPERSEDED (cinatra#3080 acceptance item 4). The STORED disposition is
+      // unchanged — Regenerate settles the gate "in the change road's existing
+      // representation", with no migration — so this is a relabel of the READING
+      // and nothing else. It reads as SUPERSEDED because on this floor the
+      // canonical change operation has exactly ONE caller, Regenerate, and the
+      // drawing's word for the gate a regeneration settles is `superseded`: the
+      // reviewed revision is kept and displayed, and its successor opens beneath
+      // it on the next revision. Nothing was turned back and nothing was lost.
       return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
+        title: `Superseded${by}`,
+        body: "The gate is settled as superseded. The reviewed revision is kept as it was, and the review has moved on from it.",
       };
+  }
+}
+
+/**
+ * THE SETTLED WORD FOR A STORED DISPOSITION (cinatra#3080).
+ *
+ * The card reads its outcome off the wire's closed set; the RAIL reads the gate
+ * row's own column, and used to print it — so a settled Review entry read
+ * APPROVE after a Continue and CHANGES_REQUESTED after a Regenerate, the
+ * machine's vocabulary on a person's surface. The drawing's rail "records how it
+ * was settled (continued, superseded by a regeneration, changes requested)", so
+ * every place a disposition is DISPLAYED comes here for the word.
+ *
+ * Titles only, and they agree with `reviewSettledCopy` by test, so the rail row
+ * and the card above it cannot drift into two names for one decision. A value
+ * this build does not know reads "Settled" — true, and never a raw column.
+ */
+export function reviewSettledWord(disposition: string | null | undefined): string {
+  switch (disposition) {
+    case "approve":
+      return "Continued";
+    case "changes_requested":
+      return "Superseded";
+    case "reject":
+      return "Rejected";
+    default:
+      return "Settled";
   }
 }
 
@@ -265,7 +300,8 @@ export function reviewRevisionMarker(representationRevisionId: string): {
 // ---------------------------------------------------------------------------
 
 export interface ReviewDecisionPermissions {
-  /** Terminal Approve / Reject — requires approve access on the run. */
+  /** The terminal floor actions, Continue and Regenerate — both require the
+   *  run's decision (approve) access; only the WORDS retired, not the right. */
   canDecide: boolean;
   /** Comment — requires respond access on the run. */
   canComment: boolean;
@@ -279,9 +315,9 @@ export function reviewDecideDisabledReason(
 ): string | null {
   if (perms.canDecide) return null;
   if (perms.canComment) {
-    return "A terminal Approve / Reject needs approve access on the run — you can Comment, but not decide.";
+    return "Continue and Regenerate need decision access on the run — you can Comment, but not decide.";
   }
-  return "You do not have approve access on the run, so a terminal decision is disabled.";
+  return "You do not have decision access on the run, so Continue and Regenerate are disabled.";
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +478,7 @@ export function mapSubmitResultToOutcome(
       return {
         kind: "not-permitted",
         message:
-          "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+          "You do not have the run access this decision needs — Continue and Regenerate require decision access, a comment requires respond access.",
       };
     // FAIL-CLOSED: a conflicting/settled gate is a block, never a silent success.
     case "gate-conflict":
@@ -498,6 +534,13 @@ export function mapChangesRequestedToOutcome(
       return { kind: "blocked", reason: "revision-not-live" };
     case "targets-mismatch":
       return { kind: "blocked", reason: "targets-mismatch" };
+    case "regenerate-unavailable":
+      // NOT a block: the operation refused BEFORE it settled anything, so the
+      // gate is still pending and the floor is still live. The reason the store
+      // stated is the reason the person reads — carried through verbatim rather
+      // than replaced by a generic line, because "it could not be recorded" and
+      // "there is nothing here that can make this again" are different answers.
+      return { kind: "error", message: result.error };
     default:
       // invalid-request / idempotency-key-reuse / empty-feedback / a transient
       // failure — the decision did not commit; safe to retry.
@@ -605,6 +648,25 @@ export const RECORDED_PROMPT_PROPERTY = "imagePrompt";
 
 export const REGENERATE_NOT_ON_THIS_REVIEW =
   "This review has no producing step to send the words back to, so Regenerate is not available on it. Comment or Continue instead.";
+
+/**
+ * THE ANSWER WHEN NOTHING CAN MAKE THE WORK AGAIN (cinatra#3080 item 4).
+ *
+ * The review IS on the lifecycle road — it has a producing step on paper — but
+ * that step declares no repair capability and no other route can remake this
+ * artifact, so a Regenerate would settle the gate and never bring a successor
+ * back. Refused with this reason and the gate left PENDING: a review closed for
+ * a revision that is not coming is worse than a refusal, because the run is
+ * released from a decision nobody made.
+ */
+export const REGENERATE_HAS_NO_PRODUCING_STEP =
+  "Nothing can make this piece of work again, so Regenerate would close the review with no new revision to come. Comment or Continue instead.";
+
+/** The same refusal, for a lineage that has already been remade as many times as
+ *  a review allows. The bound exists so a regeneration loop cannot run forever;
+ *  reaching it leaves the gate pending rather than settling it into nothing. */
+export const REGENERATE_BOUND_REACHED =
+  "This work has already been sent back to be made again as many times as a review allows. Comment or Continue instead.";
 
 /**
  * What a CALLER may submit. The three floor actions, plus the two retired words

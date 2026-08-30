@@ -117,6 +117,13 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * a `changes_requested` decision carries the same decider of record an
    * approve/reject does. */
   decidedBy?: string | null;
+  /**
+   * WHICH ROAD ASKED (cinatra#3080 item 4) — passed straight through to the
+   * canonical operation, which refuses a `regenerate` it cannot give a successor
+   * to rather than settling the gate into nothing. Defaults to `typed`, so a
+   * caller that predates the field keeps the escalating behaviour it had.
+   */
+  origin?: "typed" | "regenerate";
 }
 
 // A minimal read-only projection of `objects` — the artifact TYPE the core
@@ -323,6 +330,7 @@ export async function recordReviewSurfaceChangesRequested(
       currentBaseRevisionId,
       lineageId,
       decidedBy: input.decidedBy ?? null,
+      origin: input.origin ?? "typed",
     });
   } catch (err) {
     // The entry point THROWS a gate CAS conflict (the gate is not pending — a

@@ -348,9 +348,15 @@ describe("§IV — the decision: three affordances, one bar, atomic, re-validate
     expect(DECISION_BAR).toMatch(/variant="default"[\s\S]*?data-action="continue-review/);
   });
 
-  it("carries the one optional rationale field (expected on Regenerate) that travels to the audit trail", () => {
-    expect(DECISION_BAR).toMatch(/Decision rationale/);
-    expect(DECISION_BAR).toMatch(/optional on Continue, expected on Regenerate/);
+  it("carries the one note field, in the drawing's own words, that travels to the audit trail", () => {
+    // cinatra#3080 — the field is the drawing's NOTE, and it is labelled with the
+    // drawing's sentence rather than a paraphrase of it: one note, optional when
+    // the run simply goes on, and the material a Regenerate works from. The DOM
+    // proof of the exact label and placeholder is `review-floor-bar.test.tsx`;
+    // this pin keeps the source from drifting back to a summary of the drawing.
+    expect(DECISION_BAR).toMatch(/optional on Continue · the words a Regenerate works from/);
+    expect(DECISION_BAR).toMatch(/Add a note, or say what to change before Regenerate/);
+    expect(stripComments(DECISION_BAR)).not.toMatch(/Decision rationale/);
     expect(DECISION_BAR).toMatch(/Textarea/);
   });
 

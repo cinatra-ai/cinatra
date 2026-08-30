@@ -56,12 +56,31 @@ const target = (): Target => ({
 /** Seed a real `agent_runs` row directly, for the same reason the sibling suite
  *  does: the store helper fires a best-effort objects shadow-write whose floating
  *  rejection to an unconfigured mirror host would flake the suite. */
-async function seedRun(): Promise<string> {
+async function seedRun(opts?: { repairCapable?: boolean }): Promise<string> {
   const runId = `run-${randomUUID()}`;
+  const templateId = `tmpl-${randomUUID()}`;
+  // THE PRODUCING STEP IS PART OF THE FIXTURE (item 4). Until this suite seeded
+  // one, every run it made had a template id pointing at no row at all, so the
+  // change road read "declares no repair capability", routed every Regenerate to
+  // a human and minted no successor — and the suite still passed, because it
+  // counted repair rows rather than asking whether anything could ever answer
+  // them. The template is seeded now, and what it DECLARES is which arm the test
+  // is on: a step that can make the work again, or nothing that can.
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
+       (id, package_name, org_id, name, source_nl, compiled_plan, input_schema, approval_policy, lifecycle_config)
+     VALUES ($1, $2, $3, 'review-floor fixture', 'fixture', '[]', '{}', '{}', $4)`,
+    [
+      templateId,
+      `@cinatra-ai/review-floor-fixture-${templateId}`,
+      ORG,
+      JSON.stringify({ repairCapable: opts?.repairCapable ?? true }),
+    ],
+  );
   await client.query(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, run_by, status, input_params)
      VALUES ($1, $2, $3, $4, 'queued', '{}')`,
-    [runId, `tmpl-${randomUUID()}`, ORG, OWNER_ID],
+    [runId, templateId, ORG, OWNER_ID],
   );
   return runId;
 }
@@ -136,6 +155,9 @@ async function regenerate(
     feedback: note,
     ...(prompt === undefined ? {} : { prompt }),
     decidedBy: OWNER_ID,
+    // THE FLOOR'S REGENERATE, not the typed change road — the two ask for
+    // different things of a run that has nothing left to make the work again.
+    origin: "regenerate",
   });
 }
 
@@ -152,7 +174,7 @@ async function gateRow(runId: string, reviewTaskId: string) {
 
 async function repairRowsFor(gateId: string) {
   const { rows } = await client.query(
-    `SELECT id, attempt, findings, idempotency_key FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
+    `SELECT id, attempt, findings, idempotency_key, route, status FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
     [gateId],
   );
   return rows as Array<{
@@ -160,7 +182,19 @@ async function repairRowsFor(gateId: string) {
     attempt: number;
     findings: unknown;
     idempotency_key: string;
+    route: string;
+    status: string;
   }>;
+}
+
+/** Every review gate on a run — the count "exactly one successor" is measured
+ *  against, before and after. */
+async function gateRowsFor(runId: string) {
+  const { rows } = await client.query(
+    `SELECT id, status, disposition FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
+    [runId],
+  );
+  return rows as Array<{ id: string; status: string; disposition: string | null }>;
 }
 
 async function runStatus(runId: string): Promise<string> {
@@ -326,6 +360,60 @@ describe.skipIf(!HAS_DB)("item 4 — Regenerate rides the change road's canonica
     );
     expect(gates.rows).toHaveLength(1);
     expect((gates.rows[0] as { status: string }).status).toBe("resolved");
+  });
+
+  // -------------------------------------------------------------------------
+  // ARM ONE — a run with NOTHING that can make the work again.
+  // -------------------------------------------------------------------------
+  // What the first capture found on the real surface: pressing Regenerate on a
+  // run that had already finished SETTLED the gate with a change-request
+  // disposition and raised no successor — one gate row before, one gate row
+  // after, and a review closed for a revision that was never coming. A gate that
+  // settles without a successor is worse than a refusal: the run is released
+  // from a decision nobody made.
+  it("REFUSES when no producing step can regenerate — and the gate stays pending", async () => {
+    const runId = await seedRun({ repairCapable: false });
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+    const gatesBefore = await gateRowsFor(runId);
+
+    const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+
+    // A STATED refusal, not a silent half-fire.
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("regenerate-unavailable");
+    expect(result.error.length).toBeGreaterThan(0);
+
+    // NOTHING was settled and NOTHING was written.
+    const after = await gateRow(runId, reviewTaskId);
+    expect(after?.status).toBe("pending");
+    expect(after?.disposition ?? null).toBeNull();
+    expect(await repairRowsFor(after!.id)).toHaveLength(0);
+    expect(await gateRowsFor(runId)).toHaveLength(gatesBefore.length);
+  });
+
+  // -------------------------------------------------------------------------
+  // ARM TWO — a run whose producing step CAN make the work again.
+  // -------------------------------------------------------------------------
+  it("settles the gate and opens a repair that can actually answer it", async () => {
+    const runId = await seedRun({ repairCapable: true });
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    // The repair is DISPATCHABLE — a successor can come back. An escalated
+    // repair is the shape that left the gate closed with nothing behind it.
+    expect(result.status).toBe("requested");
+    expect(result.route.kind).toBe("producer_repair");
+
+    const after = await gateRow(runId, reviewTaskId);
+    expect(after?.status).toBe("resolved");
+    const [repair] = await repairRowsFor(after!.id);
+    expect(repair.route).toBe("producer_repair");
+    expect(repair.status).toBe("requested");
   });
 
   it("refuses an EMPTY note with a reason, and writes nothing at all", async () => {

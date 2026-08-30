@@ -149,15 +149,18 @@ export function ReviewPromptWindow({
 function describeOutcome(outcome: ReviewSubmitOutcome): { reply: string; refreshToLive: boolean } {
   switch (outcome.kind) {
     case "changes-requested":
+      // cinatra#3080 — the outcome the floor's Regenerate produces reads as
+      // SUPERSEDED, in the same words the decision bar's own notice uses, so the
+      // window and the bar cannot say two different things about one press.
       return outcome.status === "requested"
         ? {
             reply:
-              "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight.",
+              "Sent back to be made again. This review is closed and reopens on the next revision — the step that produced the work is on it now.",
             refreshToLive: false,
           }
         : {
             reply:
-              "Changes requested. The reviewed work has been turned back — escalated because no automatic repair is available; the effect stays held.",
+              "Sent back to be made again. This review is closed; nothing can make it automatically, so a person has been asked to pick it up and the effect stays held.",
             refreshToLive: false,
           };
     case "annotated":

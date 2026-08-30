@@ -180,3 +180,35 @@ describe("acceptance item 5 — a picture's prompt is its own field", () => {
     expect(firstInput(submitAction).regeneratePrompt ?? null).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE NOTE FIELD'S OWN WORDS (cinatra#3080, the ratified drawing's §VI floor).
+// ---------------------------------------------------------------------------
+// The field had been labelled "Decision rationale (optional on Continue, expected
+// on Regenerate)" over the placeholder "Add a note for the run and the audit
+// trail…" — a paraphrase of the drawing rather than the drawing. The drawing's
+// own words name the field for what it IS on this floor: one note, optional when
+// the run simply goes on, and the material a Regenerate works from.
+describe("the note field is labelled in the drawing's words", () => {
+  it("carries the label and the placeholder exactly", () => {
+    renderBar();
+    const label = document.querySelector('label[for="review-rationale"]');
+    expect(label).not.toBeNull();
+    expect(label!.textContent!.replace(/\s+/g, " ").trim()).toBe(
+      "Note (optional on Continue · the words a Regenerate works from)",
+    );
+    expect(screen.getByTestId("review-rationale").getAttribute("placeholder")).toBe(
+      "Add a note, or say what to change before Regenerate…",
+    );
+  });
+
+  it("keeps none of the paraphrase it replaced", () => {
+    renderBar();
+    const label = document.querySelector('label[for="review-rationale"]');
+    expect(label!.textContent).not.toMatch(/rationale/i);
+    expect(label!.textContent).not.toMatch(/expected on Regenerate/i);
+    expect(screen.getByTestId("review-rationale").getAttribute("placeholder")).not.toMatch(
+      /audit trail/i,
+    );
+  });
+});

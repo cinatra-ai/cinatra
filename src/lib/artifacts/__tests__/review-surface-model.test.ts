@@ -19,6 +19,7 @@ import {
   reviewBlockedCopy,
   reviewDecideDisabledReason,
   reviewSettledCopy,
+  reviewSettledWord,
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
@@ -104,13 +105,24 @@ describe("§V — permission copy + blocked copy", () => {
   it("no disabled reason when the reviewer may decide", () => {
     expect(reviewDecideDisabledReason({ canDecide: true, canComment: true })).toBeNull();
   });
-  it("a comment-only reviewer sees the terminal-needs-approve reason", () => {
+  it("a comment-only reviewer is told which access the terminal actions need", () => {
     const reason = reviewDecideDisabledReason({ canDecide: false, canComment: true });
-    expect(reason).toMatch(/approve access/);
+    // RE-PINNED to the floor's vocabulary (cinatra#3080 item 1). The right is
+    // unchanged — a terminal decision still needs the run's approve access — but
+    // the sentence a PENDING reviewer reads may not name a retired action, and
+    // this one used to read "A terminal Approve / Reject needs approve access".
+    expect(reason).toMatch(/decision access/);
+    expect(reason).toMatch(/Continue and Regenerate/);
     expect(reason).toMatch(/Comment/);
+    expect(reason).not.toMatch(/\bapprove/i);
+    expect(reason).not.toMatch(/\breject/i);
   });
-  it("a reviewer with neither sees the no-approve-access reason", () => {
-    expect(reviewDecideDisabledReason({ canDecide: false, canComment: false })).toMatch(/approve access/);
+  it("a reviewer with neither is told the terminal actions are disabled", () => {
+    const reason = reviewDecideDisabledReason({ canDecide: false, canComment: false });
+    expect(reason).toMatch(/decision access/);
+    expect(reason).toMatch(/Continue and Regenerate/);
+    expect(reason).not.toMatch(/\bapprove/i);
+    expect(reason).not.toMatch(/\breject/i);
   });
   it("blocked copy covers every closed reason", () => {
     expect(reviewBlockedCopy("no-longer-pending").title).toMatch(/no longer open/);
@@ -289,6 +301,33 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
 // §IV — the SETTLED reading (cinatra#2855; plan §4.2)
 // ---------------------------------------------------------------------------
 
+describe("the settled WORD for a stored disposition (cinatra#3080)", () => {
+  it("reads every stored disposition as the drawing's settled word", () => {
+    // "…records how it was settled (continued, superseded by a regeneration,
+    // changes requested)". A raw column value is never one of those.
+    expect(reviewSettledWord("approve")).toBe("Continued");
+    expect(reviewSettledWord("changes_requested")).toBe("Superseded");
+    expect(reviewSettledWord("reject")).toBe("Rejected");
+  });
+
+  it("never hands back a machine token, whatever the column holds", () => {
+    for (const raw of ["approve", "reject", "changes_requested", "comment", "", null, undefined]) {
+      const word = reviewSettledWord(raw);
+      expect(word).not.toMatch(/_/);
+      expect(word).toBe(word[0].toUpperCase() + word.slice(1));
+      expect(word.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("agrees with the settled CARD's title, so the rail and the card cannot drift", () => {
+    expect(reviewSettledWord("approve")).toBe(reviewSettledCopy("approved").title);
+    expect(reviewSettledWord("reject")).toBe(reviewSettledCopy("rejected").title);
+    expect(reviewSettledWord("changes_requested")).toBe(
+      reviewSettledCopy("changes_requested").title,
+    );
+  });
+});
+
 describe("the settled copy names the outcome and its decider", () => {
   it("is keyed on the SAME closed set the wire carries", () => {
     // This model deliberately keeps its own local union rather than importing
@@ -318,8 +357,11 @@ describe("the settled copy names the outcome and its decider", () => {
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
       "Rejected by Dana Okonkwo",
     );
+    // cinatra#3080 item 4 — a gate the change road settled reads SUPERSEDED.
+    // The stored disposition is unchanged (`changes_requested`, "the change
+    // road's existing representation"); the WORD is the drawing's.
     expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
-      "Changes requested by Dana Okonkwo",
+      "Superseded by Dana Okonkwo",
     );
   });
 
@@ -333,7 +375,7 @@ describe("the settled copy names the outcome and its decider", () => {
     }
     expect(reviewSettledCopy("approved").title).toBe("Continued");
     expect(reviewSettledCopy("rejected").title).toBe("Rejected");
-    expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
+    expect(reviewSettledCopy("changes_requested").title).toBe("Superseded");
   });
 
   it("does NOT claim a live repair the way the post-press notice does", () => {
@@ -341,7 +383,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // fact about what the reviewer's own press started. A settled card has not
     // read that, so it may not assert it.
     expect(reviewSettledCopy("changes_requested").body).toBe(
-      "The gate is resolved and the reviewed work has been turned back for repair.",
+      "The gate is settled as superseded. The reviewed revision is kept as it was, and the review has moved on from it.",
     );
     expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
   });

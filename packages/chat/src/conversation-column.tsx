@@ -243,6 +243,12 @@ export type ConversationColumnProps = {
   composerNotice?: ReactNode;
 };
 
+/** The gap between the composer's top edge and the last thing in the scrolling
+ *  list. A card's decision floor must read as ABOVE the composer, not flush
+ *  against it — an affordance touching the composer's edge reads as belonging to
+ *  the composer, and is one stray pixel from being under it again. */
+const COMPOSER_CLEARANCE_GAP_PX = 16;
+
 export function ConversationColumn({
   host,
   messages,
@@ -382,12 +388,45 @@ export function ConversationColumn({
     if (!hasActiveStream) promptRef.current?.focus();
   }, [hasActiveStream, promptRef]);
 
+  // THE DOCKED COMPOSER'S CLEARANCE IS MEASURED, NEVER GUESSED (cinatra#3080).
+  //
+  // The composer is absolutely positioned over the foot of the scrolling list,
+  // and the list cleared it with `pb-24` — 96 fixed pixels. That is enough for a
+  // message, whose last line only has to be READ. It is not enough for a card
+  // whose FOOT is the thing a person has to reach: at 1440x900 a review card's
+  // decision floor — Comment, Regenerate, Continue — was painted over by the
+  // composer and could not be pressed at all. A guess cannot be right for a
+  // composer that grows with a notice, an attachment row or a second typed line,
+  // so the clearance is read off the composer itself and re-read whenever it
+  // resizes. The class string keeps `pb-24` (it is the column's pinned DOM shape
+  // and the correct pre-measurement paint); this value overrides it as soon as
+  // there is a measurement.
+  const composerDockRef = useRef<HTMLDivElement | null>(null);
+  const [composerClearance, setComposerClearance] = useState<number | null>(null);
+  useEffect(() => {
+    const node = composerDockRef.current;
+    if (!node) return;
+    const measure = () => {
+      const height = node.getBoundingClientRect().height;
+      if (height > 0) setComposerClearance(Math.ceil(height) + COMPOSER_CLEARANCE_GAP_PX);
+    };
+    measure();
+    // A layout-less environment (jsdom, a server pass) has no observer and no
+    // heights either; the one measurement above is then all there is, and the
+    // class string still paints the list correctly.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   const column = (
     <div className="relative flex min-h-0 flex-1 flex-col">
 
       <div
         ref={messagesContainerRef}
         className="min-h-0 flex-1 overflow-y-auto pb-24 pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        style={composerClearance === null ? undefined : { paddingBottom: composerClearance }}
         onScroll={() => {
           // Ignore scroll events caused by scrollToBottom() itself — only react to user input.
           if (isProgrammaticScrollRef.current) return;
@@ -433,7 +472,10 @@ export function ConversationColumn({
 
       {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
       <div className="relative mx-auto w-full max-w-3xl px-4">
-        <div className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0">
+        <div
+          ref={composerDockRef}
+          className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0"
+        >
           {composerNotice}
           <PromptField
             ref={promptRef}

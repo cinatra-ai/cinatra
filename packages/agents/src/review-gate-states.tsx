@@ -66,7 +66,7 @@ export function ReviewGateBlocked({
 /**
  * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
  * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Changes requested by …", over the shipped sentence for
+ * "Rejected by …" / "Superseded by …", over the shipped sentence for
  * that outcome, and with the recorded suggestion chips still drawn above it by
  * the caller.
  *

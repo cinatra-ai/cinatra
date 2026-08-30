@@ -75,6 +75,10 @@ import {
   type BatchDisposition,
 } from "@/lib/lifecycle/lifecycle-batch";
 import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  REGENERATE_BOUND_REACHED,
+  REGENERATE_HAS_NO_PRODUCING_STEP,
+} from "@/lib/artifacts/review-surface-model";
 
 // ---------------------------------------------------------------------------
 // changes_requested — close the review attempt, open the repair.
@@ -135,6 +139,28 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+  /**
+   * WHICH ROAD ASKED (cinatra#3080 acceptance item 4). Two callers reach this
+   * one operation and they want different things of a run that has nothing left
+   * to make the work again:
+   *
+   *   `typed`      — the change road's own request. A producer that cannot
+   *                  repair ESCALATES to a human or an org route: the request is
+   *                  recorded, the gate closes, and a person picks it up. That
+   *                  is the route's design and it is unchanged.
+   *   `regenerate` — the review floor's Regenerate, which promises exactly one
+   *                  thing: this work, made again, under a successor gate. When
+   *                  no producing step can deliver that, the operation REFUSES
+   *                  before it writes anything and the gate stays PENDING. It
+   *                  must never settle a gate whose successor is not coming —
+   *                  the shape a real run was found in: one gate row before, one
+   *                  gate row after, a review closed for a revision nobody was
+   *                  going to make.
+   *
+   * Defaults to `typed`, so every caller that predates this field keeps its
+   * behaviour byte for byte.
+   */
+  origin?: "typed" | "regenerate";
 }
 
 export type RecordChangesRequestedResult =
@@ -218,6 +244,27 @@ export async function recordChangesRequested(
     continuationMode: request.continuationMode,
     orgRepairRoute: input.orgRepairRoute ?? null,
   });
+
+  // A REGENERATE THAT CANNOT REGENERATE IS REFUSED, NOT HALF-FIRED (cinatra#3080
+  // item 4). BEFORE the transaction, so nothing is written and the gate is left
+  // exactly as the reviewer found it: pending, with its floor still live and the
+  // stated reason on screen. An escalation is a fine answer to a TYPED change
+  // request — a person picks it up — but it is not an answer to Regenerate,
+  // which promises the same work made again beneath a successor gate. Settling
+  // the gate anyway is the worst of the three outcomes: the run is released from
+  // a decision nobody made, toward a revision that is not coming.
+  if (input.origin === "regenerate") {
+    if (route.kind !== "producer_repair") {
+      return {
+        ok: false,
+        code: "regenerate-unavailable",
+        error: REGENERATE_HAS_NO_PRODUCING_STEP,
+      };
+    }
+    if (cycle.escalate) {
+      return { ok: false, code: "regenerate-unavailable", error: REGENERATE_BOUND_REACHED };
+    }
+  }
 
   // Escalate (never dispatch) when the cycle bound tripped OR the producer cannot
   // repair (routed to a human / org route). Only a repair-capable producer within

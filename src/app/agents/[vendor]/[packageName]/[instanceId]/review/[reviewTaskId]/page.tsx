@@ -405,7 +405,7 @@ function ReviewShell({ children }: { children: React.ReactNode }) {
       <PageHeader
         label="Agent run"
         title="Review"
-        description="Approve, reject, or comment on what an agent produced — before the run continues."
+        description="Comment on what an agent produced, Regenerate it, or Continue the run."
         divider={false}
       />
       <PageContent className="flex flex-col gap-4 pb-10" data-surface="artifact-review">
