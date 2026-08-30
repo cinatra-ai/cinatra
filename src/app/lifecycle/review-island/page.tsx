@@ -117,6 +117,7 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { ReviewIslandHeightReport } from "./island-height-report";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
@@ -257,6 +258,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           scrollbar and the canvas an overscroll exposes. Composed from the
           closed enum, never from the request's text. */}
       {groundCss ? <style>{groundCss}</style> : null}
+
+      {/* The island tells the frame around it how tall its content actually is
+          (cinatra#3047), so an expanded frame is the reading's own height rather
+          than a fixed ceiling with empty ground under it. Draws nothing. */}
+      <ReviewIslandHeightReport />
 
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}

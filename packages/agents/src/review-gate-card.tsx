@@ -134,7 +134,7 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   ArrowRight,
   Check,
@@ -302,6 +302,54 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 /** Clamped island height (§ the issue's clamp + internal scroll + expand). */
 const ISLAND_HEIGHT_CLAMPED = 380;
 const ISLAND_HEIGHT_EXPANDED = 760;
+
+/**
+ * The marker on the height the island reports about ITSELF (cinatra#3047).
+ *
+ * Mirrored from `island-height-report.tsx` — the client half of one contract,
+ * pinned on both sides by their own suites, for the same reason the island's
+ * credential and colour-scheme parameter keys are mirrored here: the card
+ * recomposes what it needs from its own constants rather than adopting anything
+ * a document chose.
+ */
+const REVIEW_ISLAND_HEIGHT_MESSAGE = "cinatra:review-island-height";
+
+/**
+ * The height the frame takes for a reported content height.
+ *
+ * THE DEFECT THIS CLOSES. The expanded frame used to be `ISLAND_HEIGHT_EXPANDED`
+ * unconditionally. A reviewed target is usually SHORTER than that, so expanding
+ * added empty ground under the reading and pushed the frame's own control 380px
+ * further down — and a reader who scrolled to that control was looking at the
+ * ground, with the target's header, chip and revision line scrolled out above
+ * it. The frame read as blank while nothing was wrong with the document in it.
+ *
+ * So the expanded frame is now the READING's own height, clamped: never smaller
+ * than the collapsed box (which would make expanding a shrink) and never larger
+ * than the ceiling the drawing fixes (which is what keeps a long document
+ * scrolling inside the island rather than growing the page without bound). With
+ * NO reported height — an island that never got its message out — the ceiling
+ * stands, which is exactly the behaviour this replaces.
+ */
+function islandHeightFor(expanded: boolean, contentHeight: number | null): number {
+  if (!expanded) return ISLAND_HEIGHT_CLAMPED;
+  if (contentHeight === null) return ISLAND_HEIGHT_EXPANDED;
+  return Math.min(ISLAND_HEIGHT_EXPANDED, Math.max(ISLAND_HEIGHT_CLAMPED, contentHeight));
+}
+
+/**
+ * Is there anything the collapsed frame is not already showing?
+ *
+ * A control that cannot act is a control that fails on press — the same rule the
+ * settled reading applies to its decision chrome. A target whose whole reading
+ * already fits the collapsed box has nothing to expand INTO, so it is offered no
+ * Expand at all rather than a control that grows empty ground. Unknown (no
+ * report) keeps the control, because withholding it on a document that might be
+ * long would take the reader's only way to see the rest.
+ */
+function islandHasMoreToShow(contentHeight: number | null): boolean {
+  return contentHeight === null || contentHeight > ISLAND_HEIGHT_CLAMPED;
+}
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -1466,6 +1514,41 @@ function ReviewTargetIsland({
     setLoad({ src, attempt: 0, loaded: false, timedOut: false });
   }
 
+  // THE READING'S OWN HEIGHT, as the island reports it (cinatra#3047). Keyed by
+  // `src` like the load state above and for the same reason: a new target's
+  // frame must not be sized by the previous target's document.
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [content, setContent] = useState<{ src: string; height: number | null }>({
+    src,
+    height: null,
+  });
+  if (content.src !== src) {
+    setContent({ src, height: null });
+  }
+  const contentHeight = content.src === src ? content.height : null;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onMessage = (event: MessageEvent) => {
+      // THE WINDOW THIS CARD FRAMED, and no other. Origin is not the check
+      // here — the island is cross-origin by design inside a third-party frame,
+      // where its own origin is the app's and the listener's is the site's — so
+      // the identity of the source window is what says this height is ours.
+      // Every other message on the page is somebody else's.
+      const frame = frameRef.current;
+      if (!frame || event.source !== frame.contentWindow) return;
+      const data: unknown = event.data;
+      if (typeof data !== "object" || data === null) return;
+      const marker = (data as { marker?: unknown }).marker;
+      const height = (data as { height?: unknown }).height;
+      if (marker !== REVIEW_ISLAND_HEIGHT_MESSAGE) return;
+      if (typeof height !== "number" || !Number.isFinite(height) || height <= 0) return;
+      setContent((current) => (current.src === src ? { src, height } : current));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [src]);
+
   useEffect(() => {
     if (load.loaded) return;
     const timer = setTimeout(() => {
@@ -1475,7 +1558,11 @@ function ReviewTargetIsland({
   }, [load.src, load.attempt, load.loaded]);
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = expanded ? ISLAND_HEIGHT_EXPANDED : ISLAND_HEIGHT_CLAMPED;
+  const hasMoreToShow = islandHasMoreToShow(contentHeight);
+  // A target that fits the collapsed box keeps the collapsed box even while the
+  // reader's last expand is still remembered: there is nothing to expand into,
+  // and drawing the ceiling anyway is precisely the empty ground this closes.
+  const height = islandHeightFor(expanded && hasMoreToShow, contentHeight);
 
   return (
     <div
@@ -1488,6 +1575,7 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.src}:${load.attempt}`}
+        ref={frameRef}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -1540,23 +1628,28 @@ function ReviewTargetIsland({
           )}
         </div>
       ) : null}
-      <div className="flex items-center justify-end border-t border-line px-2 py-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-action="toggle-review-target-height"
-          aria-expanded={expanded}
-          onClick={onToggleExpanded}
-        >
-          {expanded ? (
-            <Minimize2 aria-hidden="true" className="size-3.5" />
-          ) : (
-            <Maximize2 aria-hidden="true" className="size-3.5" />
-          )}
-          {expanded ? "Collapse" : "Expand"}
-        </Button>
-      </div>
+      {/* The control is drawn only while there IS more to show — see
+          `islandHasMoreToShow`. The footer row goes with it, so a target that
+          fits its box carries no empty strip where a control used to be. */}
+      {hasMoreToShow ? (
+        <div className="flex items-center justify-end border-t border-line px-2 py-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-action="toggle-review-target-height"
+            aria-expanded={expanded}
+            onClick={onToggleExpanded}
+          >
+            {expanded ? (
+              <Minimize2 aria-hidden="true" className="size-3.5" />
+            ) : (
+              <Maximize2 aria-hidden="true" className="size-3.5" />
+            )}
+            {expanded ? "Collapse" : "Expand"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
