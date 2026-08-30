@@ -58,6 +58,7 @@
   --color-brand-mustard: var(--brand-mustard);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-input-fill: var(--input-fill);
   --color-ring: var(--ring);
 
   /* Ink/primary shorthand for cinatra's dark action color */
