@@ -1,5 +1,5 @@
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
-index 185899567..0a8865b75 100644
+index efc6452..3aecbde 100644
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
 @@ -16,6 +16,7 @@ import {
@@ -10,7 +10,7 @@ index 185899567..0a8865b75 100644
  import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
  import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
  import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-@@ -1351,34 +1352,10 @@ END $$`,
+@@ -1351,37 +1352,10 @@ END $$`,
      )` },
      { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_test_sends_run_id_submission_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id, submission_id)` },
      { text: `CREATE INDEX IF NOT EXISTS agent_run_test_sends_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id)` },
@@ -23,16 +23,19 @@ index 185899567..0a8865b75 100644
 -    // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
 -    // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
 -    // claim) SERIALIZES the decision across the one-shot job + reconciliation
--    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
+-    // sweep. TWIN of core__0071 + core__0100 — the DDLs MUST stay identical
+-    // (cinatra#3029: the RETIRED response-text columns are nullable; `items`
+-    // carries the default road's end-node-output family).
 -    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (
 -      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
 -      org_id text NOT NULL,
 -      template_id text NOT NULL,
 -      package_version text,
 -      created_by text,
--      content text NOT NULL,
+-      content text,
 -      content_is_json boolean NOT NULL DEFAULT false,
--      content_hash text NOT NULL,
+-      content_hash text,
+-      items jsonb,
 -      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
 -      attempts integer NOT NULL DEFAULT 0,
 -      lease_token text,
@@ -51,10 +54,10 @@ index 185899567..0a8865b75 100644
      // verbatim, because this file is a baselined file-size-ratchet bottleneck
 diff --git a/src/lib/output-derivation-schema.ts b/src/lib/output-derivation-schema.ts
 new file mode 100644
-index 000000000..e64e96863
+index 0000000..e17376e
 --- /dev/null
 +++ b/src/lib/output-derivation-schema.ts
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,39 @@
 +// Bootstrap DDL for the produces-scoped derivation OUTBOX — a pure string
 +// builder with ZERO imports, spread into buildCreateStoreSchemaQueries, so
 +// every statement here is executed core-store DDL.
@@ -71,16 +74,19 @@ index 000000000..e64e96863
 +    // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
 +    // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
 +    // claim) SERIALIZES the decision across the one-shot job + reconciliation
-+    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
++    // sweep. TWIN of core__0071 + core__0100 — the DDLs MUST stay identical
++    // (cinatra#3029: the RETIRED response-text columns are nullable; `items`
++    // carries the default road's end-node-output family).
 +    { text: `CREATE TABLE IF NOT EXISTS "${s}"."agent_run_output_derivations" (
 +      run_id text PRIMARY KEY REFERENCES "${s}"."agent_runs"(id) ON DELETE CASCADE,
 +      org_id text NOT NULL,
 +      template_id text NOT NULL,
 +      package_version text,
 +      created_by text,
-+      content text NOT NULL,
++      content text,
 +      content_is_json boolean NOT NULL DEFAULT false,
-+      content_hash text NOT NULL,
++      content_hash text,
++      items jsonb,
 +      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
 +      attempts integer NOT NULL DEFAULT 0,
 +      lease_token text,

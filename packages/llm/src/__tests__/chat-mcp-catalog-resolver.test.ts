@@ -204,6 +204,35 @@ describe("chat MCP catalog: capability availability", () => {
     expect(withoutCrm).toContain("agent_list");
   });
 
+  it("keeps a primitive whose connector holds no connection of its own", () => {
+    // cinatra#3108. Step 3 asks ONE question — is this capability available? —
+    // and the host answers it from the connector's own declaration: a connector
+    // that consumes another connector's connection is judged on THAT
+    // connection. So a primitive of such a connector must survive here on an
+    // available answer, exactly like any other, and still drop on an
+    // unavailable one. The drop that hid these names was the host answering
+    // "no" for a connector that can never own a connection, never this step.
+    const CONSUMING_KEY = "google-appointment-schedules-connector";
+    const CONSUMING_PRIMITIVE = "appointment_schedule_list";
+    const servable: ServableChatPrimitive[] = [
+      seeded("agent_list"),
+      { name: CONSUMING_PRIMITIVE, declaredClass: "read", capabilityKey: CONSUMING_KEY },
+    ];
+    const isHostApproved = (name: string) =>
+      name === CONSUMING_PRIMITIVE || isCoreDelegatedChatAdmitted(name);
+
+    const kept = resolveChatMcpAllowedTools(
+      stateOf(servable, { isHostApproved, isCapabilityAvailable: (key) => key === CONSUMING_KEY }),
+    );
+    expect(kept).toContain(CONSUMING_PRIMITIVE);
+
+    const dropped = resolveChatMcpAllowedTools(
+      stateOf(servable, { isHostApproved, isCapabilityAvailable: () => false }),
+    );
+    expect(dropped).not.toContain(CONSUMING_PRIMITIVE);
+    expect(dropped).toContain("agent_list");
+  });
+
   it("does not consult availability for an ungated primitive", () => {
     const isCapabilityAvailable = vi.fn(() => true);
     resolveChatMcpAllowedTools(

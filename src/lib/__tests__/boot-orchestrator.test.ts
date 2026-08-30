@@ -100,6 +100,11 @@ vi.mock("@/lib/boot/phases/boot-degrade-probe", () => ({
     { name: "boot-degrade-probe", policy: "degraded", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/provider-connection-bootstrap", () => ({
+  providerConnectionBootstrapPhases: () => [
+    { name: "provider-connection-bootstrap", policy: "retryable", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/dev-boot", () => ({
   devAwaitedPhases: () => [{ name: "a2a-dev-auto-connect", policy: "dev-only", run: async () => {} }],
   startDetachedDevAgentsScanPhase: vi.fn(),
@@ -159,6 +164,7 @@ describe("runBoot orchestration", () => {
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, AWAITED (dev + prod)
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
+      "provider-connection-bootstrap", // env → sealed row, AFTER extension activation, BEFORE the services that read the provider
       "assistant-bootstrap",
       "otel-tracing",
       "a2a-dev-auto-connect", // AWAITED dev phase, between otel + usage
@@ -202,6 +208,7 @@ describe("runBoot orchestration", () => {
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, runs in PROD too
+      "provider-connection-bootstrap", // env → sealed row, runs in PROD too (that is the whole point)
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod
