@@ -17,6 +17,32 @@ import * as path from "node:path";
 //
 // The suite self-skips without the flag below, so any other config that picks
 // the file up keeps the ordinary skip.
+//
+// NO CI RUNNER, AND THE LEDGER SAYS SO. A run of this tier needs a whole
+// development stack inside one job: a real Postgres, a real Redis (with the
+// queue backend unreachable the boot never reaches ready and the readiness poll
+// below simply times out), the per-boot secrets the start-up path refuses to
+// run without, the development runtime mode (the production path needs a baked
+// seed that a plain source-tree run does not produce), the companion extension
+// tree the start-up hook imports, and a ready budget of minutes for a cold
+// compile.
+//
+// One job DOES carry that combination today - the chat-HITL held-turn
+// dev-runtime e2e job, which boots the development runtime, provisions both
+// sidecars and already runs eight sibling tiers as steps of its own. Giving
+// this tier a step there is the closure this wants, and it is a WORKFLOW
+// change; the change that adds this tier does not make one, so the wiring is a
+// CI-wiring change of its own.
+//
+// Folding the suite into one of the tiers that job already runs is not the
+// answer either: every one of those configs pins `SUPABASE_SCHEMA` to a
+// throwaway schema, and the development server spawned below inherits the
+// environment it is spawned with - it would boot against a schema that does not
+// carry the application's tables.
+//
+// So the tier is recorded in scripts/audit/root-tier-runner-exceptions.json
+// with its slice and that reason: the second of the two lawful states that
+// ledger allows, and the honest one until the step exists.
 const root = path.resolve(__dirname, "..", "..");
 
 export default defineConfig({
