@@ -636,7 +636,10 @@ function warnOnUnclassifiedVehicles(
 //                 admit a name.
 //   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
 //                 connection for, read through the same per-row `use` gate the
-//                 connector inventory uses.
+//                 connector inventory uses. For a connector that holds no
+//                 connection of its own, that is the connection it DECLARES it
+//                 consumes (cinatra#3108) — the inventory row already answers
+//                 the question that way, so this set needs no second rule.
 //
 // The capability key for a primitive is derived from the LIVE connector
 // catalog rather than from a table: a primitive whose name matches a catalog
