@@ -109,8 +109,9 @@ things can hide behind a moved hash, and they cost different amounts:
   not quietly pass here; it turns that suite red instead, one layer further in.
 - **The manifest declares exactly what it declared before**, and only the
   embedded spec-content hash moved — the spec source changed under an unchanged
-  drawing. Three of the five known drifts below are this case, and the
-  functional-acceptance suite would stay green through a blind re-pin of them.
+  drawing. Three of the five drifts the reconciliation below adopted were this
+  case, and the functional-acceptance suite would have stayed green through a
+  blind re-pin of them.
   Nothing downstream catches it, which is precisely why the hashes are compared
   here and why a re-pin is still an adoption: the claim "this repo verified
   against THAT artifact" stops being true the moment the hash is edited without
@@ -127,7 +128,8 @@ adoption, never the whole of it.
   every push to `main` and on dispatch — its own job, not a step in `gates`,
   because `gates` is a required context and a red here had to be visible
   without blocking anything until (b) landed. The first `main` run came back
-  red with five drifts (see Known drifts below).
+  red with five drifts, all five of which the reconciliation record below
+  has since adopted.
 - **(b) the requirement.** `design-pin-drift` is now listed in
   `.github/branch-protections.json`'s required contexts, and mirrored in
   `scripts/ci/merge-group-coverage-guard.mjs`. That file is a declaration: the
@@ -141,42 +143,73 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-Measured 2026-08-28 against the published manifests. The five frozen bodies are
-committed under
-`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-08-28/`, with
-a `capture.json` receipt recording each one's URL, date, status, byte length and
-hash — so any row below can be re-checked by hand with
-`curl -sS <url> | shasum -a 256`. All five pins differ in **both** hashes.
-**No adopting issue is filed for any of them yet**; each needs its own, and the
-right-hand column is a to-do, not a record.
+**None.** All five pins were reconciled on 2026-08-30 and every one of them
+reads `match` against the published manifests, including on the `push`-to-`main`
+arm that is red on any non-`match` outcome. The record of what each adoption
+changed is below; the five bodies that were drifting are kept as the checker's
+own drift fixture (see `superseded-pins-2026-08-28/` beside the frozen
+published ones), because a gate whose drift path has no input is a gate whose
+drift path is untested.
 
-| Pin | Outcome | What differs | Adopting issue |
+## Reconciliation record
+
+Measured 2026-08-28 and adopted on 2026-08-30, after re-fetching each published
+manifest and confirming it was byte-identical to the frozen 2026-08-28 capture
+under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-08-28/`.
+Every row's committed artifact under
+`tests/e2e/design/conformance/manifests/` is the verbatim published body; both
+hashes in `conformance-pins.json` were re-derived from it, never typed.
+
+| Pin | Was | What the adoption changed | Cost |
 | --- | --- | --- | --- |
-| `app` | `drift` | a declaration change: one additional surface, `sidebar-assistants-entry`, which has no driver and no harness mount here | none filed |
-| `app-components` | `drift` | a declaration change: `scheduling-trigger-tab` is gone; `breadcrumb-entity-resolution` and `scheduling-step-configured` are new | none filed |
-| `app-extensions` | `drift` | **hashes only** — the published manifest declares byte-identical surfaces; the spec source moved under an unchanged drawing | none filed |
-| `app-connectors` | `drift` | **hashes only** — byte-identical surfaces | none filed |
-| `app-notifications` | `drift` | **hashes only** — byte-identical surfaces | none filed |
+| `app` | `drift` | one surface gained: `sidebar-assistants-entry` (`open-assistants -> assistants`) | driver + harness mount + test-id contract row |
+| `app-components` | `drift` | `scheduling-trigger-tab` retired; `scheduling-step-configured` and `breadcrumb-entity-resolution` gained | one driver retired, two added, two harness mounts, two test-id contract rows |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-connectors` | `drift` | **hashes only** — byte-identical surfaces | re-pin |
+| `app-notifications` | `drift` | **hashes only** — byte-identical surfaces | re-pin |
 
-The split matters. Only the first two would ever reach the
-functional-acceptance suite; the other three are visible **here and nowhere
-else**, which is the case this job was written for.
+The two redeclaring adoptions are the ones the "who moves a pin" rule is
+written for, and neither needed product work — both name mechanisms this
+repository already ships:
 
-`app-components` is the most expensive of the five and the reason the "who moves
-a pin" rule is written the way it is. Adopting it costs three things in one
-commit, none of which a hash edit provides:
+1. **`sidebar-assistants-entry`** is the §IX Assistants nav entry, shipped in
+   `src/components/app-sidebar.tsx` with the exact
+   `data-conformance-id` / `data-action` literals the surface declares, and
+   already asserted at the source by
+   `src/components/__tests__/sidebar-assistants-conformance.test.ts`. What was
+   missing was a mount that exercises its ACTION to the declared outcome; the
+   adoption adds one.
+2. **`scheduling-step-configured`** replaces `scheduling-trigger-tab`, and the
+   retirement happened **with** the adoption, in one commit, exactly as this
+   page required — the driver and harness mount for the retired surface were
+   left untouched until the manifest that retires it was pinned. The redraw
+   follows the product: the Trigger tab's `cancel`/`release` pair is gone
+   because **Run now** was withdrawn with its whole action path, and the two
+   surviving operations are the configured schedule step's `Save changes`
+   (`save-schedule-changes`, settling to "Saved — the trigger is re-armed on
+   these rows" = `rearmed`) and `Cancel schedule`
+   (`cancel-trigger-schedule` = `stopped`), both drawn by
+   `packages/agents/src/schedule-proposal-card.tsx`.
+3. **`breadcrumb-entity-resolution`** is the crumb-contributions resolution
+   road: `src/lib/breadcrumb-contributions.ts` (publish / select / clear),
+   `src/lib/breadcrumb-trail.ts` (`buildBreadcrumbTrail`, and the
+   `idSegmentPlaceholder` floor rule that is exactly the manifest's
+   `crumb-placeholder <- entity.id` binding), and the negative surfaces'
+   `CrumbContributionsClear`, which is exactly `visit-unauthorized ->
+   resolved-names-cleared`. Its mount DRIVES that road rather than modelling
+   it: the fields, the action and the state all run through the real modules.
 
-1. `scheduling-trigger-tab` is retired **with** the adoption and not before it —
-   the currently pinned artifact still declares that surface, and a declared
-   surface with no driver and no allowlist entry is a red, so retiring its
-   driver and harness mount first would break the suite to record a fact this
-   page records without breaking anything.
-2. `scheduling-step-configured` declares actions with no counterpart to drive
-   until the schedule step itself draws them.
-3. `breadcrumb-entity-resolution` has no driver, no harness mount and no
-   testid-contract entry anywhere in this repo, and `allowlist.json` is
-   shrink-only, so it cannot be exempted — it has to be covered in the same
-   commit that moves the pin.
+An earlier reading of this page recorded `scheduling-step-configured` as
+declaring "actions with no counterpart to drive until the schedule step itself
+draws them", and `breadcrumb-entity-resolution` as having no counterpart at
+all. Both readings were wrong at the time they were written, and the
+reconciliation says so rather than carrying them forward: the schedule card had
+already landed, and the breadcrumb road had shipped well before that. Neither
+pin needed to be deferred, and none was.
+
+`allowlist.json` gained nothing — it is shrink-only and did not move. Every
+surface in every adopted manifest has a driver.
 
 ## Running it locally
 
@@ -187,5 +220,6 @@ pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/design-pin-d
 ```
 
 The unit suite needs no network: it runs the checker against the frozen
-2026-08-28 bodies, against the committed manifest copies (the zero-drift set),
-and against one fixture per failure outcome.
+2026-08-28 bodies (the adopted, zero-drift set), against the superseded bodies
+beside them (the drift set), against the committed manifest copies, and against
+one fixture per failure outcome.
