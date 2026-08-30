@@ -322,7 +322,7 @@
       ]
     },
     "scheduling-step": {
-      "manifest": "app",
+      "manifest": "app-components",
       "selector": "harness [data-surface-id=\"scheduling-step\"][data-variant=\"populated\"] (schedule affordance → data-outcome=\"armed\"; error: [data-slot=\"alert\"]; loading: [data-testid=\"scheduling-step-loading\"]).",
       "requires": [
         {
@@ -339,10 +339,17 @@
         }
       ]
     },
-    "scheduling-trigger-tab": {
-      "manifest": "app",
-      "selector": "harness [data-surface-id=\"scheduling-trigger-tab\"][data-variant=\"populated\"] (cancel/release affordances → data-outcome; error: [data-slot=\"alert\"]).",
+    "scheduling-step-configured": {
+      "manifest": "app-components",
+      "selector": "harness [data-surface-id=\"scheduling-step-configured\"][data-variant=\"populated\"] (Save changes → data-outcome=\"rearmed\"; Cancel schedule → one-step confirm → data-outcome=\"stopped\"; error: [data-slot=\"alert\"]; loading: [data-testid=\"scheduling-step-configured-loading\"]). REPLACES scheduling-trigger-tab, retired by the manifest this pin adopted; the two operations are the ones the shipped schedule card draws.",
       "requires": [
+        {
+          "file": "packages/agents/src/schedule-proposal-card.tsx",
+          "literals": [
+            "data-action=\"save-schedule-changes\"",
+            "data-action=\"cancel-trigger-schedule\""
+          ]
+        },
         {
           "file": "src/components/ui/button.tsx",
           "literals": ["data-slot=\"button\""]
@@ -354,6 +361,53 @@
         {
           "file": "src/components/ui/alert.tsx",
           "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "sidebar-assistants-entry": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"sidebar-assistants-entry\"][data-variant=\"populated\"] (the entry → data-outcome=\"assistants\"). The REAL entry is app-sidebar.tsx's AssistantsNavItem, whose literals below are the §IX conformance contract and are additionally asserted at the source by src/components/__tests__/sidebar-assistants-conformance.test.ts.",
+      "requires": [
+        {
+          "file": "src/components/app-sidebar.tsx",
+          "literals": [
+            "data-conformance-id=\"sidebar-assistants-entry\"",
+            "data-action=\"open-assistants -> assistants\"",
+            "data-testid=\"sidebar-assistants-link\""
+          ]
+        },
+        {
+          "file": "src/components/ui/sidebar.tsx",
+          "literals": ["data-slot=\"sidebar-menu-item\"", "data-slot=\"sidebar-menu-button\""]
+        }
+      ]
+    },
+    "breadcrumb-entity-resolution": {
+      "manifest": "app-components",
+      "selector": "harness [data-surface-id=\"breadcrumb-entity-resolution\"][data-variant=\"populated\"] (resolved trail [data-testid=\"crumb-label\"], unresolved trail [data-testid=\"crumb-placeholder\"], each read at its last [data-slot=\"breadcrumb-page\"]; the \"Visit an unauthorized page\" control mounts the real CrumbContributionsClear island → data-outcome=\"resolved-names-cleared\"; loading: [data-surface-id=\"breadcrumb-entity-resolution\"][data-variant=\"loading\"] [data-testid=\"crumb-placeholder-loading\"], asserted on its crumb text). The mount DRIVES the real resolution road (the contributions bus + the trail builder + the real clear island + the real Breadcrumb primitives) rather than modelling it.",
+      "requires": [
+        {
+          "file": "src/lib/breadcrumb-contributions.ts",
+          "literals": [
+            "export function publishCrumbContributions",
+            "export function clearCrumbContributions",
+            "export function selectCrumbContributions"
+          ]
+        },
+        {
+          "file": "src/lib/breadcrumb-trail.ts",
+          "literals": [
+            "export function idSegmentPlaceholder",
+            "export function buildBreadcrumbTrail"
+          ]
+        },
+        {
+          "file": "src/components/crumb-contributions.tsx",
+          "literals": ["export function CrumbContributionsClear"]
+        },
+        {
+          "file": "src/components/ui/breadcrumb.tsx",
+          "literals": ["data-slot=\"breadcrumb\"", "data-slot=\"breadcrumb-page\""]
         }
       ]
     },

@@ -5,15 +5,18 @@
 // added to the app manifest at design spec 4d7b3505 (cinatra#1043):
 //
 //   approvals-inbox, approvals-your-requests, approvals-marketplace-states,
-//   scheduling-step, scheduling-trigger-tab
+//   scheduling-step, scheduling-step-configured
 //
 // These surfaces' real screens (src/lib/approvals/**,
-// packages/agents/src/trigger-*.tsx) drive every action — approve / reject /
-// withdraw / retry / schedule / cancel / release — through a server action
-// (decideApprovalRow, setRunTrigger, deleteRunTrigger, releaseTriggerNow) that
-// needs an authenticated session + seeded rows. The design-conformance harness
-// boots a standalone production server with NO session, so the real success
-// OUTCOME (approved / armed / cancelled / …) is unreachable here — exactly the
+// packages/agents/src/trigger-*.tsx, packages/agents/src/
+// schedule-proposal-card.tsx) drive every action — approve / reject /
+// withdraw / retry / schedule / save / cancel — through a server action
+// (decideApprovalRow, setRunTrigger, and the ops
+// src/lib/lifecycle/trigger-schedule-proposal-card.ts resolves a card ref
+// into) that needs an authenticated session + seeded rows. The
+// design-conformance harness boots a standalone production server with NO
+// session, so the real success
+// OUTCOME (approved / armed / rearmed / …) is unreachable here — exactly the
 // reason the LIVE-render conformance for these surfaces was proven by hand on
 // the seeded verify stack instead (evidence branch, cinatra#1043).
 //
@@ -56,8 +59,12 @@ const OUTCOME_PILL: Record<string, StatusPillStatus> = {
   rejected: "declined",
   withdrawn: "archived",
   armed: "scheduled",
-  cancelled: "archived",
-  released: "running",
+  // scheduling-step-configured (cinatra#3057 adoption): Save changes re-arms
+  // the trigger, Cancel schedule stops it. The retired scheduling-trigger-tab's
+  // "cancelled"/"released" went with it — `released` had no outcome left to
+  // name once cinatra#2972 withdrew Run now.
+  rearmed: "scheduled",
+  stopped: "archived",
 };
 
 function OutcomePill({ outcome }: { outcome: string }) {
@@ -354,67 +361,103 @@ function SchedulingStepFixture() {
 }
 
 // ---------------------------------------------------------------------------
-// scheduling-trigger-tab — cancel → cancelled, release → released; state error
+// scheduling-step-configured — save-schedule → rearmed, cancel-schedule →
+// stopped; states error, loading
+//
+// This surface REPLACES scheduling-trigger-tab, which the same published
+// manifest retired (adopted by the cinatra#3057 pin reconciliation). The
+// design system redrew it after cinatra#2972: the persistent Trigger tab's
+// cancel/release pair is gone — Run now (`release-trigger-now`) was withdrawn
+// with its whole action path — and the CONFIGURED schedule step is where the
+// two surviving operations live. Both are shipped in
+// packages/agents/src/schedule-proposal-card.tsx and drawn on the run page
+// and the review page as the rail's schedule step:
+//
+//   Save changes   `save-schedule-changes`   settles to
+//                  "Saved — the trigger is re-armed on these rows."   -> rearmed
+//   Cancel schedule `cancel-trigger-schedule` asks first, pends as
+//                  "Stopping…", and no further runs start from it     -> stopped
+//
+// Like every surface on this harness the mount models that floor with the REAL
+// design-system primitives rather than booting the real card, whose two
+// operations go through server actions needing an authenticated session and a
+// proposal ref resolved server-side (src/lib/lifecycle/
+// trigger-schedule-proposal-card.ts). ONE deliberate divergence: the real
+// card's confirm strip repeats the verb ("Cancel schedule" opens it and
+// confirms it), which would leave the driver's two clicks resolving to the
+// same accessible name — so the confirm here is "Confirm cancel schedule",
+// the same one-step ask with an unambiguous label.
 // ---------------------------------------------------------------------------
 
-function SchedulingTriggerTabFixture() {
+function SchedulingStepConfiguredFixture() {
   const [outcome, setOutcome] = useState("idle");
-  const [confirming, setConfirming] = useState<null | "cancel" | "release">(null);
-  const decided = outcome !== "idle";
+  const [confirming, setConfirming] = useState(false);
+  const settled = outcome !== "idle";
 
   return (
-    <SurfaceSection title="Scheduling — persistent Trigger tab (surface: scheduling-trigger-tab)">
+    <SurfaceSection title="Scheduling — configured schedule step (surface: scheduling-step-configured)">
       <div
-        data-surface-id="scheduling-trigger-tab"
+        data-surface-id="scheduling-step-configured"
         data-variant="populated"
         data-outcome={outcome}
       >
         <div className="flex flex-col gap-4">
           <div className="soft-panel rounded-card flex flex-col gap-2 p-4">
-            <p className="text-base font-semibold text-foreground">Trigger configuration</p>
+            <p className="text-base font-semibold text-foreground">Schedule</p>
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Type</span>
-              <span className="text-foreground">scheduled</span>
+              <span className="text-muted-foreground">Repeats</span>
+              <span className="text-foreground">Every weekday at 09:00</span>
             </div>
           </div>
 
-          {decided ? (
+          {settled ? (
             <div className="flex items-center gap-2">
               <OutcomePill outcome={outcome} />
               <span className="text-sm text-foreground">
-                {outcome === "cancelled" ? "Trigger cancelled." : "Trigger released."}
+                {outcome === "rearmed"
+                  ? "Saved — the trigger is re-armed on these rows."
+                  : "No further runs will start from this schedule."}
               </span>
             </div>
           ) : confirming ? (
             <div className="flex items-center justify-end gap-2">
               <span className="text-sm text-muted-foreground">
-                {confirming === "cancel" ? "Cancel scheduled trigger?" : "Release trigger now?"}
+                Stop this recurring schedule?
               </span>
               <Button
                 size="sm"
-                variant={confirming === "cancel" ? "secondary" : "destructive"}
-                onClick={() => setOutcome(confirming === "cancel" ? "cancelled" : "released")}
+                variant="secondary"
+                onClick={() => setOutcome("stopped")}
               >
-                {confirming === "cancel" ? "Confirm cancel" : "Confirm release"}
+                Confirm cancel schedule
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
-                Keep trigger
+              <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                Keep schedule
               </Button>
             </div>
           ) : (
             <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setConfirming("cancel")}>
-                Cancel trigger
-              </Button>
-              <Button variant="secondary" onClick={() => setConfirming("release")}>
-                Release now
+              <Button onClick={() => setOutcome("rearmed")}>Save changes</Button>
+              <Button variant="secondary" onClick={() => setConfirming(true)}>
+                Cancel schedule
               </Button>
             </div>
           )}
         </div>
       </div>
 
-      <ErrorVariant surfaceId="scheduling-trigger-tab" />
+      <ErrorVariant surfaceId="scheduling-step-configured" />
+
+      <div data-surface-id="scheduling-step-configured" data-variant="loading">
+        {/* The real card's pending treatment on the cancel path ("Stopping…"). */}
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          data-testid="scheduling-step-configured-loading"
+        >
+          <span className="size-4 animate-spin rounded-full border-2 border-line border-t-primary" />
+          Stopping…
+        </div>
+      </div>
     </SurfaceSection>
   );
 }
@@ -431,7 +474,7 @@ export function ApprovalsSchedulingConformanceFixtures() {
       <ApprovalsYourRequestsFixture />
       <ApprovalsMarketplaceStatesFixture />
       <SchedulingStepFixture />
-      <SchedulingTriggerTabFixture />
+      <SchedulingStepConfiguredFixture />
     </>
   );
 }
