@@ -65,6 +65,14 @@ import { randomUUID } from "node:crypto";
 import { auth } from "@/lib/auth";
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { DEV_UAT_FIXTURE_USER_TYPE } from "@/lib/initial-admin-bootstrap-policy";
+import {
+  devFixtureSeedRefusal,
+  printDevFixtureSecretOnce,
+  resolveDevFixturePassword,
+  retireDevFixturePassword,
+  rotateDevFixturePassword,
+  type DevFixtureCredentialStore,
+} from "@/lib/dev-fixture-secret";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
 
@@ -659,28 +667,79 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
 // production and never touches the prod auth-route guard or manifest.
 // ---------------------------------------------------------------------------
 
-// Deterministic dev UAT end-user. The password is a fixed DEV literal (never a
-// production secret) the Playwright suite reads from the handoff file below to
-// drive the hosted-login popup. Min length 12 (matches the auth policy floor).
+// Deterministic dev UAT end-user. Its IDENTITY is fixed; its PASSWORD is not —
+// that is minted fresh on every boot by `@/lib/dev-fixture-secret`, shown to the
+// operator once, and written nowhere in clear. The Playwright suite reads the
+// same value from the environment the instance was started with.
 const DEV_UAT_USER = {
   // Dot-domain literal: better-auth's (zod) email schema rejects no-dot
   // domains like `@localhost`, which would make this seed fail on every
   // fresh DB. RFC 2606 reserves example.com; no mail is ever sent to it.
   email: "cinatra-uat@example.com",
   name: "Cinatra UAT",
-  // Assembled from fragments so no secret-scanner flags a literal credential.
-  password: ["cinatra", "uat", "dev", "12345"].join("-"),
 } as const;
 
 // Handoff file the Playwright globalSetup reads (gitignored: tests/e2e/wp-drupal-uat/.uat/).
+// It carries the fixture's IDENTITY only — never its password.
 const DEV_UAT_ACTOR_FILE = path.join(
   process.cwd(),
   "tests/e2e/wp-drupal-uat/.uat/dev-actor.json",
 );
 
-type DevConnectActor = { userId: string; orgId: string; email: string; password: string };
+type DevConnectActor = { userId: string; orgId: string; email: string };
 
 let cachedDevActor: DevConnectActor | null = null;
+
+/**
+ * The three sign-in-store operations a fixture-password rotation needs, taken
+ * from the app's own auth stack so the rotation hashes exactly the way a real
+ * sign-up does. The plain password never leaves this process: only its hash is
+ * written, and only onto the fixture's own credential account.
+ */
+async function devFixtureCredentialStore(): Promise<DevFixtureCredentialStore> {
+  const ctx = await auth.$context;
+  return {
+    hasCredentialAccount: async (userId) =>
+      (await ctx.internalAdapter.findAccounts(userId)).some(
+        (account: { providerId?: string | null }) => account.providerId === "credential",
+      ),
+    hashPassword: (plain) => ctx.password.hash(plain),
+    updateCredentialPassword: (userId, passwordHash) =>
+      ctx.internalAdapter.updatePassword(userId, passwordHash),
+  };
+}
+
+/**
+ * Take an earlier boot's password away from a fixture account this boot will
+ * NOT be using. Called where seeding is refused: the refusal stops a NEW
+ * account appearing, and this stops an OLD one still answering to a password
+ * somebody may have written down. Best-effort and silent on absence — an
+ * instance with no fixture row, or no database to ask, has nothing to retire.
+ */
+async function retireStaleDevFixtureAccount(): Promise<void> {
+  try {
+    const userId = (
+      runPostgresQueriesSync({
+        connectionString: getPostgresConnectionString(),
+        queries: [
+          { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+        ],
+      })[0]?.rows as { id: string }[] | undefined
+    )?.[0]?.id;
+    if (!userId) return;
+    const retired = await retireDevFixturePassword(userId, await devFixtureCredentialStore());
+    console.log(
+      retired
+        ? `${tag}:connect an earlier boot left the fixture account ${DEV_UAT_USER.email} behind — its password has been retired, so nothing can sign in as it`
+        : `${tag}:connect the fixture account ${DEV_UAT_USER.email} from an earlier boot still exists and its password could NOT be retired — remove that account by hand`,
+    );
+  } catch (err) {
+    console.log(
+      `${tag}:connect could not check for a fixture account left by an earlier boot ` +
+        `(${err instanceof Error ? err.message : "unknown"}) — if one exists, remove it by hand`,
+    );
+  }
+}
 
 /**
  * Idempotently ensure the deterministic dev UAT user + Default org membership,
@@ -691,12 +750,33 @@ let cachedDevActor: DevConnectActor | null = null;
  * more. It must NEVER route through `ensureInitialAdminBootstrap`: seeding it
  * as the "first user" consumed the one-shot platform-admin bootstrap on every
  * fresh dev install, so the first real registrant stayed role=user and the
- * setup wizard 403'd (cinatra#1135). Writes a gitignored handoff file for the
- * Playwright suite. Returns null (soft) if seeding is unavailable.
+ * setup wizard 403'd (cinatra#1135). Writes a gitignored handoff file carrying
+ * the fixture's IDENTITY for the Playwright suite — never its password.
+ *
+ * Refuses outright, with a printed sentence, on an instance configured to be
+ * served anywhere but a loopback or private-network address, and rotates an
+ * account an earlier boot left behind onto this boot's secret so an older
+ * password stops working. Returns null (soft) if seeding is unavailable or
+ * refused.
  */
 export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
   if (!isStrictDevelopmentRuntime()) return null;
   if (cachedDevActor) return cachedDevActor;
+
+  // An instance anyone can reach never carries the fixture account: a password
+  // printed on one operator's screen must never be typeable at somebody else's
+  // sign-in page. Decided BEFORE a single row is read or written.
+  const refusal = devFixtureSeedRefusal();
+  if (refusal) {
+    console.log(`${tag}:connect ${refusal}`);
+    // Refusing to seed is not enough on an instance that used to be private:
+    // an account an earlier boot created is still sitting there answering to
+    // that boot's password. Take the password away before returning.
+    await retireStaleDevFixtureAccount();
+    return null;
+  }
+
+  const { password: fixturePassword, source: fixturePasswordSource } = resolveDevFixturePassword();
 
   const connectionString = getPostgresConnectionString();
 
@@ -711,12 +791,14 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     })[0]?.rows as { id: string }[] | undefined
   )?.[0]?.id;
 
+  let seededThisBoot = false;
   if (!userId) {
     try {
       const signedUp = await auth.api.signUpEmail({
-        body: { email: DEV_UAT_USER.email, password: DEV_UAT_USER.password, name: DEV_UAT_USER.name },
+        body: { email: DEV_UAT_USER.email, password: fixturePassword, name: DEV_UAT_USER.name },
       });
       userId = signedUp?.user?.id;
+      seededThisBoot = Boolean(userId);
     } catch (err) {
       // A concurrent boot may have created it between the SELECT and signUp.
       userId = (
@@ -735,6 +817,37 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
       }
     }
   }
+
+  // An account from an earlier boot still carries THAT boot's password, which
+  // may have been written down anywhere in the meantime. Put this boot's secret
+  // on it before anything else uses it. FAIL CLOSED: an account whose password
+  // this boot cannot replace is not wired at all, so a password can never
+  // outlive the boot that minted it.
+  if (!seededThisBoot) {
+    let rotated = false;
+    try {
+      const store = await devFixtureCredentialStore();
+      rotated = await rotateDevFixturePassword(userId, fixturePassword, store);
+    } catch (err) {
+      console.log(
+        `${tag}:connect could not replace the fixture account's password (${err instanceof Error ? err.message : "unknown"}) — ` +
+          `not wiring the actor; an account whose password this boot does not know must not be used. ` +
+          `${DEV_UAT_USER.email} MAY STILL ANSWER TO AN EARLIER BOOT'S PASSWORD — remove that account by hand.`,
+      );
+      return null;
+    }
+    if (!rotated) {
+      console.log(
+        `${tag}:connect the fixture account has no password to replace — not wiring the actor`,
+      );
+      return null;
+    }
+  }
+
+  // The account now carries THIS boot's secret, so the operator is shown it
+  // here — before the org wiring below, any step of which can return early. A
+  // live account whose password nobody was ever told is no use to anybody.
+  printDevFixtureSecretOnce(DEV_UAT_USER.email, fixturePassword, fixturePasswordSource);
 
   // Mark the fixture row as a MACHINE account before any org wiring: better-
   // auth's signup default is userType='human' (the field is input:false, so it
@@ -804,11 +917,14 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     return null;
   }
 
-  const actor: DevConnectActor = { userId, orgId, email: DEV_UAT_USER.email, password: DEV_UAT_USER.password };
+  const actor: DevConnectActor = { userId, orgId, email: DEV_UAT_USER.email };
   try {
     mkdirSync(path.dirname(DEV_UAT_ACTOR_FILE), { recursive: true });
-    writeFileSync(DEV_UAT_ACTOR_FILE, JSON.stringify(actor, null, 2));
-    // Restrict perms — the file carries a (dev-only) password.
+    writeFileSync(
+      DEV_UAT_ACTOR_FILE,
+      JSON.stringify({ userId, orgId, email: DEV_UAT_USER.email }, null, 2),
+    );
+    // Restrict perms — the file names the fixture account (never its password).
     try { chmodSync(DEV_UAT_ACTOR_FILE, 0o600); } catch { /* best-effort on non-POSIX */ }
   } catch {
     // Non-fatal: the mint still works; the suite just won't find the handoff.

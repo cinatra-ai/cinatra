@@ -30,8 +30,18 @@ export const DRUPAL_CONTAINER = process.env.UAT_DRUPAL_CONTAINER ?? "cinatra-dru
 export const WP_TITLE = "Cinatra UAT Page";
 export const DRUPAL_TITLE = "Cinatra UAT Article";
 export const SEED_FILE = path.join(__dirname, ".uat", "seed.json");
-// dev-auto-setup writes the deterministic dev UAT user creds here (gitignored).
+// dev-auto-setup writes the deterministic dev UAT user's IDENTITY here
+// (gitignored). It never carries a password: the dev boot mints one per boot and
+// prints it once, and this suite reads that value from the environment below.
 export const DEV_ACTOR_FILE = path.join(__dirname, ".uat", "dev-actor.json");
+// The setting the instance was started with, carrying the fixture account's
+// password. Mirrors DEV_FIXTURE_PASSWORD_ENV in src/lib/dev-fixture-secret.ts.
+export const DEV_FIXTURE_PASSWORD_ENV = "CINATRA_DEV_FIXTURE_PASSWORD";
+// The floor the dev boot applies to that value. Mirrors
+// MIN_DEV_FIXTURE_PASSWORD_LENGTH in src/lib/dev-fixture-secret.ts: a shorter
+// value is IGNORED by the boot, which mints its own instead, so a harness that
+// accepted one here would type a password the instance never had.
+export const MIN_DEV_FIXTURE_PASSWORD_LENGTH = 24;
 // Saved Cinatra session for the dev UAT user (used by the hosted-login popup).
 export const STORAGE_STATE_FILE = path.join(__dirname, ".auth", "state.json");
 
@@ -198,7 +208,32 @@ function assertWidgetWired(): void {
   );
 }
 
-export type DevActor = { userId: string; orgId: string; email: string; password: string };
+export type DevActor = { userId: string; orgId: string; email: string };
+
+/**
+ * The fixture account's password for this run. The dev boot mints one per boot,
+ * shows it once and stores it nowhere, so whatever starts the dev server for
+ * this suite passes the same value in through the environment. There is nothing
+ * to fall back to — a missing value says exactly which setting to supply.
+ */
+export function readDevActorPassword(): string {
+  const value = process.env[DEV_FIXTURE_PASSWORD_ENV];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(
+      `[wp-drupal-uat] the dev UAT account's password is not available. Set ${DEV_FIXTURE_PASSWORD_ENV} to ` +
+        `the value the dev server was started with — the boot mints one per boot and prints it once, and ` +
+        `setting this before the boot chooses it instead. It is deliberately absent from ${DEV_ACTOR_FILE}.`,
+    );
+  }
+  if (value.length < MIN_DEV_FIXTURE_PASSWORD_LENGTH) {
+    throw new Error(
+      `[wp-drupal-uat] ${DEV_FIXTURE_PASSWORD_ENV} is shorter than ${MIN_DEV_FIXTURE_PASSWORD_LENGTH} ` +
+        `characters, so the dev server ignored it and minted its own password for this boot. Supply a value ` +
+        `at least ${MIN_DEV_FIXTURE_PASSWORD_LENGTH} characters long to both the dev server and this suite.`,
+    );
+  }
+  return value;
+}
 
 function readDevActor(): DevActor {
   let raw: string;
@@ -224,12 +259,14 @@ function readDevActor(): DevActor {
  * CMS admin origin the specs navigate to. So a popup opened by the frame may
  * land already authenticated and return itself without presenting a form. The
  * drive (`helpers.finishFrameSignIn`) handles BOTH outcomes and types the same
- * actor's credentials from `.uat/dev-actor.json` when the form does appear, so
+ * actor's identity from `.uat/dev-actor.json` — and this boot's password from
+ * the environment — when the form does appear, so
  * neither path is assumed and the ceremony is real either way. The state is also
  * what lets the render-parity leg's same-site seam fetch read a thread it seeded
  * as this user.
  */
 async function establishCinatraSession(actor: DevActor): Promise<void> {
+  const password = readDevActorPassword();
   const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
   try {
     // The dev server is still churning through first-compile + background
@@ -244,7 +281,7 @@ async function establishCinatraSession(actor: DevActor): Promise<void> {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         signIn = await ctx.post("/api/auth/sign-in/email", {
-          data: { email: actor.email, password: actor.password },
+          data: { email: actor.email, password },
           headers: { Origin: CINATRA_BASE },
           failOnStatusCode: false,
         });

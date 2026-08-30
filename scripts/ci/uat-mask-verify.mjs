@@ -5,8 +5,9 @@
  *
  * WHAT THIS GUARDS
  * ----------------
- * The four values the UAT jobs mint per run (BETTER_AUTH_SECRET,
- * NANGO_ENCRYPTION_KEY, CINATRA_BRIDGE_TOKEN, CINATRA_CONTEXT_ATTEST_KEY) are
+ * The values the UAT jobs mint per run (BETTER_AUTH_SECRET,
+ * NANGO_ENCRYPTION_KEY, CINATRA_BRIDGE_TOKEN, CINATRA_CONTEXT_ATTEST_KEY and
+ * CINATRA_DEV_FIXTURE_PASSWORD) are
  * written to $GITHUB_ENV, which makes them part of the JOB env — and the runner
  * prints the whole job env in the `##[group]Run …` header of every subsequent
  * step. A derivation step therefore does not have to echo anything for its
@@ -22,7 +23,7 @@
  * later job either — masked values are redacted out of job outputs, which is
  * the masking working as intended. So this runs as a SEPARATE job that reads
  * the finished log of the UAT job in the same run and checks the leak site
- * directly: every rendering of those four env keys must show `***`.
+ * directly: every rendering of those env keys must show `***`.
  *
  * That is strictly narrower than "the value appears nowhere", so it is paired
  * with the in-job `uat-diagnostics.sh scan` step, which greps the actual
@@ -40,6 +41,7 @@ const MINTED_KEYS = [
   "NANGO_ENCRYPTION_KEY",
   "CINATRA_BRIDGE_TOKEN",
   "CINATRA_CONTEXT_ATTEST_KEY",
+  "CINATRA_DEV_FIXTURE_PASSWORD",
 ];
 // Echoed by the "Assert app-service env present" step, which runs ONLY on the
 // real-run path and only after all four values have been minted. Its presence
