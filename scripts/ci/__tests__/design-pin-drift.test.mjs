@@ -12,9 +12,14 @@
 //
 //   1. OUTCOMES. The five FROZEN published manifests (fetched 2026-08-28,
 //      committed verbatim under __fixtures__) are run against the REAL
-//      conformance-pins.json and must report exactly five `drift` outcomes.
-//      The committed manifest copies are the zero-drift set — they are the
-//      bytes the pins name, so the same checker must report five `match`es.
+//      conformance-pins.json. The reconciliation ADOPTED those exact bytes,
+//      so they are now the zero-drift set together with the committed
+//      manifest copies they are byte-identical to — five `match`es, and that
+//      identity IS the adoption record. The drift path keeps a real input of
+//      its own: the SUPERSEDED bodies (the artifacts the pins named before
+//      the reconciliation, frozen beside the published ones) must still
+//      report five `drift`s, in both hashes. A gate whose drift path has no
+//      input is a gate whose drift path is untested.
 //      One fixture each drives `http-failure`, `invalid-json` and
 //      `schema-failure` BY NAME, because the failure a gate never names is
 //      the failure it silently passes.
@@ -69,6 +74,12 @@ const FIXTURES = path.join(
   "design-pin-drift",
 );
 const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-08-28");
+/**
+ * The artifacts the pins named BEFORE the cinatra#3057 reconciliation. They
+ * are the suite's drift input now that the published bodies are the adopted
+ * ones: see the provenance receipt beside them.
+ */
+const SUPERSEDED = path.join(FIXTURES, "superseded-pins-2026-08-28");
 const MALFORMED = path.join(FIXTURES, "malformed");
 
 const pins = loadPins(REPO_ROOT);
@@ -96,10 +107,14 @@ const byId = (results, id) => results.find((r) => r.id === id);
 // ---------------------------------------------------------------------------
 
 describe("criterion 1 — the five outcomes are reported, never silently passed", () => {
-  it("the frozen 2026-08-28 published manifests drift against every pin on main", async () => {
+  it("the superseded pinned artifacts drift against every pin on main", async () => {
+    // The drift path's real input after the reconciliation: the five bodies
+    // the pins named BEFORE it. Serving them back is exactly the shape of the
+    // red this gate exists to raise, so nothing about that red went untested
+    // when the published bodies stopped drifting.
     const results = await runCheck({
       pins,
-      fetchManifest: fixtureFetcher(FROZEN_PUBLISHED),
+      fetchManifest: fixtureFetcher(SUPERSEDED),
     });
     expect(results).toHaveLength(5);
     expect(outcomesOf(results)).toEqual(["drift", "drift", "drift", "drift", "drift"]);
@@ -109,6 +124,27 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
       expect(result.publishedManifestSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(result.publishedManifestSha256).not.toBe(result.pinnedManifestSha256);
       expect(result.publishedSpecContentHash).not.toBe(result.pinnedSpecContentHash);
+    }
+  });
+
+  it("the frozen 2026-08-28 published manifests are the ADOPTED bytes and every pin matches", async () => {
+    // The reconciliation's own record, held as an assertion rather than as
+    // prose: the pins name the bytes docs.cinatra.ai served, and the
+    // committed copies under manifests/ are those same bytes verbatim.
+    const results = await runCheck({
+      pins,
+      fetchManifest: fixtureFetcher(FROZEN_PUBLISHED),
+    });
+    expect(results).toHaveLength(5);
+    expect(outcomesOf(results)).toEqual(["match", "match", "match", "match", "match"]);
+    expect(decide({ event: "push-main", results, touchedPinIds: [] }).red).toBe(false);
+    for (const pin of pins.manifests) {
+      expect(
+        readFileSync(path.join(FROZEN_PUBLISHED, pin.file)),
+        `${pin.id}: the committed copy is not the published artifact verbatim`,
+      ).toEqual(
+        readFileSync(path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file)),
+      );
     }
   });
 
@@ -236,31 +272,91 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
       const parsed = JSON.parse(bytes.toString("utf8"));
       expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
       expect(parsed.contentHash, row.file).toBe(row.contentHash);
-      // Every recorded hash differs from the pin: this IS the drift on main.
+      // Every recorded hash IS the pin: this receipt is the provenance of the
+      // adoption — the pins name bytes whose fetch is recorded, not bytes
+      // someone typed.
+      const pin = pins.manifests.find((p) => p.file === row.file);
+      expect(row.sha256, row.file).toBe(pin.manifestSha256);
+      expect(row.contentHash, row.file).toBe(pin.specContentHash);
+    }
+  });
+
+  it("the superseded fixtures carry a provenance receipt every row of which describes their real bytes", () => {
+    // Same bar as the capture receipt: a drift input nobody can re-derive is a
+    // drift input nobody can trust. `git show <sourceCommit>:<repoPath>`
+    // re-checks any row by hand.
+    const receipt = JSON.parse(readFileSync(path.join(SUPERSEDED, "provenance.json"), "utf8"));
+    expect(receipt.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(receipt.manifests.map((m) => m.file)).toEqual(pins.manifests.map((p) => p.file));
+    for (const row of receipt.manifests) {
+      const bytes = readFileSync(path.join(SUPERSEDED, row.file));
+      expect(row.repoPath, row.file).toBe(
+        `tests/e2e/design/conformance/manifests/${row.file}`,
+      );
+      expect(bytes.length, row.file).toBe(row.byteLength);
+      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+      expect(parsed.contentHash, row.file).toBe(row.contentHash);
+      // Every recorded hash differs from the pin: this IS what a drift is.
       const pin = pins.manifests.find((p) => p.file === row.file);
       expect(row.sha256, row.file).not.toBe(pin.manifestSha256);
       expect(row.contentHash, row.file).not.toBe(pin.specContentHash);
     }
   });
 
-  it("three of the five drifts change NOTHING the manifest declares — only the pinned hashes", () => {
+  it("three of the five adopted drifts changed NOTHING the manifest declares — only the hashes", () => {
     // Why both hashes are compared unconditionally: for app-extensions,
-    // app-connectors and app-notifications the frozen body and the committed
-    // copy declare byte-identical surfaces. A surface-shape comparison would
-    // report those three as unchanged; only the hashes see them.
+    // app-connectors and app-notifications the published body and the
+    // superseded one declare byte-identical surfaces. A surface-shape
+    // comparison would report those three as unchanged; only the hashes see
+    // them, and only this gate does. The other two — app (a surface gained)
+    // and app-components (one retired, two gained) — reach the
+    // functional-acceptance suite as well, and the reconciliation is what
+    // makes that split a fact rather than a claim.
     const declarationsOnly = (bytes) => {
-      const { contentHash, ...rest } = JSON.parse(bytes.toString("utf8"));
-      return JSON.stringify(rest);
+      // contentHash is the SPEC hash, not something the manifest DECLARES —
+      // dropping it is what makes this a comparison of the declarations.
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      delete parsed.contentHash;
+      return JSON.stringify(parsed);
     };
     const identical = [];
+    const redeclared = [];
     for (const pin of pins.manifests) {
-      const frozen = readFileSync(path.join(FROZEN_PUBLISHED, pin.file));
-      const committed = readFileSync(
-        path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file),
-      );
-      if (declarationsOnly(frozen) === declarationsOnly(committed)) identical.push(pin.id);
+      const adopted = readFileSync(path.join(FROZEN_PUBLISHED, pin.file));
+      const superseded = readFileSync(path.join(SUPERSEDED, pin.file));
+      // Whichever class it is, it WAS a drift: neither hash survived.
+      expect(
+        createHash("sha256").update(adopted).digest("hex"),
+        pin.id,
+      ).not.toBe(createHash("sha256").update(superseded).digest("hex"));
+      if (declarationsOnly(adopted) === declarationsOnly(superseded)) identical.push(pin.id);
+      else redeclared.push(pin.id);
     }
     expect(identical).toEqual(["app-extensions", "app-connectors", "app-notifications"]);
+    expect(redeclared).toEqual(["app", "app-components"]);
+  });
+
+  it("the two redeclaring adoptions gained and retired exactly the surfaces the record names", () => {
+    // The reconciliation's coverage claim, asserted against the artifacts
+    // themselves: a later re-pin that quietly drops a surface (or brings the
+    // retired one back) cannot leave this record standing.
+    const surfaceIds = (dir, file) =>
+      JSON.parse(readFileSync(path.join(dir, file), "utf8")).surfaces.map((s) => s.id);
+    const moved = (file) => {
+      const before = new Set(surfaceIds(SUPERSEDED, file));
+      const after = new Set(surfaceIds(FROZEN_PUBLISHED, file));
+      return {
+        gained: [...after].filter((id) => !before.has(id)),
+        retired: [...before].filter((id) => !after.has(id)),
+      };
+    };
+    expect(moved("app.json")).toEqual({ gained: ["sidebar-assistants-entry"], retired: [] });
+    expect(moved("app-components.json")).toEqual({
+      gained: ["breadcrumb-entity-resolution", "scheduling-step-configured"],
+      retired: ["scheduling-trigger-tab"],
+    });
   });
 });
 
@@ -484,7 +580,7 @@ describe("criterion 2 — the CLI turns that rule into a diff, an annotation and
     const exitCode = await runCli({
       argv,
       env,
-      fetchManifest: fetchManifest ?? fixtureFetcher(FROZEN_PUBLISHED),
+      fetchManifest: fetchManifest ?? fixtureFetcher(SUPERSEDED),
       runGit,
       log: (line) => out.push(String(line)),
       logError: (line) => err.push(String(line)),
@@ -662,7 +758,7 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
   let results;
 
   it("names the pin id, file, published URL, both hash pairs, the outcome and the rule", async () => {
-    results = await runCheck({ pins, fetchManifest: fixtureFetcher(FROZEN_PUBLISHED) });
+    results = await runCheck({ pins, fetchManifest: fixtureFetcher(SUPERSEDED) });
     const failing = [byId(results, "app-components")];
     message = formatRedMessage(failing);
 
@@ -751,7 +847,7 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
   });
 
   it("prints a per-pin table of id, file, both hashes and the outcome", async () => {
-    const results = await runCheck({ pins, fetchManifest: fixtureFetcher(FROZEN_PUBLISHED) });
+    const results = await runCheck({ pins, fetchManifest: fixtureFetcher(SUPERSEDED) });
     const table = formatTable(results);
     const lines = table.split("\n");
     expect(lines[0]).toContain("pin");
@@ -822,10 +918,24 @@ describe("criteria 5 and 6 — the constants the docs page and the follow-up dep
       "## Why a hash-only re-pin is refused",
       "## Rollout state",
       "## Known drifts",
+      // The page keeps the record the "who moves a pin" rule demands: what
+      // each adoption changed, named per pin, in the same place the drift was
+      // recorded before it.
+      "## Reconciliation record",
     ]) {
       expect(doc, heading).toContain(heading);
     }
     for (const id of ALL_IDS) expect(doc, id).toContain(id);
+    // Every surface the reconciliation moved is named on the page, so the
+    // record cannot go quiet about the expensive half of the adoption.
+    for (const surface of [
+      "sidebar-assistants-entry",
+      "scheduling-trigger-tab",
+      "scheduling-step-configured",
+      "breadcrumb-entity-resolution",
+    ]) {
+      expect(doc, surface).toContain(surface);
+    }
   });
 
   it("rollout step (b): the branch-protection contexts list design-pin-drift", () => {

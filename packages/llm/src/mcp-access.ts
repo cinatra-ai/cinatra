@@ -44,62 +44,161 @@ const AUTH_BASE_PATH = "/api/auth";
 // sooner so recovery is quick after the operator fixes the tunnel.
 // ---------------------------------------------------------------------------
 
+/**
+ * WHY the probe failed. A slow answer, a closed port and a broken transport
+ * are three different events and must never be recorded as one (#3109):
+ * "timeout" says something about this moment, "refused" says something about
+ * the address, and "error" is every other transport failure recorded as what
+ * it is instead of being dressed up as a refusal it was not.
+ */
+export type PublicMcpUnreachableKind = "timeout" | "refused" | "error";
+
 export type PublicMcpReachability =
   | { status: "unconfigured" }
   | { status: "reachable"; url: string }
-  | { status: "unreachable"; url: string; reason: string };
+  | { status: "unreachable"; url: string; kind: PublicMcpUnreachableKind; reason: string };
 
+// ---------------------------------------------------------------------------
+// The probe budget and the cache lifetimes (#3109). One place, and a measured
+// value rather than a guess.
+//
+// MEASURED for this change, from a Linux server on an ordinary public network:
+// ten HEAD requests to ten unrelated public HTTPS origins, one fresh
+// connection each (no connection reuse, no warm pool). DNS plus TCP plus TLS
+// took 15-332 ms; the whole request, up to the response, took 18-436 ms. The
+// worst of the ten was a transatlantic origin at 332 ms of handshake and
+// 436 ms in total.
+//
+// So a single 2500 ms attempt is already about 5.7x the slowest whole cold
+// request observed. The budget was never the thing that was too small, which
+// is why it is unchanged. What one attempt cannot survive is a LOST packet:
+// a dropped SYN costs a full retransmit (one second on Linux, and more if it
+// is dropped again), and that alone spent the whole budget and refused the
+// turn. The fix is therefore a SECOND attempt with a fresh budget rather than
+// a larger single one — enlarging the single budget would make every
+// genuinely dead address wait that much longer before the turn is refused,
+// and would still lose the turn to a second dropped packet.
+//
+// Two attempts, back to back, with no sleep between them: the attempt that
+// just timed out already spent up to 2500 ms of real waiting, which IS the
+// backoff, and adding a timer would put a deliberate delay in the request hot
+// path. Worst case for an address that swallows packets: 5000 ms.
+//
+// The cache carries the CLASS of the verdict, because the classes do not age
+// alike. A live answer is a stable fact (60 s). A refusal is a stable fact
+// about the address (15 s, unchanged - that is the #1699 protection). A
+// timeout is not a fact about the address at all, so it gets a deliberately
+// short life: long enough that a run of back-to-back turns against a
+// black-holed address does not pay 5000 ms each time, short enough that a
+// recovering ingress is picked up almost at once instead of being inherited
+// by turns nothing re-checked.
+// ---------------------------------------------------------------------------
 const MCP_REACHABILITY_TTL_OK_MS = 60_000;
 const MCP_REACHABILITY_TTL_FAIL_MS = 15_000;
+const MCP_REACHABILITY_TTL_TIMEOUT_MS = 5_000;
 const MCP_REACHABILITY_TIMEOUT_MS = 2_500;
+const MCP_REACHABILITY_ATTEMPTS = 2;
 
 let mcpReachabilityCache: { validUntil: number; forUrl: string; result: PublicMcpReachability } | null = null;
 
-/** Test hook — the module-level cache would otherwise leak across tests. */
+/** Test hook - the module-level cache would otherwise leak across tests. */
 export function _resetPublicMcpReachabilityCacheForTests(): void {
   mcpReachabilityCache = null;
 }
 
 /**
  * Probe the configured public MCP server URL for basic network reachability.
- * Cached (60s live / 15s dead); ~2.5s timeout; never throws.
+ * Up to 2 attempts of ~2.5s each; only a TIMEOUT is retried, because only a
+ * timeout carries no information about the address. A live answer is cached
+ * 60s, a refusal or other transport error 15s, a timeout only 5s. Never
+ * throws.
  */
 export async function checkPublicMcpReachability(): Promise<PublicMcpReachability> {
   const url = getPublicMcpServerUrl();
   if (!url) return { status: "unconfigured" };
 
-  const now = Date.now();
-  if (mcpReachabilityCache && mcpReachabilityCache.forUrl === url && mcpReachabilityCache.validUntil > now) {
+  if (mcpReachabilityCache && mcpReachabilityCache.forUrl === url && mcpReachabilityCache.validUntil > Date.now()) {
     return mcpReachabilityCache.result;
   }
 
-  let result: PublicMcpReachability;
-  try {
-    // HEAD keeps the probe body-free; a 405 from a POST-only route is still
-    // a live ingress. `redirect: "manual"` so a proxied 3xx also counts
-    // without following anywhere.
-    await fetch(url, {
-      method: "HEAD",
-      redirect: "manual",
-      signal: AbortSignal.timeout(MCP_REACHABILITY_TIMEOUT_MS),
-    });
-    result = { status: "reachable", url };
-  } catch (err) {
-    const reason =
-      err instanceof Error && err.name === "TimeoutError"
-        ? `no response within ${MCP_REACHABILITY_TIMEOUT_MS}ms`
-        : err instanceof Error
-          ? ((err.cause as { message?: string } | undefined)?.message ?? err.message)
-          : String(err);
-    result = { status: "unreachable", url, reason };
+  let failure: { kind: PublicMcpUnreachableKind; detail: string } | null = null;
+  let result: PublicMcpReachability | null = null;
+  let attemptsMade = 0;
+
+  for (let attempt = 1; attempt <= MCP_REACHABILITY_ATTEMPTS; attempt += 1) {
+    attemptsMade = attempt;
+    try {
+      // HEAD keeps the probe body-free; a 405 from a POST-only route is still
+      // a live ingress. `redirect: "manual"` so a proxied 3xx also counts
+      // without following anywhere. A FRESH signal per attempt, so the retry
+      // gets a whole budget of its own rather than the remains of the first.
+      await fetch(url, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(MCP_REACHABILITY_TIMEOUT_MS),
+      });
+      result = { status: "reachable", url };
+      break;
+    } catch (err) {
+      failure = classifyProbeFailure(err);
+      // A refusal is an ANSWER: the port is closed, or the name does not
+      // resolve. Re-asking cannot change it, and retrying would only delay the
+      // loud refusal the guard exists to give. Any other transport error is
+      // an answer too. Only a timeout - the one outcome that says nothing
+      // about the address - is retried.
+      if (failure.kind !== "timeout") break;
+    }
   }
 
-  mcpReachabilityCache = {
-    forUrl: url,
-    validUntil: now + (result.status === "reachable" ? MCP_REACHABILITY_TTL_OK_MS : MCP_REACHABILITY_TTL_FAIL_MS),
-    result,
-  };
+  if (!result) {
+    const spent = failure ?? { kind: "error" as const, detail: "the probe did not run" };
+    result = { status: "unreachable", url, kind: spent.kind, reason: describeFailure(spent, attemptsMade) };
+  }
+
+  mcpReachabilityCache = { forUrl: url, validUntil: Date.now() + ttlForResult(result), result };
   return result;
+}
+
+function ttlForResult(result: PublicMcpReachability): number {
+  if (result.status === "reachable") return MCP_REACHABILITY_TTL_OK_MS;
+  if (result.status === "unreachable" && result.kind === "timeout") return MCP_REACHABILITY_TTL_TIMEOUT_MS;
+  return MCP_REACHABILITY_TTL_FAIL_MS;
+}
+
+// The transport-level causes that are an ANSWER about the address rather than
+// a broken transport: the port said no, or the name does not resolve, or the
+// route does not exist.
+const REFUSAL_CAUSE_CODES = ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH"];
+
+/**
+ * Split a probe rejection into the outcomes that mean different things.
+ * The kind and the reason are what land in the server log, so a timeout and a
+ * refusal must not read alike, and a failure that is NEITHER must not be
+ * written down as a refusal (#3109 acceptance 4).
+ */
+function classifyProbeFailure(err: unknown): { kind: PublicMcpUnreachableKind; detail: string } {
+  // AbortSignal.timeout rejects with a DOMException named TimeoutError.
+  if (err instanceof Error && err.name === "TimeoutError") return { kind: "timeout", detail: "" };
+
+  // undici buries the useful message and the code in error.cause.
+  const cause = err instanceof Error ? (err.cause as { message?: string; code?: string } | undefined) : undefined;
+  const detail = cause?.message ?? (err instanceof Error ? err.message : String(err));
+  const haystack = `${cause?.code ?? ""} ${detail}`;
+  const refused = REFUSAL_CAUSE_CODES.some((code) => haystack.includes(code));
+  return { kind: refused ? "refused" : "error", detail };
+}
+
+/** The recorded reason. One sentence per class, and the classes read apart. */
+function describeFailure(failure: { kind: PublicMcpUnreachableKind; detail: string }, attempts: number): string {
+  if (failure.kind === "timeout") {
+    return (
+      `no response within ${MCP_REACHABILITY_TIMEOUT_MS}ms on ` +
+      `${attempts} attempt${attempts === 1 ? "" : "s"} ` +
+      `(${attempts * MCP_REACHABILITY_TIMEOUT_MS}ms budget)`
+    );
+  }
+  if (failure.kind === "refused") return `connection refused or name not resolved: ${failure.detail}`;
+  return `the connection failed: ${failure.detail}`;
 }
 
 // Chat → MCP delegated actor token plumbing. The token issuer lives in the

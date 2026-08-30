@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-components.html",
+  "contentHash": "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e",
+  "surfaces": [
+    {
+      "id": "scheduling-step",
+      "fields": [],
+      "actions": [
+        {
+          "action": "schedule",
+          "outcome": "armed"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "scheduling-trigger-tab",
+      "fields": [],
+      "actions": [
+        {
+          "action": "cancel",
+          "outcome": "cancelled"
+        },
+        {
+          "action": "release",
+          "outcome": "released"
+        }
+      ],
+      "states": [
+        "error"
+      ]
+    }
+  ]
+}
