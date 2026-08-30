@@ -153,7 +153,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // which is the whole point of the pin. The two readings differ by design —
   // this page shows what the artifact has become, a review shows what was
   // approved.
-  const revisionId = resolveEditorRevisionId(
+  const revisionId = await resolveEditorRevisionId(
     orgId,
     id,
     artifact.latestRepresentationRevisionId,

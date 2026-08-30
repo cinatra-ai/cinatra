@@ -263,8 +263,16 @@
    "disposition": "MAPPED",
    "unitProofs": [
     {
-     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
-     "testName": "maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor"
+     "file": "src/app/artifacts/[id]/__tests__/review-target-mount.test.tsx",
+     "testName": "build-map mount → the server-only ExtensionRendererSlot, host generatedKey passed through"
+    },
+    {
+     "file": "src/app/artifacts/[id]/__tests__/review-target-mount.test.tsx",
+     "testName": "runtime mount → the main-realm DynamicRendererLoader with the host descriptor + a BOUND preflight"
+    },
+    {
+     "file": "src/app/artifacts/[id]/__tests__/review-target-mount.test.tsx",
+     "testName": "floor mount → never blank: a sanitized diagnostic + the caller's fallback"
     },
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",

@@ -568,7 +568,7 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the editor opens on the HEAD rev
     // THREE independent resolutions, the way three fresh loads ask.
     for (let load = 0; load < 3; load += 1) {
       expect(
-        store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId),
+        await store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId),
       ).toBe(head);
     }
   });
@@ -580,15 +580,15 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the editor opens on the HEAD rev
       [artifactId, ORG, GENERIC_ARTIFACT_TYPE],
     );
     expect(store.listRepresentations(ORG, artifactId)).toEqual([]);
-    expect(store.resolveEditorRevisionId(ORG, artifactId, "rev-cached")).toBe("rev-cached");
-    expect(store.resolveEditorRevisionId(ORG, artifactId, null)).toBeNull();
+    expect(await store.resolveEditorRevisionId(ORG, artifactId, "rev-cached")).toBe("rev-cached");
+    expect(await store.resolveEditorRevisionId(ORG, artifactId, null)).toBeNull();
   });
 
   it("never crosses organizations — another org's head is not this org's", async () => {
     const foreign = await seedArtifact(OTHER_ORG);
     await appendRevisions(OTHER_ORG, foreign.artifactId, foreign.revisionId, 1);
 
-    expect(store.resolveEditorRevisionId(ORG, foreign.artifactId, null)).toBeNull();
+    expect(await store.resolveEditorRevisionId(ORG, foreign.artifactId, null)).toBeNull();
   });
 });
 
@@ -697,7 +697,7 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the review card carries the pinn
     }
 
     // The EDITOR opens on the head; the CARD stays on the revision the gate pinned.
-    expect(store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId)).toBe(base);
+    expect(await store.resolveEditorRevisionId(ORG, seeded.artifactId, seeded.revisionId)).toBe(base);
     expect(await projectPinned(seeded.artifactId, seeded.revisionId)).toMatchObject({
       kind: "text",
       text: seeded.text,

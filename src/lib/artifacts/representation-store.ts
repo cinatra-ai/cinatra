@@ -148,16 +148,18 @@ export function getLatestRepresentation(orgId: string, artifactId: string): Repr
  * — an artifact whose metadata exists without a materialized representation
  * reads exactly as it did before.
  */
-export function resolveEditorRevisionId(
+export async function resolveEditorRevisionId(
   orgId: string,
   artifactId: string,
   cachedLatestRevisionId: string | null,
-): string | null {
+): Promise<string | null> {
   ensurePostgresSchema();
-  // ONE ROW, not the series. This runs on every open of an artifact's page, and
-  // the page needs the head's identity — not its history, which the revision
-  // list is for.
-  const r = runPostgresQueriesSync({
+  // ONE ROW, not the series, and read through the ASYNC bridge. This runs on
+  // every open of an artifact's page, and the page needs the head's identity —
+  // not its history, which the revision list is for. The page is already
+  // asynchronous, so the read has no reason to hold the request thread the way
+  // this file's older synchronous readers do.
+  const r = await runPostgresQueriesAsync({
     connectionString: conn(),
     queries: [
       {
