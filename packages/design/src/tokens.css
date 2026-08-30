@@ -109,7 +109,18 @@
   --border: var(--line);
   /* Input chrome carries the strong navy line, not the low-alpha hairline.
      Cascades through every shadcn primitive that uses `border-input`. */
-  --input: var(--line-strong);
+  /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
+     held at or above the 3:1 non-text contrast floor against the grounds a
+     control sits on. Kept identical to the host token layer in
+     `src/app/globals.css`, which this package mirrors. */
+  --line-control: var(--line-strong);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line-strong);
   --ring: var(--accent);
   --radius: 0.625rem;
 
@@ -167,7 +178,18 @@
   --info-foreground: #ffffff;
   --brand-mustard: #c79545;
   --border: var(--line);
-  --input: var(--line-strong);
+  /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
+     held at or above the 3:1 non-text contrast floor against the grounds a
+     control sits on. Kept identical to the host token layer in
+     `src/app/globals.css`, which this package mirrors. */
+  --line-control: var(--line-strong);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line-strong);
   --ring: var(--accent);
   --radius: 0.5rem;
 
@@ -207,8 +229,18 @@
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
-  /* Dark-mode reverts --input to the subtle hairline. */
-  --input: var(--line);
+  /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
+     held at or above the 3:1 non-text contrast floor against the grounds a
+     control sits on. Kept identical to the host token layer in
+     `src/app/globals.css`, which this package mirrors. */
+  --line-control: oklch(1 0 0 / 40%);
+  --input: var(--line-control);
+  /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
+     control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
+     BOUNDARY must not restyle those fills, so the fill keeps its own token,
+     pinned to the value `--input` carried before the boundary was raised.
+     Consumed via `bg-input-fill` through the theme layer. */
+  --input-fill: var(--line);
   --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
   --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
 

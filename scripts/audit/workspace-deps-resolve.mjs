@@ -20,8 +20,19 @@
  * repos) are DELIBERATELY out of scope: they can't be deleted by a PR here and
  * are validated by their own repos' CI. Excluding them keeps the gate hermetic
  * and deterministic — no `clone-extensions`, no network — and no in-tree
- * manifest declares a `workspace:` dependency on an extension anyway (verified),
- * so nothing is misreported. For each in-tree member's package.json the gate
+ * manifest declares a `workspace:` dependency on companion extensions since
+ * item 0.8 of `PLAN: Agents Lifecycle (C)`: deleting the host's hand-maintained
+ * renderer path aliases leaves the ordinary dependency edge as the road a bare
+ * package specifier resolves through. Such an edge is NOT dangling — the
+ * package is a workspace member the moment the pinned acquisition materialises
+ * it, and `pnpm-workspace.yaml` already globs it — so the gate tolerates a
+ * `workspace:` target that the ROOT MANIFEST DECLARES in its required extension
+ * universe (`cinatra.extensions`), and only that. An edge on anything else — a
+ * deleted in-tree package, or an extension the manifest does not require —
+ * still fails, so the #1669 regression class is unchanged: an undeclared target
+ * is exactly the uninstallable state.
+ *
+ * For each in-tree member's package.json the gate
  * checks every dependency (all four buckets) whose spec uses the `workspace:`
  * protocol and asserts its target resolves to a known in-tree member.
  *
@@ -84,12 +95,42 @@ export function resolveWorkspaceTarget(name, spec) {
 }
 
 /**
+ * The companion-extension package names the ROOT MANIFEST declares as its
+ * required universe (`cinatra.extensions`), whose entries carry a range:
+ * `"@cinatra-ai/markdown-artifact@^0.1.0"` -> `"@cinatra-ai/markdown-artifact"`.
+ * Anything else in the field is ignored rather than guessed at.
+ */
+export function declaredExtensionPackageNames(rootPkg) {
+  const declared = rootPkg?.cinatra?.extensions;
+  if (!Array.isArray(declared)) return new Set();
+  const names = new Set();
+  for (const entry of declared) {
+    if (typeof entry !== "string" || entry.length === 0) continue;
+    if (entry.startsWith("@")) {
+      const body = entry.slice(1);
+      const slash = body.indexOf("/");
+      if (slash < 0) continue;
+      const at = body.indexOf("@", slash);
+      names.add("@" + (at < 0 ? body : body.slice(0, at)));
+      continue;
+    }
+    const at = entry.indexOf("@");
+    names.add(at < 0 ? entry : entry.slice(0, at));
+  }
+  return names;
+}
+
+/**
  * Find dangling workspace deps. `members` = [{ name, dir, deps: {bucket:{name:spec}} }].
+ * `acquiredNames` = package names the root manifest DECLARES as companion
+ * extensions to acquire (see declaredExtensionPackageNames); a `workspace:`
+ * target in that set is a member once the pinned acquisition runs, so it is not
+ * dangling even though this hermetic scan never looks under `extensions/`.
  * Returns [{ member, dir, bucket, dep, spec, target }] for each `workspace:`
  * dependency whose target is not a known member — by NAME for the bare/aliased
  * forms, and by resolved PATH for the relative form (`workspace:../foo`).
  */
-export function findDanglingWorkspaceDeps(members) {
+export function findDanglingWorkspaceDeps(members, acquiredNames = new Set()) {
   const memberNames = new Set(members.map((m) => m.name).filter(Boolean));
   const memberDirs = new Set(members.map((m) => normalize(m.dir)));
   const dangling = [];
@@ -110,7 +151,7 @@ export function findDanglingWorkspaceDeps(members) {
           continue;
         }
         const target = resolveWorkspaceTarget(dep, spec);
-        if (target && !memberNames.has(target)) {
+        if (target && !memberNames.has(target) && !acquiredNames.has(target)) {
           dangling.push({ member: identity, dir: m.dir, bucket, dep, spec, target });
         }
       }
@@ -208,9 +249,19 @@ function main() {
     process.exit(2);
   }
 
-  const dangling = findDanglingWorkspaceDeps(members);
+  let acquiredNames;
+  try {
+    acquiredNames = declaredExtensionPackageNames(
+      JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")),
+    );
+  } catch (err) {
+    console.error(`[workspace-deps-resolve] scanner error: unreadable root manifest: ${err?.message ?? err}`);
+    process.exit(2);
+  }
+
+  const dangling = findDanglingWorkspaceDeps(members, acquiredNames);
   if (dangling.length === 0) {
-    console.log(`[workspace-deps-resolve] OK — every workspace: dependency targets an existing in-tree member (${members.length} members scanned).`);
+    console.log(`[workspace-deps-resolve] OK — every workspace: dependency targets an existing in-tree member or a declared companion extension (${members.length} members scanned, ${acquiredNames.size} declared extension(s)).`);
     process.exit(0);
   }
 
@@ -218,7 +269,7 @@ function main() {
   for (const d of dangling) {
     console.error(`  ${d.member} (${d.bucket}): "${d.dep}": "${d.spec}" -> no workspace package named "${d.target}"`);
   }
-  console.error(`\nA package the manifest still depends on was removed. Delete the stale declaration (and regenerate pnpm-lock.yaml), or restore the package.`);
+  console.error(`\nA package the manifest still depends on was removed, or an extension it depends on is not declared in cinatra.extensions. Delete the stale declaration (and regenerate pnpm-lock.yaml), restore the package, or declare the extension.`);
   process.exit(1);
 }
 
