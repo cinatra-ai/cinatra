@@ -58,7 +58,11 @@ import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
 // which reads it as an unreviewed new caller inside the write perimeter.
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import type { ProposedSchedule } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
-import { armedScheduleFormValues } from "@cinatra-ai/agents/trigger-recurrence";
+import {
+  armedScheduleFormValues,
+  mayChangeRunSchedule,
+  SAVE_SCHEDULE_REFUSALS,
+} from "@cinatra-ai/agents/trigger-recurrence";
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import {
   decodeLifecycleGateRef,
@@ -357,21 +361,40 @@ export async function resolveBoundReference(input: {
     // conversation's, and an absence is everyone else's one uniform absence.
     if (!settled || settled.phase !== "settled") return ABSENT;
     const schedule = settled.schedule as ProposedSchedule;
-    // THE REASON, not a second rule: the guard the write itself asks twice.
-    const refusal = settled.canSave
+    // AND WHOSE RUN IT IS (cinatra#2934, the FOURTH graded capture). Reading a
+    // run is not permission to change its schedule — plan (A) §7.1 gives that
+    // to the run's owner and to an administrator — and the fourth capture
+    // photographed the gap: a second person's described change was placed into
+    // the owner's form rows with a live **Save changes**, and only the write at
+    // the very end refused. The predicate is the write's own, asked here so the
+    // window that lends the fill asks the same question the write will.
+    const settledOwner = (settled as { runOwnerId?: string | null }).runOwnerId ?? null;
+    const mayAct = mayChangeRunSchedule({
+      actorUserId: input.actorCtx.actor.userId ?? null,
+      isAdmin: input.actorCtx.roleHints?.platformRole === "platform_admin",
+      runOwnerId: settledOwner,
+    });
+    const canSave = settled.canSave && mayAct;
+    // THE REASON, not a second rule: the guard the write itself asks twice —
+    // and, where the person rather than the schedule is what stops the save,
+    // the sentence that says so. A card that is perfectly changeable must never
+    // be described as one that is over.
+    const refusal = canSave
       ? null
-      : await ports
-          .armedScheduleRefusal({
-            trigger: await ports.readRunTrigger(armed.runId).catch(() => null),
-            arming: settled.arming,
-          })
-          .catch(() => "This schedule can no longer be changed.");
+      : !mayAct
+        ? SAVE_SCHEDULE_REFUSALS.notYours
+        : await ports
+            .armedScheduleRefusal({
+              trigger: await ports.readRunTrigger(armed.runId).catch(() => null),
+              arming: settled.arming,
+            })
+            .catch(() => "This schedule can no longer be changed.");
     return {
       kind: "armed_schedule_form",
       runId: armed.runId,
       xRenderer: ARMED_SCHEDULE_FORM_X_RENDERER,
       schedule,
-      canSave: settled.canSave,
+      canSave,
       refusal,
       form: {
         schema: armedScheduleFormSchema(),

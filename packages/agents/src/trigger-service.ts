@@ -50,6 +50,7 @@ import { markTriggerReleased } from "./trigger-gate";
 import {
   buildCron,
   SAVE_SCHEDULE_REFUSALS,
+  mayChangeRunSchedule,
   type RecurringConfig,
 } from "./trigger-recurrence";
 // cinatra#2981 — the ONE serialization this service, **Cancel schedule** and the
@@ -258,13 +259,16 @@ function isOwnerOrAdmin(
   actor: TriggerActorContext,
   runOwnerId: string | null,
 ): boolean {
-  if (actor.role === "admin") return true;
-  // Unowned runs (runBy: null) require admin — any authenticated user should
-  // NOT be able to schedule or delete triggers on runs they did not create.
-  // The old "bypass for legacy runs" rationale does not apply to trigger ops
-  // which have permanent schedule effects.
-  if (!runOwnerId) return false;
-  return runOwnerId === actor.userId;
+  // ONE PREDICATE FOR THE WRITE AND FOR EVERY SURFACE ABOVE IT (cinatra#2934,
+  // the fourth graded capture). The rule is unchanged — the run's owner, or an
+  // administrator, and an unowned run needs an administrator because a trigger
+  // has permanent effects — but it now lives where the card and the resolver
+  // can ask it too, so a surface can no longer offer what this guard refuses.
+  return mayChangeRunSchedule({
+    actorUserId: actor.userId,
+    isAdmin: actor.role === "admin",
+    runOwnerId,
+  });
 }
 
 /**

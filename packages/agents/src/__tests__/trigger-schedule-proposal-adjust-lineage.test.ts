@@ -815,9 +815,26 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
     // a recurring schedule that has fired once" means — and `stopped`, the
     // state that control leaves behind. Neither is true here: this schedule is
     // still installing, so it has fired nothing and been stopped by nobody.
+    //
+    // AND TWO IN cinatra#2934 (the fourth graded capture): `runOwnerId` — whose
+    // run this is, the reading plan (A) §7.1's "Cancel is the run's owner or an
+    // administrator" is asked with — and `saveRefusal`, the sentence a reader
+    // who may see the card but not act on it is owed beside its dead control
+    // (§1.2). This road is one person's by construction — the proposal token is
+    // read back under their own identity — so there is nothing to withhold and
+    // the sentence is null.
+    //
+    // AND ONE MORE IN THE CONVERGENCE ROUND OF THAT LEG: `mayAct`, the ONE
+    // answer both floor controls read. Gating **Save changes** on the person
+    // and leaving **Cancel schedule** on the schedule's state alone still drew
+    // a second person a live Cancel. It is true here for the same reason
+    // `saveRefusal` is null: this road is the token holder's own.
     expect(resolved).toEqual({
       phase: "settled",
       runId: "run_1",
+      saveRefusal: null,
+      mayAct: true,
+      runOwnerId: USER,
       agentName: "Weekly digest",
       triggerType: "recurring",
       schedule: {

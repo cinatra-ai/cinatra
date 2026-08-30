@@ -67,10 +67,12 @@ function toEntries(
     role: "user" | "assistant";
     text: string;
     fill?: { ref: string; values: Record<string, unknown> } | null;
+    /** A save's receipt (cinatra#2934) — a record, not a message. */
+    savedPlacement?: { ref: string; sequences: number[] } | null;
   }>,
 ): RunWindowEntry[] {
   return rows
-    .filter((row) => !row.fill)
+    .filter((row) => !row.fill && !row.savedPlacement)
     .map((row, index) => ({
       id: index + 1,
       role: row.role,

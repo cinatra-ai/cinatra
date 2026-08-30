@@ -1147,7 +1147,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
    * against the resolver itself, so this file is not the only place that says
    * what a fired one-off looks like.
    */
-  it("a FIRED one-off draws a DEAD Save changes, no operations, and read-only rows", async () => {
+  it("a FIRED one-off draws NO floor, no operations, and read-only rows", async () => {
     for (const host of ALL_HOSTS) {
       mockTransport(
         { state: "settled" },
@@ -1167,38 +1167,41 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
           view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
         ).not.toBeNull(),
       );
-      // SAVE CHANGES IS THERE AND DEAD (cinatra#2934; plan (A) §7.2). Drawing
-      // no floor at all left a locked form with no reason anywhere on the
-      // screen — and took the window under it with it, because the surfaces
-      // measure the window off this floor. The card is drawn whole, its one
-      // action disabled, and the reason beside it.
+      // NO FLOOR AT ALL (cinatra#2934, the FOURTH graded capture). The ratified
+      // drawing at the pin this pull request records gives this exact state no
+      // floor, no hairline and nothing to press, and plan (A) §7.2 says the
+      // surface "shows the same form and nothing else — no summary box, no
+      // status label". The reader still gets the reason: the prompt window
+      // below the scheduler stays present and disabled and answers there.
       expect(
-        (view.container.querySelector('[data-action="save-schedule-changes"]') as HTMLButtonElement)
-          ?.disabled,
+        view.container.querySelector('[data-action="save-schedule-changes"]'),
         host,
-      ).toBe(true);
+      ).toBeNull();
       expect(
         view.container.querySelector('[data-action="cancel-trigger-schedule"]'),
         host,
       ).toBeNull();
       expect(view.container.querySelector('[data-action="release-trigger-now"]'), host).toBeNull();
       expect(
-        view.container.querySelector('[data-conformance-id="schedule-proposal-floor"]')
-          ?.getAttribute("data-schedule-changeable"),
+        view.container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
         host,
-      ).toBe("false");
+      ).toBeNull();
       expect(
         view.container.querySelector('[data-action="confirm-schedule-proposal"]'),
         host,
       ).toBeNull();
-      // And no status LABEL stands in for the withheld control — what stands
-      // beside it is the server's own sentence for the state.
+      // AND NO STATUS LABEL AT ALL, of any kind (plan (A) §7.2). Not the
+      // released line, and not the state's own sentence either: the card is the
+      // form, and the sentence belongs to the window below the scheduler, which
+      // is where the sibling suite pins it.
       expect(
         view.container.querySelector('[data-conformance-id="schedule-released"]'),
         host,
       ).toBeNull();
       expect(view.container.textContent, host).not.toContain("Released —");
-      expect(view.container.textContent, host).toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
+      expect(view.container.textContent, host).not.toContain(
+        SAVE_SCHEDULE_REFUSALS.firedOneOff,
+      );
       // The rows stand — read-only, showing the schedule that fired.
       expect(
         isDisabled(view.container.querySelector('[data-field="schedule-run-at"]')),
@@ -1266,16 +1269,11 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
     );
-    // The floor stands, dead, with the reason on it (cinatra#2934).
+    // No floor (cinatra#2934, the fourth graded capture).
     expect(
-      container
-        .querySelector('[data-conformance-id="schedule-proposal-floor"]')!
-        .getAttribute("data-schedule-changeable"),
-    ).toBe("false");
-    expect(
-      (container.querySelector('[data-action="save-schedule-changes"]') as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+    ).toBeNull();
+    expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
     // And NEITHER status line above the rows — this body satisfies both — since
     // each exists to explain a withheld control, and the floor now explains it
     // where the control is.
@@ -1340,10 +1338,8 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       ).toBeNull(),
     );
     expect(
-      container
-        .querySelector('[data-conformance-id="schedule-proposal-floor"]')!
-        .getAttribute("data-schedule-changeable"),
-    ).toBe("false");
+      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+    ).toBeNull();
     // AND THE UNSAVED EDIT IS GONE WITH IT. The rows now stand read-only, so
     // whatever they show is a claim about what is armed — it must be the
     // server's schedule, never the draft nobody saved.

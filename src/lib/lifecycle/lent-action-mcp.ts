@@ -361,9 +361,24 @@ export async function handleLentAction(
         resolveSince?: () => Promise<Date | null>;
         refMatches?: (rowRef: string) => boolean;
       },
-    ) => Promise<{ ref: string; values: Record<string, unknown> }[]>;
+    ) => Promise<
+      { ref: string; values: Record<string, unknown>; sequence?: number }[]
+    >;
     /** The form's own row, read for ONE field: when it was last written. */
     readonly readTrigger?: (runId: string) => Promise<{ updatedAt?: Date } | null>;
+    /**
+     * Record which placements a save consumed (cinatra#2934, the fourth graded
+     * capture) — the identity boundary that replaced a comparison between two
+     * different clocks.
+     */
+    readonly recordSaved?: (input: {
+      runId: string;
+      surface: "armed-trigger";
+      ref: string;
+      messageId?: string | null;
+      savedBy?: string | null;
+      sequences: readonly number[];
+    }) => Promise<void>;
     readonly buildPayload?: BuildChatGateSubmitPayload;
     readonly now?: () => Date;
   } = {},
@@ -531,8 +546,8 @@ export async function handleLentAction(
     // the moment it happens, and the same form undoes it. Closing it properly
     // means reading whether the sentence ASKED — the typed actions per card
     // kind (cinatra#2853) — and not narrowing the road issue #2934 describes.
-    const readers = deps.readPlacedFills ? null : await loadRunWindowFillReaders();
-    const readPlaced = deps.readPlacedFills ?? readers!.readRunWindowPlacedFills;
+    const readers = await loadRunWindowFillReaders();
+    const readPlaced = deps.readPlacedFills ?? readers.readRunWindowPlacedFills;
     const readTrigger = deps.readTrigger ?? (await loadRunTriggerReader());
     const placed = await readPlaced(bound.runId, parsed.data.ref, {
       messageId: claims.messageId,
@@ -541,7 +556,9 @@ export async function handleLentAction(
         rowRef === parsed.data.ref ||
         decodeScheduleRunRef(rowRef)?.runId === bound.runId,
       resolveSince: async () => (await readTrigger(bound.runId))?.updatedAt ?? null,
-    }).catch(() => [] as { ref: string; values: Record<string, unknown> }[]);
+    }).catch(
+      () => [] as { ref: string; values: Record<string, unknown>; sequence?: number }[],
+    );
 
     // AND A FORM WITH NOTHING PLACED SAYS SO, in its own words rather than in
     // the card's fixed authorization sentence. The card resolved, the predicate
@@ -595,6 +612,35 @@ export async function handleLentAction(
             : LENT_ACTION_CARD_UNAVAILABLE,
       });
     }
+    // AND THE PLACEMENTS THIS SAVE COMMITTED ARE RECORDED AS COMMITTED
+    // (cinatra#2934, the FOURTH graded capture).
+    //
+    // WHY IT IS A RECEIPT AND NOT A CLOCK. "Not already saved" was a comparison
+    // between the fill row's `created_at`, stamped by the database, and the
+    // trigger row's `updated_at`, stamped by this process — two clocks, and any
+    // disagreement in the wrong direction re-applies a placement this very call
+    // just committed to rows that have moved on. The receipt names the ROWS, so
+    // the boundary stops being a race; the timestamp bound stays beside it as
+    // the abandonment cut-off it honestly is.
+    //
+    // WRITTEN AFTER THE WRITE LANDED, and never allowed to fail the turn: a
+    // receipt written first would discard a change nobody saved, and a receipt
+    // that will not append costs this one save its identity bound and leaves
+    // the timestamp bound standing — exactly where the road was before it.
+    const consumedSequences = placed
+      .map((f) => (f as { sequence?: number }).sequence)
+      .filter((n): n is number => typeof n === "number");
+    if (consumedSequences.length > 0) {
+      await (deps.recordSaved ?? readers.recordRunWindowPlacementsSaved)({
+        runId: bound.runId,
+        surface: "armed-trigger",
+        ref: parsed.data.ref,
+        messageId: claims.messageId,
+        savedBy: frame.userId,
+        sequences: consumedSequences,
+      }).catch(() => undefined);
+    }
+
     // AND THE ROWS STILL SHOW WHAT WAS SAVED. The trigger row is read back
     // through the resolver's own arm — the same read the card re-resolves with,
     // under the same access — rather than reported from what was sent.

@@ -252,7 +252,13 @@ describe("§X — one window, five readings: the sentence in the empty field", (
     ["run-page", "Ask Cinatra to fill the fields above, or ask about this step…"],
     ["step-by-step", "Ask Cinatra to fill this step's fields, or ask about the run…"],
     ["schedule", "Ask Cinatra to set the schedule above, or ask about it…"],
-    ["armed-trigger", "Ask Cinatra to change this schedule, or ask about it…"],
+    // THE ARMED SCHEDULE'S READING IS PLAN (A) §7.4 STEP 8'S OWN COPY
+    // (cinatra#2934, the fourth graded capture), word for word: "You type into
+    // the prompt window under the tab ('Ask Cinatra to suggest edits to the
+    // fields above…')". Four captures graded the wording that stood here before
+    // against the plan and the ratified drawing, and four captures called it a
+    // divergence. It is the plan's sentence again.
+    ["armed-trigger", "Ask Cinatra to suggest edits to the fields above…"],
     ["review", "Ask Cinatra about this review, or ask for changes to the work…"],
   ];
 
@@ -265,8 +271,12 @@ describe("§X — one window, five readings: the sentence in the empty field", (
     // from the surface it is mounted on.
     expect(panel).toContain("const placeholder = RUN_WINDOW_PLACEHOLDERS[surface];");
     expect(panel).toContain("placeholder={placeholder}");
-    // The string every mount used to show is gone from the product.
-    expect(panel).not.toContain("Ask Cinatra to suggest edits to the fields above");
+    // NO MOUNT CARRIES A WORDING OF ITS OWN, which is the property this arm is
+    // really about: every sentence lives in the map above and each appears in it
+    // exactly once, so no two readings can drift onto one string.
+    for (const [, sentence] of READINGS) {
+      expect(panel.split(`"${sentence}"`).length - 1).toBe(1);
+    }
   });
 
   for (const [surface, sentence] of READINGS) {

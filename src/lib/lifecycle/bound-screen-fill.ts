@@ -64,8 +64,8 @@ import {
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 import { canActorRespondToRun } from "@/lib/lifecycle/run-window-turn";
 import {
+  classifyDrawnFillValues,
   drawnScreenControls,
-  selectDrawnFillValues,
 } from "@/lib/lifecycle/bound-screen-controls";
 
 // THE PURE CLOSED SET LIVES NEXT DOOR (cinatra#2934, repaired after the picture
@@ -75,6 +75,9 @@ import {
 // rule and must not pull this module's store graph in for it. Re-exported here
 // so every existing reader of this module is unchanged.
 export {
+  classifyDrawnFillValues,
+  describeDrawnRows,
+  nowForDrawnForm,
   FILL_MAX_FIELDS,
   FILL_MAX_SERIALIZED_CHARS,
   FILL_RESERVED_KEYS,
@@ -92,6 +95,34 @@ export type BoundScreenFillOutcome =
   | { readonly kind: "unavailable" }
   /** The card is a screen, but nothing asked for is a field it declares. */
   | { readonly kind: "no-fields"; readonly fields: readonly string[] }
+  /**
+   * THE ROWS ALREADY SHOW WHAT WAS ASKED FOR (cinatra#2934, the fourth graded
+   * capture). NOT a refusal, and not the sentence above: the screen draws those
+   * controls, the person may fill them, and what they asked for is what the
+   * fields are holding. Nothing is recorded — a placement that alters nothing a
+   * person can see must not unlock a press — and the answer says so truthfully
+   * rather than telling them the fields do not exist.
+   */
+  | { readonly kind: "already-holding"; readonly fields: readonly string[] }
+  /**
+   * A DRAWN ROW COULD NOT HOLD THE VALUE THE ASK GAVE IT (cinatra#2934, the
+   * fourth graded capture). A UTC instant handed to a local date-time box is
+   * the shipping example: reading it as a local one would move the run, so it
+   * is refused — and the refusal names the ROW that refused it. The fourth
+   * capture photographed this case answered with the fields-do-not-exist
+   * sentence, on a screen whose Run at row is exactly the field named.
+   */
+  | { readonly kind: "unusable-values"; readonly rows: readonly string[]; readonly fields: readonly string[] }
+  /**
+   * THE ASK WAS TOO BIG TO PLACE (cinatra#2934, convergence round of the fourth
+   * fix leg). The keys name real controls and the rows could hold them; the
+   * serialized bound — which exists because a placement is stored and travels
+   * back to a browser — refused the whole ask. It is the FOURTH of the four
+   * situations the split exists for, and until this round it fell through to
+   * the fields-do-not-exist sentence, which is exactly the false reason the
+   * capture caught.
+   */
+  | { readonly kind: "too-large"; readonly fields: readonly string[] }
   /**
    * The form is there and is this person's, and it can no longer be changed
    * (cinatra#2934, the armed-trigger tab). NOT the uniform absence: every gate
@@ -221,10 +252,27 @@ export async function recordBoundScreenFill(input: {
   // the no-op rule compares to.
   const state = await readRunWindowState(bound.runId, input.ref, input.messageId);
   const shown = { ...bound.form.values, ...state.placedThisMessage };
-  const values = selectDrawnFillValues({ ...bound.form, values: shown }, input.values);
+  const read = classifyDrawnFillValues({ ...bound.form, values: shown }, input.values);
+  const values = read.values;
   const applied = Object.keys(values);
   if (applied.length === 0) {
-    return { kind: "no-fields", fields: drawnScreenControls(bound.form) };
+    // WHICH REASON, AND NEVER THE WRONG ONE (cinatra#2934, the fourth graded
+    // capture). These four outcomes used to be one, and the one sentence they
+    // shared was true of only the first of them. They are asked in the order a
+    // reader would ask them: a row that refused the value is the most specific
+    // thing that happened, then a row already showing it, then a key that names
+    // no control at all.
+    const fields = drawnScreenControls(bound.form);
+    if (read.unusable.length > 0) {
+      return { kind: "unusable-values", rows: read.unusable, fields };
+    }
+    if (read.tooLarge) {
+      return { kind: "too-large", fields };
+    }
+    if (read.unchanged.length > 0 && read.notFields.length === 0) {
+      return { kind: "already-holding", fields: read.unchanged };
+    }
+    return { kind: "no-fields", fields };
   }
 
   // THE GRANT, CLAIMED LAST. Everything above is a read; this is the moment

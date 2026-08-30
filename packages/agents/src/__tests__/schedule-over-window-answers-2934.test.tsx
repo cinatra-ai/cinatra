@@ -1,28 +1,29 @@
 // @vitest-environment jsdom
 //
-// A SCHEDULE THAT CAN NO LONGER BE CHANGED **ANSWERS** (cinatra#2934, the
-// armed-schedule change road) — plan (A) §7.2, and the reversal of this pull
-// request's own named deviation.
+// A SCHEDULE THAT CAN NO LONGER BE CHANGED IS DRAWN AS THE DRAWING DRAWS IT
+// (cinatra#2934, the FOURTH graded capture of this pull request).
 //
-// WHAT THE DEVIATION SAID, and why it is withdrawn. cinatra#3004 read "a
-// control that exists only to refuse" as a reason to draw NOTHING for a
-// schedule that is over: the card dropped its whole controls floor and the
-// surfaces, which measure the window's state off that floor, dropped the window
-// with it. The graded re-shoot photographed the result: a fired one-off with
-// its rows locked, no floor, no window, no composer and NO SENTENCE ANYWHERE —
-// the reader is told nothing rather than told why.
+// THE READING THIS SUITE USED TO PIN, and why it is withdrawn. The third fix leg
+// read plan (A) §7.2's "answer that it can no longer be changed" as a reason to
+// keep the card's controls floor and draw it DEAD — Save changes present and
+// disabled, the server's own state sentence beside it inside the form. The
+// fourth capture graded that against the ratified drawing at the pin this pull
+// request records and against §7.2's own words, and both refuse it: the drawing
+// gives a fired card NO FLOOR AT ALL — no hairline, no button, nothing to press
+// — and §7.2 says the schedule surface "shows the same form and nothing else —
+// no summary box, no status label". One drawing conflict was traded for another.
 //
-// WHAT THE PLAN ASKS FOR INSTEAD. §7.2: "once a run set to Run right after
-// setup or Schedule for later has fired, its schedule cannot be changed any
-// more" — and the reading a reader is owed for a surface they may see but not
-// act on is the surface WHOLE, with its actions disabled and the reason on
-// screen. So: the form stays locked, the floor STAYS and is drawn dead, the
-// server's own sentence for that state is on it, and the window stays and says
-// the same thing in its own words rather than vanishing.
+// WHAT IS DRAWN INSTEAD, and it is the whole of it:
 //
-// THE COMPOSER IS STILL WITHDRAWN, and that half of #3004 stands: an invitation
-// to type a change is one this surface cannot keep. What replaces it is an
-// answer, not an empty column.
+//   · the form, locked, and nothing else on the card — no floor, no button, no
+//     status line;
+//   · the prompt window below the scheduler, PRESENT and disabled, drawn as the
+//     window's own block — its chrome and its bordered field — carrying the
+//     answer that the schedule can no longer be changed. The answer lives in
+//     that block; it is never loose paragraph text on the page ground, which is
+//     what the capture photographed and called a paragraph rather than a window.
+//
+// AND THE WINDOW'S OWN INVITATION is the drawing's copy again (§7.4 step 8).
 //
 // Run:
 //   cd packages/agents && pnpm exec vitest run \
@@ -35,6 +36,7 @@ import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-proto
 import { RunScheduleTab } from "../run-schedule-tab";
 import { ScheduleStepSurface } from "../schedule-rail-step";
 import { SCHEDULE_WINDOW_OVER_NOTICE } from "../schedule-prompt-window";
+import { RUN_WINDOW_PLACEHOLDERS } from "../hitl-conversation-panel";
 import { SAVE_SCHEDULE_REFUSALS } from "../trigger-recurrence";
 
 afterEach(() => {
@@ -93,6 +95,16 @@ const STOPPED_RECURRING: TriggerScheduleProposalViewBody = {
   canCancel: false,
 };
 
+/** A schedule that is perfectly changeable, viewed by somebody who may not
+ *  change it (plan (A) §1.2: "the card is drawn in full with its buttons
+ *  disabled and the reason on the card"). */
+const NOT_THIS_PERSONS: TriggerScheduleProposalViewBody = {
+  ...LIVE_RECURRING,
+  canSave: false,
+  canCancel: false,
+  saveRefusal: SAVE_SCHEDULE_REFUSALS.notYours,
+};
+
 function mockResolve(body: TriggerScheduleProposalViewBody) {
   globalThis.fetch = vi.fn(
     async () =>
@@ -107,6 +119,8 @@ function mockResolve(body: TriggerScheduleProposalViewBody) {
   ) as unknown as typeof fetch;
 }
 
+const card = (root: HTMLElement) =>
+  root.querySelector('[data-conformance-id="schedule-proposal-card"]');
 const floor = (root: HTMLElement) =>
   root.querySelector('[data-conformance-id="schedule-proposal-floor"]');
 const saveButton = (root: HTMLElement) =>
@@ -114,30 +128,47 @@ const saveButton = (root: HTMLElement) =>
 /** The box a person types in — the panel's own field, not its mount. */
 const composer = (root: HTMLElement) =>
   root.querySelector('[data-schedule-prompt-window=""] [contenteditable="true"]');
+const windowMount = (root: HTMLElement) =>
+  root.querySelector('[data-conformance-id="schedule-prompt-window"]');
+/** The window's OWN block — the same chrome the live window draws. */
+const windowBlock = (root: HTMLElement) =>
+  root.querySelector('[data-conformance-id="schedule-prompt-window"] [data-run-window-placement]');
+/** The window's bordered field, disabled, carrying the answer. */
+const windowField = (root: HTMLElement) =>
+  root.querySelector('[data-run-window-field]');
 const windowAnswer = (root: HTMLElement) =>
   root.querySelector('[data-conformance-id="schedule-window-over"]');
 
-describe("a fired one-off answers instead of withdrawing", () => {
-  it("keeps the floor, draws Save changes dead, and puts the reason on screen", async () => {
+describe("a fired one-off carries no floor at all", () => {
+  it("draws the locked form and nothing else — no floor, no button, no status line", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
-    await waitFor(() => expect(floor(container)).toBeTruthy());
-    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("false");
-    expect(saveButton(container)).toBeTruthy();
-    expect(saveButton(container)!.disabled).toBe(true);
-    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
+    await waitFor(() => expect(card(container)).toBeTruthy());
+    expect(floor(container)).toBeNull();
+    expect(saveButton(container)).toBeNull();
+    // NO STATUS LABEL INSIDE THE FORM (§7.2). The state's own sentence belongs
+    // to the window below, and it is drawn there exactly once.
+    expect(card(container)!.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
   });
 
-  it("keeps the window, which says the schedule can no longer be changed", async () => {
+  it("keeps the window, present and disabled, drawn as the window's own block", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
     await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
+    // THE WINDOW'S OWN CHROME, not a paragraph on the page ground.
+    expect(windowMount(container)).toBeTruthy();
+    expect(windowBlock(container)).toBeTruthy();
+    const field = windowField(container);
+    expect(field).toBeTruthy();
+    expect(field!.getAttribute("aria-disabled")).toBe("true");
+    // AND THE ANSWER LIVES INSIDE THAT FIELD.
+    expect(field!.contains(windowAnswer(container))).toBe(true);
     expect(windowAnswer(container)!.textContent).toBe(SCHEDULE_WINDOW_OVER_NOTICE);
-    // The invitation to type is still withdrawn — an answer, not a dead box.
+    // Nothing can be typed into it.
     expect(composer(container)).toBeNull();
   });
 
@@ -147,22 +178,22 @@ describe("a fired one-off answers instead of withdrawing", () => {
       <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
     await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
-    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("false");
-    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
+    expect(floor(container)).toBeNull();
+    expect(windowField(container)).toBeTruthy();
     expect(composer(container)).toBeNull();
   });
 });
 
-describe("a recurring schedule stopped after a fire answers with its own reason", () => {
-  it("names the stop, not the release", async () => {
+describe("a recurring schedule stopped after a fire is drawn the same way", () => {
+  it("carries no floor, and the window says it in the window's own block", async () => {
     mockResolve(STOPPED_RECURRING);
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
-    await waitFor(() => expect(floor(container)).toBeTruthy());
-    expect(container.textContent).toContain(SAVE_SCHEDULE_REFUSALS.stopped);
-    expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
-    expect(windowAnswer(container)).toBeTruthy();
+    await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
+    expect(floor(container)).toBeNull();
+    expect(card(container)!.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
+    expect(windowField(container)!.contains(windowAnswer(container))).toBe(true);
   });
 });
 
@@ -173,9 +204,33 @@ describe("a schedule that can still be changed is untouched by any of this", () 
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
     await waitFor(() => expect(floor(container)).toBeTruthy());
-    expect(floor(container)!.getAttribute("data-schedule-changeable")).toBe("true");
     expect(windowAnswer(container)).toBeNull();
     await waitFor(() => expect(composer(container)).toBeTruthy());
     expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
+  });
+
+  it("invites the reader in the drawing's own words", () => {
+    // Plan (A) §7.4 step 8, word for word.
+    expect(RUN_WINDOW_PLACEHOLDERS["armed-trigger"]).toBe(
+      "Ask Cinatra to suggest edits to the fields above…",
+    );
+  });
+});
+
+describe("a card this person may see but not act on", () => {
+  it("keeps the floor whole, draws Save changes dead, and puts the reason on it", async () => {
+    mockResolve(NOT_THIS_PERSONS);
+    const { container } = render(
+      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+    );
+    await waitFor(() => expect(floor(container)).toBeTruthy());
+    // The card is drawn IN FULL — this schedule is not over, and saying so
+    // would be as false as the sentence the fourth capture caught.
+    expect(saveButton(container)).toBeTruthy();
+    expect(saveButton(container)!.disabled).toBe(true);
+    expect(floor(container)!.textContent).toContain(SAVE_SCHEDULE_REFUSALS.notYours);
+    expect(windowAnswer(container)).toBeNull();
+    // And the window stays live, because the true reason has to be answerable.
+    await waitFor(() => expect(composer(container)).toBeTruthy());
   });
 });

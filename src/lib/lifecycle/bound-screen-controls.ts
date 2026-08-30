@@ -415,6 +415,78 @@ function valueForDrawnControl(
 }
 
 /**
+ * WHY AN ASK PLACED NOTHING, PER KEY (cinatra#2934, the fourth graded capture).
+ *
+ * THE DEFECT THIS CLOSES, said plainly. `selectDrawnFillValues` answered ONE
+ * empty object for four different situations — a key the screen draws no
+ * control for, a control whose row cannot hold the value the ask gave it, a
+ * control already showing exactly what was asked for, and an ask so large the
+ * bound refused it — and the fill road turned every one of them into the single
+ * sentence "None of those are fields on this screen". The fourth capture
+ * photographed that sentence answering an ask that named the form's OWN Run at
+ * row, moments after five identical-in-kind asks had moved it: the stated
+ * reason was false, and the reader could disprove it by looking at the screen.
+ *
+ * A REASON IS NOT A REFUSAL. Splitting them here is what lets the road say the
+ * true one for each, and it is done in this pure module so the split is pinned
+ * by a test rather than by reading a model's mind.
+ */
+export type DrawnFillClassification = {
+  /** What may actually be placed — `selectDrawnFillValues`, unchanged. */
+  readonly values: Record<string, unknown>;
+  /** Keys the ask named that this screen draws no control for. */
+  readonly notFields: readonly string[];
+  /** Drawn controls whose own row cannot hold the value the ask gave them. */
+  readonly unusable: readonly string[];
+  /** Drawn controls already showing exactly what the ask asked for. */
+  readonly unchanged: readonly string[];
+  /** There WAS something to place and the size bound refused all of it. */
+  readonly tooLarge: boolean;
+};
+
+/** The ask, read against the screen in view, with a reason for every key. */
+export function classifyDrawnFillValues(
+  form: BoundScreenForm,
+  requested: Record<string, unknown>,
+): DrawnFillClassification {
+  const drawn = drawnScreenForm(form);
+  const controls = fillableFieldNames(drawn.schema);
+  const meant: Record<string, unknown> = {};
+  const unusable: string[] = [];
+  for (const control of controls) {
+    if (!Object.prototype.hasOwnProperty.call(requested, control)) continue;
+    const value = valueForDrawnControl(
+      propertySchema(drawn.schema, control),
+      requested[control],
+      drawn.values[control],
+    );
+    // `undefined` here is the control saying "not a value I could show", which
+    // is a different sentence from "not a control I draw".
+    if (value === undefined) {
+      unusable.push(control);
+      continue;
+    }
+    meant[control] = value;
+  }
+  const unchanged = Object.keys(meant).filter((key) =>
+    sameValue(meant[key], drawn.values[key]),
+  );
+  const values = selectFillableValues(drawn.schema, meant, drawn.values);
+  const notFields = Object.keys(requested).filter((key) => !controls.includes(key));
+  return {
+    values,
+    notFields,
+    unusable,
+    unchanged,
+    // Something was placeable and nothing was placed: the only remaining rule
+    // that can do that is the serialized bound.
+    tooLarge:
+      Object.keys(meant).length > unchanged.length &&
+      Object.keys(values).length === 0,
+  };
+}
+
+/**
  * The values a fill may place in the DRAWN controls of the screen in view.
  *
  * Composed rather than forked: the closed-set, reserved-key, no-op and bound
@@ -425,17 +497,164 @@ export function selectDrawnFillValues(
   form: BoundScreenForm,
   requested: Record<string, unknown>,
 ): Record<string, unknown> {
-  const drawn = drawnScreenForm(form);
-  const meant: Record<string, unknown> = {};
-  for (const control of fillableFieldNames(drawn.schema)) {
-    if (!Object.prototype.hasOwnProperty.call(requested, control)) continue;
-    const value = valueForDrawnControl(
-      propertySchema(drawn.schema, control),
-      requested[control],
-      drawn.values[control],
-    );
-    if (value === undefined) continue;
-    meant[control] = value;
+  return classifyDrawnFillValues(form, requested).values;
+}
+
+// ---------------------------------------------------------------------------
+// WHAT THE SCREEN'S ROWS ARE, IN WORDS (cinatra#2934, the fourth graded
+// capture).
+//
+// THE OTHER HALF OF THE SAME DEFECT. The turn that names a bound screen to the
+// assistant named its rows and nothing else — not the spelling a row holds, not
+// what it is holding now — so "make it half past twelve tomorrow" had to be
+// turned into a value with no ground truth to turn it against. The same
+// described change therefore reached the road spelled differently from one turn
+// to the next, and a spelling the row cannot hold was dropped in silence.
+//
+// So the rows are described rather than listed: the shape the control holds and
+// the characters it is showing right now. That is a DETERMINISTIC input, and it
+// is the structural half of the repeat fix — the road stops depending on a
+// guess it never had to be a guess.
+// ---------------------------------------------------------------------------
+
+/** How ONE row writes its value, in the reader's own words, or `null`. */
+function describeRowShape(row: Record<string, unknown> | null): string | null {
+  if (!row) return null;
+  if (Array.isArray(row.enum)) {
+    return `one of ${row.enum.map((v) => JSON.stringify(v)).join(", ")}`;
   }
-  return selectFillableValues(drawn.schema, meant, drawn.values);
+  if (row.type === "string") {
+    if (row.format === LOCAL_DATE_TIME_FORMAT) {
+      return (
+        "a local date and time written YYYY-MM-DDTHH:mm, read in the timezone " +
+        "row beside it — never a UTC instant, never a zone letter and never seconds"
+      );
+    }
+    if (row.format === IANA_TIMEZONE_FORMAT) return "an IANA timezone name";
+    return "text";
+  }
+  if (row.type === "boolean") return "true or false";
+  if (row.type === "integer" || row.type === "number") {
+    const bounds: string[] = [];
+    if (typeof row.minimum === "number") bounds.push(`at least ${row.minimum}`);
+    if (typeof row.maximum === "number") bounds.push(`at most ${row.maximum}`);
+    const kind = row.type === "integer" ? "a whole number" : "a number";
+    return bounds.length > 0 ? `${kind}, ${bounds.join(" and ")}` : kind;
+  }
+  if (row.type === "array") return "a list";
+  return null;
+}
+
+/**
+ * HOW MUCH OF A ROW'S CURRENT VALUE IS ECHOED BACK TO THE TURN.
+ *
+ * WHAT IT IS FOR (cinatra#2934, the convergence round of the fourth fix leg).
+ * Naming what a row is holding is what makes a described change computable —
+ * and the value is text a PERSON typed, on an arbitrary screen, travelling into
+ * the turn's own instructions. So it travels bounded: enough to recognise the
+ * row's current state, never enough to be a payload. The echo is always
+ * JSON-quoted, which keeps a newline a newline and cannot open a section of its
+ * own, and the whole description is capped as well as each value, so no screen
+ * can make this fragment grow without limit.
+ */
+export const ROW_VALUE_ECHO_MAX_CHARS = 120;
+/** The whole description's cap — a screen with very many rows is cut, not carried. */
+export const ROWS_DESCRIPTION_MAX_CHARS = 4_000;
+
+/**
+ * Rows whose value is NEVER echoed: a secret is not state the turn needs.
+ *
+ * Read from the row's own schema where it says so (`writeOnly`, a password
+ * format) and from its name otherwise, because a JSON-schema form on an
+ * arbitrary screen is not obliged to say either.
+ */
+function rowValueIsSecret(control: string, schema: Record<string, unknown> | null): boolean {
+  if (schema) {
+    if (schema.writeOnly === true) return true;
+    const format = typeof schema.format === "string" ? schema.format.toLowerCase() : "";
+    if (format === "password") return true;
+  }
+  return /pass(word|phrase)|secret|token|credential|api[_-]?key|private[_-]?key/i.test(
+    control,
+  );
+}
+
+/** One line per drawn control: its name, how it is written, what it holds. */
+export function describeDrawnRows(form: BoundScreenForm): readonly string[] {
+  const drawn = drawnScreenForm(form);
+  const out: string[] = [];
+  let budget = ROWS_DESCRIPTION_MAX_CHARS;
+  for (const control of fillableFieldNames(drawn.schema)) {
+    const parts: string[] = [];
+    const rowSchema = propertySchema(drawn.schema, control);
+    const shape = describeRowShape(rowSchema);
+    if (shape) parts.push(shape);
+    const held = drawn.values[control];
+    if (typeof held === "string" || typeof held === "number" || typeof held === "boolean") {
+      if (rowValueIsSecret(control, rowSchema)) {
+        // NAMED, NOT SHOWN. The turn still knows the row is holding something,
+        // which is all it needs to reason about whether to change it.
+        parts.push("now set (not shown)");
+      } else {
+        const text = String(held);
+        const shown =
+          text.length > ROW_VALUE_ECHO_MAX_CHARS
+            ? `${text.slice(0, ROW_VALUE_ECHO_MAX_CHARS)}…`
+            : text;
+        parts.push(`now ${JSON.stringify(shown)}`);
+      }
+    }
+    const line = parts.length > 0 ? `${control} (${parts.join("; ")})` : control;
+    // THE WHOLE DESCRIPTION IS BOUNDED TOO. A row that does not fit is named
+    // without its shape rather than dropped — the turn must still be able to
+    // address every control the screen draws.
+    if (line.length > budget) {
+      out.push(control);
+      budget -= control.length;
+      if (budget <= 0) budget = 0;
+      continue;
+    }
+    out.push(line);
+    budget -= line.length;
+  }
+  return out;
+}
+
+/**
+ * The instant a local-date-time row would be showing for "now", or `null`.
+ *
+ * NAMED SO "TOMORROW" IS COMPUTABLE. A described change is almost always
+ * relative — tomorrow, this evening, in an hour — and a row that says only what
+ * it holds leaves the arithmetic to a guess about what day it is. The zone is
+ * the form's OWN timezone row, so the answer is in the same clock the row is
+ * read in; a form with no such row, or a zone the runtime cannot resolve, gets
+ * `null` rather than a moment in the wrong clock.
+ */
+export function nowForDrawnForm(form: BoundScreenForm, at: Date): string | null {
+  const drawn = drawnScreenForm(form);
+  let zone: string | null = null;
+  for (const control of fillableFieldNames(drawn.schema)) {
+    const row = propertySchema(drawn.schema, control);
+    if (row?.format !== IANA_TIMEZONE_FORMAT) continue;
+    const held = drawn.values[control];
+    if (typeof held === "string" && held.trim() !== "") zone = held;
+  }
+  if (!zone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    const value = `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
+    return readLocalDateTime(value) === value ? value : null;
+  } catch {
+    return null;
+  }
 }

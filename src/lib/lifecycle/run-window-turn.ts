@@ -632,6 +632,7 @@ export async function runWindowTurn(
           replyToSequence: userRow.sequence,
           fill: null,
           attachments: null,
+          savedPlacement: null,
           messageId,
           placedBy: null,
           createdAt: new Date(),

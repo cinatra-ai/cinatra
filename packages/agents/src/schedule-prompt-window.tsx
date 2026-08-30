@@ -179,23 +179,45 @@ export function SchedulePromptWindow({
     [sendRunWindowTurn, onActed, onFill],
   );
 
-  // THE WINDOW ANSWERS RATHER THAN VANISHING (cinatra#2934; plan (A) §7.2). The
-  // panel is not mounted at all here: it exists to be typed into, and there is
-  // nothing to type. What stands in its place is one sentence, in the window's
-  // own region, so the reader finds the answer where the box used to be.
+  // THE WINDOW ANSWERS, AND IT IS STILL A WINDOW (cinatra#2934, the FOURTH
+  // graded capture; plan (A) §7.2).
+  //
+  // WHAT THE CAPTURE PHOTOGRAPHED. The sentence was there, and it was drawn as
+  // a bare paragraph on the page ground — no block, no chrome, no field — so
+  // what the pixels showed under a locked form was a line of text, not the
+  // window the drawing places below the scheduler. And the card above it had
+  // been given a dead floor to carry the same state twice.
+  //
+  // SO THE WINDOW IS PRESENT AND DISABLED, drawn as ITS OWN BLOCK: the same
+  // outer placement the live window takes, the same centred column, and the
+  // window's own bordered field — the box a person would type in — carrying the
+  // answer instead of a composer. Nothing can be typed into it: it is a region,
+  // not a control, and it is marked disabled for a reader who is not looking at
+  // the pixels. This is now the ONLY place this state says anything, which is
+  // what §7.2's "the same form and nothing else" leaves room for.
   if (readOnly) {
     return (
       <div
         data-conformance-id="schedule-prompt-window"
         data-schedule-prompt-window=""
       >
-        <p
-          data-conformance-id="schedule-window-over"
-          role="status"
-          className="text-sm text-muted-foreground"
-        >
-          {SCHEDULE_WINDOW_OVER_NOTICE}
-        </p>
+        <div data-run-window-placement="floating" className="px-5 pb-4 pt-6">
+          <div className="mx-auto max-w-3xl">
+            <div
+              data-run-window-field=""
+              aria-disabled="true"
+              className="rounded-panel border border-line bg-surface px-3 py-2.5 shadow-lg"
+            >
+              <p
+                data-conformance-id="schedule-window-over"
+                role="status"
+                className="text-sm text-muted-foreground"
+              >
+                {SCHEDULE_WINDOW_OVER_NOTICE}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

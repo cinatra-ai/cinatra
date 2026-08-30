@@ -243,6 +243,44 @@ describe("a genuinely superseded card carries the flag", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// WHOSE CONTROLS THEY ARE (cinatra#2934, the convergence round of the fourth fix
+// leg). **Save changes** was gated on the person; **Cancel schedule** was left
+// reading the schedule's state alone, so a second person on a fired recurring
+// run was still drawn a LIVE Cancel — a control the write refuses. Both act on
+// the same run under plan (A) §7.1's one rule, so both read one answer.
+// ---------------------------------------------------------------------------
+describe("a floor's controls are the run owner's, or an administrator's", () => {
+  function firedRecurring(over: Record<string, unknown>) {
+    return { ...settledResolution(false), firedOnce: true, ...over };
+  }
+
+  it("draws Cancel schedule for a reader who may act", async () => {
+    resolveProposalForReader.mockResolvedValue(
+      firedRecurring({ mayAct: true, saveRefusal: null, runOwnerId: "u1" }),
+    );
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
+    expect(view).toMatchObject({ canCancel: true, canSave: true });
+    expect("saveRefusal" in (view as object)).toBe(false);
+  });
+
+  it("draws NO live control for a reader who may not, and says why", async () => {
+    resolveProposalForReader.mockResolvedValue(
+      firedRecurring({
+        mayAct: false,
+        canSave: false,
+        saveRefusal: "That schedule is not yours to change.",
+        runOwnerId: "somebody_else",
+      }),
+    );
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
+    // NEITHER control is live — the capture's own defect was a live one.
+    expect(view).toMatchObject({ canCancel: false, canSave: false });
+    // And the reason travels, because this card HAS a floor to write it on.
+    expect(view).toMatchObject({ saveRefusal: "That schedule is not yours to change." });
+  });
+});
+
 describe("the pending card is untouched by any of this", () => {
   it("carries no `superseded` key either", async () => {
     resolveProposalForReader.mockResolvedValue({

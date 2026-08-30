@@ -180,21 +180,17 @@ export type ScheduleSurfaceReading = {
 const SCHEDULE_FLOOR_SELECTOR = '[data-conformance-id="schedule-proposal-floor"]';
 
 /**
- * The floor's OWN answer to "can this schedule still be changed"
- * (cinatra#2934, the armed-schedule change road).
+ * THE PRESENCE OF THE FLOOR IS THE ANSWER (cinatra#2934, the FOURTH graded
+ * capture).
  *
- * THE PRESENCE OF THE FLOOR USED TO BE THE ANSWER, and that stopped being true
- * when a schedule that is over began drawing its floor DEAD — with Save changes
- * disabled and the reason on it — instead of drawing nothing (plan (A) §7.2;
- * the reversal of cinatra#3004's withdrawal). Reading presence alone would now
- * report a fired one-off as changeable and put a live composer under a locked
- * form, which is the opposite mistake.
- *
- * A floor that does not carry the attribute at all is read as changeable, which
- * is exactly what presence meant before: the reading never gets stricter than
- * the card it is measuring.
+ * It always was, and for one turn of this pull request it stopped being: a
+ * schedule that is over drew its floor DEAD rather than not at all, so presence
+ * had to be qualified by an attribute on it. The fourth capture graded that
+ * dead floor against the ratified drawing at the pin this pull request records
+ * and against plan (A) §7.2 — the drawing gives that state no floor, no
+ * hairline and nothing to press — so the floor is gone again for it and the
+ * attribute with it. One fact, read one way, by both surfaces.
  */
-const SCHEDULE_CHANGEABLE_ATTR = "data-schedule-changeable";
 
 export function useScheduleSurfaceReading(
   host: HTMLElement | null,
@@ -211,8 +207,7 @@ export function useScheduleSurfaceReading(
     const read = () => {
       const drawn = host.childElementCount > 0;
       const floor = drawn ? host.querySelector(SCHEDULE_FLOOR_SELECTOR) : null;
-      const changeable =
-        floor !== null && floor.getAttribute(SCHEDULE_CHANGEABLE_ATTR) !== "false";
+      const changeable = floor !== null;
       // Same object identity while nothing moved: this runs on every mutation
       // inside the card, and a fresh object each time would re-render the
       // surface on every keystroke in the form below it.

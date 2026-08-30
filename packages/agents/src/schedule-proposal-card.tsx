@@ -196,7 +196,6 @@ import {
   // The SERVER'S OWN sentences for a schedule that can no longer be changed
   // (cinatra#2934), from the leaf both sides already share — so this card draws
   // the words the write guard answers with and no second wording exists.
-  frozenScheduleReason,
 } from "./trigger-recurrence";
 
 /**
@@ -748,24 +747,28 @@ function SettledPhase({
   // this run's, so the stamp says nothing about whether it has fired. Its
   // firing is `canCancel`'s business, read server-side off the tick's own stamp.
   //
-  // A FROZEN CARD DRAWS ITS FLOOR **DEAD**, AND SAYS WHY (cinatra#2934, the
-  // armed-schedule change road) — the reversal of this card's own earlier
-  // reading, which drew no floor at all.
+  // A FROZEN CARD CARRIES NO FLOOR AT ALL (cinatra#2934, the FOURTH graded
+  // capture) — the ratified drawing at the pin this pull request records, read
+  // against §7.2's own words.
   //
-  // WHAT THAT READING COST, measured rather than argued. The graded re-shoot
-  // photographed a fired one-off: rows locked, no floor, and — because both
-  // surfaces measure the window's state off that floor — no window, no composer
-  // and no sentence anywhere on the screen. The reader was told nothing rather
-  // than told why, which is the one thing plan (A) §7.2 asks this state to do:
-  // a schedule that has fired "cannot be changed any more", and a surface a
-  // reader may see but not act on shows the card whole with its actions
-  // disabled and the reason on screen.
+  // THE TWO READINGS THIS STATE HAS HAD, and why neither of the first two is
+  // this one. It first drew NO floor and NO window, so a fired one-off stood
+  // with its rows locked and no sentence anywhere: the reader was told nothing
+  // rather than told why. It then drew the floor DEAD — Save changes present
+  // and disabled, the state's own sentence inside the form — which the fourth
+  // capture graded against the drawing and against §7.2 and both refuse: the
+  // drawing gives this exact state no floor, no hairline and nothing to press,
+  // and §7.2 says the surface "shows the same form and nothing else — no
+  // summary box, no status label".
   //
-  // SO THE FLOOR STAYS AND IS DEAD: **Save changes** disabled, no Cancel
-  // schedule (there is nothing left to stop), and the SERVER'S OWN sentence for
-  // this state beside it — from the one table the write guard chooses from, so
-  // the card and the write cannot word one state two ways. `data-schedule-  // changeable` on the floor is what the surfaces read now, because the floor
-  // being THERE no longer means the schedule can be changed.
+  // BOTH THINGS ARE TRUE AT ONCE, and that is the whole reading: the CARD is
+  // the form and nothing else, and the ANSWER lives in the prompt window below
+  // the scheduler, which stays present and disabled and says in its own block
+  // that the schedule can no longer be changed. Nothing is withheld from the
+  // reader; it is simply drawn where the drawing puts it.
+  //
+  // AND THE SURFACES READ THE FLOOR'S PRESENCE AGAIN, as they always did before
+  // the dead-floor reading made presence ambiguous.
   //
   // WHAT THIS DELIBERATELY DOES NOT CATCH. A one-off whose moment has passed
   // while the release job has not drained yet has NOT fired — its gate is still
@@ -781,15 +784,13 @@ function SettledPhase({
   const frozen =
     (body.triggerType !== "recurring" && body.released) || body.stopped === true;
 
-  // WHY IT IS FROZEN, IN THE SERVER'S OWN WORDS — the same table
-  // `saveScheduleGuardRefusal` chooses from, and in the same order it asks:
-  // a stopped schedule first, then a released one. Never a wording of this
-  // card's own.
-  const frozenReason = frozenScheduleReason({
-    triggerType: body.triggerType,
-    stopped: body.stopped === true,
-    released: body.released === true,
-  });
+  // WHY **Save changes** IS WITHHELD FROM THIS READER, when the reason is about
+  // the READER (cinatra#2934, the fourth graded capture). Plan (A) §1.2: a card
+  // a person "may see but not act on" is "drawn in full with its buttons
+  // disabled and the reason on the card". The sentence is the SERVER's, carried
+  // on the body, and it is sent only for that case — a schedule that is over
+  // sends none, because that card has no floor for one to sit on.
+  const readerRefusal = body.saveRefusal ?? null;
 
   const act = async (op: "cancel") => {
     setRefusal(null);
@@ -873,30 +874,27 @@ function SettledPhase({
         durationCopy={null}
       />
 
-      {frozen ? (
+      {/* NO FLOOR ON A SCHEDULE THAT IS OVER — see the note above `frozen`. The
+          form, locked, and nothing else; the window below the scheduler is
+          where this state says what it says. */}
+      {frozen ? null : (
         <div
           data-conformance-id="schedule-proposal-floor"
-          data-schedule-changeable="false"
           className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
         >
-          <p
-            data-conformance-id="schedule-proposal-refusal"
-            role="status"
-            className="mr-auto text-sm text-muted-foreground"
-          >
-            {frozenReason}
-          </p>
-          <Button type="button" size="sm" data-action="save-schedule-changes" disabled>
-            <Check aria-hidden="true" className="size-3.5" />
-            Save changes
-          </Button>
-        </div>
-      ) : (
-        <div
-          data-conformance-id="schedule-proposal-floor"
-          data-schedule-changeable="true"
-          className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
-        >
+          {/* THE READER-SHAPED REASON, beside the control it explains (plan (A)
+              §1.2). It stands where a live refusal would, and only one of the
+              two is ever on the floor at a time — a card that just refused a
+              press is showing that refusal. */}
+          {!refusal && readerRefusal ? (
+            <p
+              data-conformance-id="schedule-proposal-refusal"
+              role="status"
+              className="mr-auto text-sm text-muted-foreground"
+            >
+              {readerRefusal}
+            </p>
+          ) : null}
           {refusal ? (
             <p
               data-conformance-id="schedule-proposal-refusal"

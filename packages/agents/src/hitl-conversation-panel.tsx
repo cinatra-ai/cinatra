@@ -31,8 +31,15 @@ export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
   "step-by-step": "Ask Cinatra to fill this step's fields, or ask about the run…",
   /** The schedule screen — the scheduler form, in both of its states. */
   schedule: "Ask Cinatra to set the schedule above, or ask about it…",
-  /** The armed-trigger tab — the run's schedule as it stands. */
-  "armed-trigger": "Ask Cinatra to change this schedule, or ask about it…",
+  /**
+   * The armed-trigger tab — the run's schedule as it stands.
+   *
+   * PLAN (A) §7.4 STEP 8'S OWN COPY, word for word: "You type into the prompt
+   * window under the tab ('Ask Cinatra to suggest edits to the fields above…')".
+   * A wording of this window's own stood here through four captures and was
+   * graded against the drawing on every one of them.
+   */
+  "armed-trigger": "Ask Cinatra to suggest edits to the fields above…",
   /** The review page — under the decision bar. */
   review: "Ask Cinatra about this review, or ask for changes to the work…",
 };
@@ -360,7 +367,10 @@ export function HitlConversationPanel({
             </div>
           </div>
         )}
-        <div onFocus={handleFocus} onClick={handleFocus}>
+        {/* THE WINDOW'S OWN BORDERED FIELD, marked so the read-only reading of
+            this window can draw the same block around its answer rather than a
+            paragraph on the page ground (cinatra#2934, the fourth capture). */}
+        <div data-run-window-field="" onFocus={handleFocus} onClick={handleFocus}>
           <PromptField
             ref={promptFieldRef}
             placeholder={placeholder}
