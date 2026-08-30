@@ -62,7 +62,9 @@
  * Pure functions so they can be unit-tested without mounting the MCP server.
  * The request-level composition (reading the peer, the minted token and the
  * headers) lives in `./dev-admin-bypass-request` — ONE implementation, used by
- * the MCP transport and by the `/api/cli/*` guard alike.
+ * the MCP transport and by the `/api/cli/*` guard alike. The transport reaches
+ * it through the PORT at the foot of this module, which the boot hook fills;
+ * see the note there for why the transport may not import it directly.
  */
 
 import { timingSafeEqual } from "node:crypto";
@@ -296,4 +298,175 @@ export function shouldGrantDevAdminBypass(opts: {
   if (opts.envBypassFlag !== "true") return false;
   if (!opts.isTrustedDevPeer) return false;
   return true;
+}
+
+/**
+ * THE TRANSPORT'S PORT INTO THE ONE COMPOSITION.
+ *
+ * `./dev-admin-bypass-request` composes this policy for a live request, and it
+ * needs two things this module deliberately does not: the per-boot credential,
+ * read from a file, and the ingress snapshot, taken by a capture installed on
+ * the Node HTTP server. Both are BOOT facts — established once per process,
+ * long before a handler runs.
+ *
+ * The MCP transport (`./index.tsx`) may not import that composition. It is this
+ * package's own entry, so every module it reaches is a module reached by every
+ * call site that imports the package for something else entirely — and a
+ * filesystem reader plus `node:http` travelling that far is exactly the graph
+ * pressure the repository's route budget measures.
+ *
+ * So the transport asks HERE, and the boot hook — the same one that installs
+ * the capture and mints the credential — fills the port with the one
+ * composition (`installDevAdminBypassRequestPort`). The decision is NOT
+ * duplicated: the port holds that single function, and `/api/cli/*` calls it
+ * directly.
+ *
+ * WHAT THE PORT MAY NOT DO. An indirection through a mutable slot is a place
+ * where something other than the boot hook could put its own answer, so the
+ * port does not take the installed function's word for the two guards that
+ * make this feature development-only. `grantDevAdminBypassThroughPort` applies
+ * `NODE_ENV !== "production"` and the explicit opt-in flag ITSELF, before it
+ * consults anything, and the installer REFUSES outright when those do not
+ * hold — so in a production build the slot is empty and unreadable as an
+ * answer, whatever is written into it. The port is also write-ONCE per process:
+ * the boot hook runs before anything else can serve a request or load an
+ * extension, and a later install of a different function is refused and
+ * reported. What remains inside a development process that already opted in is
+ * the composition's own three network facts (loopback peer, no forwarded header
+ * at ingress, this boot's credential), which only the composition can read.
+ *
+ * AN UNFILLED PORT REFUSES. That is strictly fail-closed: the port can be no
+ * wider than the composition, and with nothing installed it is narrower — the
+ * composition would still grant a correct local operator where the port says
+ * no. That direction is the safe one, and it is the answer a process without
+ * the boot hook has to give anyway, since it has neither ingress snapshot nor
+ * minted credential.
+ *
+ * The port lives in a `globalThis` slot keyed by a registered symbol, for the
+ * reason `./local-connection` and `./dev-local-token` do the same: the boot
+ * graph and the route graph are compiled separately, and a bundler that emits
+ * two copies of this module must still see ONE port. The one-time notice below
+ * shares that slot for the same reason.
+ */
+export type DevAdminBypassPort = (headers: HeaderReader) => boolean;
+
+type PortSlot = {
+  grant: DevAdminBypassPort | null;
+  unfilledNoticeEmitted: boolean;
+  replacementNoticeEmitted: boolean;
+};
+
+const PORT_SLOT_KEY = Symbol.for("cinatra.mcp-server.dev-admin-bypass-port");
+
+function portSlot(): PortSlot {
+  const registry = globalThis as unknown as Record<symbol, PortSlot | undefined>;
+  const existing = registry[PORT_SLOT_KEY];
+  if (existing) return existing;
+  const slot: PortSlot = {
+    grant: null,
+    unfilledNoticeEmitted: false,
+    replacementNoticeEmitted: false,
+  };
+  // Non-writable and non-configurable: the slot OBJECT cannot be swapped for
+  // another once this process has one, so the only route to the decision it
+  // holds is the write-once installer below.
+  Object.defineProperty(globalThis, PORT_SLOT_KEY, {
+    value: slot,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
+  return slot;
+}
+
+/**
+ * The two guards that make this feature development-only, applied WITHOUT
+ * consulting the port. Both the reader and the installer go through here, so
+ * neither an installed function nor a written slot can widen the bypass past
+ * what the environment already allows.
+ */
+function devAdminBypassEnvironmentAllows(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  return process.env.CINATRA_MCP_DEV_ADMIN_BYPASS === "true";
+}
+
+/**
+ * Install the request-level composition behind the port. Called by the boot
+ * hook through `installDevAdminBypassRequestPort` in
+ * `./dev-admin-bypass-request`; nothing else should call it, so there stays
+ * exactly one thing a port can hold.
+ *
+ * Refused when the environment does not allow the bypass at all, and refused a
+ * SECOND time: the port is write-once per process, so code that runs after the
+ * boot hook — an extension, say — cannot replace the trust decision with its
+ * own. Both refusals are silent no-ops for the caller; the second is reported
+ * once, because it means something tried.
+ */
+export function installDevAdminBypassPort(grant: DevAdminBypassPort): void {
+  if (!devAdminBypassEnvironmentAllows()) return;
+  const slot = portSlot();
+  if (slot.grant) {
+    if (slot.grant !== grant && !slot.replacementNoticeEmitted) {
+      slot.replacementNoticeEmitted = true;
+      console.warn(
+        "[mcp-dev-admin-bypass] REFUSED a second install of the local-operator check in this process — the port is write-once and the boot hook already filled it.",
+      );
+    }
+    return;
+  }
+  slot.grant = grant;
+}
+
+/**
+ * The bypass decision for a request, through the installed composition.
+ *
+ * The environment guards are applied HERE, not delegated: whatever occupies the
+ * slot, this returns false in a production build and false without the explicit
+ * opt-in. Refuses when nothing is installed — see the note above on why that is
+ * the fail-closed direction.
+ */
+export function grantDevAdminBypassThroughPort(headers: HeaderReader): boolean {
+  if (!devAdminBypassEnvironmentAllows()) return false;
+  const grant = portSlot().grant;
+  if (!grant) {
+    emitUnfilledPortNoticeOnce();
+    return false;
+  }
+  return grant(headers);
+}
+
+/**
+ * One-time operator notice when the opt-in flag is on but NOTHING filled the
+ * port in this process — the bypass is enabled and the transport will refuse
+ * every request until the boot hook runs.
+ *
+ * It is emitted from the REQUEST path deliberately. A process whose boot hook
+ * never ran cannot say so at boot, and this is the exact shape that failure
+ * takes: the local operator's own client, correct in every respect, quietly
+ * refused. (The sibling notice in `./dev-admin-bypass-request` covers the other
+ * half — a boot hook that ran without minting a credential.) The caller has
+ * already established that the environment allows the bypass, so there is
+ * nothing to re-check and nothing to say in production.
+ */
+function emitUnfilledPortNoticeOnce(): void {
+  const slot = portSlot();
+  if (slot.unfilledNoticeEmitted) return;
+  slot.unfilledNoticeEmitted = true;
+  console.warn(
+    "[mcp-dev-admin-bypass] enabled, but nothing installed the local-operator check in this process — the MCP transport will REFUSE every request. The check is installed by the boot hook, which also captures the connection and mints this boot's credential.",
+  );
+}
+
+/**
+ * Test seam: empty the port (and re-arm its notices) so the uninstalled state,
+ * and a fresh write-once install, can be exercised. A no-op wherever the
+ * environment does not allow the bypass, so it cannot be used to disturb a
+ * production process.
+ */
+export function resetDevAdminBypassPortForTest(): void {
+  if (!devAdminBypassEnvironmentAllows()) return;
+  const slot = portSlot();
+  slot.grant = null;
+  slot.unfilledNoticeEmitted = false;
+  slot.replacementNoticeEmitted = false;
 }

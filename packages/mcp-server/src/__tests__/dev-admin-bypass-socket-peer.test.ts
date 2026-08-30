@@ -11,14 +11,22 @@
  * application server. Nothing here binds a fixed port and nothing here touches
  * a database: the subject is the connection, not the app.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { grantDevAdminBypassForRequest } from "../dev-admin-bypass-request";
-import { DEV_LOCAL_TOKEN_HEADER } from "../dev-admin-bypass";
+import {
+  grantDevAdminBypassForRequest,
+  installDevAdminBypassRequestPort,
+} from "../dev-admin-bypass-request";
+import {
+  DEV_LOCAL_TOKEN_HEADER,
+  grantDevAdminBypassThroughPort,
+  installDevAdminBypassPort,
+  resetDevAdminBypassPortForTest,
+} from "../dev-admin-bypass";
 import {
   devLocalTokenPath,
   mintDevLocalToken,
@@ -254,5 +262,167 @@ describe("the forwarded-header guard reads INGRESS, not the route handler's head
   it("REFUSES when there is no ingress snapshot at all (the boot hook never ran)", () => {
     // No `runWithLocalConnection` frame: peer unknown AND a hop assumed.
     expect(grantDevAdminBypassForRequest(credentialedHeaders())).toBe(false);
+  });
+});
+
+/**
+ * THE TRANSPORT'S PORT INTO THAT ONE COMPOSITION.
+ *
+ * The composition reads a file and a `node:http` server; both belong to the
+ * boot graph. The transport module is imported by a great many call sites for
+ * unrelated reasons, so it asks the pure policy module for the decision instead
+ * of importing the readers, and the boot hook — the same hook that installs the
+ * connection capture and mints the credential — installs the composition behind
+ * that port. These cases pin both halves: the port carries EXACTLY the one
+ * composition's answer, and it refuses while nothing has installed it.
+ */
+describe("the transport's port into the one composition", () => {
+  function credentialedHeaders(extra: Record<string, string> = {}) {
+    const token = readDevLocalTokenFile(process.env) as string;
+    const map: Record<string, string> = {
+      [DEV_LOCAL_TOKEN_HEADER]: token,
+      ...extra,
+    };
+    return {
+      get: (name: string) => map[name.toLowerCase()] ?? null,
+    };
+  }
+
+  const localOperator = { remoteAddress: "127.0.0.1", forwardedHeaderPresent: false };
+
+  beforeEach(() => {
+    resetDevAdminBypassPortForTest();
+  });
+
+  afterAll(() => {
+    resetDevAdminBypassPortForTest();
+  });
+
+  it("REFUSES while nothing has installed the composition, on a request the composition itself grants", () => {
+    const throughPort = runWithLocalConnection(localOperator, () =>
+      grantDevAdminBypassThroughPort(credentialedHeaders()),
+    );
+    const direct = runWithLocalConnection(localOperator, () =>
+      grantDevAdminBypassForRequest(credentialedHeaders()),
+    );
+    // The refusal is the PORT's — the same request is granted by the one
+    // composition, so an uninstalled port cannot be mistaken for a policy that
+    // says no.
+    expect(direct).toBe(true);
+    expect(throughPort).toBe(false);
+  });
+
+  it("says so ONCE when the boot hook never filled it — the silent-refusal shape", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runWithLocalConnection(localOperator, () => grantDevAdminBypassThroughPort(credentialedHeaders()));
+      runWithLocalConnection(localOperator, () => grantDevAdminBypassThroughPort(credentialedHeaders()));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("REFUSE");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("carries exactly the one composition's decision once the boot hook installs it", () => {
+    installDevAdminBypassRequestPort();
+
+    const granted = runWithLocalConnection(localOperator, () => ({
+      throughPort: grantDevAdminBypassThroughPort(credentialedHeaders()),
+      direct: grantDevAdminBypassForRequest(credentialedHeaders()),
+    }));
+    expect(granted).toEqual({ throughPort: true, direct: true });
+
+    const noCredential = { get: () => null };
+    const refused = runWithLocalConnection(localOperator, () => ({
+      throughPort: grantDevAdminBypassThroughPort(noCredential),
+      direct: grantDevAdminBypassForRequest(noCredential),
+    }));
+    expect(refused).toEqual({ throughPort: false, direct: false });
+
+    const proxied = runWithLocalConnection({ remoteAddress: "127.0.0.1", forwardedHeaderPresent: true }, () => ({
+      throughPort: grantDevAdminBypassThroughPort(credentialedHeaders()),
+      direct: grantDevAdminBypassForRequest(credentialedHeaders()),
+    }));
+    expect(proxied).toEqual({ throughPort: false, direct: false });
+  });
+});
+
+/**
+ * THE PORT MAY NOT WIDEN THE BYPASS.
+ *
+ * The transport now reaches its trust decision through a mutable slot, so the
+ * question a reviewer asks is what happens when something OTHER than the boot
+ * hook fills it. Two answers are pinned here, and they are the reason the
+ * indirection is not a hole: the two guards that make this feature
+ * development-only are applied by the port itself rather than delegated to
+ * whatever it holds, and the port is write-once, so the boot hook's install —
+ * which happens before this process can serve a request or load an extension —
+ * is the one that stands.
+ *
+ * These cases install a grant that says YES to everything, which is the widest
+ * thing a caller could possibly put there, and show it still cannot reach past
+ * either guard.
+ */
+describe("the port cannot widen the development-only bypass", () => {
+  const anyHeaders = { get: () => null };
+
+  beforeEach(() => {
+    resetDevAdminBypassPortForTest();
+  });
+
+  afterAll(() => {
+    resetDevAdminBypassPortForTest();
+  });
+
+  it("applies the production and opt-in guards ITSELF, whatever is installed", () => {
+    installDevAdminBypassPort(() => true);
+    // Development, opted in: the installed answer is the answer.
+    expect(grantDevAdminBypassThroughPort(anyHeaders)).toBe(true);
+
+    vi.stubEnv("NODE_ENV", "production");
+    expect(grantDevAdminBypassThroughPort(anyHeaders)).toBe(false);
+    vi.stubEnv("NODE_ENV", "test");
+
+    process.env.CINATRA_MCP_DEV_ADMIN_BYPASS = "false";
+    expect(grantDevAdminBypassThroughPort(anyHeaders)).toBe(false);
+    process.env.CINATRA_MCP_DEV_ADMIN_BYPASS = "true";
+
+    // ...and the guards did not disturb the port itself.
+    expect(grantDevAdminBypassThroughPort(anyHeaders)).toBe(true);
+  });
+
+  it("installs NOTHING while the environment does not allow the bypass", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    installDevAdminBypassPort(() => true);
+    vi.stubEnv("NODE_ENV", "test");
+
+    // Back in development the port is still empty — the production install was
+    // refused outright rather than parked for later.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(grantDevAdminBypassThroughPort(anyHeaders)).toBe(false);
+      expect(String(warn.mock.calls[0][0])).toContain("nothing installed");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("is write-once: a later grant that says yes to everything is refused and reported", () => {
+    installDevAdminBypassRequestPort();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      installDevAdminBypassPort(() => true);
+      installDevAdminBypassPort(() => true);
+      // The boot hook's composition still decides, and it refuses a request
+      // carrying no credential — the widening grant never took effect.
+      expect(runWithLocalConnection({ remoteAddress: "127.0.0.1", forwardedHeaderPresent: false }, () =>
+        grantDevAdminBypassThroughPort(anyHeaders),
+      )).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("REFUSED a second install");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

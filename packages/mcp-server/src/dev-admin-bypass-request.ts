@@ -21,6 +21,7 @@
 
 import {
   DEV_LOCAL_TOKEN_HEADER,
+  installDevAdminBypassPort,
   isTrustedDevPeer,
   shouldGrantDevAdminBypass,
   type HeaderReader,
@@ -78,4 +79,18 @@ export function emitDevAdminBypassReadinessNoticeOnce(): void {
       DEV_LOCAL_TOKEN_HEADER +
       " header.",
   );
+}
+
+/**
+ * The boot hook's one call: put the composition above behind the transport's
+ * port, then say so if the bypass is enabled with nothing to grant.
+ *
+ * This is where the two halves meet. `/api/cli/*` calls
+ * `grantDevAdminBypassForRequest` directly — it is an application module and
+ * carries no package entry into anybody's graph. The MCP transport cannot, so
+ * it reads the port this fills. Same function, one trust boundary.
+ */
+export function installDevAdminBypassRequestPort(): void {
+  installDevAdminBypassPort(grantDevAdminBypassForRequest);
+  emitDevAdminBypassReadinessNoticeOnce();
 }

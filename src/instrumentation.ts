@@ -35,6 +35,16 @@ export async function register() {
       "@cinatra-ai/mcp-server/dev-local-token"
     );
     mintDevLocalToken();
+    // With both facts established, the ONE request-level composition goes
+    // behind the transport's port. The MCP transport reads the port instead of
+    // importing the composition, so the file reader and the connection capture
+    // above stay on this boot graph and out of every route graph that imports
+    // the MCP package for unrelated reasons. The `/api/cli/*` guard calls the
+    // same composition directly.
+    const { installDevAdminBypassRequestPort } = await import(
+      "@cinatra-ai/mcp-server/dev-admin-bypass-request"
+    );
+    installDevAdminBypassRequestPort();
     const { register: registerNode } = await import("./instrumentation.node");
     await registerNode();
   }

@@ -61,10 +61,7 @@ import {
   unavailableDelegatedChatAdmissionSnapshot,
   type DelegatedChatAdmissionSnapshot,
 } from "./delegated-chat-admission";
-import {
-  emitDevAdminBypassReadinessNoticeOnce,
-  grantDevAdminBypassForRequest,
-} from "./dev-admin-bypass-request";
+import { grantDevAdminBypassThroughPort } from "./dev-admin-bypass";
 import { PageHeader } from "@/components/page-header";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getTrustedTokenOrigins, DEFAULT_MCP_AUTH_SCOPES } from "./llm-credentials";
@@ -762,14 +759,19 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       delegatedActor = null;
     }
 
-    // Surface the bypass readiness notice on first request.
-    emitDevAdminBypassReadinessNoticeOnce();
-
     // The dev-only admin bypass, resolved ONCE per request: a loopback SOCKET
     // PEER presenting this boot's local credential, with no forwarded header
     // on the request. It reads no hostname — see `./dev-admin-bypass.ts` for
     // why a Host header cannot carry this decision.
-    const devAdminBypassActive = grantDevAdminBypassForRequest(request.headers);
+    //
+    // Asked through the PORT, not by importing the composition: this module is
+    // the package entry, so a credential-file reader and a `node:http` capture
+    // imported here would travel into every graph that imports the package for
+    // anything at all. The boot hook fills the port with the ONE composition
+    // (`installDevAdminBypassRequestPort`), which is also what `/api/cli/*`
+    // calls; an unfilled port refuses, which is what a process with no boot
+    // hook would answer anyway.
+    const devAdminBypassActive = grantDevAdminBypassThroughPort(request.headers);
 
     // The local operator's own client bypasses OAuth — the connection and the
     // per-boot credential ARE the auth. Every other request must carry a valid
