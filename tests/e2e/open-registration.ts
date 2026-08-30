@@ -1,21 +1,28 @@
 /**
- * Open registration for an end-to-end harness.
+ * State an instance setting an end-to-end harness depends on.
  *
  * A fresh instance keeps registration CLOSED: the first account is admitted on
  * the bootstrap exception, and every account after that is refused. Harnesses
  * that mint more than one account — or that mint one on an instance another
  * suite already seeded — therefore have to open the instance first, and say so.
- * That is all this does, and every suite that goes through the public sign-up
- * road calls it before its first sign-up.
+ * A harness that wants to prove behaviour ON a closed instance says that just
+ * as explicitly, with `closeRegistrationForFixtures`.
  *
- * It is a READ-MODIFY-WRITE on the single instance settings row: every sibling
- * setting on that row survives, so calling this never silently reconfigures the
- * instance a suite runs on. An unreadable or garbled row is replaced with a row
- * that carries just this one setting, which is the only sensible reading of "we
- * could not tell what was there".
+ * Every road here is a READ-MODIFY-WRITE on the single instance settings row:
+ * sibling settings survive, so stating one setting never silently reconfigures
+ * the instance a suite runs on. That matters more than it looks: the settings
+ * row carries several instance toggles, and a whole-row write DELETES the ones
+ * it does not mention. A deleted `closedRegistration` key does not read as
+ * "unchanged" — only an explicit `false` opens the door, so dropping the key
+ * closes the instance behind whatever suite opened it. `patchInstanceSettings-
+ * ForFixtures` is therefore the only road a suite should take to this row.
+ *
+ * An unreadable or garbled row is replaced with a row that carries just the
+ * requested settings, which is the only sensible reading of "we could not tell
+ * what was there".
  *
  * The application caches this row for a few seconds, so after an actual change
- * the helper waits the cache out — otherwise the first sign-up can still meet
+ * the helper waits the cache out — otherwise the next request can still meet
  * the value the application read a moment earlier. When nothing changed (the
  * common case on a re-run) there is nothing to wait for.
  *
@@ -61,7 +68,13 @@ export type OpenRegistrationOptions = {
   waitOutReadCache?: boolean;
 };
 
-export async function openRegistrationForFixtures(
+/**
+ * Record `patch` on the instance settings row, preserving every key it does
+ * not mention. Writes nothing when every key already holds the asked-for
+ * value; waits the application read-cache out when it did write.
+ */
+export async function patchInstanceSettingsForFixtures(
+  patch: Record<string, unknown>,
   options: OpenRegistrationOptions = {},
 ): Promise<void> {
   const envLocal = readEnvLocal();
@@ -95,12 +108,14 @@ export async function openRegistrationForFixtures(
       }
     }
 
-    if (settings.closedRegistration === false) return;
+    // Nothing to do when the row already says what the caller wants. Skipping
+    // the write also skips the cache wait, which is why a re-run is cheap.
+    if (Object.entries(patch).every(([key, value]) => settings[key] === value)) return;
 
     await client.query(
       `INSERT INTO "${schema}"."metadata" (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [INSTANCE_IDENTITY_KEY, JSON.stringify({ ...settings, closedRegistration: false })],
+      [INSTANCE_IDENTITY_KEY, JSON.stringify({ ...settings, ...patch })],
     );
     changed = true;
   } finally {
@@ -110,4 +125,25 @@ export async function openRegistrationForFixtures(
   if (changed && waitOutReadCache) {
     await new Promise((done) => setTimeout(done, READ_CACHE_MS + 500));
   }
+}
+
+/**
+ * Open the public sign-up road. Every suite that signs a second account up
+ * calls this before its first sign-up.
+ */
+export async function openRegistrationForFixtures(
+  options: OpenRegistrationOptions = {},
+): Promise<void> {
+  await patchInstanceSettingsForFixtures({ closedRegistration: false }, options);
+}
+
+/**
+ * Close the public sign-up road explicitly — the posture a real instance ships
+ * with. A suite states this when the behaviour it proves only exists on a
+ * closed instance, so the assertion cannot quietly pass on an open one.
+ */
+export async function closeRegistrationForFixtures(
+  options: OpenRegistrationOptions = {},
+): Promise<void> {
+  await patchInstanceSettingsForFixtures({ closedRegistration: true }, options);
 }
