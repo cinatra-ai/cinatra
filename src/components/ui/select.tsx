@@ -3,7 +3,8 @@
 import * as React from 'react'
 import { Select as SelectPrimitive } from 'radix-ui'
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
-import { cn, overlayCollisionPadding } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { overlayCollisionPadding } from '@/lib/overlay-collision'
 
 function Select({
   ...props

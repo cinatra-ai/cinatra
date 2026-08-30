@@ -27,7 +27,7 @@ import {
   OVERLAY_EDGE_GUTTER_PX,
   overlayCollisionPadding,
   readBannerHeightPx,
-} from "@/lib/utils";
+} from "@/lib/overlay-collision";
 
 describe("overlayCollisionPadding", () => {
   it("keeps the whole header band clear, with room to spare", () => {
@@ -71,7 +71,7 @@ describe("the bound is set once, in the shared layer", () => {
       expect(
         source,
         `${file} must import the shared bound rather than restate one`,
-      ).toMatch(/import \{[^}]*overlayCollisionPadding[^}]*\} from ["']@\/lib\/utils["']/);
+      ).toMatch(/import \{[^}]*overlayCollisionPadding[^}]*\} from ["']@\/lib\/overlay-collision["']/);
       expect(
         source,
         `${file} must pass collisionPadding, defaulting to the shared bound`,

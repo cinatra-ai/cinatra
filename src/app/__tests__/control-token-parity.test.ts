@@ -141,7 +141,9 @@ describe("the portable primitives carry the same fixes as the host's", () => {
   ]) {
     it(`${file} takes the shared header bound and keeps it overridable (#3105)`, () => {
       const source = read(file);
-      expect(source).toMatch(/import \{ cn, overlayCollisionPadding \} from "\.\.\/lib\/utils"/);
+      expect(source).toMatch(
+        /import \{ overlayCollisionPadding \} from "\.\.\/lib\/overlay-collision"/,
+      );
       expect(source).toContain("collisionPadding={collisionPadding ?? overlayCollisionPadding()}");
       expect(source).toMatch(/^\s+collisionPadding,$/m);
     });

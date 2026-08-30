@@ -3,7 +3,8 @@
 import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
-import { cn, overlayCollisionPadding } from "../lib/utils"
+import { cn } from "../lib/utils"
+import { overlayCollisionPadding } from "../lib/overlay-collision"
 
 function Popover({
   ...props
