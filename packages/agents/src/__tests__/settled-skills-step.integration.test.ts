@@ -43,6 +43,29 @@ vi.mock("../server-actions", () => ({
   getRunRecommendedSkillsAction: vi.fn(async () => []),
 }));
 
+// Same reason as the component suite beside this tier: the mounted card reaches
+// the run page host, whose module graph statically lists every optional
+// extension package via the generated registries below. This tier stands up a
+// real database and a real resolver, not a real installed extension fleet, so
+// (as run-page-recommendation-one-place.test.tsx already does for the same
+// mount) those two generated modules are stood in for here too.
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {},
+  STATIC_EXTENSION_RECORDS: [],
+  GENERATED_EXTENSION_SERVER_ENTRIES: {},
+  GENERATED_CONNECTOR_ENTRY_MODULES: {},
+  GENERATED_CONNECTOR_MCP_MODULES: {},
+  GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: {},
+  GENERATED_EXTERNAL_MCP_TOOLBOXES: {},
+  GENERATED_WIDGET_STREAM_AGENTS: {},
+  GENERATED_CHAT_WIDGET_MODULES: {},
+  GENERATED_CHAT_WIDGET_MANIFEST_MODULES: {},
+  GENERATED_DEV_SETUP_MODULES: {},
+}));
+vi.mock("@/lib/generated/field-renderer-components", () => ({
+  GENERATED_FIELD_RENDERER_COMPONENTS: {},
+}));
+
 // THE ONE SEAM THIS TIER SUBSTITUTES, and it substitutes only the SESSION.
 // `getRunRecommendationHoldStateAction` is a `"use server"` wrapper whose whole
 // body is "resolve the cookie session into an actor, then ask the core". There
