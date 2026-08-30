@@ -372,6 +372,79 @@ export function parseSedReadCommand(
   return { lineCount, path: seg.slice(pathStart, p) };
 }
 
+/**
+ * Path-confinement barrier for the local skill shell.
+ *
+ * The downstream `assertSkillFilePathInsideRoot` (skills package) bounds a
+ * read to the shared skill ROOTS. That is not enough here: every mounted
+ * skill lives under the same roots, so a traversal like
+ * `/skills/<slug>/../<other-slug>/SKILL.md` stays inside them and lets one
+ * skill read a SIBLING skill's files. This layer therefore runs at the
+ * BUILDER, before a path is assembled and before anything is read:
+ *
+ *   1. `normalizeSkillTargetPath` refuses any `..` segment in the
+ *      model-supplied path and normalizes what remains (so `//`, `.` and
+ *      trailing-separator forms cannot smuggle a mismatch past the prefix
+ *      comparisons below);
+ *   2. `confineToSkillDirectory` re-asserts the assembled path against the
+ *      directory of the MOUNTED SKILL it matched — not merely the roots.
+ *
+ * The downstream root check stays exactly as it is: defence in depth.
+ */
+function normalizeSkillTargetPath(targetPath: string): string {
+  const segments = targetPath.split(/[\\/]+/);
+  if (segments.some((segment) => segment === "..")) {
+    throw new Error(
+      `Path '${targetPath}' is not within any mounted skill directory ` +
+      `('..' path segments are not allowed).`,
+    );
+  }
+  // Normalize on the POSIX separator: the virtual `/skills/<slug>` namespace
+  // is posix-shaped, and skill directories are posix paths on every host the
+  // shell runs on.
+  return path.posix.normalize(targetPath.split("\\").join("/"));
+}
+
+/**
+ * Canonicalize a path for containment comparison. A path that does not exist
+ * cannot itself be a symlink, but one of its ANCESTORS can be, so the nearest
+ * existing ancestor is canonicalized and the missing tail re-attached; the
+ * read that follows fails on its own if the file is genuinely absent.
+ */
+async function canonicalizeForContainment(candidatePath: string): Promise<string> {
+  try {
+    return await fsPromises.realpath(candidatePath);
+  } catch {
+    const parent = path.dirname(candidatePath);
+    if (parent === candidatePath) return candidatePath;
+    return path.join(await canonicalizeForContainment(parent), path.basename(candidatePath));
+  }
+}
+
+async function confineToSkillDirectory(
+  candidatePath: string,
+  skillDirectory: string,
+  targetPath: string,
+): Promise<string> {
+  const refuse = () => {
+    throw new Error(
+      `Path '${targetPath}' is not within any mounted skill directory.`,
+    );
+  };
+  // Layer 1 — lexical containment against the matched skill's own directory.
+  const resolved = path.resolve(candidatePath);
+  const root = path.resolve(skillDirectory);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) refuse();
+  // Layer 2 — canonical containment. A symlinked file or ancestor INSIDE the
+  // matched skill passes the lexical check while its real target sits in a
+  // SIBLING skill; both live under the same shared roots, so the downstream
+  // root guard admits it too. Re-assert against the canonicalized pair.
+  const realRoot = await canonicalizeForContainment(root);
+  const realResolved = await canonicalizeForContainment(resolved);
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) refuse();
+  return resolved;
+}
+
 async function executeLocalSkillCommand(
   command: string,
   mountedSkills: SkillSummary[],
@@ -442,15 +515,23 @@ async function executeLocalSkillCommand(
     throw new Error(`No file path found in command: ${command}`);
   }
 
-  // Resolve target path — virtual paths first, then real directoryPaths, then relative.
+  // Resolve target path — virtual paths first, then real directoryPaths, then
+  // relative. The path is normalized and refused any `..` segment BEFORE a
+  // real path is built from it, and every branch confines its result to the
+  // directory of the mounted skill it matched.
+  const normalizedTarget = normalizeSkillTargetPath(targetPath);
   let resolvedPath: string | undefined;
 
-  if (path.isAbsolute(targetPath)) {
+  if (path.isAbsolute(normalizedTarget)) {
     // Check virtual path map (e.g. /skills/scrape-data/SKILL.md → real dir)
     if (virtualToReal) {
       for (const [virtual, real] of virtualToReal) {
-        if (targetPath === virtual || targetPath.startsWith(virtual + path.sep)) {
-          resolvedPath = real + targetPath.slice(virtual.length);
+        if (normalizedTarget === virtual || normalizedTarget.startsWith(virtual + "/")) {
+          resolvedPath = await confineToSkillDirectory(
+            real + normalizedTarget.slice(virtual.length),
+            real,
+            targetPath,
+          );
           break;
         }
       }
@@ -459,17 +540,34 @@ async function executeLocalSkillCommand(
     if (!resolvedPath) {
       for (const skill of mountedSkills) {
         if (!skill.directoryPath) continue;
-        if (targetPath.startsWith(skill.directoryPath + path.sep) || targetPath === skill.directoryPath) {
-          resolvedPath = targetPath;
+        // Compare host-native forms on BOTH sides: `normalizedTarget` was
+        // folded onto the POSIX separator, so a native directory path must be
+        // normalized too or a legitimate legacy read would stop matching.
+        const nativeTarget = path.normalize(normalizedTarget);
+        const nativeDirectory = path.normalize(skill.directoryPath);
+        if (
+          nativeTarget.startsWith(nativeDirectory + path.sep) ||
+          nativeTarget === nativeDirectory
+        ) {
+          resolvedPath = await confineToSkillDirectory(
+            nativeTarget,
+            skill.directoryPath,
+            targetPath,
+          );
           break;
         }
       }
     }
   } else {
-    // Relative path — resolve against the first available skill directory.
+    // Relative path — resolve against the first available skill directory,
+    // and confine the join to that same directory.
     for (const skill of mountedSkills) {
       if (skill.directoryPath) {
-        resolvedPath = path.join(skill.directoryPath, targetPath);
+        resolvedPath = await confineToSkillDirectory(
+          path.join(skill.directoryPath, normalizedTarget),
+          skill.directoryPath,
+          targetPath,
+        );
         break;
       }
     }
