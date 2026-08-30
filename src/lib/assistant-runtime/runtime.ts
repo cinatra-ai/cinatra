@@ -636,7 +636,10 @@ function warnOnUnclassifiedVehicles(
 //                 admit a name.
 //   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
 //                 connection for, read through the same per-row `use` gate the
-//                 connector inventory uses.
+//                 connector inventory uses. For a connector that holds no
+//                 connection of its own, that is the connection it DECLARES it
+//                 consumes (cinatra#3108) — the inventory row already answers
+//                 the question that way, so this set needs no second rule.
 //
 // The capability key for a primitive is derived from the LIVE connector
 // catalog rather than from a table: a primitive whose name matches a catalog
@@ -1279,15 +1282,31 @@ export async function runAssistantTurn(
   // below instead of running a turn that lies about the platform.
   const mcpReachability = await checkPublicMcpReachability();
   if (mcpReachability.status === "unreachable") {
+    // The probe already retried a timeout and gave up (#3109), so this is a
+    // considered verdict, not one slow moment. The log carries WHICH outcome
+    // it was — a timeout and a refused connection are different events and
+    // have to be tellable apart afterwards — and the URL and the raw network
+    // reason stay here, where an operator reads them.
     console.error(
       `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
-        `(${mcpReachability.reason}) — refusing to run the turn without Cinatra tools (#1699)`,
+        `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
+        "without Cinatra tools (#1699, #3109)",
     );
+    // What the PERSON reads says what happened to them, in words that need no
+    // knowledge of the product's own network setup, and names the one thing
+    // worth doing next. The two outcomes ask for different next steps, so
+    // they do not read alike: a moment that did not answer is worth sending
+    // again, an address that answered "no" needs somebody to fix it.
     send("error", {
       message:
-        `Cinatra tools are unavailable: the public MCP URL ${mcpReachability.url} is not reachable ` +
-        `(${mcpReachability.reason}). The assistant can't use platform tools until the tunnel is ` +
-        "restored — check /configuration/development?tab=tunnel and run its connection test.",
+        mcpReachability.kind === "timeout"
+          ? "The platform tools did not answer in time for this message, so the assistant " +
+            "stopped rather than answer as though it never had them. Send the message again - " +
+            "a slow moment usually clears on its own."
+          : "The platform tools were unavailable for this message, so the assistant stopped " +
+            "rather than answer as though it never had them. If this keeps happening, an " +
+            "administrator can open /configuration/development?tab=tunnel and run its " +
+            "connection test.",
     });
     return;
   }
