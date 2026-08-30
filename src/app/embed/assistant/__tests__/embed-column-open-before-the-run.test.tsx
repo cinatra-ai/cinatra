@@ -109,9 +109,13 @@ vi.mock("@/lib/embed/frame-widget-session.client", async (importOriginal) => {
   };
 });
 
-vi.mock("@/components/ui/button", () => ({
-  Button: (props: Record<string, unknown>) => <button {...props} />,
-}));
+// The stub renders through the design-system Button's own export (never a
+// raw <button>) so it stays subject to the same shadcn-wrapper rule as
+// production code — this file has nothing to gain from bypassing it.
+vi.mock("@/components/ui/button", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui/button")>();
+  return { ...actual };
+});
 
 import { EmbedAssistantClient, planNextLook } from "../embed-assistant-client";
 

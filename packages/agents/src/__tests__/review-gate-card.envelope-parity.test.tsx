@@ -38,7 +38,10 @@
 // outline Button. The four `*/pending-with-suggestions` captures are the only
 // entries that carry a chip, and the ONLY bytes that moved in them are those
 // two class names — the painted colour is unchanged and no other byte of DOM
-// differs. Every other entry is still its earlier capture, byte for byte.
+// differs. An entry in the fixture is re-taken only when the surface it
+// draws changes; the capture road fills whatever entries are still missing
+// and never overwrites one already committed, so every untouched entry
+// stays its earlier capture, byte for byte.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
