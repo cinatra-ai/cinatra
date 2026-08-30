@@ -100,9 +100,9 @@ function setupSteps(opts: RunFixture = {}): SetupRailStep[] {
     gateStatus: opts.gateStatus ?? null,
   });
   return [
-    // THE SCHEDULE STEP CARRIES NO SETTLED READING, and its absence is the
-    // finding rather than an omission — see the last describe below.
-    { key: "schedule", surface: <StepSurface name="schedule" /> },
+    // THE SKILLS QUESTION FIRST, exactly as the screen lists it (cinatra#3047):
+    // the drawing puts this entry at the head of the rail, ahead of the steps it
+    // authorizes.
     {
       key: "recommendation",
       reached: opens,
@@ -112,6 +112,9 @@ function setupSteps(opts: RunFixture = {}): SetupRailStep[] {
       settled: entry === "settled" && opens,
       surface: opens ? <StepSurface name="recommendation" /> : null,
     },
+    // THE SCHEDULE STEP CARRIES NO SETTLED READING, and its absence is the
+    // finding rather than an omission — see the last describe below.
+    { key: "schedule", surface: <StepSurface name="schedule" /> },
     {
       key: "review",
       reached: reading !== "none",
@@ -137,6 +140,14 @@ const ROW_SEL = '[data-conformance-id="run-surface-rail-step"]';
 const INDICATOR_SEL = '[data-conformance-id="run-surface-rail-indicator"]';
 
 const rows = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>(ROW_SEL));
+/** The row for a step, BY KEY (cinatra#3047). What each case here rules on is a
+ *  particular step's circle and title, never a position on the rail, and the
+ *  order the rail draws them in is `setup-run-surface-rail.test.tsx`'s subject. */
+const rowFor = (c: HTMLElement, key: "recommendation" | "schedule" | "review") => {
+  const row = rows(c).find((r) => r.getAttribute("data-run-surface-rail-step-key") === key);
+  if (!row) throw new Error(`the rail drew no row for the ${key} step`);
+  return row;
+};
 const detailColumn = (c: HTMLElement) =>
   c.querySelector<HTMLElement>('[data-conformance-id="run-detail-column"]')!;
 
@@ -157,7 +168,7 @@ function railStepRecord(row: HTMLElement) {
 describe("a settled step is the rail's own resolved-gate history row", () => {
   it("puts the completed circle where the numeral was, for a DECIDED recommendation", () => {
     const { container } = renderSetupSurface({ park: DECIDED_HOLD });
-    const row = rows(container)[1];
+    const row = rowFor(container, "recommendation");
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("true");
     // The circle records how it was settled: the glyph, and no numeral left
@@ -185,7 +196,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
       slot: REVIEW_ON_FILE,
       gateStatus: "resolved",
     });
-    const row = rows(container)[2];
+    const row = rowFor(container, "review");
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("true");
     expect(railStepRecord(row)).toEqual({
@@ -207,22 +218,25 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     // — which is the claim this arm has always made.
     const { container } = renderSetupSurface({ park: LIVE_HOLD, slot: REVIEW_ON_FILE });
 
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-settled")).toBe("false");
-    expect(railStepRecord(rows(container)[1])).toEqual({
+    const skills = rowFor(container, "recommendation");
+    expect(skills.getAttribute("data-run-surface-rail-settled")).toBe("false");
+    expect(railStepRecord(skills)).toEqual({
       railStepIndicatorText: "",
       railStepIndicatorHasCheckGlyph: true,
     });
     expect(
-      rows(container)[1].querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+      skills.querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
     ).not.toBeNull();
-    expect(rows(container)[1].textContent).toBe("Skills");
-    expect(
-      rows(container)[1].querySelector<HTMLElement>(INDICATOR_SEL)!.className,
-    ).toContain("bg-muted-foreground/40");
-    // A gate that is still open is not history either — and it is the rail's
-    // FIRST numeral's neighbour now: "1 Schedule · [glyph] Skills · 2 Review".
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-settled")).toBe("false");
-    expect(railStepRecord(rows(container)[2])).toEqual({
+    expect(skills.textContent).toBe("Skills");
+    expect(skills.querySelector<HTMLElement>(INDICATOR_SEL)!.className).toContain(
+      "bg-muted-foreground/40",
+    );
+    // A gate that is still open is not history either — and it is the LAST of
+    // the rail's numerals: "[glyph] Skills · 1 Schedule · 2 Review".
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-settled")).toBe(
+      "false",
+    );
+    expect(railStepRecord(rowFor(container, "review"))).toEqual({
       railStepIndicatorText: "2",
       railStepIndicatorHasCheckGlyph: false,
     });
@@ -233,7 +247,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     // nobody answered it, so there is nothing for the circle to record. A check
     // here would say a person decided something they never saw.
     const { container } = renderSetupSurface({ park: EXPIRED_HOLD });
-    const row = rows(container)[1];
+    const row = rowFor(container, "recommendation");
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("false");
     // The circle holds the step's OWN glyph (cinatra#3047), which is what an
@@ -257,7 +271,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     // The placeholder reading: the run produced something and no gate exists
     // yet, so there is no decision to record.
     const { container } = renderSetupSurface({ slot: AWAITING_REVIEW });
-    const row = rows(container)[2];
+    const row = rowFor(container, "review");
 
     expect(row.getAttribute("data-run-surface-rail-settled")).toBe("false");
     // "2", not "3": the Skills entry above it takes no numeral (cinatra#3047).
@@ -269,7 +283,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
 
   it("keeps every anchor the capture recorder measures", () => {
     const { container } = renderSetupSurface({ park: DECIDED_HOLD });
-    const row = rows(container)[1];
+    const row = rowFor(container, "recommendation");
 
     expect(row.tagName).toBe("BUTTON");
     expect(row.getAttribute("data-conformance-id")).toBe("run-surface-rail-step");
@@ -289,15 +303,17 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     // own answer and is not touched here.
     const { container } = renderSetupSurface({ park: DECIDED_HOLD });
 
-    expect(rows(container)[1].hasAttribute("aria-disabled")).toBe(false);
+    expect(rowFor(container, "recommendation").hasAttribute("aria-disabled")).toBe(false);
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
 
     const surface = container.querySelector<HTMLElement>('[data-testid="surface-recommendation"]')!;
     expect(surface).not.toBeNull();
     expect(detailColumn(container).contains(surface)).toBe(true);
     // Selected now — and the circle still records that it was settled.
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(railStepRecord(rows(container)[1])).toEqual({
+    expect(
+      rowFor(container, "recommendation").getAttribute("data-run-surface-rail-selected"),
+    ).toBe("true");
+    expect(railStepRecord(rowFor(container, "recommendation"))).toEqual({
       railStepIndicatorText: "",
       railStepIndicatorHasCheckGlyph: true,
     });
@@ -329,7 +345,7 @@ describe("the schedule row keeps its numeral — no settled reading is invented 
     ]) {
       cleanup();
       const { container } = renderSetupSurface(opts);
-      const row = rows(container)[0];
+      const row = rowFor(container, "schedule");
       expect(row.getAttribute("data-run-surface-rail-settled")).toBe("false");
       expect(railStepRecord(row)).toEqual({
         railStepIndicatorText: "1",

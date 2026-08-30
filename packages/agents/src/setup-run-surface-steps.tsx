@@ -46,8 +46,10 @@ export function buildSetupRailSteps(
   // THE NUMERALS ARE THE RAIL'S OWN RULE, not this list's index (cinatra#3047,
   // the re-shoot's third defect). The Skills entry draws the drawing's glyph and
   // takes NO numeral, so the row after it is the next number rather than the
-  // next index — "1 Schedule · [glyph] Skills · 2 Review" here, exactly as the
-  // run page's rail renumbers around the same entry.
+  // next index — "[glyph] Skills · 1 Schedule · 2 Review" here, exactly as the
+  // run page's rail renumbers around the same entry, and in the order the
+  // drawing puts them: the skills question at the head of the rail, ahead of
+  // the steps it authorizes.
   const numerals = runSurfaceRailNumerals(steps.map((step) => step.key));
   return steps.map((step, index) => {
     const selectable = isRunSurfaceStepSelectable(step, null);

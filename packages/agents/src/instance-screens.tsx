@@ -786,8 +786,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // makes it this slice's work: "no schedule step in the rail today; the armed
   // schedule has Cancel / Release on a Trigger tab → S9d makes the schedule a
   // dedicated step above '1 Review'". So the card no longer sits in the trigger
-  // screen's body — it is the first ROW of this page's left rail, and the rail
-  // renumbers itself around it (`stepOffset`).
+  // screen's body — it is a ROW of this page's left rail, the first of the rows
+  // that carry a NUMERAL (the Skills entry heads the rail ahead of it and takes
+  // none, cinatra#3047), and the rail renumbers itself around it (`stepOffset`).
   //
   // ONLY FOR A RUN THAT HAS A SCHEDULE. A run with no trigger row has nothing
   // for the step to open onto — the card would resolve `absent` and draw no DOM
@@ -2275,7 +2276,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // instead.
   //
   // THE THREE STEPS ARE THE SETUP FLOW'S OWN, and no fourth is invented: the
-  // schedule (plan (A) §7), the skills recommendation (§6) and the review (§4).
+  // skills recommendation (plan (A) §6), the schedule (§7) and the review (§4).
   // Each keeps EXACTLY the surface it has today — the scheduling form, and the
   // one shipped renderer of the recommendation card. A step the run has not
   // reached draws nothing: the plan draws no "not reached yet" screen, so none
@@ -2290,22 +2291,17 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // a second rule written here (`setup-run-surface-steps.tsx`).
   const setupSteps: SetupRailStep[] = run
     ? [
-        {
-          key: "schedule",
-          // AND NO SETTLED READING FOR THIS ONE (cinatra#2975), which is a
-          // finding rather than an omission. The drawing's history row is a
-          // resolved GATE's, and a schedule is not a gate: plan (A) §7.2 step 5
-          // opens this step "to see the configuration or change it", and draws
-          // the line itself — "a trigger decides *when* the agent runs, and a
-          // review card exists only after the agent has run". Nor is a fired
-          // schedule finished: §7.2 keeps a recurring one editable after it
-          // fires, and puts the fired one-off's read-only reading in the FORM —
-          // "the form stays as a read-only reading with no controls at all",
-          // which the step's own surface above already draws. The run page's
-          // schedule row draws no settled reading either, and inventing one here
-          // would make the same step read two ways on two screens.
-          surface: scheduleStepSurface,
-        },
+        // THE SKILLS QUESTION IS THE RAIL'S FIRST ENTRY (cinatra#3047, the
+        // standing review point). The ratified drawing at the capture
+        // contract's pin puts it at "the top entry on the step rail, ahead of
+        // the work steps it would authorize" (plan (A) 6.2), and acceptance 2
+        // of the issue states it in one line: "the recommendation entry stays
+        // first on the rail". The run page's rail and the review page's
+        // composition already build the series that way; this screen listed the
+        // schedule first, so one series read two ways in one product and the
+        // re-shoot photographed "1 Schedule / Skills / 2 Review" here. The
+        // NUMERALS follow on their own: the entry draws its own glyph and takes
+        // none, so the schedule stays "1" and the review stays "2".
         {
           key: "recommendation",
           // HAS THIS RUN GOT A RECOMMENDATION AT ALL? A live hold opens the
@@ -2332,6 +2328,22 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
                 />
               </LifecycleCardSurfaceProvider>
             ),
+        },
+        {
+          key: "schedule",
+          // AND NO SETTLED READING FOR THIS ONE (cinatra#2975), which is a
+          // finding rather than an omission. The drawing's history row is a
+          // resolved GATE's, and a schedule is not a gate: plan (A) §7.2 step 5
+          // opens this step "to see the configuration or change it", and draws
+          // the line itself — "a trigger decides *when* the agent runs, and a
+          // review card exists only after the agent has run". Nor is a fired
+          // schedule finished: §7.2 keeps a recurring one editable after it
+          // fires, and puts the fired one-off's read-only reading in the FORM —
+          // "the form stays as a read-only reading with no controls at all",
+          // which the step's own surface above already draws. The run page's
+          // schedule row draws no settled reading either, and inventing one here
+          // would make the same step read two ways on two screens.
+          surface: scheduleStepSurface,
         },
         {
           key: "review",
