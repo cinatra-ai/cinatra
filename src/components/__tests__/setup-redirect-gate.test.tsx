@@ -205,6 +205,17 @@ describe("the confirmation must not itself go stale", () => {
     // Still exactly the one redirect from before setup was done. A cached
     // "incomplete" here is the loop, rebuilt.
     expect(replaceToSetup).toHaveBeenCalledTimes(1);
+    // The repair rides a passive EFFECT of the very commit that painted
+    // "complete", and React runs those AFTER the DOM mutation the waitFor
+    // above watches for. Reading the mock the instant the text settles is
+    // therefore a bet on flush ordering that a loaded runner loses; the
+    // refresh is awaited on its own terms instead, exactly as the sibling arm
+    // further up already does.
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    // ...and it is still one once the queue is fully drained. This is a
+    // settling check on THIS arm only — the once-only guard itself is fenced
+    // by the sibling arm above, which re-renders the hook.
+    await act(async () => {});
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

@@ -28,7 +28,16 @@
  *  - cross-type forgery: a chat / agent-run token does NOT verify here (and a
  *    widget token does NOT verify under the chat verifier)
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 
 const PUBLIC_BASE_URL = "https://cinatra-test.tailnet000.ts.net";
 const PUBLIC_MCP_URL = `${PUBLIC_BASE_URL}/api/mcp`;
@@ -379,14 +388,56 @@ describe("widget-mcp-actor-token verify — signature canonicalization", () => {
 });
 
 describe("widget-mcp-actor-token verify — exact-expiry boundary", () => {
+  // THE SECOND IS PINNED HERE, and only here. The verifier reads its OWN
+  // `Date.now()` on every call, so this boundary can only be stated at all if
+  // the test and the code under test agree on what second it is — and a case
+  // built from a live reading asks wall-clock time to stand still across
+  // several calls. It does not: a second ticking over mid-case turns the
+  // still-valid arm below into a rejection, which is how this test failed on a
+  // loaded runner.
+  //
+  // The agreement is therefore made explicit instead of assumed. `Date.now` is
+  // stubbed on the one global object BOTH sides look it up on, every claim
+  // below is built from the pinned constant rather than from a second reading,
+  // and the stub itself is asserted before it is relied on — so a fixture that
+  // ever failed to take hold fails as a broken fixture, on its own line,
+  // instead of as a mysterious acceptance at the boundary. Timers are left
+  // completely alone (no fake-timer install), so nothing else in this file
+  // changes behaviour, and the stub is removed after every case.
+  const PINNED_MS = 1_800_000_000_000; // an exact second boundary, in UTC
+  const PINNED_S = PINNED_MS / 1000;
+  let clockMs = PINNED_MS;
+  let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    clockMs = PINNED_MS;
+    nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clockMs);
+  });
+
+  afterEach(() => {
+    nowSpy?.mockRestore();
+    nowSpy = undefined;
+  });
+
   it("rejects a token AT its exp second (exp <= now, RFC 7519)", () => {
-    const t = now();
+    // The pin is the premise of every assertion below, so it is asserted, not
+    // trusted.
+    expect(now()).toBe(PINNED_S);
+    const t = PINNED_S;
     // iat = t-120, exp = t → lifetime is exactly 120 s AND exp === now.
     expect(verify(signClaims(baseClaims({ iat: t - 120, exp: t })))).toBeNull();
     // One second earlier still verifies (exp = now+1).
     expect(
       verify(signClaims(baseClaims({ iat: t - 119, exp: t + 1 }))),
     ).not.toBeNull();
+    // The far side of the same boundary: the SAME token, refused the moment
+    // the clock reaches its `exp` second. `<` would accept it here, and that
+    // acceptance is the whole point of the `<=` the verifier spells out.
+    clockMs = PINNED_MS + 1000;
+    expect(now()).toBe(PINNED_S + 1);
+    expect(
+      verify(signClaims(baseClaims({ iat: t - 119, exp: t + 1 }))),
+    ).toBeNull();
   });
 });
 
