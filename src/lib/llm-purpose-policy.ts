@@ -111,6 +111,22 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
       "Provider-neutral prompt+JSON work with no capability dependency. Already degrades cleanly (a null runtime skips the match and structural identity stands).",
   },
   {
+    purpose: "default-road-form-detection",
+    file: "src/lib/artifacts/default-road-pickup.ts",
+    what:
+      "The default road's model rung — the fixed multiple-choice question " +
+      "that names the FORM of a produced text when the deterministic rungs " +
+      "of the detection ladder do not settle it.",
+    policy: "exact-default",
+    rationale:
+      "Provider-neutral prompt+JSON classification with no capability " +
+      "dependency — the same class of work as artifact-matching, whose " +
+      "runtime this rung deliberately reuses so no new class of data leaves " +
+      "the deployment. It degrades cleanly: a null runtime returns null from " +
+      "the rung and the ladder falls through to its deterministic answer, so " +
+      "an unconfigured provider costs a rung, not the pickup.",
+  },
+  {
     purpose: "chat-capture-classification",
     file: "src/lib/chat-capture/classifier.ts",
     what: "Classifies whether a chat turn carries a durable instruction worth capturing.",
