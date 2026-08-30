@@ -42,6 +42,8 @@
  */
 import { test as setup, expect, type APIResponse } from "@playwright/test";
 
+import { openRegistrationForFixtures } from "../open-registration";
+
 import {
   APIVERSION_V12,
   seedDashboardFixtures,
@@ -68,6 +70,11 @@ async function describe(response: APIResponse): Promise<string> {
 }
 
 setup("create test user + seed dashboard fixtures + save session", async ({ request }) => {
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
+
   // 1. Sign up. Better Auth's `autoSignIn: true` sets a session cookie
   //    on this APIRequestContext when the user is newly created. On a
   //    retry the user exists and we get 400/422 (no session minted —
