@@ -2,7 +2,7 @@
 // and it matches what went to the wire.
 //
 // THE GAP (finding F8 of the #2094 S7 acceptance E2E, evidence under
-// evidence/2094-s7-acceptance/e2e/): the chat surface delivered skills to the
+// https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/e2e/): the chat surface delivered skills to the
 // provider and wrote no per-run record, so the acceptance's own "assert
 // delivery from the run's records" wording was unsatisfiable and the wave99
 // evidence had to use the wire-level egress ledger as the record instead.
@@ -42,6 +42,8 @@ const state = vi.hoisted(() => ({
     dropped: [] as Array<{ skillId: string; reason: string }>,
   },
   mcpReachable: true,
+  /** WHICH unreachable outcome the probe reports (#3109). */
+  mcpUnreachableKind: "refused" as "timeout" | "refused" | "error",
   /** Every (turnId, rows) the runtime committed, in order. */
   recorded: [] as Array<{ turnId: string; rows: Array<Record<string, unknown>> }>,
   /** Keys already persisted — reproduces `ON CONFLICT DO NOTHING`. */
@@ -159,7 +161,15 @@ vi.mock("@cinatra-ai/llm", () => ({
   checkPublicMcpReachability: vi.fn(async () =>
     state.mcpReachable
       ? { status: "reachable", url: "https://mcp.example.test/api/mcp" }
-      : { status: "unreachable", url: "https://mcp.example.test/api/mcp", reason: "ECONNREFUSED" },
+      : {
+          status: "unreachable",
+          url: "https://mcp.example.test/api/mcp",
+          kind: state.mcpUnreachableKind,
+          reason:
+            state.mcpUnreachableKind === "timeout"
+              ? "no response within 2500ms on 2 attempts (5000ms budget)"
+              : "connection refused or name not resolved: ECONNREFUSED",
+        },
   ),
   resolveDefaultAdapter: vi.fn(async () => ({
     provider: state.provider,
@@ -248,6 +258,7 @@ beforeEach(() => {
   state.provider = "openai";
   state.defaultModel = "gpt-5.5";
   state.mcpReachable = true;
+  state.mcpUnreachableKind = "refused";
   state.recorded = [];
   state.persistedKeys = new Set();
   state.deliveryResult = {
@@ -558,6 +569,63 @@ describe("the record never OVERCLAIMS", () => {
 
     expect(capturedStreamInput).toBeNull();
     expect(send).toHaveBeenCalledWith("error", expect.anything());
+    expect(state.recorded).toEqual([]);
+  });
+
+  it("the refusal a person reads is plainly worded - the plumbing detail stays in the log (#3109)", async () => {
+    // The old copy handed the reader the public MCP URL and the raw network
+    // reason string and asked them to fix a tunnel. A person cannot act on
+    // "ECONNREFUSED"; the log can, and does.
+    state.mcpReachable = false;
+    state.mcpUnreachableKind = "refused";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+
+    const errorCall = send.mock.calls.find((call) => call[0] === "error");
+    expect(errorCall).toBeDefined();
+    const message = String((errorCall?.[1] as { message?: string } | undefined)?.message ?? "");
+    expect(message).not.toContain("ECONNREFUSED");
+    expect(message).not.toContain("https://mcp.example.test/api/mcp");
+    expect(message.toLowerCase()).toContain("platform tools");
+
+    // Acceptance 4: the OUTCOME is in the log, where an operator reads it,
+    // together with the address and the raw reason.
+    const logLine = logged.mock.calls.map((call) => String(call[0])).join(" ");
+    expect(logLine).toContain("[refused]");
+    expect(logLine).toContain("https://mcp.example.test/api/mcp");
+    expect(logLine).toContain("ECONNREFUSED");
+    logged.mockRestore();
+  });
+
+  it("a timeout and a refusal do not read alike, to the person or in the log (#3109)", async () => {
+    const read = async (kind: "timeout" | "refused") => {
+      state.mcpReachable = false;
+      state.mcpUnreachableKind = kind;
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      const send = vi.fn();
+      await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+      const call = send.mock.calls.find((entry) => entry[0] === "error");
+      const line = logged.mock.calls.map((entry) => String(entry[0])).join(" ");
+      logged.mockRestore();
+      return { message: String((call?.[1] as { message?: string } | undefined)?.message ?? ""), line };
+    };
+
+    const timedOut = await read("timeout");
+    const refused = await read("refused");
+
+    expect(timedOut.message).not.toBe(refused.message);
+    expect(timedOut.line).toContain("[timeout]");
+    expect(refused.line).toContain("[refused]");
+    // Neither hands the reader the plumbing.
+    for (const message of [timedOut.message, refused.message]) {
+      expect(message).not.toContain("https://mcp.example.test/api/mcp");
+      expect(message).not.toContain("2500ms");
+      expect(message).not.toContain("ECONNREFUSED");
+      expect(message.toLowerCase()).toContain("platform tools");
+    }
+    // The turn still ends: no record is written for either outcome.
     expect(state.recorded).toEqual([]);
   });
 });

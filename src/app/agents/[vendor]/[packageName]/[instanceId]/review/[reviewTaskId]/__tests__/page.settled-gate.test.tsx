@@ -16,7 +16,7 @@
  * reader, and is pinned where it is drawn
  * (`packages/agents/src/__tests__/review-gate-card.test.tsx`,
  * `…/review-gate-card.envelope-parity.test.tsx`) plus the live capture round in
- * `evidence/2904-settled-gate-review-page`. This suite would pass against a card
+ * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2904-settled-gate-review-page`. This suite would pass against a card
  * that drew nothing at all, which is why it is not the only proof.
  *
  * The card, the provider and the page's chrome are stubbed so a node process can

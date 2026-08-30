@@ -46,6 +46,11 @@ function fakeProps(): ArtifactRendererProps {
     urls: { preview: "/p", download: "/d" },
     identity: { kind: "extension", extension: "@x/ext" },
     actions: { download: "/d", openInSource: null },
+    // The content channel (enabler 0.3, cinatra#3027). This fixture predates it
+    // and draws from the byte hrefs above, so it carries the NAMED absence — the
+    // same answer the props builder yields for a caller that has not built a
+    // projection.
+    content: { kind: "none", channelVersion: 1, representationRevisionId: "rev", reason: "absent" },
   };
 }
 

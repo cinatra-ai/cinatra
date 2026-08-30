@@ -4,7 +4,7 @@
  * The S0 seed (`anthropic-custom-skills-client-conformance.test.ts`) asserts the
  * request shapes our client SENDS. This file asserts our client against the
  * response shapes the API actually RETURNS — captured from a real round trip
- * during the S7 live acceptance run (`evidence/2094-s7-acceptance/live-results.json`,
+ * during the S7 live acceptance run (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-results.json`,
  * 68 live requests against `api.anthropic.com` with the org key).
  *
  * The captured list contract, verbatim from the wire:
@@ -26,7 +26,7 @@
  *
  * Everything here is deterministic: `fetch` is stubbed with the captured shape,
  * no key is required, and no live call is made. The live arm lives in
- * `evidence/2094-s7-acceptance/drivers/live-skills-api-probe.mjs`.
+ * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/drivers/live-skills-api-probe.mjs`.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {

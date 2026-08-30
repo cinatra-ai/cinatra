@@ -87,6 +87,11 @@ function props(propsApiVersion = 1): ArtifactRendererProps {
     urls: { preview: "/p", download: "/d" },
     identity: { kind: "extension", extension: PKG },
     actions: { download: "/d", openInSource: null },
+    // The content channel (enabler 0.3, cinatra#3027). This fixture predates it
+    // and draws from the byte hrefs above, so it carries the NAMED absence — the
+    // same answer the props builder yields for a caller that has not built a
+    // projection.
+    content: { kind: "none", channelVersion: 1, representationRevisionId: "rev_1", reason: "absent" },
   };
 }
 
@@ -169,14 +174,72 @@ describe("resolveRuntimeRendererForRoute — attaches the server-known pre-impor
     expect(desc!.reason).toBe("react-peer-incompatible");
   });
 
-  it("props-API-version skew → `abi-incompatible` BEFORE import", async () => {
+  it("a renderer BEHIND the host still imports — the ratchet, not the flag day", async () => {
+    // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4 of `PLAN: Agents Lifecycle
+    // (C)`, cinatra#3027). This case used to floor: the check was strict
+    // equality, so "host at v2, renderer pinned v1" was an ABI floor — and the
+    // day the host emitted a new version every existing display went dark at
+    // once. The host's supported WINDOW now admits it at its own version.
     await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate });
-    // The host snapshot expects props v2; the renderer pinned v1 → ABI floor.
+    const desc = await resolveRuntimeRendererForRoute(runtimeAssetRegistry.keyFor(PKG, "detail"), 2);
+    expect(desc!.reason).toBeUndefined();
+  });
+
+  it("a renderer AHEAD of the host → `abi-incompatible` BEFORE import", async () => {
+    // The refusal that remains: a display declaring a props version this host
+    // cannot build a snapshot at. Nothing about the display is wrong — the
+    // deployment is behind it — and it floors rather than being handed a shape
+    // it never agreed to.
+    await runtimeAssetRegistry.admitAndActivate({
+      tuple: tuple({ propsApiVersion: 3 }),
+      generation: 1,
+      ...okActivate,
+    });
     const desc = await resolveRuntimeRendererForRoute(runtimeAssetRegistry.keyFor(PKG, "detail"), 2);
     expect(desc!.reason).toBe("abi-incompatible");
   });
 
   it("no live runtime binding → null (caller floors as requires-rebuild)", async () => {
     expect(await resolveRuntimeRendererForRoute(runtimeAssetRegistry.keyFor(PKG, "detail"), 1)).toBeNull();
+  });
+});
+
+describe("ExtensionRendererSlot — the snapshot the display negotiated, or none", () => {
+  it("mounts the renderer when the negotiated version IS the snapshot's version", async () => {
+    const el = (await ExtensionRendererSlot({
+      generatedKey: BUILD_MAP_KEY,
+      packageName: "@fixture/built-ext",
+      slot: "detail",
+      props: props(1),
+      fallback: "FLOOR",
+    })) as ReactElement;
+    // The renderer itself, not a fragment carrying a degrade notice.
+    expect(el.type).not.toBe(RendererDegradedNotice);
+  });
+
+  it("DEGRADES rather than handing an admitted older display a newer snapshot", async () => {
+    // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4 of `PLAN: Agents Lifecycle
+    // (C)`, cinatra#3027) has two halves: admit the display at its own version,
+    // AND build the snapshot at that version. This seam receives a snapshot
+    // already built, so it can only honour the first half. The gap that leaves:
+    // the build entry declares v1, the host ceiling here is v2, negotiation
+    // admits v1, and the v1 component would be mounted with the v2 snapshot the
+    // caller built.
+    //
+    // Until the sibling plan wires a per-version snapshot builder into this
+    // seam, the fail-closed half of the ratchet stands: the same
+    // `abi-incompatible` degrade the strict equality used to produce, never a
+    // shape the display did not agree to.
+    const el = (await ExtensionRendererSlot({
+      generatedKey: BUILD_MAP_KEY,
+      packageName: "@fixture/built-ext",
+      slot: "detail",
+      props: props(2),
+      fallback: "FLOOR",
+    })) as ReactElement;
+    const kids = (el.props as { children: ReactElement[] }).children;
+    expect(kids[0].type).toBe(RendererDegradedNotice);
+    expect((kids[0].props as { failureClass: string }).failureClass).toBe("abi-incompatible");
+    expect(kids[1]).toBe("FLOOR");
   });
 });

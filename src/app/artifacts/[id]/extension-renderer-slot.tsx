@@ -51,6 +51,33 @@ export async function ExtensionRendererSlot({
     );
   }
 
+  // THE SNAPSHOT MUST BE THE ONE THE DISPLAY NEGOTIATED (enabler 0.4 of
+  // `PLAN: Agents Lifecycle (C)`, cinatra#3027): "resolve the display, read its
+  // declared props version, then build the snapshot at that version."
+  //
+  // This seam receives a snapshot ALREADY BUILT by its caller, so when the
+  // negotiated version is not the version that snapshot carries it cannot honour
+  // the second half of the sentence — and handing an older display a newer shape
+  // is exactly what the enabler forbids ("a v1 display admitted under a v2 host
+  // must be handed a v1 snapshot, not a v2 one it cannot read"). It therefore
+  // degrades under the SAME `abi-incompatible` class the strict equality used to
+  // produce, rather than mounting a shape the display never agreed to. Building
+  // a per-version snapshot at this seam is the sibling plan's wiring; until it
+  // lands, this is the fail-closed half of the ratchet, and it is a no-op while
+  // the host window holds a single version.
+  if (result.negotiatedPropsApiVersion !== props.propsApiVersion) {
+    return (
+      <>
+        <RendererDegradedNotice
+          packageName={packageName}
+          slot={slot}
+          failureClass="abi-incompatible"
+        />
+        {fallback}
+      </>
+    );
+  }
+
   const { Component } = result;
   return <Component {...props} />;
 }

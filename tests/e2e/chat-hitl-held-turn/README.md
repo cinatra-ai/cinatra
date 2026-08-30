@@ -183,30 +183,30 @@ nothing here is written to the canonical capture index.
 
 Two directories, and the difference is the whole policy:
 
-- **`evidence/2824-s9k/`** is the **frozen reference** — four graded PNGs and one
-  `capture-index.provisional.json`, committed. Nothing a run does touches it. The
-  hashes cited in this PR's round comments stay true for as long as those blobs do.
-- **`evidence/2824-s9k/.run/`** is where **a run mints**. `.gitignore` covers it, so
-  a passing run — a developer's, or the future #2886 CI job — leaves
-  `git status --porcelain` **empty**.
+- The **frozen reference** — four graded PNGs and one
+  `capture-index.provisional.json` — is pinned in history at
+  <https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2824-s9k>.
+  Nothing a run does touches it, and the hashes cited in that PR's round comments
+  stay true for as long as that commit does.
+- **`test-results/chat-hitl-held-turn-captures/`** is where **a run mints**. It is
+  the Playwright config's own gitignored `outputDir`, so a passing run — a
+  developer's, or the #2886 CI job — leaves `git status --porcelain` **empty**.
 
-Refreshing the reference is a **deliberate** act, never a side effect of running
-the suite. Point the run directory at the committed one and drive a full green run:
+Re-recording the set is a **deliberate** act, never a side effect of running the
+suite. Point the run directory somewhere of your own and drive a full green run:
 
 ```
-E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+E2E_CHAT_HITL_EVIDENCE_DIR=test-results/my-refresh pnpm test:e2e:chat-hitl-held-turn
 ```
 
-That rewrites the four PNGs and the index in place, from a run that was graded at
-the `audit` tier — which is the only kind of refresh worth committing. Review the
-resulting diff before you keep it.
+That writes four PNGs and an index from a run graded at the `audit` tier — which
+is the only kind of capture worth citing. Nothing is committed: proof pictures are
+posted on the PR and cited by permalink, never carried in the product tree.
 
-The scratch directory sits under `evidence/` rather than under the config's
-`test-results/` outputDir because the S9h recorder **refuses** a screenshot path
-outside `evidence/`, before the shutter, and grades the same rule again when it
-validates the record. A record is honest only when its `screenshot` field names
-where the file really is, so the scratch directory moved under the rule instead of
-the rule being widened for a test.
+The scratch root is the recorder's own `CAPTURE_OUTPUT_ROOT`. The recorder
+**refuses** a screenshot path outside it, before the shutter, and grades the same
+rule again when it validates the record — so a record is honest only when its
+`screenshot` field names where the file really is.
 
 ## Why `retries: 0`
 

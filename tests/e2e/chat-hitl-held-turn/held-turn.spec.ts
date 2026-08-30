@@ -53,7 +53,7 @@
  *   records; this flow writes its index beside its own screenshots, never to the
  *   canonical one. A run mints into the gitignored scratch directory named at
  *   `RUN_EVIDENCE_DIR` below, so a PASSING run leaves the tree clean and the
- *   committed reference set under `evidence/2824-s9k/` stays the frozen one.
+ *   reference set pinned in history stays the frozen one.
  * · "Exactly one job" is measured as "jobs naming this run" — every job whose id is
  *   the run id OR whose payload carries the run id, across every queue state,
  *   de-duplicated by job id — so a second dispatch under another id is seen. A
@@ -64,7 +64,7 @@
  *
  *   pnpm test:e2e:chat-hitl-held-turn
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIResponse, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
@@ -104,42 +104,49 @@ import {
   readSelectedSkillRevisions,
   waitFor,
 } from "./probes";
+import {
+  bootWindowRemainingMs,
+  handshakeFailureFrom,
+  isRuntimeNotFoundDocument,
+  retryWhileRouteMissing,
+} from "./route-readiness";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
-/**
- * THE FROZEN REFERENCE SET — committed, and never written by a run.
+/*
+ * THE FROZEN REFERENCE SET — pinned in history, and never written by a run.
  *
- * `evidence/2824-s9k/` holds the four graded PNGs and the provisional index this
- * PR posted as its proof. They are a REFERENCE: a reader compares a run against
- * them, and the hashes cited in the round comments stay true for as long as the
- * blobs do.
+ * The four graded PNGs and the provisional index this flow's PR posted as its
+ * proof are a REFERENCE: a reader compares a run against them. They are no
+ * longer carried in the working tree, so the reference is a HISTORICAL PERMALINK
+ * at the last commit that held them — an immutable pin, which is what a frozen
+ * set wanted to be all along. The hashes cited in the round comments stay true
+ * for as long as that commit does. It is a citation and nothing in this file
+ * reads it, so it is recorded here rather than bound to a dead constant:
+ *
+ *   https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2824-s9k
  */
-const REFERENCE_EVIDENCE_DIR = "evidence/2824-s9k";
 
 /**
- * WHERE A RUN ACTUALLY MINTS, and why it is not the directory above.
+ * WHERE A RUN MINTS.
  *
- * Writing the captures straight into the committed set made every single run —
- * a developer's, and the #2886 CI job's — rewrite four tracked PNGs and a tracked
- * index. That leaves a dirty tree after a PASSING run, and it means nothing ever
- * compares a run against the reference: the reference was simply overwritten by
- * whatever just happened.
+ * `test-results/` is the Playwright config's own `outputDir`: gitignored, already
+ * uploaded by the CI job that runs this flow, and already the root other suites
+ * mint into. A PASSING run therefore leaves `git status --porcelain` empty by
+ * construction rather than by a `.gitignore` line aimed at one directory.
  *
- * So a run mints into a SCRATCH directory that `.gitignore` covers, and the
- * committed set is refreshed only DELIBERATELY, by pointing this variable at it:
+ * It used to be a subdirectory of the committed reference set, because the S9h
+ * recorder refused any screenshot path outside the tracked proof tree. That rule
+ * now names this root instead (`CAPTURE_OUTPUT_ROOT` in the recorder): proof
+ * pictures do not belong in the product tree, so there is no tracked root left
+ * to be under.
  *
- *   E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+ * The env var still points a deliberate refresh anywhere:
  *
- * WHY THE SCRATCH PATH IS UNDER `evidence/` rather than under the config's
- * `test-results/` outputDir: the shipped S9h recorder REFUSES any screenshot path
- * outside `evidence/` (`screenshotPathViolation`), before the shutter, and that
- * rule is checked again by the validator that grades the record. A record is only
- * honest if its `screenshot` field names where the file really is, so the scratch
- * directory moves under the rule instead of the rule being widened for a test.
+ *   E2E_CHAT_HITL_EVIDENCE_DIR=test-results/my-refresh pnpm test:e2e:chat-hitl-held-turn
  */
 const RUN_EVIDENCE_DIR =
-  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? `${REFERENCE_EVIDENCE_DIR}/.run`;
+  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? "test-results/chat-hitl-held-turn-captures";
 
 /**
  * THE COLD-COMPILE BUDGET. On a cold dev route the FIRST `POST /api/chat` compiles
@@ -482,12 +489,129 @@ async function expectDuplicateDispatchWouldBeSeen(runId: string): Promise<void> 
   ).toBe(1);
 }
 
+/**
+ * THE STREAM HANDSHAKE, AND WHY THE CARD PROBE COULD NOT SEE IT FAIL.
+ *
+ * `/chat` negotiates the S1 stream contract before it will put a turn on the wire
+ * (`negotiateAssistantChatContract`), and that negotiation fails CLOSED: there is
+ * no legacy wire to fall back to, so a failed handshake means NO TURN, no dispatch,
+ * no run, and therefore no card — ever. It is reported through `console.error`
+ * ("[chat] AG-UI stream handshake request failed: …") and NOTHING about it reaches
+ * the transcript, which is the only thing `waitForHeldCard` reads. So on the run
+ * that saw that handshake answered 404 about two minutes after boot, the probe
+ * could do nothing but wait out its whole 900 000 ms cold-compile budget and then
+ * report "no held card" — true, useless, and pointing at the card.
+ *
+ * Two things change that, and they are deliberately separate:
+ *
+ *   1. `installHandshakeBootWindowRetry` — a 404 on that route during the boot
+ *      window is RETRIED, in the same bounded back-off the setup uses, so the
+ *      compile race is absorbed rather than reported. Test-only, at the network
+ *      seam: the shipped client is not touched, and nothing about the negotiation
+ *      it performs changes.
+ *   2. `watchHandshakeFailures` — the console line is kept, so a handshake that
+ *      fails for ANY OTHER reason ends the wait immediately, quoting the browser's
+ *      own words. That is the difference between "a 404 with another cause" being
+ *      reported as itself and being reported as a fifteen-minute timeout.
+ */
+const HANDSHAKE_BOOT_WINDOW_MS = 60_000;
+const HANDSHAKE_ROUTE = "**/api/assistants/chat/capabilities";
+const HANDSHAKE_FAILURE_LINES = new WeakMap<Page, string[]>();
+
+/** Keep every console line that reports a failed handshake — and only those, so a
+ *  fifteen-minute turn does not accumulate a dev server's whole console. */
+function watchHandshakeFailures(page: Page): void {
+  const lines: string[] = [];
+  HANDSHAKE_FAILURE_LINES.set(page, lines);
+  page.on("console", (message) => {
+    const text = message.text();
+    if (handshakeFailureFrom([text])) lines.push(text);
+  });
+}
+
+/** The first handshake failure this page reported, or `null`. */
+function handshakeFailure(page: Page): string | null {
+  return handshakeFailureFrom(HANDSHAKE_FAILURE_LINES.get(page) ?? []);
+}
+
+async function installHandshakeBootWindowRetry(page: Page): Promise<void> {
+  // THE WINDOW IS MEASURED FROM THE INSTALL, not from each request. The second
+  // turn happens many minutes after boot; giving it another full window would
+  // delay a genuine late 404 by the whole bound before reporting it — the exact
+  // "reported as a timeout instead of as itself" fault this change exists to end.
+  const installedAt = Date.now();
+  await page.route(HANDSHAKE_ROUTE, async (route) => {
+    // Only the first-party POST handshake. The GET advertisement belongs to the
+    // cross-origin embed and is none of this flow's business.
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const windowMs = bootWindowRemainingMs(installedAt, Date.now(), HANDSHAKE_BOOT_WINDOW_MS);
+    if (windowMs <= 0) {
+      // Past the boot window: no interception at all, the answer is the answer.
+      await route.fallback();
+      return;
+    }
+    let outcome;
+    try {
+      outcome = await retryWhileRouteMissing<APIResponse>(
+        async (_attemptIndex, remainingMs) => {
+          // The rest of the window is the request's own timeout (never 0, which
+          // Playwright reads as "no timeout"), so the window bounds the wall clock.
+          const response = await route.fetch({ timeout: remainingMs });
+          return {
+            status: response.status(),
+            // The media type separates the runtime's own not-found DOCUMENT from a
+            // 404 the handler produced; only the first is worth waiting through.
+            contentType: response.headers()["content-type"] ?? null,
+            value: response,
+          };
+        },
+        {
+          timeoutMs: windowMs,
+          onRetry: ({ attempts, delayMs, contentType }) =>
+            console.log(
+              `[S9k] the stream handshake answered 404 (attempt ${attempts}) — ` +
+                (isRuntimeNotFoundDocument(contentType)
+                  ? "the dev runtime answered its own not-found PAGE, so " +
+                    "/api/assistants/chat/capabilities is not routable yet"
+                  : "the dev runtime has not compiled " +
+                    "/api/assistants/chat/capabilities yet") +
+                `; retrying in ${delayMs}ms`,
+            ),
+        },
+      );
+    } catch {
+      // A TRANSPORT fault is not a 404 and is not retried — the request fails now,
+      // exactly as it did before this interceptor existed.
+      await route.abort();
+      return;
+    }
+    // The LAST answer is served through, 404 or not: past the bound this is a real
+    // answer the client must see, and the fail-fast below reports what it was.
+    if (outcome.value) await route.fulfill({ response: outcome.value });
+    else await route.abort();
+  });
+}
+
 /** Wait until a HELD card is on screen, then return the anchors it published. */
 async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAnchors> {
   let last: CardAnchors | null = null;
   await waitFor(
     "the §V recommendation_hold card to render in the transcript in state 'held'",
     async () => {
+      // FAIL FAST ON A FAILED HANDSHAKE. It never reaches the transcript, so this
+      // is checked first and separately: without it the only report available is
+      // the full cold-compile budget expiring against a card that could not come.
+      const handshake = handshakeFailure(page);
+      if (handshake) {
+        throw new Error(
+          "the chat stream handshake FAILED, so the turn was never put on the wire — no run was " +
+            `created, and no hold and no card could follow. The browser reported: ${handshake}. ` +
+            "This is a transport fault, not a card fault.",
+        );
+      }
       const transcript = await page
         .locator(CONVERSATION_LIST)
         .innerText()
@@ -576,7 +700,7 @@ async function expectCardAtProducingSlot(
  * rather than being logged, because an evidence file nobody validated is worse than
  * no evidence file.
  *
- * The records go to `evidence/2824-s9k/`, NEVER to the canonical capture index:
+ * The records go to `RUN_EVIDENCE_DIR`, NEVER to the canonical capture index:
  * S9g alone adopts and canonicalizes AC-15 records, and `build: "development"`
  * labels every one of these as dev-runtime per the 2026-08-13 capture ruling.
  */
@@ -610,12 +734,11 @@ async function recordCapture(
     }) => Promise<Record<string, unknown>>;
     validateCaptureRecord: (
       record: Record<string, unknown>,
-      io: { hashOf: (rel: string) => string; tier: "graded" | "audit" },
+      io: { repoRoot: string; tier: "graded" | "audit" },
     ) => unknown[];
-    hashFile: (abs: string) => string;
   };
   const { playwrightPage } = driver;
-  const { observeCapture, validateCaptureRecord, hashFile } = recorder;
+  const { observeCapture, validateCaptureRecord } = recorder;
 
   // WAIT FOR THE PIXELS BEFORE OPENING THE SHUTTER.
   //
@@ -670,8 +793,13 @@ async function recordCapture(
     build: "development",
     repoRoot: REPO_ROOT,
   });
+  // NO INJECTED HASHER. This is a REAL capture on a real disk, so it takes the
+  // shipped resolved-path check: the screenshot must be a regular, singly-linked
+  // file inside the real capture root. Supplying a reader here used to be read
+  // as "this caller brings its own filesystem" and skipped that check on the one
+  // producer that actually writes captures.
   const violations = validateCaptureRecord(record, {
-    hashOf: (rel: string) => hashFile(resolve(REPO_ROOT, rel)),
+    repoRoot: REPO_ROOT,
     tier: "audit",
   });
   expect(
@@ -691,6 +819,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   page,
 }, testInfo) => {
   const records: Array<Record<string, unknown>> = [];
+
+  // Before the first navigation, so no handshake can happen unwatched or unretried.
+  watchHandshakeFailures(page);
+  await installHandshakeBootWindowRetry(page);
 
   // ══ TURN 1 — dispatch → hold → CONFIRM ═══════════════════════════════════
   const threadUrl = await freshThread(page);

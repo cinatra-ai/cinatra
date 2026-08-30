@@ -81,6 +81,16 @@ Adopting a new upstream manifest = replace the file under `manifests/`
 verbatim + update both hashes in `conformance-pins.json` in the same commit. The
 committed copies are generated artifacts — **never hand-edit**.
 
+**A pin that stops matching what is published is a distinct, separately gated
+fact** (cinatra#3057): the `design-pin-drift` job in `gates.yml` fetches every
+published manifest on each pull request and on every push to `main` and reports
+`drift` / `http-failure` / `invalid-json` / `schema-failure` / `match` per pin,
+so a moved upstream manifest can no longer sit unnoticed behind a `source:
+\"repo\"` pin. It never moves a pin: a pin moves only in the issue that ADOPTS
+the change, drivers and harness mounts included, and a hash-only re-pin is
+refused. See
+[`docs/internals/contracts/design-conformance-pin-drift.md`](../../../../docs/internals/contracts/design-conformance-pin-drift.md).
+
 ## Stable data-testid contract (`testid-contract.json`)
 
 Each covered surface maps to the real component file(s) that implement it and

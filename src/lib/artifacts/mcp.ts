@@ -12,6 +12,7 @@ import { resolveScope } from "@/lib/mcp-tool-scope";
 import { assertProjectReadAccess } from "@/lib/sealed-room";
 import {
   listArtifacts,
+  listArtifactsPage,
   getArtifact,
   tombstoneArtifact,
 } from "./artifact-service";
@@ -61,8 +62,27 @@ const listSchema = z.object({
   // package (config-supplied by the artifact-list portlet; not a caller tenant
   // override). Backwards-compatible: omit → all artifacts.
   extensionPackageName: z.string().min(1).optional(),
+  // cinatra#3031 (epic #3023 W7, plan (C) 0.26): "the listing gains a filter by
+  // type and a cursor in place of its flat cap." `types` narrows the object
+  // types read at all; `cursor` is the opaque continuation the previous page
+  // returned as `nextCursor`. Both optional — a caller that passes neither gets
+  // exactly the page it got before.
+  types: z.array(z.string().min(1)).min(1).optional(),
+  cursor: z.string().min(1).nullish(),
 });
 const idSchema = z.object({ artifactId: z.string().min(1) });
+
+// DELIBERATELY NOT REGISTERED HERE (cinatra#3031, epic #3023 W7 — a named
+// deviation, recorded rather than silent). Plan (C) 0.26's capped content read
+// ships on the DETERMINISTIC passthrough road only
+// (`@/lib/extension-scoped-tools`), where it is admitted per declared artifact
+// dependency. Registering it on this self-served MCP surface as well pulls the
+// reader module and its admission into the reachable graph of four ratcheted
+// routes — /chat, /api/mcp, /api/a2a and /api/llm-bridge — and the
+// route-graph ratchet's ceilings may only ever SHRINK. Widening them to admit a
+// tool would spend a budget the ratchet exists to defend, so the self-served
+// half waits for the graph-narrowing step that pays for it. The listing's type
+// filter and cursor below need no new module and ship on both roads.
 
 // Assertion + representation primitives.
 const assertionListSchema = z.object({
@@ -116,7 +136,7 @@ const artifactAuthoringEmitSchema = z.object({
 const TOOL_META = {
   artifacts_list: {
     description:
-      "List artifacts (files, documents, dashboards, connector refs) for the active organization, newest first. Each summary carries the semantic identity (`primaryExtension`, `eligibleExtensions`). Optionally filter to artifacts eligible for a given `extensionPackageName`. Read-only.",
+      "List artifacts (files, documents, dashboards, connector refs) for the active organization, newest first. Each summary carries the semantic identity (`primaryExtension`, `eligibleExtensions`). Optionally filter to artifacts eligible for a given `extensionPackageName`, or to a set of object `types`. Returns `{artifacts, nextCursor}`: pass `nextCursor` back as `cursor` for the next page (null when the listing is exhausted). Read-only.",
     inputSchema: listSchema,
   },
   artifacts_get: {
@@ -211,15 +231,16 @@ export function registerArtifactPrimitives(server: McpRuntimeToolServer): void {
       if (projectId !== null) {
         assertProjectReadAccess(actor, projectId);
       }
-      return envelope({
-        artifacts: listArtifacts({
-          orgId,
-          actor,
-          limit: parsed.limit,
-          projectId,
-          ...(parsed.extensionPackageName ? { extensionPackageName: parsed.extensionPackageName } : {}),
-        }),
+      const page = listArtifactsPage({
+        orgId,
+        actor,
+        ...(parsed.limit !== undefined ? { limit: parsed.limit } : {}),
+        projectId,
+        ...(parsed.types ? { types: parsed.types } : {}),
+        ...(parsed.cursor ? { cursor: parsed.cursor } : {}),
+        ...(parsed.extensionPackageName ? { extensionPackageName: parsed.extensionPackageName } : {}),
       });
+      return envelope({ artifacts: page.artifacts, nextCursor: page.nextCursor });
     }) as never,
   );
 

@@ -414,7 +414,7 @@ export function embedFrame(page: Page): FrameLocator {
  * once the nested iframe's `load` event lands, `"timed-out"` past the card's
  * own bound. A screenshot taken without this wait can catch the FIRST of
  * those — the bare white box the 333 proof round photographed
- * (evidence/2674-s8e V5 vs V6, same session, both CMSes) and the owner caught.
+ * (the S8e round, V5 vs V6, same session, both CMSes) and the owner caught.
  *
  * Waits for `"loaded"` SPECIFICALLY, not merely "away from loading": a capture
  * round that reaches `"timed-out"` instead is a real regression worth failing
