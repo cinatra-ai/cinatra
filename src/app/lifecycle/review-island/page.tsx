@@ -152,7 +152,17 @@ function emptyIsland(scheme: IslandColorScheme | null) {
       data-conformance-id="review-target-island-empty"
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
-    />
+    >
+      {/* A DENIAL REPORTS ITS HEIGHT TOO (cinatra#3047), and draws nothing while
+          doing it. Without the report the frame around this document has no
+          height to size from, and its no-report rule — keep the control, take
+          the ceiling — turns a refusal into an expanded panel of empty ground
+          with only its own control in it, which is the defect this closes. What
+          it reports fits the collapsed box, so the frame stays that box and
+          offers no Expand; it is the same number for every refusal, so nothing
+          here becomes distinguishable from anything else. */}
+      <ReviewIslandHeightReport />
+    </div>
   );
 }
 

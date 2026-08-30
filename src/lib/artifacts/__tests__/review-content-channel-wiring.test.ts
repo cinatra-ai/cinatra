@@ -219,6 +219,58 @@ describe("the pinned-substance read behind the channel", () => {
     expect(opened).toBe(false);
   });
 
+  it("the STORE's own size over the ceiling is an absence, whatever the row claims", async () => {
+    // The row and the bytes can disagree — a replaced or truncated blob, a row
+    // written before its upload finished. The size check above reads the row;
+    // this reads what the store says it actually holds.
+    let consumed = 0;
+    const projection = await buildArtifactContentProjection(
+      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+      createPinnedSubstanceReader(
+        {},
+        deps({
+          openBytes: async () => ({
+            sizeBytes: PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES + 1,
+            stream: (async function* () {
+              consumed += 1;
+              yield new TextEncoder().encode(DRAFT);
+            })(),
+          }),
+        }),
+      ),
+    );
+    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+    expect(consumed).toBe(0);
+  });
+
+  it("a STREAM that runs past the ceiling stops reading and is an absence", async () => {
+    // Neither recorded size is a promise about the stream, so the ceiling is
+    // counted on the bytes themselves: the read stops at it rather than pulling
+    // an unbounded blob into memory behind a small row.
+    const CHUNK = 1024 * 1024;
+    let chunksPulled = 0;
+    const projection = await buildArtifactContentProjection(
+      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+      createPinnedSubstanceReader(
+        {},
+        deps({
+          openBytes: async () => ({
+            stream: (async function* () {
+              // Twice the ceiling if it were ever read to the end.
+              for (let i = 0; i < (PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES / CHUNK) * 2; i += 1) {
+                chunksPulled += 1;
+                yield new Uint8Array(CHUNK);
+              }
+            })(),
+          }),
+        }),
+      ),
+    );
+    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+    // Stopped at the ceiling: the one chunk that crossed it, and nothing after.
+    expect(chunksPulled).toBe(PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES / CHUNK + 1);
+  });
+
   it("a NON-text file form is `unsupported-form`, never a markdown-shaped absence", async () => {
     const projection = await buildArtifactContentProjection(
       { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "image/png" },

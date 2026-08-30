@@ -66,7 +66,7 @@ export interface PinnedSubstanceReaderDeps {
   openBytes(input: {
     orgId: string;
     storageKey: string;
-  }): Promise<{ stream: AsyncIterable<Uint8Array> }>;
+  }): Promise<{ stream: AsyncIterable<Uint8Array>; sizeBytes?: number }>;
 }
 
 const defaultDeps: PinnedSubstanceReaderDeps = {
@@ -169,9 +169,27 @@ async function readTextSubstance(
       orgId: input.orgId,
       storageKey: resolved.storageKey,
     });
+    // THE STORE'S OWN SIZE, when it has one. The check above reads the size the
+    // SUBSTRATE recorded; this reads the size the bytes actually have. They can
+    // disagree — a truncated or replaced blob, a row written before its upload
+    // finished — and it is the physical one that decides how much this read
+    // would pull into memory.
+    if (typeof handle.sizeBytes === "number" && handle.sizeBytes > PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES) {
+      return null;
+    }
     const chunks: Buffer[] = [];
+    let read = 0;
     for await (const chunk of handle.stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      read += buf.byteLength;
+      // THE CEILING IS ENFORCED ON THE BYTES, not only on what a row claims
+      // about them. Neither size above is a promise about the stream, so the
+      // one bound that always holds is counted while reading: past the ceiling
+      // this stops pulling (leaving the loop calls the iterator's `return`,
+      // which cancels the underlying stream) and answers the channel's named
+      // absence, exactly as an over-ceiling row does.
+      if (read > PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES) return null;
+      chunks.push(buf);
     }
     return { class: "text", text: Buffer.concat(chunks).toString("utf8") };
   } catch {

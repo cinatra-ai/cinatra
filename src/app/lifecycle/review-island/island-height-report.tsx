@@ -25,8 +25,24 @@ import { useEffect } from "react";
 /** The marker the host matches on. Mirrored by the card that reads it. */
 export const REVIEW_ISLAND_HEIGHT_MESSAGE = "cinatra:review-island-height";
 
-/** The island body the measurement is taken from — the page's own wrapper. */
-const ISLAND_BODY_SELECTOR = '[data-conformance-id="review-target-island-body"]';
+/**
+ * The island root the measurement is taken from.
+ *
+ * BOTH ROOTS, and that is the point. The body is the reading; the empty island
+ * is what EVERY denial and every absence draws — one painted rectangle with
+ * nothing in it. A denial that reported nothing would leave the frame with no
+ * height to size from, and the host's no-report rule (keep the control, keep
+ * the ceiling) would then draw the very thing this closes: an expanded frame of
+ * empty ground with only its own control in it. So the denial reports too, and
+ * what it reports fits the collapsed box, so the frame stays that box and is
+ * offered no Expand at all.
+ *
+ * It says nothing about WHICH refusal it is: every denial is the same element
+ * and reports the same number, and that number lands in the same "fits its box"
+ * band any short reading lands in.
+ */
+const ISLAND_ROOT_SELECTOR =
+  '[data-conformance-id="review-target-island-body"], [data-conformance-id="review-target-island-empty"]';
 
 /**
  * Measure the CONTENT, never the box.
@@ -47,7 +63,12 @@ function measureContentHeight(body: Element): number {
     if (rect.height > 0) bottom = Math.max(bottom, rect.bottom);
   }
   const paddingBottom = Number.parseFloat(getComputedStyle(body).paddingBottom);
-  return Math.ceil(bottom - top + (Number.isFinite(paddingBottom) ? paddingBottom : 0));
+  const height = Math.ceil(bottom - top + (Number.isFinite(paddingBottom) ? paddingBottom : 0));
+  // A root with nothing in it — the empty island every denial draws — measures
+  // zero. It still has to SAY so, because a height of zero is the host's "no
+  // report", so it reports the smallest height there is: one that fits the
+  // collapsed box, which is what a rectangle with nothing in it needs.
+  return Math.max(1, height);
 }
 
 /**
@@ -63,7 +84,7 @@ export function ReviewIslandHeightReport(): null {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (window.parent === window) return;
-    const body = document.querySelector(ISLAND_BODY_SELECTOR);
+    const body = document.querySelector(ISLAND_ROOT_SELECTOR);
     if (!body) return;
 
     let last = -1;
