@@ -446,7 +446,7 @@ jobs:
           : "${CINATRA_CONTEXT_ATTEST_KEY:?regression pin: CINATRA_CONTEXT_ATTEST_KEY must be derived (openssl rand) before cinatra setup dev — the wayflow boot preflight refuses to start without it, and the artifact leak scan below cannot report a trustworthy result for an unset value}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
-          : "${CINATRA_DEV_FIXTURE_PASSWORD:?regression pin: CINATRA_DEV_FIXTURE_PASSWORD must be derived (openssl rand) before the dev server boots — the boot mints the UAT fixture account's password per boot and prints it once, so both the dev server and global-setup must be given the SAME value}"
+          : "${CINATRA_DEV_FIXTURE_PASSWORD:?regression pin: CINATRA_DEV_FIXTURE_PASSWORD must be derived (openssl rand) before the dev server boots — the boot mints the UAT fixture account password fresh per boot and prints it once, so both the dev server and global-setup must be given the SAME value}"
           echo "app-service env present"
       # cinatra#2131 — start the periodic resource sampler BEFORE the composite
       # action, which is where the docker stack comes up and where the
@@ -690,7 +690,7 @@ jobs:
           : "${CINATRA_CONTEXT_ATTEST_KEY:?regression pin: CINATRA_CONTEXT_ATTEST_KEY must be derived (openssl rand) before cinatra setup dev — the wayflow boot preflight refuses to start without it, and the artifact leak scan below cannot report a trustworthy result for an unset value}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
-          : "${CINATRA_DEV_FIXTURE_PASSWORD:?regression pin: CINATRA_DEV_FIXTURE_PASSWORD must be derived (openssl rand) before the dev server boots — the boot mints the UAT fixture account's password per boot and prints it once, so both the dev server and global-setup must be given the SAME value}"
+          : "${CINATRA_DEV_FIXTURE_PASSWORD:?regression pin: CINATRA_DEV_FIXTURE_PASSWORD must be derived (openssl rand) before the dev server boots — the boot mints the UAT fixture account password fresh per boot and prints it once, so both the dev server and global-setup must be given the SAME value}"
           echo "app-service env present"
       # cinatra#2131 — same capture the uat-gate job runs; see the rationale
       # there. The nightly hosts the identical stack on the identical runner
