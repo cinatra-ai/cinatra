@@ -1464,6 +1464,8 @@ describe("the generated display map imports through package exports, never a hos
     expect(aliased).toEqual([
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+      "@cinatra-ai/podcast-artifacts/src/renderers/detail",
+      "@cinatra-ai/podcast-artifacts/src/renderers/preview",
     ]);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
   });

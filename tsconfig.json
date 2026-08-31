@@ -512,6 +512,8 @@
       "@cinatra-ai/email-artifacts/src/renderers/list-row": ["./extensions/cinatra-ai/email-artifacts/src/renderers/list-row.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/send-confirmation": ["./extensions/cinatra-ai/email-artifacts/src/renderers/send-confirmation.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/test-delivery-input": ["./extensions/cinatra-ai/email-artifacts/src/renderers/test-delivery-input.tsx"],
+      "@cinatra-ai/podcast-artifacts/src/renderers/detail": ["./extensions/cinatra-ai/podcast-artifacts/src/renderers/detail.tsx"],
+      "@cinatra-ai/podcast-artifacts/src/renderers/preview": ["./extensions/cinatra-ai/podcast-artifacts/src/renderers/preview.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
       "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],

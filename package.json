@@ -117,6 +117,7 @@
       "@cinatra-ai/pdf-artifact": "https://github.com/cinatra-ai/pdf-artifact.git",
       "@cinatra-ai/plane-connector": "https://github.com/cinatra-ai/plane-connector.git",
       "@cinatra-ai/planner-agent": "https://github.com/cinatra-ai/planner-agent.git",
+      "@cinatra-ai/podcast-artifacts": "https://github.com/cinatra-ai/podcast-artifacts.git",
       "@cinatra-ai/product-portfolio-artifact": "https://github.com/cinatra-ai/product-portfolio-artifact.git",
       "@cinatra-ai/product-portfolio-matcher-skill": "https://github.com/cinatra-ai/product-portfolio-matcher-skill.git",
       "@cinatra-ai/resend-connector": "https://github.com/cinatra-ai/resend-connector.git",
