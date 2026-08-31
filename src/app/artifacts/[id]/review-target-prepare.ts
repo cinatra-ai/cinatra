@@ -47,6 +47,16 @@ import {
   absentArtifactContent,
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
+// TYPE-ONLY, and that is load-bearing (wave 3). This module is reachable from
+// four routes whose first-party module count the route-graph ratchet locks, and
+// both roads pull real graphs behind them — the content channel's builder and
+// the capability minters. The roads are CONSTRUCTED on the surfaces that choose
+// them (`./review-surface-roads`), none of which is a locked route, and named
+// here by type alone, which the compiler erases.
+import type {
+  ArtifactContentBuilder,
+  ArtifactByteUrlMinter,
+} from "./review-surface-roads";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -76,6 +86,33 @@ export type ReviewRunGatePorts = Pick<
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
+  /**
+   * HOW THIS SURFACE ADDRESSES BYTES (wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
+   *
+   * Absent — every first-party, cookie-authenticated surface — and the snapshot
+   * carries the session byte routes it always carried, named as the `session`
+   * road. Present — the island, whose reader holds a broker bearer and no
+   * cookie — and the snapshot carries the island-scoped capability address
+   * instead, which is the whole of "the byte capability and its serving route
+   * ... for the six media displays and the CMS picture pair".
+   *
+   * A FUNCTION, NOT A FLAG, and it is the surface's: this binder cannot
+   * construct an island address by itself, so no first-party path can acquire
+   * one by accident.
+   */
+  byteMinter?: ArtifactByteUrlMinter;
+  /**
+   * HOW THIS SURFACE READS CONTENT (wave 3).
+   *
+   * Absent and the snapshot carries the channel's own NAMED ABSENCE, which is
+   * what this consumer said about itself before this wave: "each a contract
+   * defined here and wired for its consumers in the sibling plan". Present and
+   * the pinned revision is read ON THE SERVER and carried on the props — which
+   * is what takes "the three browser fetchers — json, cms-snapshot, text" off
+   * the browser fetch that dies inside a third-party application.
+   */
+  buildContent?: ArtifactContentBuilder;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -86,6 +123,8 @@ export function bindArtifactReviewPorts(ctx: {
   | "buildProps"
 > {
   const { orgId, actor } = ctx;
+  const byteMinter = ctx.byteMinter ?? null;
+  const buildContent = ctx.buildContent ?? null;
 
   const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
@@ -261,7 +300,7 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
-  const buildProps = (input: {
+  const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
@@ -284,6 +323,47 @@ export function bindArtifactReviewPorts(ctx: {
     const downloadHref = fileBacked
       ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`
       : null;
+    // THE BYTE REFERENCE (wave 3, cinatra#3091). A non-file revision has no
+    // bytes at all and therefore no road: enabler 0.10's rule that "non-file
+    // props carry no preview or download address" governs this field exactly as
+    // it governs the two above, and minting an island address for a dashboard
+    // would be a sealed capability over nothing.
+    //
+    // AND THE ISLAND ROAD ONLY WHERE THE ROAD RUNS. The minter answers `null`
+    // for a form that is not one of the six media kinds — the three browser
+    // fetchers' forms among them — and such a revision keeps the session
+    // addresses it always had rather than gaining a sealed capability to its
+    // full bytes beside its capped content projection.
+    const minted =
+      fileBacked && byteMinter
+        ? byteMinter({
+            artifactId: artifact.artifactId,
+            representationRevisionId,
+            mime,
+          })
+        : null;
+    const bytes = minted
+      ? { road: "island" as const, ...minted }
+      : fileBacked
+        ? { road: "session" as const, preview: previewHref, download: downloadHref }
+        : undefined;
+
+    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED HERE BY WAVE 3.
+    // Until now this consumer named itself unwired; "the three browser fetchers
+    // — json, cms-snapshot, text — moved onto the content channel" is that name
+    // being replaced by the read it stood in for. A form the channel projects
+    // no class for — every one of the six media forms — still comes back as the
+    // channel's own named absence, because its bytes are the byte road's.
+    const content = buildContent
+      ? await buildContent({
+          orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId,
+          form: input.member.form ?? (fileBacked ? "file" : null),
+          mime,
+        })
+      : absentArtifactContent(representationRevisionId);
+
     return buildArtifactRendererProps({
       artifact,
       representation: { revisionId: representationRevisionId, mime },
@@ -292,11 +372,8 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
-      // wired to it yet — "each a contract defined here and wired for its
-      // consumers in the sibling plan" — so it says so, by name, instead of
-      // letting an absent projection read as a wired one that found nothing.
-      content: absentArtifactContent(representationRevisionId),
+      content,
+      bytes,
     });
   };
 
@@ -324,7 +401,18 @@ export async function prepareArtifactReviewTargets(args: {
   orgId: string;
   actor: ActorContext;
   runGatePorts: ReviewRunGatePorts;
+  /** The island's byte minter, when this preparation is for an island reader
+   *  (wave 3). Absent on every cookie surface. */
+  byteMinter?: ArtifactByteUrlMinter;
+  /** How this surface reads content (wave 3). Absent on a surface that has not
+   *  named a road. */
+  buildContent?: ArtifactContentBuilder;
 }): Promise<PrepareReviewResult> {
-  const artifactPorts = bindArtifactReviewPorts({ orgId: args.orgId, actor: args.actor });
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    byteMinter: args.byteMinter,
+    buildContent: args.buildContent,
+  });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

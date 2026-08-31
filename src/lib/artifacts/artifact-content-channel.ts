@@ -55,6 +55,17 @@ const TEXT_PROJECTION_MIMES: ReadonlySet<string> = new Set([
   "text/plain",
   "text/csv",
   "application/json",
+  // The CMS snapshot's field document (wave 3 of
+  // `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091). It is one of "the
+  // three browser fetchers — json-artifact, cms-snapshot-artifact,
+  // text-artifact — moved onto the content channel", and it could not move
+  // while its own form had no class here: the display would have been told
+  // `unsupported-form` and gone straight back to fetching.
+  //
+  // IT MEETS THE SET'S OWN RULE, which is what admits it and not the wave: a
+  // json document form, non-executable, already served inline by the host, and
+  // read as DATA by its display rather than as markup.
+  "application/vnd.cinatra.cms-fields+json",
 ]);
 
 /** The representation forms the substrate admits (`representation_form_chk`). */
@@ -91,7 +102,27 @@ export function resolveArtifactContentClass(input: {
 
 /** What the server read of a pinned revision yields, per class. */
 export type PinnedRevisionSubstance =
-  | { class: "text"; text: string }
+  | {
+      class: "text";
+      text: string;
+      /**
+       * The FULL byte length of the pinned revision, when the reader knows it
+       * without having read the whole of it.
+       *
+       * WHY IT EXISTS. `byteLength` on the projection is contracted as "bytes
+       * of the FULL content, before any truncation — what the pinned revision
+       * actually holds, so a display can say 'showing the first N of M' rather
+       * than pretending it has the whole draft". A port that reads only as far
+       * as the cap cannot derive M from the prefix it holds; deriving it anyway
+       * would report a multi-megabyte document as being exactly the cap long,
+       * and the display's "first N of M" would say "first N of N". So the port
+       * carries the true M when its store already knows it (a blob handle does)
+       * and omits it when it does not, in which case the projection falls back
+       * to measuring the text it was given — the behaviour every caller had
+       * before this field existed.
+       */
+      totalByteLength?: number;
+    }
   | { class: "configuration"; configuration: unknown; digest: string }
   | { class: "page"; pageVersion: number; page: unknown };
 
@@ -212,8 +243,14 @@ export async function buildArtifactContentProjection(
   const cap = artifactContentCapFor(contentClass);
 
   if (substance.class === "text") {
-    const byteLength = utf8Bytes(substance.text);
-    const text = byteLength <= cap ? substance.text : truncateToUtf8Bytes(substance.text, cap);
+    const readByteLength = utf8Bytes(substance.text);
+    const byteLength =
+      typeof substance.totalByteLength === "number" &&
+      Number.isFinite(substance.totalByteLength) &&
+      substance.totalByteLength >= 0
+        ? substance.totalByteLength
+        : readByteLength;
+    const text = readByteLength <= cap ? substance.text : truncateToUtf8Bytes(substance.text, cap);
     return {
       kind: "text",
       channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,

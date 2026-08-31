@@ -276,7 +276,7 @@ export interface PrepareReviewPorts {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
-  }): ArtifactRendererProps;
+  }): Promise<ArtifactRendererProps> | ArtifactRendererProps;
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +451,13 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  const props = ports.buildProps({
+  // AWAITED SINCE WAVE 3 of `PLAN: Agents Lifecycle (D) — Review`
+  // (cinatra#3091). The content channel's builder "reads the pinned revision on
+  // the server", which is asynchronous by contract "precisely so no display is
+  // ever tempted to fetch them itself" — so the props port had to be allowed to
+  // be asynchronous before the three browser fetchers could move onto it. A
+  // synchronous binder is unaffected: `await` on a plain value is the value.
+  const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,
     mime,

@@ -47,6 +47,7 @@ import {
   absentArtifactContent,
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
+import { hostArtifactContentBuilder } from "./review-surface-roads";
 
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
@@ -188,11 +189,20 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     representation: revisionId ? { revisionId, mime } : null,
     previewHref,
     downloadHref,
-    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
-    // wired to it yet — "each a contract defined here and wired for its
-    // consumers in the sibling plan" — so it says so, by name, instead of
-    // letting an absent projection read as a wired one that found nothing.
-    content: absentArtifactContent(revisionId ?? null),
+    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED HERE BY WAVE 3 of
+    // `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091). The artifact's own
+    // page is one of the hosts "the json, cms-snapshot and text displays draw
+    // through the content channel on" — and the surface where a display that
+    // still fetched would look correct while being broken everywhere else.
+    content: revisionId
+      ? await hostArtifactContentBuilder()({
+          orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId: revisionId,
+          form: "file",
+          mime,
+        })
+      : absentArtifactContent(null),
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.

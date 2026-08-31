@@ -230,6 +230,29 @@ export type IslandCredentialReader = {
    *  ref's own decode, so a mismatch cannot survive by being re-read later. */
   runId: string;
   reviewTaskId: string;
+  /**
+   * THE LIVE PRINCIPAL THIS RESOLVER JUST PROVED (wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
+   *
+   * The island's media displays and its capture pair are painted under
+   * short-lived capabilities sealed to exactly these bindings, and until wave 3
+   * nothing downstream could mint one because nothing downstream was told who
+   * the reader was. It is handed out HERE, from the row this function re-read
+   * and compared field by field, rather than re-derived by the caller — a
+   * second read would be a second place for the bindings to drift.
+   *
+   * IT AUTHORIZES NOTHING. Every field in it is re-checked live by the serving
+   * path before a byte is read; carrying it is transport, not permission.
+   */
+  principal: {
+    orgId: string;
+    userId: string;
+    jti: string;
+    siteId: string;
+    client: string;
+    instanceId: string;
+    agentSlug: string;
+  };
 };
 
 /**
@@ -364,5 +387,21 @@ export async function resolveIslandCredentialReader(input: {
     reason: "island",
   });
 
-  return { actorCtx, runId: verified.runId, reviewTaskId: verified.reviewTaskId };
+  return {
+    actorCtx,
+    runId: verified.runId,
+    reviewTaskId: verified.reviewTaskId,
+    // From `live`, never from `verified`: the sealed copy is what was CLAIMED
+    // and the row is what is TRUE. They were proven equal three rungs above,
+    // and handing out the true one keeps it that way if they ever stop being.
+    principal: {
+      orgId: live.orgId,
+      userId: live.userId,
+      jti: verified.jti,
+      siteId: live.siteId,
+      client: live.client,
+      instanceId: live.instanceId,
+      agentSlug: live.agentSlug,
+    },
+  };
 }
