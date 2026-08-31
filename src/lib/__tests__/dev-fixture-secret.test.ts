@@ -477,7 +477,7 @@ describe("the development boot is wired to the fixture-secret rules", () => {
 
   it("refuses a publicly served instance BEFORE it reads or writes anything in the database", () => {
     const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
-    const refusalIdx = body.indexOf("devFixtureSeedRefusal");
+    const refusalIdx = body.indexOf("devFixtureSeedingAllowed(");
     const firstQueryIdx = body.indexOf("runPostgresQueriesSync");
     const signUpIdx = body.indexOf("signUpEmail");
     expect(refusalIdx).toBeGreaterThan(-1);
@@ -495,7 +495,7 @@ describe("the development boot is wired to the fixture-secret rules", () => {
   // password. The refusal branch takes the password away.
   it("retires an account an earlier boot left behind when it refuses to seed", () => {
     const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
-    const refusalIdx = body.indexOf("devFixtureSeedRefusal");
+    const refusalIdx = body.indexOf("devFixtureSeedingAllowed(");
     const retireIdx = body.indexOf("retireStaleDevFixtureAccount");
     expect(retireIdx).toBeGreaterThan(refusalIdx);
     const src = stripComments(readSource(DEV_AUTO_SETUP_PATH));
@@ -532,7 +532,7 @@ describe("the development boot is wired to the fixture-secret rules", () => {
   it("takes an earlier boot\u2019s password file away when it refuses to seed", () => {
 
     const body = stripComments(extractFunctionBody(readSource(DEV_AUTO_SETUP_PATH), "ensureDevConnectActor"));
-    const refusalIdx = body.indexOf("devFixtureSeedRefusal");
+    const refusalIdx = body.indexOf("devFixtureSeedingAllowed(");
     const removeIdx = body.indexOf("removeDevFixturePasswordFile");
     expect(refusalIdx).toBeGreaterThan(-1);
     expect(removeIdx).toBeGreaterThan(refusalIdx);

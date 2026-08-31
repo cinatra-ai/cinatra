@@ -49,6 +49,7 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { setDevActorForExternalMcp } from "@/lib/external-mcp-registry";
+import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
@@ -66,7 +67,7 @@ import { auth } from "@/lib/auth";
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { DEV_UAT_FIXTURE_USER_TYPE } from "@/lib/initial-admin-bootstrap-policy";
 import {
-  devFixtureSeedRefusal,
+  devFixtureSeedingAllowed,
   printDevFixtureSecretOnce,
   removeDevFixturePasswordFile,
   resolveDevFixturePassword,
@@ -90,8 +91,17 @@ type Status =
 
 // Strict dev gate (exact-equality, NOT the default-development getAppRuntimeMode):
 // every powerful helper + the `cnx_` mint is refused outside development.
+//
+// This is the RUNTIME ARM of the shared seeding rule, not a second reading of
+// it: `devFixtureSeedingAllowed` given nothing but the runtime is exactly the
+// exact-equality gate this has always been, and the fixture-seeding path below
+// calls the SAME function with the exposure signals filled in. One rule, one
+// place it is written down.
 function isStrictDevelopmentRuntime(): boolean {
-  return process.env.CINATRA_RUNTIME_MODE === "development" && process.env.NODE_ENV !== "production";
+  return devFixtureSeedingAllowed({
+    runtimeMode: process.env.CINATRA_RUNTIME_MODE,
+    nodeEnv: process.env.NODE_ENV,
+  }).allowed;
 }
 
 // Container allowlist — the docker exec / ps helpers only ever touch containers
@@ -712,6 +722,35 @@ async function devFixtureCredentialStore(): Promise<DevFixtureCredentialStore> {
 }
 
 /**
+ * The public base URL this instance is configured to be reachable at — the
+ * value the operator sets for the instance, which the instance stores about
+ * itself and the sign-in stack reads back as a trusted origin. It is the second
+ * exposure signal the seeding rule is given.
+ *
+ * Null when there is none: an instance with no database yet has nothing
+ * configured, and that reader already answers "none" for an unreachable boot
+ * database, so a fresh install still boots. A read that throws is something
+ * else — the reader fails loud only when the database IS reachable and the
+ * query itself failed — and that is reported as UNREADABLE, not as "none": the
+ * rule fails closed on a signal it could not obtain rather than seeding on an
+ * instance it cannot show to be private.
+ *
+ * The read is the same one the rest of the app uses, so there is one answer to
+ * "what is this instance reachable at".
+ */
+function configuredPublicBaseUrl(): { publicBaseUrl: string | null; unreadable: boolean } {
+  try {
+    return { publicBaseUrl: getMcpPublicBaseUrl().publicBaseUrl, unreadable: false };
+  } catch (err) {
+    console.log(
+      `${tag}:connect could not read the public base URL this instance is configured at ` +
+        `(${err instanceof Error ? err.message : "unknown"})`,
+    );
+    return { publicBaseUrl: null, unreadable: true };
+  }
+}
+
+/**
  * Take an earlier boot's password away from a fixture account this boot will
  * NOT be using. Called where seeding is refused: the refusal stops a NEW
  * account appearing, and this stops an OLD one still answering to a password
@@ -767,10 +806,28 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
 
   // An instance anyone can reach never carries the fixture account: a password
   // printed on one operator's screen must never be typeable at somebody else's
-  // sign-in page. Decided BEFORE a single row is read or written.
-  const refusal = devFixtureSeedRefusal();
-  if (refusal) {
-    console.log(`${tag}:connect ${refusal}`);
+  // sign-in page. Decided BEFORE a single row is read or written, by the shared
+  // rule — the same function this module's strict-development gate is written
+  // in terms of, and the same one the tests drive.
+  //
+  // BOTH exposure signals are handed to it. The authentication base URL is the
+  // origin the sign-in stack is built on; the public base URL is the one the
+  // operator configured and the instance stored about itself, which also enters
+  // the origins the sign-in stack trusts. An instance is reachable from outside
+  // if EITHER of them says so.
+  const publicSignal = configuredPublicBaseUrl();
+  const decision = devFixtureSeedingAllowed({
+    runtimeMode: process.env.CINATRA_RUNTIME_MODE,
+    nodeEnv: process.env.NODE_ENV,
+    env: process.env,
+    // Mirrors `authBaseUrl` in `@/lib/auth`, default included: that is the
+    // origin better-auth is actually built on when the setting is absent.
+    authBaseUrl: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+    publicBaseUrl: publicSignal.publicBaseUrl,
+    publicBaseUrlUnreadable: publicSignal.unreadable,
+  });
+  if (!decision.allowed) {
+    console.log(`${tag}:connect ${decision.refusal}`);
     // Nothing on this instance may hold a fixture password it refuses to use.
     removeDevFixturePasswordFile();
     // Refusing to seed is not enough on an instance that used to be private:
