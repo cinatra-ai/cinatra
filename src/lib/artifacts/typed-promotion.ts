@@ -113,6 +113,53 @@ export interface MatcherAssociation {
   threshold: number;
 }
 
+/**
+ * THE ROAD'S ENTRY, and the reason it has one.
+ *
+ * The road runs against ONE type: the type the confirmed extension owns. The
+ * surface resolves that from the object-type registry, and the count it finds is
+ * not always one — so the entry is a decision, not a lookup, and every outcome
+ * of it is named:
+ *
+ *   - EXACTLY ONE registered artifact type: the road runs against it.
+ *   - SEVERAL: a package-keyed confirmation cannot say which type was meant, so
+ *     the road is left alone rather than guessing.
+ *   - NONE, and the pack ships no display for an unregistered type: a pure
+ *     matcher pack. There is nothing to promote INTO and nothing worth
+ *     reporting — the road does not apply.
+ *   - NONE, and the pack DOES ship a display for a type no package registers:
+ *     the pack declared a type that never registered, because ownership is by
+ *     namespace and the declared id sits in a namespace no installed package
+ *     owns. That is a broken installation, not an inapplicable road: no row can
+ *     ever carry the type, the display can never be reached, and the person who
+ *     confirmed the meaning is owed the road's own named refusal —
+ *     `extension-owns-no-type` — instead of silence.
+ *
+ * The last case is the one the wave-3 proof leg measured: a deck confirmation that
+ * retyped nothing and reported nothing.
+ */
+export type PromotionEntryPlan =
+  | { kind: "run"; typeId: string }
+  | { kind: "refuse"; reason: TypedPromotionRefusal }
+  | { kind: "not-applicable" };
+
+export function planPromotionEntry(input: {
+  /** The artifact types this package actually registered, read from the
+   *  object-type registry. */
+  ownedRegisteredTypes: readonly string[];
+  /** True when the package registered a semantic display for an object type no
+   *  package registers — a declaration the registrar refused. */
+  shipsDisplayForUnregisteredType: boolean;
+}): PromotionEntryPlan {
+  if (input.ownedRegisteredTypes.length === 1) {
+    return { kind: "run", typeId: input.ownedRegisteredTypes[0]! };
+  }
+  if (input.ownedRegisteredTypes.length === 0 && input.shipsDisplayForUnregisteredType) {
+    return { kind: "refuse", reason: "extension-owns-no-type" };
+  }
+  return { kind: "not-applicable" };
+}
+
 export type TypedPromotionPlan =
   | {
       ok: true;

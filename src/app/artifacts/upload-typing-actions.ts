@@ -39,6 +39,7 @@ import {
 } from "@/lib/artifacts/installed-type-picker";
 import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
+import { planPromotionEntry } from "@/lib/artifacts/typed-promotion";
 import {
   readArtifactForDetail,
   readArtifactForMeaningWrite,
@@ -359,16 +360,36 @@ async function promoteOnConfirmedMeaning(input: {
     const { matcherManifestRegistry, objectTypeRegistry } = await import(
       "@cinatra-ai/objects/registry"
     );
-    // THE EXTENSION'S OWN TYPE: the one artifact type its package defines. A
-    // package that defines none is a pure matcher pack — the road does not
-    // apply. A package that defines SEVERAL cannot be resolved from a
-    // package-keyed confirmation, so it is left alone rather than guessed at.
+    const { semanticRendererRegistry } = await import(
+      "@cinatra-ai/objects/artifact-renderer-registry"
+    );
+    // THE EXTENSION'S OWN TYPE: the one artifact type its package REGISTERED.
+    // The count is not always one, and `planPromotionEntry` names every outcome
+    // rather than folding them into one silence — because two very different
+    // worlds both register zero types:
+    //
+    //   a PURE MATCHER PACK declares none, so the road does not apply; and
+    //   a PACK WHOSE DECLARED TYPE NEVER REGISTERED — ownership is by namespace
+    //   and its declared id sits in a namespace no installed package owns — is a
+    //   broken installation whose display can never be reached at all.
+    //
+    // The second is what the wave-3 proof leg measured (cinatra#3091): a deck
+    // confirmation that retyped nothing and reported nothing. It is separated
+    // from the first by the pack's OWN registration state — a semantic display
+    // registered for an object type no package registers.
     const owned = objectTypeRegistry
       .getTypesForPackage(input.extension)
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
-    if (owned.length !== 1) return null;
-    const ownType = owned[0]!;
+    const entryPlan = planPromotionEntry({
+      ownedRegisteredTypes: owned.map((t) => t.typeId),
+      shipsDisplayForUnregisteredType: semanticRendererRegistry
+        .listByPackage(input.extension)
+        .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null),
+    });
+    if (entryPlan.kind === "not-applicable") return null;
+    if (entryPlan.kind === "refuse") return { promoted: false, reason: entryPlan.reason };
+    const ownType = owned.find((t) => t.typeId === entryPlan.typeId)!;
     const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
