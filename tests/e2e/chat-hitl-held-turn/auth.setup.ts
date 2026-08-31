@@ -30,6 +30,7 @@ import { test as setup, expect } from "@playwright/test";
 
 import { HELD_TURN_AGENT_PACKAGE } from "./constants";
 import { DATABASE_URL, SCHEMA } from "./probes";
+import { openRegistrationForFixtures } from "../open-registration";
 import {
   markMemberInsertPending,
   recordMemberInsert,
@@ -240,6 +241,11 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
         `${ready.elapsedMs}ms`,
     );
   }
+
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
 
   // 1. The account. Idempotent — an existing user answers 400/422.
   //
