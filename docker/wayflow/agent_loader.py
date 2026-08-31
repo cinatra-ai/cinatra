@@ -3320,15 +3320,33 @@ def _read_bridge_token() -> Optional[str]:
 # worse: it would send a list shape the agent never declared. So the pass
 # leaves it exactly as declared and names the path out loud instead.
 #
-# WHERE THE AUTHOR DECLARED NO MEMBERS the pass stays silent about the shape:
-# `{"type": "object"}` is a declaration that says nothing about the inside, and
-# inventing members would send the provider something the agent never said. The
-# request keeps asking for a free-form object, an answer therefore need carry
-# nothing inside it, and the pass SAYS SO — each such path is named in the
-# per-node report and printed at load. That disclosure is the actionable half:
-# the fix for a free-form member is one line in the AGENT's own OAS
-# (`json_schema.items` / `json_schema.properties`), which is the other branch
-# the issue itself names, and this pass then carries it without further change.
+# WHERE THE AUTHOR DECLARED NO MEMBERS the pass invents none — but it may not
+# stay silent about the KEYWORDS either (cinatra#3133). `{"type": "object"}` is
+# a declaration that says nothing about the inside, and the strict contract has
+# no way to ask for that: `additionalProperties: false` is required on EVERY
+# object node, so there is no open map to request, and ONE node without the
+# keyword makes the provider refuse the WHOLE schema:
+#
+#     Invalid schema for response_format 'response': ...
+#     'additionalProperties' is required to be supplied and to be false.
+#
+# Three shapes could stand in for "any object" under that contract: a CLOSED
+# EMPTY object, a JSON string the caller parses, or an enumerated key set. The
+# last two are not this pass's to take — it would have to invent the keys, or
+# change the TYPE the calling node declared and every consumer of that output
+# reads (the host route spreads the answer's keys). Dropping strictness is not
+# per-node either: the schema is submitted as one strict request. So the pass
+# emits the closed empty object — `{"type": "object", "properties": {},
+# "required": [], "additionalProperties": false}` — which asks for an object and
+# promises nothing inside it. That is exactly what the declaration said, and it
+# is the shape the issue's own desired outcome names.
+#
+# An answer therefore still carries nothing there, and the pass SAYS SO — each
+# such path is named in the per-node report and printed at load. That disclosure
+# is the actionable half: the fix for a free-form member is one line in the
+# AGENT's own OAS (`json_schema.items` / `json_schema.properties`), which is the
+# other branch the issue itself names, and this pass then carries it without
+# further change.
 # ---------------------------------------------------------------------------
 
 #: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
@@ -3370,19 +3388,57 @@ def _declared_items(node: Any) -> Any:
     return items
 
 
+#: Schema keywords whose value is a LIST OF SUBSCHEMAS. An object node reached
+#: through one of them is still an object node the provider validates, so the
+#: pass has to carry the strict keywords into each branch (cinatra#3133).
+_BRANCH_KEYWORDS = ("anyOf", "oneOf", "allOf")
+
+
+def _declared_types(node: Any) -> List[str]:
+    """Every type a declaration names, in EITHER spelling.
+
+    `"object"` and the nullable list `["object", "null"]` say the same thing
+    about the level: an answer may put an object there, so the strict contract
+    asks the same two keywords of it (cinatra#3133). Reading only the string
+    spelling would let a nullable object out of the pass unclosed.
+    """
+    if not isinstance(node, dict):
+        return []
+    declared = node.get("type")
+    if isinstance(declared, str):
+        return [declared]
+    if isinstance(declared, list):
+        return [entry for entry in declared if isinstance(entry, str)]
+    return []
+
+
 def _strict_declared_subschema(
     node: Any, path: str, free_form: List[str]
 ) -> Any:
     """One declared subschema -> the JSON Schema the request carries for it.
 
     Returns a COPY (the document's own declaration is read, never adopted), with
-    exactly two keywords supplied and only where the author declared members:
-    `required` naming every declared member and `additionalProperties: False`.
-    Everything else the author wrote rides through byte-for-byte.
+    exactly two keywords supplied on every OBJECT level: `required` naming every
+    member listed under that level's own `properties`, and
+    `additionalProperties: False`. Everything else the author wrote rides
+    through byte-for-byte.
 
-    A level that declares NO members (`{"type": "object"}`, or an array with no
-    `items` at all) is left exactly as declared and its path is appended to
-    ``free_form`` — the caller reports it rather than inventing a shape.
+    An object level that declares NO members (`{"type": "object"}`) gets both
+    keywords too, over an EMPTY member map (cinatra#3133): the strict contract
+    has no open map, so a node without `additionalProperties` makes the provider
+    refuse the whole schema, and the closed empty object is the honest shape for
+    a declaration that says nothing about its inside. No member is invented. An
+    ARRAY with no `items` at all is a different case — the strict contract asks
+    nothing of it, and inventing an element shape would send a list the agent
+    never declared — so that one is left exactly as declared. Both are appended
+    to ``free_form``, so the caller reports what the request cannot promise.
+
+    An OBJECT level is recognised in either spelling — `"object"` and the
+    nullable `["object", "null"]` — and object levels reached through `anyOf` /
+    `oneOf` / `allOf` or through the tuple spelling of `items` are carried down
+    into as well, because the provider validates every one of them and a single
+    node left open refuses the whole schema. A `$ref` is NOT followed: this pass
+    resolves no references, so a referenced level is not one it emits.
 
     An authored `required` that names a SUBSET of the declared members is
     WIDENED, for the same reason the root widens: the strict surface has no
@@ -3403,12 +3459,39 @@ def _strict_declared_subschema(
         }
         shape["required"] = list(shape["properties"])
         shape["additionalProperties"] = False
-    elif node.get("type") == "object":
+    elif "object" in _declared_types(node):
+        # No members declared. The closed EMPTY object is the only shape the
+        # strict contract can carry for "an object this declaration says nothing
+        # about" — see the block comment above (cinatra#3133). The same two
+        # keywords the declared branch supplies, over an empty member map: no
+        # member is invented, and the path is still reported.
+        shape["properties"] = {}
+        shape["required"] = []
+        shape["additionalProperties"] = False
         free_form.append(path)
+    for keyword in _BRANCH_KEYWORDS:
+        branches = node.get(keyword)
+        if isinstance(branches, list):
+            # An object node inside `anyOf`/`oneOf`/`allOf` is validated by the
+            # provider exactly like one reached through `properties`, so it gets
+            # the same treatment. Descending costs nothing where the keyword is
+            # absent, and one branch left open refuses the whole schema.
+            shape[keyword] = [
+                _strict_declared_subschema(
+                    branch, f"{path}|{keyword}[{index}]", free_form
+                )
+                for index, branch in enumerate(branches)
+            ]
     items = _declared_items(node)
-    if items is not None:
+    if isinstance(items, list):
+        # The tuple spelling: one declaration per position.
+        shape["items"] = [
+            _strict_declared_subschema(item, f"{path}[{index}]", free_form)
+            for index, item in enumerate(items)
+        ]
+    elif items is not None:
         shape["items"] = _strict_declared_subschema(items, f"{path}[]", free_form)
-    elif node.get("type") == "array":
+    elif "array" in _declared_types(node):
         free_form.append(f"{path}[]")
     return shape
 
@@ -3421,8 +3504,10 @@ def _output_property_json_schema(
     `items` (and a nested `properties` map) accept BOTH the agentspec spellings
     the shipped OAS files use — a top-level key and the `json_schema` nesting —
     the same fallback the host compiler applies. The declared member shapes are
-    carried down to every level by `_strict_declared_subschema`; the paths that
-    declare no members land in ``free_form`` for the caller to report.
+    carried down to every level by `_strict_declared_subschema`; a level that
+    declares no members is emitted as the closed EMPTY object the strict
+    contract requires (cinatra#3133), and its path lands in ``free_form`` for
+    the caller to report.
     """
     if not isinstance(prop, dict):
         return None
@@ -3450,9 +3535,21 @@ def _output_property_json_schema(
         shape["required"] = list(shape["properties"])
         shape["additionalProperties"] = False
     elif type_ == "object":
+        # A whole declared output of type `object` naming no members: the same
+        # closed EMPTY object, for the same reason (cinatra#3133).
+        shape["properties"] = {}
+        shape["required"] = []
+        shape["additionalProperties"] = False
         collected.append(title)
     items = _declared_items(prop)
-    if items is not None:
+    if isinstance(items, list):
+        # The tuple spelling: one declaration per position, each carried down
+        # the same way (cinatra#3133).
+        shape["items"] = [
+            _strict_declared_subschema(item, f"{title}[{index}]", collected)
+            for index, item in enumerate(items)
+        ]
+    elif items is not None:
         shape["items"] = _strict_declared_subschema(items, f"{title}[]", collected)
     elif type_ == "array":
         collected.append(f"{title}[]")
@@ -3479,10 +3576,11 @@ def _derive_bridge_output_schemas(
 
     The root names every declared output in ``required`` and sets
     ``additionalProperties: False`` — see the block comment above for why that
-    is load-bearing at the real provider and not cosmetic. EVERY declared member
-    map below the root gets the same two keywords; a level that declares no
-    members stays free-form and is named in that node's report entry (and
-    printed), because the request can then promise nothing about its contents.
+    is load-bearing at the real provider and not cosmetic. EVERY object level
+    below the root gets the same two keywords, including one that declares no
+    members (emitted as the closed EMPTY object, cinatra#3133); such a level is
+    still named in that node's report entry (and printed), because the request
+    can then promise nothing about its contents.
     """
     report: List[Dict[str, Any]] = []
 
@@ -3531,18 +3629,19 @@ def _derive_bridge_output_schemas(
         node_id = node.get("id") or node.get("name")
         free_form = sorted(set(free_form))
         if free_form:
-            # Not a defect in this pass: the agent declared these members as
-            # free-form, so the request cannot promise what is inside them. Said
-            # out loud because it is exactly what an answer will come back
-            # EMPTY inside — and because the fix is one declaration in the
-            # agent's own OAS.
+            # Not a defect in this pass: the agent declared no members here, so
+            # the request cannot promise what is inside. Said out loud because
+            # it is exactly what an answer will come back EMPTY inside — and
+            # because the fix is one declaration in the agent's own OAS.
             print(
                 f"[agent_loader] NOTE: {label}: bridge ApiNode {node_id!r} "
                 f"declares no members for {', '.join(free_form)}; the request "
-                f"keeps them free-form. Nothing tells a provider what belongs "
-                f"inside, so an answer may carry nothing there. Declare the "
-                f"members in the agent's own OAS (`json_schema.items` / "
-                f"`json_schema.properties`) to close it."
+                f"can promise nothing about them. An object level with no "
+                f"declared members is sent CLOSED and EMPTY (the strict "
+                f"structured-output contract has no open map), so an answer "
+                f"carries nothing there. Declare the members in the agent's own "
+                f"OAS (`json_schema.items` / `json_schema.properties`) to close "
+                f"it properly."
             )
         report.append(
             {
