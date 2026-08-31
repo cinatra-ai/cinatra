@@ -27,6 +27,14 @@ import { PageHeader } from "@/components/page-header";
  * label published by an earlier authorized visit must not survive into this one
  * and put a run's name above a page that refuses to show it.
  *
+ * CLEARING THE LABEL IS ONLY HALF OF IT (the sixth graded proof set). With no
+ * label published, the trail fell through to the id-derived short placeholder
+ * underneath and printed eight characters of the run id in the very crumb the
+ * clearing had just emptied. The fallback for that crumb now names the KIND —
+ * "Agent run", the same words as this panel's own header — so the chrome above
+ * the refusal discloses no more than the panel does (src/lib/breadcrumb-trail.ts,
+ * `UNRESOLVED_AGENT_INSTANCE_LABEL`).
+ *
  * WHY IT IS ONE COMPONENT. The three surfaces refuse for the same reason and
  * must refuse the same way; two panels would drift, and the difference between
  * them would read to the person as a difference in what happened.

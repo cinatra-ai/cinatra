@@ -44,6 +44,7 @@ import { enforceRunAccess } from "../auth-policy";
 import type { ActorRoleHints, AgentAuthPolicy } from "../auth-policy";
 import { runScreenAccessAnswer } from "../instance-screens";
 import { RunNotAuthorizedPanel } from "../run-not-authorized-panel";
+import { buildBreadcrumbTrail } from "@/lib/breadcrumb-trail";
 
 const RUN = { id: "run-1", runBy: "user-owner", orgId: "org-A" };
 
@@ -159,6 +160,92 @@ describe("the panel itself leaks nothing of the run it refuses", () => {
     // AND NOTHING OF THE RUN — no identifier, no title, no exchange.
     for (const leak of ["run-1", "user-owner", "org-A"]) {
       expect(container.textContent).not.toContain(leak);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CHROME REFUSES TOO (the SIXTH graded proof set).
+//
+// Both refusal readings drew the right panel and still printed the run's
+// identity above it: the trail read "Agents > <eight characters of the run id>
+// > Schedule". The panel clears the crumb contributions precisely so an
+// authorized visit's label cannot survive into a refused one — and underneath
+// that clearing the instance crumb fell back to a slice of the raw id, which is
+// the same disclosure in a shorter form. A truncated identifier is still an
+// identifier.
+//
+// Measured here per PERSON CLASS, because the two classes reach the same trail
+// by different roads: the ORGANIZATION MEMBER through the not-authorized panel
+// (403, existence intact), the OUTSIDER through the flat not-found (404,
+// existence hidden). Neither page publishes a crumb contribution, so both are
+// the no-contribution reading of the very path the reader typed.
+// ---------------------------------------------------------------------------
+const REFUSED_RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+const RUN_PAGE_PATH = `/agents/vendor/pkg/${REFUSED_RUN_ID}`;
+const SCHEDULE_PATH = `${RUN_PAGE_PATH}/trigger`;
+
+/** Every run-id substring of three characters or more that `text` contains. */
+function runIdPartsIn(text: string): string[] {
+  const hits: string[] = [];
+  for (let start = 0; start < REFUSED_RUN_ID.length; start++) {
+    for (let end = start + 3; end <= REFUSED_RUN_ID.length; end++) {
+      const part = REFUSED_RUN_ID.slice(start, end);
+      if (text.includes(part)) hits.push(part);
+    }
+  }
+  return hits;
+}
+
+/** The trail as it is drawn for a refused reading: the path the reader typed,
+ *  with the contributions the refusal page cleared. */
+const refusedTrail = (pathname: string): string[] =>
+  buildBreadcrumbTrail(pathname, { contributions: [] }).map((c) => c.label);
+
+describe("the trail above the refusal carries no run identifier either", () => {
+  it("ORGANIZATION MEMBER: the run page's not-authorized reading draws a trail with no substring of the run id", async () => {
+    const verdict = await readAs("user-colleague", ORG_MEMBER);
+    expect(verdict).toEqual({ ok: false, statusCode: 403, reason: "forbidden" });
+    expect(
+      runScreenAccessAnswer(
+        new AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),
+      ),
+    ).toBe("not-authorized");
+    // The panel this person is given clears the crumb contributions itself.
+    const { container } = render(
+      <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />,
+    );
+    expect(container.querySelector('[data-conformance-id="run-not-authorized"]')).not.toBeNull();
+    const labels = refusedTrail(RUN_PAGE_PATH);
+    expect(runIdPartsIn(labels.join(" "))).toEqual([]);
+    expect(labels).toEqual(["Agents", "Agent run"]);
+  });
+
+  it("ORGANIZATION MEMBER: the schedule URL's not-authorized reading draws a trail with no substring of the run id", async () => {
+    const verdict = await readAs("user-colleague", ORG_MEMBER);
+    expect(verdict.ok).toBe(false);
+    const { container } = render(
+      <RunNotAuthorizedPanel surface="Schedule" conformanceId="run-not-authorized" />,
+    );
+    expect(container.textContent).not.toContain(REFUSED_RUN_ID);
+    const labels = refusedTrail(SCHEDULE_PATH);
+    expect(runIdPartsIn(labels.join(" "))).toEqual([]);
+    expect(labels).toEqual(["Agents", "Agent run", "Schedule"]);
+  });
+
+  it("OUTSIDER: the not-found reading of both surfaces draws a trail with no substring of the run id", async () => {
+    const verdict = await readAs("user-stranger", OUTSIDER);
+    expect(verdict).toEqual({ ok: false, statusCode: 404, reason: "hidden" });
+    // The existence hiding stays exactly as it was — only the chrome changes.
+    expect(
+      runScreenAccessAnswer(
+        new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." }),
+      ),
+    ).toBe("not-found");
+    for (const pathname of [RUN_PAGE_PATH, SCHEDULE_PATH]) {
+      const labels = refusedTrail(pathname);
+      expect(runIdPartsIn(labels.join(" "))).toEqual([]);
+      expect(labels[1]).toBe("Agent run");
     }
   });
 });

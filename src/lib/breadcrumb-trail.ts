@@ -203,6 +203,26 @@ const AGENT_INSTANCE_SUBROUTE_LABELS: Readonly<Record<string, string>> = {
   trigger: "Schedule",
 };
 
+// THE UNRESOLVED AGENT-INSTANCE CRUMB (cinatra#2934, the sixth graded proof
+// set).
+//
+// The instance crumb is normally the run's own published label. When no route
+// published one — the refusal panel and the not-found page both CLEAR the
+// contributions on purpose, so that an authorized visit's label cannot survive
+// into a refused one — the crumb used to fall through to the id-derived short
+// placeholder, and the trail above a refusal read "Agents > (the run id's first
+// eight characters) > Schedule". A truncated identifier is still an identifier,
+// and the panel underneath it deliberately holds nothing of the run.
+//
+// So the fallback names the KIND instead of the instance, in the panel's own
+// words ("Agent run", the label its own header already carries): the reader
+// keeps the shape they know — Agents, the run, the step — and the trail says
+// nothing the refusal itself would not say. This is the agent-instance position
+// only; the general branch's placeholder rule (precedence step 3 above) is
+// unchanged, because a crumb elsewhere that resolves to nothing is a naming
+// gap, not a disclosure.
+const UNRESOLVED_AGENT_INSTANCE_LABEL = "Agent run";
+
 export function buildBreadcrumbTrail(
   pathname: string,
   opts: {
@@ -248,15 +268,23 @@ export function buildBreadcrumbTrail(
   if (segments[0] === "agents" && segments.length >= 4) {
     const instancePath = "/" + segments.slice(0, 4).join("/");
     const contributed = replacementFor(instancePath);
+    // No published label AND an id-like segment: this is the unresolved crumb
+    // the refused readings land on. It carries no name of the run, so it also
+    // carries no LINK to it — an intermediate crumb is rendered as an anchor,
+    // and that anchor's address is the whole id, in the chrome, where the
+    // shortened id used to be. Non-navigable draws the same crumb as plain
+    // text; the leaf position (the run page reading) already drew text.
+    const unresolvedInstance = !contributed && isIdLikeSegment(segments[3]);
     const crumbs: BreadcrumbCrumb[] = [
       { label: "Agents", href: "/agents" },
       {
         label:
           contributed?.label ??
           (isIdLikeSegment(segments[3])
-            ? idSegmentPlaceholder(segments[3])
+            ? UNRESOLVED_AGENT_INSTANCE_LABEL
             : humanizePathSegment(segments[3])),
         href: instancePath,
+        ...(unresolvedInstance ? { nonNavigable: true } : {}),
       },
     ];
     if (segments.length >= 5) {
