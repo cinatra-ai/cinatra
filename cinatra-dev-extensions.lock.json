@@ -115,7 +115,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "cfc6ba434b31ecf874e3f32e4f7f0bf813ca7157"
+      "resolvedSha": "b03cc72683390b51f15566adca102d3b9263dbf3"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -370,7 +370,7 @@
     {
       "packageName": "@cinatra-ai/screenshot-artifact",
       "repo": "cinatra-ai/screenshot-artifact",
-      "resolvedSha": "1ed2ae793efd49d4b0c087ca3e787cff164c9fed"
+      "resolvedSha": "7b756b7262f6c08a78a2f4ae007dfcd9f2c00558"
     },
     {
       "packageName": "@cinatra-ai/screenshot-matcher-skill",
@@ -385,7 +385,7 @@
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
       "repo": "cinatra-ai/slide-deck-artifact",
-      "resolvedSha": "56c214a1e03e813918f4711c94c46d93bb02e0e0"
+      "resolvedSha": "31fd761e72d545a4456cef5f2fe628bcc8f5ec6a"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-matcher-skill",
