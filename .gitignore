@@ -154,6 +154,7 @@ evidence/2824-s9k/.run/
 proofs/
 proof/
 
-# Instance-local runtime state written at boot (the development admin
-# bypass credential lives here, 0600). Never tracked.
+# Instance-local runtime state written at boot, never tracked. Both 0600
+# per-boot local credentials live here: the development admin bypass token
+# and the local-caller gate credential.
 /.cinatra/
