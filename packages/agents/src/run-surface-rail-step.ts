@@ -26,7 +26,18 @@ import type { ReactNode } from "react";
  * the run's own detail (its steps and their progress, the gate the review page
  * opened on).
  */
-export type RunStepSelection = "recommendation" | "schedule" | "review" | "detail";
+export type RunStepSelection =
+  | "recommendation"
+  | "schedule"
+  | "review"
+  // THE RUN'S OWN RECORD, as a step with its own page. The ratified drawing:
+  // "The rail's LAST entry is the run's own record, and its page lists the run's
+  // work" -- and "one page per gate: the step's own card, and nothing else ...
+  // two cards are never stacked in one detail". So the record is selected like
+  // any other step and opens ALONE, instead of riding inside the run detail
+  // beneath whatever else that detail was already drawing.
+  | "runMade"
+  | "detail";
 
 /** A step that heads the rail: its row, and the surface it opens onto. */
 export type RunSurfaceRailStep = {

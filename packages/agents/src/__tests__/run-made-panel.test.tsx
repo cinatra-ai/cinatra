@@ -106,7 +106,12 @@ describe("the panel title is paired with the run-state pill", () => {
     );
     const pill = container.querySelector('[data-slot="status-pill"]');
     expect(pill).not.toBeNull();
-    expect(pill!.textContent).toContain("Completed");
+    // THE DRAWING'S OWN WORD. The ratified drawing's section on the run's last
+    // step draws this pill as "Finished" in both of its readings; the product's
+    // status word "Completed" is not the drawing's vocabulary and never reaches
+    // the reader here.
+    expect(pill!.textContent).toContain("Finished");
+    expect(pill!.textContent).not.toContain("Completed");
 
     // BESIDE the title, not somewhere else in the panel: the title and the pill
     // share one header row, which is what "paired" means in the drawing.
@@ -134,5 +139,65 @@ describe("the panel title is paired with the run-state pill", () => {
     expect(container.textContent).toContain(
       "This run wrote no artifact and used none",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PILL'S VOCABULARY IS THE DRAWING'S (the conformance-fix leg).
+//
+// The ratified drawing's section on the run's last step gives this pill exactly
+// one word, and gives it twice -- once beside the list of what the run made, and
+// once beside the empty reading: "Finished". The panel drew the product's own
+// status word "Completed" there instead.
+//
+// WHICH STATES THE PILL CAN DRAW AT ALL. This panel is the rail's LAST entry and
+// it exists only for a run that has ENDED: the screen builds it behind
+// `isTerminalRunStatus`, and the terminal set is exactly
+// {completed, failed, stopped}. So the pill's whole vocabulary is those three
+// readings, and the nine-entry table the panel used to carry described seven
+// states it can never be handed.
+// ---------------------------------------------------------------------------
+describe("the pill's vocabulary is the drawing's", () => {
+  it('reads "Finished" for a run that finished -- the drawing gives no other word for it', () => {
+    const { container } = render(
+      <RunMadePanel records={[WROTE_MARKDOWN]} runStatus="completed" />,
+    );
+    const pill = container.querySelector('[data-slot="status-pill"]');
+    expect(pill!.textContent).toBe("Finished");
+    expect(pill!.getAttribute("data-status")).toBe("approved");
+  });
+
+  it('reads "Finished" on the EMPTY reading too -- the drawing draws the same pill there', () => {
+    const { container } = render(<RunMadePanel records={[]} runStatus="completed" />);
+    const pill = container.querySelector('[data-slot="status-pill"]');
+    expect(pill!.textContent).toBe("Finished");
+    expect(container.textContent).toContain("This run wrote no artifact and used none");
+  });
+
+  it("never lends the finished word to a run that did not finish", () => {
+    // The drawing supplies NO word for a run that failed or was stopped, so the
+    // panel keeps the run's own truthful reading for those two and invents
+    // nothing. What it must never do is lend them the finished word.
+    for (const status of ["failed", "stopped"]) {
+      cleanup();
+      const { container } = render(
+        <RunMadePanel records={[WROTE_MARKDOWN]} runStatus={status} />,
+      );
+      const pill = container.querySelector('[data-slot="status-pill"]');
+      expect(pill!.textContent).not.toContain("Finished");
+      expect(pill!.textContent).not.toContain("Completed");
+    }
+  });
+
+  it("draws no invented reading for a state it cannot be handed", () => {
+    // A queued run cannot reach this panel (the screen builds it only for a
+    // terminal run). If one ever did, the pill says the raw state rather than
+    // dressing it in a word the drawing never wrote.
+    const { container } = render(
+      <RunMadePanel records={[WROTE_MARKDOWN]} runStatus="queued" />,
+    );
+    const pill = container.querySelector('[data-slot="status-pill"]');
+    expect(pill!.textContent).toBe("queued");
+    expect(pill!.getAttribute("data-status")).toBe("idle");
   });
 });

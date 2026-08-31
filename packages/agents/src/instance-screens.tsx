@@ -566,6 +566,9 @@ export function runDetailInitialStep(params: {
   recommendationHeld: boolean;
   hasScheduleStep: boolean;
   hasExecution: boolean;
+  /** Does this run carry its OWN RECORD as the rail's last step? A finished run
+   *  does; a run still working does not. */
+  hasRunMadeStep?: boolean;
 }): RunStepSelection {
   if (params.hasRecommendationStep && params.recommendationHeld) return "recommendation";
   if (
@@ -577,6 +580,13 @@ export function runDetailInitialStep(params: {
   ) {
     return "schedule";
   }
+  // A FINISHED RUN OPENS ON ITS OWN RECORD. It is LAST in the ladder because a
+  // live hold is the step the run is paused on and the drawing highlights that
+  // one; a run that has ended is paused on nothing, and the drawing's reading of
+  // the last step draws that step ACTIVE on the rail with its page open beside
+  // it. It is also the only way the record has a page of its own to be opened
+  // on, now that it is no longer stacked into the run detail.
+  if (params.hasRunMadeStep) return "runMade";
   return "detail";
 }
 
@@ -1118,6 +1128,31 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   });
   const hasRecommendationStep = recommendationEntry !== "none";
 
+  // CAN THE RECORD BE A STEP ON THIS BRANCH AT ALL? (the convergence leg.)
+  //
+  // The record's ROW is the rail's own last entry, drawn by `RunStepRailPanel`
+  // among the run's other rows, which is where the drawing puts it ("the rail's
+  // LAST entry is the run's own record"). So the record can only open as a step
+  // of its own where that rail is drawn BESIDE the frame.
+  //
+  // On the flow branch it is not: `screenHostsStepRail` hands the rail to the
+  // LIVE column inside `OrchestratorStepperPanel`, and that panel is part of the
+  // run detail. Opening a step page there swaps the run detail out and takes the
+  // whole rail with it — the record's own row included — leaving a reader on a
+  // page with no rail, no history and no way back. So on that branch the record
+  // stays inside the run detail exactly as it was, and this leg's page-per-step
+  // reading applies where the rail can actually stand beside it.
+  const runMadeRailAvailable = screenDrawsPageRail({
+    runStatus: run?.status ?? null,
+    railEntryCount: rail?.entries.length ?? 0,
+    // The steps that HEAD the rail, counted the same way the rail counts them
+    // below: the recommendation step and the schedule step, and only those.
+    gateStepCount: (hasRecommendationStep ? 1 : 0) + (scheduleRailRef !== null ? 1 : 0),
+    panel: runDetailPanel,
+    stepperStepCount: stepperSteps.length,
+  });
+  const runMadeIsAStep = run != null && runMadeSaysSomething && runMadeRailAvailable;
+
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
   // show, and plan (A) §7.2 step 5 forbids showing one with the schedule.
@@ -1131,6 +1166,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       runMessageCount: completedRunMessages.length,
       streamedTextLength: (run?.streamedText ?? "").length,
     }),
+    hasRunMadeStep: runMadeIsAStep,
   });
 
   // The scheduling step's duration banner, computed ONLY on the branch that
@@ -1277,6 +1313,49 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   stepOffset={railSteps.length}
                 />
               ) : null;
+              // THE RUN'S OWN RECORD IS A STEP, AND ITS PAGE CARRIES ONE CARD.
+              //
+              // The ratified drawing: "One page per gate — the step's own card,
+              // and nothing else. Selecting a step opens THAT STEP'S PAGE in the
+              // run detail, and the page carries the ONE CARD of the step it
+              // belongs to ... two cards are never stacked in one detail." And,
+              // for this step in particular: "The rail's LAST entry is the run's
+              // own record, and its page lists the run's work."
+              //
+              // The record used to be composed into `detailNode` beside the
+              // recommendation card, the audit cards and the stepper panel — and
+              // the stepper panel is where a review gate's own card opens. So a
+              // finished run whose last gate had been reviewed drew both cards
+              // stacked in one detail. It is a STEP now: the rail's last row
+              // selects it (`RailExtraEntry`), and the frame swaps the detail for
+              // this one card, exactly as it does for every other step.
+              //
+              // ITS ROW IS `null` HERE because the row already exists — the
+              // rail's own last entry, drawn by `RunStepRailPanel` among the
+              // run's other rows, where the drawing puts it. A row drawn here
+              // would be a second one, at the TOP of the rail, where the steps
+              // that head the rail are drawn.
+              const runMadeStep: RunSurfaceRailStep | null =
+                run && runMadeIsAStep
+                  ? {
+                      key: "runMade",
+                      row: null,
+                      // The run has ended, so the entry is history the same way a
+                      // resolved gate's entry is.
+                      settled: true,
+                      surface: (
+                        <RunMadePanel records={runMadeRecords} runStatus={run.status} />
+                      ),
+                    }
+                  : null;
+              // The steps the FRAME resolves a selection over. `railSteps` stays
+              // the steps that HEAD the rail — it is what renumbers the rail
+              // below them (`stepOffset`) and what `screenDrawsPageRail` counts —
+              // and the record, whose row is already down there, is added only
+              // here.
+              const frameSteps: RunSurfaceRailStep[] = runMadeStep
+                ? [...railSteps, runMadeStep]
+                : railSteps;
               // A COLUMN with a GAP, not a margin on the row above. The card
               // below resolves its own state on the client and renders NO DOM at
               // all when there is no hold — the overwhelmingly common case — so a
@@ -1306,11 +1385,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   parked before this page is served, and the confirm/skip taken IN
                   the row is the only transition out of it (which also fires
                   `router.refresh()`, re-rendering this tree). */}
-              {/* "What this run made" — the panel of the rail's LAST entry
-                  (cinatra#3029). Drawn only for a finished run; its own EMPTY
-                  reading covers a run that kept nothing, so it is never an empty
-                  panel. Every row is a pointer into the artifact's own page. */}
-              {runMadeSaysSomething ? (
+              {/* "What this run made" IS NORMALLY NOT DRAWN HERE. It is the
+                  rail's LAST STEP and it has a page of its own — see
+                  `runMadeStep` above. Stacking it into this fragment put it in
+                  the same detail as the review gate's card, which the drawing
+                  rules out: "two cards are never stacked in one detail".
+                  It survives here on the ONE branch where the record cannot be a
+                  step — the flow branch, whose rail lives inside this very
+                  detail (`runMadeIsAStep`), and where opening a page of its own
+                  would leave the reader with no rail at all. */}
+              {runMadeSaysSomething && !runMadeIsAStep ? (
                 <RunMadePanel records={runMadeRecords} runStatus={run.status} />
               ) : null}
               {recommendationCardNode}
@@ -1464,10 +1548,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // — "a gate step opens the gate's own surface in place … right here
               // in the run detail, under the same rail"). Without one, the
               // surface is what it always was.
-              if (railSteps.length > 0) {
+              if (frameSteps.length > 0) {
                 return (
                   <RunSurfaceRail
-                    steps={railSteps}
+                    steps={frameSteps}
                     rail={railNode}
                     detail={detailNode}
                     initialSelection={initialStep}

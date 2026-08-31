@@ -7,6 +7,7 @@ import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reu
 import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
+import { useRunStepSelection } from "./run-surface-rail";
 
 // ---------------------------------------------------------------------------
 // The NON-STEP rail rows — gates ("Review"), verifications ("Audit")
@@ -48,6 +49,19 @@ export function RailExtraEntry({
   const isVerification = entry.kind === "verification";
   // cinatra#2047 D-5: a lifecycle POLICY decision that opened no gate.
   const isLifecycle = entry.kind === "lifecycleDecision";
+  // THE RUN'S OWN RECORD IS A STEP THAT OPENS (the conformance-fix leg). The
+  // ratified drawing: "Selecting a step opens it on the right ... the page
+  // carries the ONE CARD of the step it belongs to." This row is the rail's last
+  // entry, and pressing it opens the record's page in the run detail. Outside
+  // the run-surface frame there is no selection to make and the row stays the
+  // inert row it always was — `useRunStepSelection` answers `null` there.
+  const isRunMade = entry.kind === "runMade";
+  const selection = useRunStepSelection();
+  // "Selecting a step opens it on the right." A row is a CONTROL only where the
+  // frame actually carries the step it would open — never merely because a
+  // frame is present (the convergence leg).
+  const runMadeOpens = isRunMade && Boolean(selection?.canSelect("runMade"));
+  const runMadeSelected = isRunMade && selection?.selected === "runMade";
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
@@ -114,6 +128,8 @@ export function RailExtraEntry({
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
       data-rail-verification={isVerification ? "true" : undefined}
       data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
+      data-rail-run-made={isRunMade ? "true" : undefined}
+      data-run-surface-rail-selected={isRunMade ? (runMadeSelected ? "true" : "false") : undefined}
       data-rail-lifecycle-decision={isLifecycle ? lifecycleOutcome : undefined}
       data-rail-lifecycle-decided-by={
         isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined
@@ -164,7 +180,34 @@ export function RailExtraEntry({
             // alignment the wrapper above states.
             isLifecycle && "items-start"
           )}
-          tabIndex={-1}
+          // The record's row is the one row here a reader PRESSES, so it is the
+          // one row that keeps its place in the tab order — an EXPLICIT 0, not
+          // `undefined`. `StepperTrigger` reads `undefined` as "not selected by
+          // the stepper" and emits `-1`, and a finished rail has no internally
+          // selected row at all, so `undefined` took every row out of the tab
+          // order and no keyboard could reach this one (the convergence leg).
+          tabIndex={runMadeOpens ? 0 : -1}
+          aria-current={runMadeSelected ? "step" : undefined}
+          // `StepperTrigger` renders `role="tab"` and would otherwise announce
+          // `aria-selected="false"` on the very row `aria-current` calls open.
+          aria-selected={runMadeOpens ? runMadeSelected : undefined}
+          data-action={runMadeOpens ? "open-run-made-step -> step-detail" : undefined}
+          onClick={runMadeOpens ? () => selection?.select("runMade") : undefined}
+          // ENTER AND SPACE, on KEY-UP. `StepperTrigger`'s own key handler calls
+          // `preventDefault()` on Enter and Space, which suppresses the native
+          // click a button would otherwise synthesise — so `onClick` alone left
+          // this row mouse-only. `onKeyUp` is a prop the trigger does not set,
+          // so it reaches the button without displacing the arrow-key roving
+          // focus the trigger's `onKeyDown` provides.
+          onKeyUp={
+            runMadeOpens
+              ? (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  selection?.select("runMade");
+                }
+              : undefined
+          }
         >
           {indicatorNode}
           {titleNode}

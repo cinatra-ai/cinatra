@@ -14,6 +14,7 @@ import {
 
 import type { RunStepRailEntry } from "./run-step-rail";
 import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import { useRunStepSelection } from "./run-surface-rail";
 
 // The panel's own entry type, re-exported so a caller mounting this component
 // through the `./run-step-rail-panel` subpath can TYPE the entries it passes
@@ -69,6 +70,12 @@ export function RunStepRailPanel({
    */
   stepOffset?: number;
 }) {
+  // "Selecting a step opens it on the right. A WORK STEP shows what it did"
+  // (the ratified drawing). The run detail IS that reading, so a work step's row
+  // returns the detail to it — which is also how a reader leaves the record's
+  // own page now that the record opens alone. `null` outside the run-surface
+  // frame, where there is no selection to change and the rows stay inert.
+  const selection = useRunStepSelection();
   if (entries.length === 0) return null;
   // The stepper's numeric "value" is the active display index. Map the active
   // ordinal to its 1-based position in the sorted rail; fall back to past-the-end
@@ -155,7 +162,27 @@ export function RunStepRailPanel({
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                 >
-                  <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
+                  <StepperTrigger
+                    className="gap-2 px-0 py-0.5"
+                    // EXPLICIT 0, for the reason the record's row states: a
+                    // finished rail has no stepper-selected row, so `undefined`
+                    // left every row at `-1` and a keyboard reader who landed on
+                    // the record's page had no way back to the run's reading.
+                    tabIndex={selection ? 0 : -1}
+                    data-action={selection ? "open-run-step -> step-detail" : undefined}
+                    onClick={selection ? () => selection.select("detail") : undefined}
+                    // Enter and Space, on key-UP — `StepperTrigger` swallows the
+                    // native activation on key-down. See the record's row.
+                    onKeyUp={
+                      selection
+                        ? (event) => {
+                            if (event.key !== "Enter" && event.key !== " ") return;
+                            event.preventDefault();
+                            selection.select("detail");
+                          }
+                        : undefined
+                    }
+                  >
                     {indicatorNode}
                     {titleNode}
                   </StepperTrigger>

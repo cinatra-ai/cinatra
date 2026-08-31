@@ -31,19 +31,33 @@ import type { AgentRunStatus } from "./run-status";
 //     truncates) — a clipped reason answers nothing").
 // ---------------------------------------------------------------------------
 
-/** The run's own state, as the pill draws it. One entry per `AgentRunStatus`,
- *  so a new run state cannot reach this panel without a reading of its own. */
-const RUN_STATE_PILL: Record<AgentRunStatus, { pill: StatusPillStatus; label: string }> = {
-  queued: { pill: "queued", label: "Queued" },
-  running: { pill: "running", label: "Running" },
-  completed: { pill: "approved", label: "Completed" },
+/**
+ * THE PILL'S VOCABULARY IS THE DRAWING'S, AND THE DRAWING GIVES ONE WORD.
+ *
+ * The ratified drawing's section on the run's last step draws this pill twice --
+ * once beside the list of what the run made, once beside the empty reading --
+ * and both times it reads "Finished". The panel drew the product's own status
+ * word "Completed" there instead, which is not a word the drawing writes.
+ *
+ * ONLY THREE STATES CAN EVER REACH THIS PANEL. It is the rail's LAST entry and
+ * the screen builds it only for a run that has ENDED (`isTerminalRunStatus`), so
+ * the terminal three are the whole table. The seven further readings this table
+ * used to carry described states the panel is never handed, and no sentence of
+ * the drawing supplies a word for any of them -- so they are gone rather than
+ * invented.
+ *
+ * THE DRAWING SUPPLIES NO WORD FOR A RUN THAT FAILED OR WAS STOPPED. Those two
+ * keep the run's own truthful reading rather than borrowing the finished one --
+ * a failed run must not read as a finished run -- and the missing sentence is
+ * carried as an open question on the record rather than answered here by
+ * invention.
+ */
+const RUN_STATE_PILL: Partial<
+  Record<AgentRunStatus, { pill: StatusPillStatus; label: string }>
+> = {
+  completed: { pill: "approved", label: "Finished" },
   failed: { pill: "failed", label: "Failed" },
   stopped: { pill: "archived", label: "Stopped" },
-  pending_approval: { pill: "needs-review", label: "Needs review" },
-  pending_input: { pill: "hold", label: "Awaiting input" },
-  pending_trigger: { pill: "hold", label: "Awaiting trigger" },
-  armed: { pill: "scheduled", label: "Armed" },
-  waiting_trigger: { pill: "scheduled", label: "Waiting on trigger" },
 };
 
 export function RunMadePanel({

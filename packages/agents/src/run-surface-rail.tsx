@@ -85,6 +85,16 @@ export type { RunStepSelection, RunSurfaceRailStep };
 const RunStepSelectionContext = createContext<{
   selected: RunStepSelection;
   select: (next: RunStepSelection) => void;
+  /**
+   * Does THIS frame carry a step under that key, with something to open?
+   *
+   * A row drawn beside the frame cannot see the step list, so it used to infer
+   * "I open something" from the mere presence of this context — and a frame
+   * that carries no such step would then draw a pressable, focusable row that
+   * does nothing when pressed (`select` refuses it). The frame is the one
+   * authority on selectability (`isRunSurfaceStepSelectable`), so it answers.
+   */
+  canSelect: (key: RunStepSelection) => boolean;
 } | null>(null);
 
 /**
@@ -298,8 +308,11 @@ export function RunSurfaceRail({
     setSelected(next);
   };
 
+  const canSelect = (key: RunStepSelection) =>
+    resolveRunSurfaceSelection(steps, detail, key) === key;
+
   return (
-    <RunStepSelectionContext.Provider value={{ selected, select }}>
+    <RunStepSelectionContext.Provider value={{ selected, select, canSelect }}>
       {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows. */}
       <div
         data-conformance-id="run-step-rail-column"
