@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRunStepRail } from "../run-step-rail";
+import { buildRunStepRail, TERMINAL_RAIL_STATUSES, type RailStatus } from "../run-step-rail";
 
 // ---------------------------------------------------------------------------
 // The rail's LAST entry — the run's own record (cinatra#3029, epic #3023 W5).
@@ -97,10 +97,9 @@ describe("the run's own record on the rail", () => {
   // entry is not terminal, nothing after it may read as terminal.
   // -------------------------------------------------------------------------
 
-  const TERMINAL_RAIL_STATUSES = new Set(["completed", "resolved", "skipped"]);
 
   /** No terminal entry may sit after a non-terminal one. */
-  function readsOneWay(entries: readonly { status: string; label: string }[]) {
+  function readsOneWay(entries: readonly { status: RailStatus; label: string }[]) {
     const firstOpen = entries.findIndex((e) => !TERMINAL_RAIL_STATUSES.has(e.status));
     if (firstOpen === -1) return true;
     return entries.slice(firstOpen + 1).every((e) => !TERMINAL_RAIL_STATUSES.has(e.status));

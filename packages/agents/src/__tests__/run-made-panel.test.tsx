@@ -62,7 +62,7 @@ describe("the row's muted line", () => {
     const { container } = render(
       <RunMadePanel records={[WROTE_MARKDOWN]} runStatus="completed" />,
     );
-    const detail = container.querySelector(".font-mono");
+    const detail = container.querySelector("[data-run-made-detail]");
     expect(detail).not.toBeNull();
 
     // The whole line is there to be read, MIME included.
@@ -91,7 +91,7 @@ describe("the row's muted line", () => {
         runStatus="completed"
       />,
     );
-    const detail = container.querySelector(".font-mono");
+    const detail = container.querySelector("[data-run-made-detail]");
     expect(detail!.textContent).toBe(
       "@cinatra-ai/an-extension-with-a-very-long-package-name:post · revision 3b0f991f… · text/markdown · body · after §2",
     );
