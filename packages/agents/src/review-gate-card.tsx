@@ -150,6 +150,7 @@ import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
   type LifecycleCardHost,
   type LifecycleCardState,
+  type LifecycleReviewNote,
   type LifecycleSuggestion,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
@@ -898,6 +899,9 @@ function renderState(args: {
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
+          {/* cinatra#3080 — the notes the review collected, kept with the
+              decision they were left before. */}
+          <RecordedNotes notes={state.notes} />
           {/* The decision line — who decided, and how. Where the floor was. */}
           <ReviewGateSettled
             outcome={state.outcome}
@@ -949,6 +953,11 @@ function renderState(args: {
             marksCleared={marksCleared}
             onToggleMark={state.canDecide ? onToggleMark : undefined}
           />
+          {/* cinatra#3080 — what has already been said about this review, drawn
+              between the target it is about and the floor that settles it. A
+              Comment records a note and leaves the gate open; this is where the
+              reader reads it back. */}
+          <RecordedNotes notes={state.notes} />
           {/* #2566 — the composer binding, drawn immediately above the floor it
               mirrors: typing in the chat box is the same act as typing in the
               rationale field and pressing Comment. */}
@@ -1280,6 +1289,66 @@ function SuggestionPanel({
  * no press target at all. A disabled button would read as "you could do this,
  * later"; neither of these is that.
  */
+/**
+ * THE REVIEW'S RECORDED NOTES (cinatra#3080) — read back where they were left.
+ *
+ * `Comment` is the floor's non-terminal act: "it records the reviewer's note
+ * against the review and leaves the gate pending — nothing resumes, and the run
+ * stays paused". The words were reaching the store and no surface at all; after
+ * a press the typed sentence appeared zero times in the page text of the run
+ * page, the review page and the conversation, and nothing told the reader it had
+ * been taken. A note a reader cannot read back is a note the product only claims
+ * to have recorded.
+ *
+ * THE SHAPE IS THE DRAWING'S OWN, REUSED. The ratified cards drawing fixes one
+ * reading for the comments hanging off a gate: "a label over one panel per
+ * comment, each carrying its author kind in mono above the comment itself". The
+ * verification card already draws that reading off the SAME advisory seam, so
+ * the review's own notes are drawn in it rather than in a second invention.
+ *
+ * IT IS NOT A CONVERSATION, AND NOT A CONTROL. The panel is read-only: it has no
+ * field, no send, and no affordance of any kind. Asking for changes is the
+ * prompt window's road and deciding is the floor's; this is the record of what
+ * has already been said, sitting between the target it is about and the floor
+ * that will settle it.
+ *
+ * DRAWN ON EVERY READING THAT HAS ONE. Pending, restricted and settled all draw
+ * it — the exchange stays with the decision, so a settled card still shows what
+ * was said before it was settled. Nothing to draw draws nothing: an absent field
+ * (the store could not be read) and an empty list (there are no notes) both take
+ * the panel away rather than assert something about the review.
+ */
+function RecordedNotes({ notes }: { notes?: LifecycleReviewNote[] }): ReactElement | null {
+  if (!notes || notes.length === 0) return null;
+  return (
+    <div
+      data-conformance-id="review-recorded-notes"
+      className="flex min-w-0 flex-col gap-1.5"
+    >
+      <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+        Notes on this review
+      </span>
+      <ul className="flex flex-col gap-1.5">
+        {notes.map((note, index) => (
+          <li
+            // Positional, for the reason the verification panel's rows are: the
+            // state deliberately carries no note ids.
+            key={index}
+            className="rounded-panel border border-line bg-surface-muted px-3 py-2 text-xs"
+            data-review-note={index}
+            data-review-note-author-kind={note.authorKind}
+          >
+            <span className="font-mono text-badge-2xs uppercase tracking-wide text-muted-foreground">
+              {note.authorKind}
+            </span>
+            <p className="mt-1 whitespace-pre-wrap break-words text-foreground">{note.body}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function SuggestionChips({
   suggestions,
   dismissed,

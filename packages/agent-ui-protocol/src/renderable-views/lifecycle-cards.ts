@@ -540,6 +540,52 @@ const suggestionsField = z
   .max(MAX_LIFECYCLE_SUGGESTIONS)
   .optional();
 
+// ---------------------------------------------------------------------------
+// THE REVIEW'S RECORDED NOTES (cinatra#3080)
+// ---------------------------------------------------------------------------
+
+/** Ceiling on the notes one review card may draw. */
+export const LIFECYCLE_MAX_REVIEW_NOTES = 20;
+/** Ceiling on one note's author-kind label. */
+export const LIFECYCLE_REVIEW_NOTE_AUTHOR_KIND_MAX_LENGTH = 64;
+/** Ceiling on one note's body. */
+export const LIFECYCLE_REVIEW_NOTE_MAX_LENGTH = 4000;
+
+/**
+ * One note recorded against a review.
+ *
+ * `Comment` is the floor's non-terminal act — "it records the reviewer's note
+ * against the review and leaves the gate pending" — and until this the words it
+ * recorded reached the store and no surface at all. §VII fixes ONE shape for the
+ * comments hanging off a gate ("a label over one panel per comment, each
+ * carrying its author kind in mono above the comment itself"); the verification
+ * card already draws that shape off the same seam, and the review card now draws
+ * its own recorded notes in it rather than inventing a second reading.
+ *
+ * NO ID TRAVELS, on the same rule the verification body keeps: an addressable id
+ * inside a card payload is an invitation to read one out of it.
+ */
+export const lifecycleReviewNoteSchema = z
+  .object({
+    authorKind: z.string().min(1).max(LIFECYCLE_REVIEW_NOTE_AUTHOR_KIND_MAX_LENGTH),
+    body: z.string().min(1).max(LIFECYCLE_REVIEW_NOTE_MAX_LENGTH),
+  })
+  .strict();
+
+export type LifecycleReviewNote = z.infer<typeof lifecycleReviewNoteSchema>;
+
+/**
+ * OPTIONAL on exactly the three states that can carry a reading, for the same
+ * reason `suggestions` is: a review with no notes, a comment store that could
+ * not be read, and a resolver that was not asked all answer the same way — no
+ * panel. The `loading` / `advisory` / `absent` states have nowhere to draw one.
+ *
+ * ABSENCE IS NOT AN EMPTY LIST. An empty list is a STATEMENT ("this review
+ * carries no notes"), and making it after a store failure asserts an absence
+ * nobody established — so the resolver omits the field instead.
+ */
+const reviewNotesField = z.array(lifecycleReviewNoteSchema).max(LIFECYCLE_MAX_REVIEW_NOTES).optional();
+
 /**
  * The readable form of an RFC 6901 JSON Pointer, for §VIII's label slot.
  *
@@ -701,6 +747,10 @@ function panelValue(raw: string | undefined): string | undefined {
  * them all answer the same way — no chips. The `loading` / `advisory` /
  * `absent` states cannot carry them at all, because a card that draws nothing
  * (or draws no floor) has nowhere to put a mark.
+ *
+ * `notes` (cinatra#3080) rides the same three states on the same rule — the
+ * words a `Comment` recorded against the review, read back to the reader on
+ * whichever surface they are standing on.
  */
 export type LifecycleCardState =
   | { state: "loading" }
@@ -709,6 +759,7 @@ export type LifecycleCardState =
       canDecide: true;
       canComment: boolean;
       suggestions?: LifecycleSuggestion[];
+      notes?: LifecycleReviewNote[];
     }
   | {
       state: "restricted";
@@ -716,10 +767,12 @@ export type LifecycleCardState =
       canComment: boolean;
       reason: string;
       suggestions?: LifecycleSuggestion[];
+      notes?: LifecycleReviewNote[];
     }
   | {
       state: "settled";
       suggestions?: LifecycleSuggestion[];
+      notes?: LifecycleReviewNote[];
       /**
        * The recorded outcome, when this build could read one. ABSENT IS LEGAL
        * and is not a signal: a gate resolved before the outcome travelled, a
@@ -746,6 +799,7 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       canDecide: z.literal(true),
       canComment: z.boolean(),
       suggestions: suggestionsField,
+      notes: reviewNotesField,
     })
     .strict(),
   z
@@ -755,12 +809,14 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       canComment: z.boolean(),
       reason: z.string().min(1).max(200),
       suggestions: suggestionsField,
+      notes: reviewNotesField,
     })
     .strict(),
   z
     .object({
       state: z.literal("settled"),
       suggestions: suggestionsField,
+      notes: reviewNotesField,
       outcome: z.enum(LIFECYCLE_SETTLED_OUTCOMES).optional(),
       decidedByName: z
         .string()

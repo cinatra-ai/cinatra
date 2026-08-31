@@ -345,7 +345,35 @@ export async function dispatchPendingProducerRepairs(opts?: {
               id: runId,
               templateId: producer.templateId,
               orgId: row.orgId,
-              inputParams: { lifecycleRepairRequest: request, ...cmsInputParams },
+              // THE SAME PRODUCING STEP, THE SAME INPUTS (cinatra#3080).
+              //
+              // A queued run pauses on a setup screen for every REQUIRED input
+              // its template declares that the run's own `input_params` does not
+              // already hold (the setup interrupt loop in `execution.ts`). The
+              // delivery used to carry the typed request and NOTHING ELSE, so
+              // every one of the producing template's required inputs read as
+              // pending and the repair run stopped on a screen — parked at
+              // `pending_approval`, never producing anything, with no successor
+              // for the settled review to point at. The first capture
+              // photographed exactly that.
+              //
+              // The drawing has no human step there: "Regenerate runs the same
+              // producing step again from the note field". So the producing
+              // run's OWN inputs travel to the repair run — the same step, the
+              // same inputs it produced from — and the reviewer's words ride
+              // beside them on the typed request, which is the repair's
+              // instruction.
+              //
+              // ORDER IS LOAD-BEARING. The request is spread AFTER the inherited
+              // params, so a producing run that was itself a repair run cannot
+              // hand its OLD request down: a second attempt would otherwise
+              // deliver the first attempt's findings and the producer would
+              // answer the wrong note. The CMS additions stay last, as they were.
+              inputParams: {
+                ...producer.originatingInputParams,
+                lifecycleRepairRequest: request,
+                ...cmsInputParams,
+              },
               sourceType: "lifecycle_repair",
               // Attribution: the repair run is the ORIGINATING human's, never
               // the system dispatcher's — mirrors the ActorContext threaded to
@@ -424,6 +452,13 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
    * a system-authority principal.
    */
   originatingRunBy: string | null;
+  /**
+   * THE PRODUCING RUN'S OWN INPUTS (cinatra#3080) — read off the SAME already-
+   * open run row, like `runBy` above. `{}` when the row holds nothing readable;
+   * a run whose params cannot be parsed is treated as holding none rather than
+   * failing the delivery, because the repair still has somewhere to go.
+   */
+  originatingInputParams: Record<string, unknown>;
 } | null> {
   if (!producerRunId) return null;
   const [run] = await db
@@ -431,6 +466,7 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
       templateId: agentRuns.templateId,
       oboCeiling: agentRuns.oboCeiling,
       runBy: agentRuns.runBy,
+      inputParams: agentRuns.inputParams,
     })
     .from(agentRuns)
     .where(eq(agentRuns.id, producerRunId))
@@ -450,11 +486,23 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
       parentOboCeiling = null;
     }
   }
+  let originatingInputParams: Record<string, unknown> = {};
+  if (run.inputParams) {
+    try {
+      const parsed: unknown = JSON.parse(run.inputParams);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        originatingInputParams = parsed as Record<string, unknown>;
+      }
+    } catch {
+      originatingInputParams = {};
+    }
+  }
   return {
     templateId: tmpl.id,
     packageName: tmpl.packageName ?? null,
     parentOboCeiling,
     originatingRunBy: run.runBy ?? null,
+    originatingInputParams,
   };
 }
 

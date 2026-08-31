@@ -134,6 +134,16 @@ const HOST_STANDARD_IDS = new Set([
   // the identical reason the anchors above are: this suite's closed set is the
   // older ratified revision's, and the redrawn floor is not in it.
   "review-regenerate-prompt-field",
+  // cinatra#3080 — THE REVIEW'S RECORDED NOTES. `Comment` records the reviewer's
+  // words against the review and leaves the gate pending; the words reached the
+  // store and no surface at all until this anchor. Its drawn shape is not
+  // invented: the cards drawing fixes ONE reading for the comments hanging off a
+  // gate (a label over one panel per comment, each carrying its author kind in
+  // mono above the comment itself), which the verification card already draws
+  // off the same seam. Listed here for the identical reason the anchors above
+  // are: this suite's closed set is the OLDER ratified revision's, and this
+  // reading is not in it.
+  "review-recorded-notes",
   // cinatra#2997 — the RUN CARD'S placeholder for the review screen. It is not a
   // review-page anchor at all: this route never draws it, and the module it
   // lives in is scanned here only because that module owns the review screen's
@@ -288,20 +298,41 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
 
   // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
   // all above the reviewed work for the built-in markdown / plain-text
-  // rendering. §V's three drawn provenance regions belong to the two renderer
-  // tiers a PACKAGE supplies and to the floor; the host's own text rendering
-  // takes none of them and is given no fourth one. The strip is therefore
-  // OPTIONAL in the panel — rendered only when there is a provenance to state.
-  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
+  // rendering. The host's own text rendering names no package and did render
+  // the work, so it takes no region and is given no fourth one.
+  it("the form rung renders NO provenance region", () => {
     expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
-    const panel = stripComments(TARGET_PANEL);
-    // The strip exists only behind a null check on the resolved region id.
-    expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
-  it("a runtime provenance additionally shows its package identity (§III)", () => {
-    expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
-    expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
+  // cinatra#3080 — THE ROW THE NEWER DRAWING FORBIDS. This suite's closed set
+  // is the OLDER ratified revision's, which annotated a region for each renderer
+  // tier; the drawing pinned above (SPEC_COMMIT) settles what such a region may
+  // DRAW, and the answer is nothing: the renderer resolution "is NOT put on
+  // screen: a display shows the work and nothing about itself — no renderer
+  // name, no package identity, no provenance line", and its build-time and
+  // runtime examples are drawn identically for exactly that reason. The panel
+  // therefore draws ONE region beneath the header — the floor's — and the two
+  // renderer-tier anchors stay a classification the model makes and nothing
+  // renders. The live render is pinned in `review-target-provenance.test.tsx`;
+  // these are the source-level backstops.
+  it("draws NO renderer-resolution line and NO package identity beneath the header", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/build-time · /);
+    expect(panel).not.toMatch(/runtime · /);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+  });
+
+  it("gates the ONE region it draws on the floor anchor alone", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/provenanceConformanceId === "review-target-floor"/);
+    expect(panel).not.toMatch(/data-conformance-id="review-provenance/);
+  });
+
+  it("no review surface draws a resolution line on any host", () => {
+    for (const src of CODE_SOURCES) {
+      expect(src).not.toMatch(/build-time · /);
+      expect(src).not.toMatch(/runtime · /);
+    }
   });
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
