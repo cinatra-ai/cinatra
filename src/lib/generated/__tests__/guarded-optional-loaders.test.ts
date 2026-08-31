@@ -177,6 +177,8 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/markdown-artifact::preview", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::preview", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/podcast-artifacts::detail", resolution: "guardedOptional" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/podcast-artifacts::preview", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/text-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/video-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/zip-artifact::detail", resolution: "required" },
