@@ -1,29 +1,54 @@
 /**
- * cinatra#2582 — the key the app has actually reaches the indexer's container.
+ * cinatra#2582 — the key the app has actually reaches the indexer's container,
+ * and NEVER a disk.
  *
- * THE DEFECT. The compose service used to receive
+ * THE FIRST DEFECT. The compose service used to receive
  * `LLM__PROVIDERS__OPENAI__API_KEY: ${OPENAI_API_KEY:-}`, which interpolates
  * from the SHELL env. The app's OpenAI key lives in the app database, so that
  * resolved to the empty string on every normal install: the indexer logged "No
  * LLM client configured", and because extraction runs BEFORE the graph write,
  * every episode was accepted and dropped. Nothing said so.
  *
- * These tests drive the REAL writer against a temp directory with an obviously
- * FAKE key. The point of the exercise is the materialization itself — that the
- * resolved key lands in the file the container reads, under all three names it
- * needs — so nothing about the file write is mocked.
+ * THE SECOND DEFECT, which the first fix created. The generator resolved the
+ * key and WROTE IT IN CLEAR to `docker/graphiti/.graphiti.env` for `env_file:`
+ * to read. A decrypted credential then lived in the checkout with a lifetime
+ * nobody managed: it survived `docker compose down`, `make clean`, a branch
+ * switch and a lane teardown, and being gitignored it was invisible to every
+ * gate. These tests are what stop that road being taken again.
  *
- * Also pinned: a keyless run WARNS instead of silently materializing "", and a
- * run that cannot resolve a key does not clobber one an earlier run wrote (the
- * cold-bring-up case, where Postgres is started by the same command).
+ * So the assertion that matters has MOVED, not weakened. It used to be "the
+ * resolved key lands in the file the container reads". It is now BOTH halves of
+ * a stronger claim: the key lands in the ENVIRONMENT of the compose command
+ * that creates the container, AND no file anywhere carries it. Nothing about
+ * the writer or the exec decision is mocked — the real code runs, against a
+ * temp directory and an injected runner that records what it was handed.
+ *
+ * Also pinned: a keyless run WARNS instead of silently handing over "", a run
+ * that cannot ASK does not recreate a container that may be running on a good
+ * key (the cold-bring-up case, moved from the file to the container), the
+ * generator refuses to write anything key-shaped or anything at all under
+ * `docker/`, and it deletes a pre-existing plaintext file and says that it did.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  symlinkSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
+  GRAPHITI_ALL_KEY_NAMES,
   GRAPHITI_ANTHROPIC_KEY_NAME,
+  GRAPHITI_GENERATED_NAMES,
   GRAPHITI_KEY_NAMES,
   GRAPHITI_NO_LLM_SENTINEL,
   HOSTED_EMBEDDER_API_URL,
@@ -33,12 +58,24 @@ import {
   LOCAL_EMBEDDER_DIMENSIONS,
   LOCAL_EMBEDDER_MODEL,
   LOCAL_EMBEDDER_PLACEHOLDER_KEY,
+  assertNoKeyShapedValue,
+  assertNoMaterializedKey,
+  assertRunnableCommand,
+  assertWritablePath,
+  composeSubcommand,
   buildGraphitiEnv,
+  carriesMaterializedKey,
+  composeChildEnv,
+  parseArgs,
   parseDotenv,
   serializeDotenv,
-  shouldPreserveExisting,
+  sweepLegacyEnvFiles,
   generateGraphitiEnv,
 } from "../gen-graphiti-env.mjs";
+import { containsKeyShapedValue } from "../lib/key-shaped-values.mjs";
+
+/** The checkout root, for the tests that read the real tree. */
+const CHECKOUT_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 
 // Obviously fake, and shaped like nothing real.
 const FAKE_KEY = "sk-fake-not-a-real-key-2582";
@@ -47,20 +84,57 @@ const FAKE_KEY = "sk-fake-not-a-real-key-2582";
 const FAKE_ANTHROPIC_KEY = "sk-ant-fake-not-a-real-key-2591";
 
 let dir;
-let outPath;
+/** The sweep target: a stand-in for docker/graphiti/, inside the temp tree. */
+let sweepDir;
+/** A path OUTSIDE any docker/ directory, for the opt-in template writer. */
+let templatePath;
 const logs = [];
 const warns = [];
+
+/** Records every exec the generator asks for, WITHOUT running one. What it was
+ *  handed is the whole assertion, so this captures the argv and the env. */
+let runs;
+const recordRun = (command, args, env) => {
+  runs.push({ command, args, env });
+  return 0;
+};
 
 const sink = {
   log: (msg) => logs.push(String(msg)),
   warn: (msg) => warns.push(String(msg)),
 };
 
+/** The generator, driven with the temp fixture wired in. */
+const generate = (options) =>
+  generateGraphitiEnv({ sweepDir, run: recordRun, baseEnv: {}, ...sink, ...options });
+
+/** Every value the last recorded exec put in the child environment. */
+const lastEnv = () => runs.at(-1)?.env ?? {};
+
+/** Every file under the temp tree, as `path -> contents`. The "no file carries
+ *  the key" assertion is over the WHOLE tree, not a path we remembered to look
+ *  at: a writer that moved its output would otherwise pass. */
+function treeContents(root = dir) {
+  const out = {};
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) out[path.relative(root, full)] = readFileSync(full, "utf8");
+    }
+  };
+  walk(root);
+  return out;
+}
+
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "graphiti-env-"));
-  outPath = path.join(dir, "graphiti", ".graphiti.env");
+  sweepDir = path.join(dir, "graphiti");
+  templatePath = path.join(dir, "inspect", ".graphiti.env");
+  mkdirSync(sweepDir, { recursive: true });
   logs.length = 0;
   warns.length = 0;
+  runs = [];
 });
 
 afterEach(() => {
@@ -181,7 +255,7 @@ describe("buildGraphitiEnv (pure)", () => {
       `OPENAI_API_KEY=${LOCAL_EMBEDDER_PLACEHOLDER_KEY}`,
       `EMBEDDER__PROVIDERS__OPENAI__API_KEY=${LOCAL_EMBEDDER_PLACEHOLDER_KEY}`,
     ].join("\n");
-    expect(shouldPreserveExisting(anthropicFile)).toBe(true);
+    expect(carriesMaterializedKey(anthropicFile)).toBe(true);
   });
 
   it("writes NO credential for a blank key — and still boots the indexer", () => {
@@ -214,8 +288,8 @@ describe("buildGraphitiEnv (pure)", () => {
     // preserve-vs-rewrite. If either non-credential answered yes, a keyless file
     // would be preserved forever and a key the operator later configured would
     // never reach the container.
-    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(null).env))).toBe(false);
-    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(FAKE_KEY).env))).toBe(true);
+    expect(carriesMaterializedKey(serializeDotenv(buildGraphitiEnv(null).env))).toBe(false);
+    expect(carriesMaterializedKey(serializeDotenv(buildGraphitiEnv(FAKE_KEY).env))).toBe(true);
   });
 
   it("trims surrounding whitespace so a stray newline cannot break auth", () => {
@@ -256,50 +330,131 @@ describe("buildGraphitiEnv (pure)", () => {
   });
 });
 
+describe("the generated names are the whole set", () => {
+  // GRAPHITI_GENERATED_NAMES is what docker-compose.yml declares and what the
+  // child environment SCRUBS before setting its own. A variable added to an arm
+  // and not to this list would be declared nowhere and scrubbed from nothing —
+  // it would silently keep whatever the invoking shell happened to export.
+  it("is exactly the union of every arm's variables", () => {
+    const union = new Set([
+      ...Object.keys(buildGraphitiEnv("").env),
+      ...Object.keys(buildGraphitiEnv(FAKE_KEY).env),
+      ...Object.keys(buildGraphitiEnv(FAKE_ANTHROPIC_KEY, "anthropic").env),
+    ]);
+    expect([...GRAPHITI_GENERATED_NAMES].sort()).toEqual([...union].sort());
+  });
+
+  it("covers every variable that can carry a credential", () => {
+    for (const name of GRAPHITI_ALL_KEY_NAMES) {
+      expect(GRAPHITI_GENERATED_NAMES, name).toContain(name);
+    }
+  });
+});
+
+describe("the child environment handed to compose", () => {
+  it("carries the resolved key under all three names the image reads", () => {
+    const { env } = buildGraphitiEnv(FAKE_KEY);
+    const child = composeChildEnv(env, { PATH: "/usr/bin" });
+    for (const name of GRAPHITI_KEY_NAMES) expect(child[name]).toBe(FAKE_KEY);
+    // The rest of the invoking environment travels through untouched: this is
+    // the environment `docker compose` itself runs in, and it needs PATH,
+    // COMPOSE_PROJECT_NAME and the port plan the shared scoping step exported.
+    expect(child.PATH).toBe("/usr/bin");
+  });
+
+  it("SCRUBS an inherited value the arm does not set", () => {
+    // `npm run services` does `set -a && source .env.local`, so a stray
+    // OPENAI_API_KEY in that file is in this process's environment. The keyless
+    // arm emits none — and must not let the inherited one through, because the
+    // app's own resolver already declined to use it (a binding to another
+    // vendor, an unreadable key). Merging would hand the container a credential
+    // no one chose.
+    const { env } = buildGraphitiEnv(null);
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    const child = composeChildEnv(env, { OPENAI_API_KEY: "sk-fake-inherited-2582", PATH: "/x" });
+    expect(child.OPENAI_API_KEY).toBeUndefined();
+    expect(child.PATH).toBe("/x");
+  });
+
+  it("SCRUBS an inherited value on every generated name", () => {
+    const inherited = Object.fromEntries(
+      GRAPHITI_GENERATED_NAMES.map((name) => [name, `inherited-${name}`]),
+    );
+    const child = composeChildEnv(buildGraphitiEnv(null).env, inherited);
+    for (const name of GRAPHITI_GENERATED_NAMES) {
+      expect(String(child[name] ?? ""), name).not.toContain("inherited-");
+    }
+  });
+});
+
 describe("the materialization seam", () => {
-  it("lands the resolved key in the container env file, 0600", async () => {
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("hands the resolved key to the compose command and writes NO file", async () => {
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: FAKE_KEY,
         reason: "resolved from the app's stored OpenAI provider configuration",
       }),
-      ...sink,
     });
 
-    expect(result).toMatchObject({ state: "configured", wrote: true });
-    const written = parseDotenv(readFileSync(outPath, "utf8"));
-    for (const name of GRAPHITI_KEY_NAMES) expect(written[name]).toBe(FAKE_KEY);
-    // Owner-only: the file is a credential.
-    expect(statSync(outPath).mode & 0o777).toBe(0o600);
+    expect(result).toMatchObject({ state: "configured", ran: true, wrote: false, status: 0 });
+    // The key reached the container's environment, under every name the image
+    // reads — the claim the old file-write test made, now made about the road
+    // the container actually gets its configuration from.
+    expect(runs).toHaveLength(1);
+    expect(runs[0].command).toBe("docker");
+    expect(runs[0].args).toEqual(["compose", "up", "-d", "graphiti"]);
+    for (const name of GRAPHITI_KEY_NAMES) expect(lastEnv()[name]).toBe(FAKE_KEY);
+    // …and NOTHING on disk carries it. Asserted over the whole temp tree.
+    expect(treeContents()).toEqual({});
     expect(logs.join("\n")).toContain("knowledge-graph provider key CONFIGURED");
   });
 
+  it("never puts the key in an ARGV", async () => {
+    // An argv is world-readable in `ps` for the life of the process; an
+    // environment is not. `-e NAME` (not `-e NAME=value`) is the same rule the
+    // works-after proof tier follows.
+    await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
+      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+    });
+    expect(JSON.stringify(runs[0].args)).not.toContain(FAKE_KEY);
+    expect(runs[0].command).not.toContain(FAKE_KEY);
+  });
+
   it("never writes the key into a log line", async () => {
-    await generateGraphitiEnv({
-      outPath,
+    await generate({
+      command: ["docker", "compose", "up"],
       resolveKey: async () => ({ key: FAKE_KEY, reason: "resolved from the stored config" }),
-      ...sink,
     });
     expect([...logs, ...warns].join("\n")).not.toContain(FAKE_KEY);
   });
 
-  it("WARNS an honest keyless state instead of materializing empty values", async () => {
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("propagates the compose command's exit status", async () => {
+    // This script stands in for `docker compose` inside an `&&` chain, so a
+    // failed bring-up has to stop that chain rather than reporting success.
+    const result = await generate({
+      command: ["docker", "compose", "up"],
+      run: () => 17,
+      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+    });
+    expect(result.status).toBe(17);
+  });
+
+  it("WARNS an honest keyless state instead of handing over empty values", async () => {
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: null,
         reason: "no OpenAI provider key is configured in the app and OPENAI_API_KEY is unset",
       }),
-      ...sink,
     });
 
-    expect(result).toMatchObject({ state: "absent", embedder: "local" });
-    const written = parseDotenv(readFileSync(outPath, "utf8"));
-    // No credential reached the file: the bare OPENAI_API_KEY that graphiti_core
-    // reads is absent, and the LLM slot holds the named sentinel.
-    expect(written.OPENAI_API_KEY).toBeUndefined();
-    expect(written.LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
+    expect(result).toMatchObject({ state: "absent", embedder: "local", ran: true });
+    // No credential reached the container: the bare OPENAI_API_KEY that
+    // graphiti_core reads is absent, and the LLM slot holds the named sentinel.
+    expect(lastEnv().OPENAI_API_KEY).toBeUndefined();
+    expect(lastEnv().LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
 
     const warning = warns.join("\n");
     expect(warning).toContain("EXTRACTION is OFF");
@@ -311,151 +466,432 @@ describe("the materialization seam", () => {
     expect(warning).toContain("LOCAL embedder");
   });
 
-  it("does NOT clobber an already-materialized key when it could not ASK", async () => {
-    // The cold-bring-up case: `npm run services` runs this BEFORE it starts
-    // Postgres, so the stored key is unreadable on the first pass. Rewriting
-    // the file empty there would silently turn indexing off on a working install.
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
-      ...sink,
-    });
-
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("does NOT recreate the container when it could not ASK", async () => {
+    // The cold-bring-up case, moved from the file to the container: the stored
+    // key is unreadable on this pass, and the container may well be running on
+    // a good one. Recreating it here would silently turn indexing off on a
+    // working install, so nothing is recreated and the reason is said out loud.
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: null,
         reason: "the app's provider-key resolver was not reachable (Error)",
         storedReadFailed: true,
       }),
-      ...sink,
     });
 
-    expect(result.wrote).toBe(false);
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBe(FAKE_KEY);
-    expect(warns.join("\n")).toContain("keeping it untouched");
+    expect(result.ran).toBe(false);
+    expect(runs).toEqual([]);
+    expect(warns.join("\n")).toContain("NOT recreating");
   });
 
-  it("does NOT downgrade a materialized key to a fallback during an outage", async () => {
-    // The database is unreachable but OPENAI_API_KEY happens to be set. Writing
-    // the fallback would silently swap a known-good stored key for a possibly
-    // stale one; the fallback is for when there is nothing materialized to keep.
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
-      ...sink,
-    });
-
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("applies the environment FALLBACK during an outage, and SAYS it is one", async () => {
+    // The database is unreachable but OPENAI_API_KEY is set. That is the
+    // first-bring-up signature the legacy fallback exists to serve — there is no
+    // database yet — and holding back would leave every fresh install with an
+    // env key running a keyless indexer.
+    //
+    // In the file era this case PRESERVED, to avoid writing a possibly stale key
+    // over a known-good stored one. Nothing persists now: the swap is bounded by
+    // the one command the operator asked for, and the next successful run
+    // replaces it. So the verdict changes and the run SAYS what it did, which is
+    // what makes it safe to change.
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: "sk-fake-stale-env-2582",
         source: "environment",
         reason: "resolved from OPENAI_API_KEY in the environment (legacy path)",
         storedReadFailed: true,
       }),
-      ...sink,
     });
 
-    expect(result.wrote).toBe(false);
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBe(FAKE_KEY);
+    expect(result.ran).toBe(true);
+    expect(lastEnv().OPENAI_API_KEY).toBe("sk-fake-stale-env-2582");
+    const warning = warns.join("\n");
+    expect(warning).toContain("ENVIRONMENT fallback");
+    expect(warning).toContain("could not be read");
+    expect(warning).not.toContain("sk-fake-stale-env-2582");
   });
 
-  it("DOES use the fallback when nothing is materialized yet", async () => {
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("holds back when it could not ask AND has nothing to offer", async () => {
+    // The other half of the same rule, kept whole: with no key to put in its
+    // place, recreating would start the container keyless and turn extraction
+    // off on an install that may be running perfectly well.
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
+      resolveKey: async () => ({
+        key: null,
+        reason: "the app's provider-key resolver was not reachable (Error)",
+        storedReadFailed: true,
+      }),
+    });
+    expect(result.ran).toBe(false);
+    expect(warns.join("\n")).toContain("no key to put in its place");
+  });
+
+  it("DOES use the fallback when the configuration read fine and held no key", async () => {
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: "sk-fake-env-2582",
         source: "environment",
         reason: "resolved from OPENAI_API_KEY in the environment (legacy path)",
-        storedReadFailed: true,
+        storedReadFailed: false,
       }),
-      ...sink,
     });
 
-    expect(result.wrote).toBe(true);
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBe("sk-fake-env-2582");
+    expect(result.ran).toBe(true);
+    expect(lastEnv().OPENAI_API_KEY).toBe("sk-fake-env-2582");
   });
 
-  it("DOES clear a materialized key when the operator removed it", async () => {
+  it("DOES clear the key from the container when the operator removed it", async () => {
     // "Read fine, and there is no key" is a disconnect or a rotation, not a
-    // cold start. Preserving there would leave a revoked credential running in
-    // the indexer container forever.
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
-      ...sink,
-    });
-
-    const result = await generateGraphitiEnv({
-      outPath,
+    // cold start. Not recreating there would leave a revoked credential running
+    // in the indexer container forever.
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: null,
         reason: "no OpenAI provider key is configured in the app and OPENAI_API_KEY is unset",
         storedReadFailed: false,
       }),
-      ...sink,
     });
 
-    expect(result).toMatchObject({ state: "absent", wrote: true });
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBeUndefined();
+    expect(result).toMatchObject({ state: "absent", ran: true });
+    expect(lastEnv().OPENAI_API_KEY).toBeUndefined();
+    expect(lastEnv().LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
   });
 
-  it("refuses a control-character key WITHOUT destroying the previous one", async () => {
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
-      ...sink,
+  it("hands over a ROTATED key rather than a stale one", async () => {
+    await generate({
+      command: ["docker", "compose", "up"],
+      resolveKey: async () => ({ key: "sk-fake-old-2582", reason: "stored config" }),
     });
+    await generate({
+      command: ["docker", "compose", "up"],
+      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+    });
+    expect(lastEnv().OPENAI_API_KEY).toBe(FAKE_KEY);
+  });
 
-    const result = await generateGraphitiEnv({
-      outPath,
+  it("refuses a control-character key WITHOUT recreating the container", async () => {
+    const result = await generate({
+      command: ["docker", "compose", "up", "-d", "graphiti"],
       resolveKey: async () => ({
         key: "sk-fake\nINJECTED=1",
         reason: "stored config",
         storedReadFailed: false,
       }),
-      ...sink,
     });
 
-    expect(result.wrote).toBe(false);
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBe(FAKE_KEY);
+    expect(result.ran).toBe(false);
+    expect(runs).toEqual([]);
     const warning = warns.join("\n");
     expect(warning).toContain("REFUSED");
     expect(warning).not.toContain("INJECTED");
   });
 
-  it("writes a keyless file when there is nothing to preserve", async () => {
-    expect(existsSync(outPath)).toBe(false);
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: null, reason: "no key" }),
-      ...sink,
-    });
-    expect(existsSync(outPath)).toBe(true);
-  });
-
-  it("replaces a rotated key rather than preserving the stale one", async () => {
-    await generateGraphitiEnv({
-      outPath,
-      resolveKey: async () => ({ key: "sk-fake-old-2582", reason: "stored config" }),
-      ...sink,
-    });
-    await generateGraphitiEnv({
-      outPath,
+  it("runs nothing at all when no command was given", async () => {
+    const result = await generate({
       resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
-      ...sink,
     });
-    expect(parseDotenv(readFileSync(outPath, "utf8")).OPENAI_API_KEY).toBe(FAKE_KEY);
+    expect(result).toMatchObject({ state: "configured", ran: false, wrote: false });
+    expect(runs).toEqual([]);
+    expect(treeContents()).toEqual({});
   });
 });
 
-describe("shouldPreserveExisting (pure)", () => {
-  it("is true only when the existing file really carries a key", () => {
-    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(FAKE_KEY).env))).toBe(true);
-    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(null).env))).toBe(false);
-    expect(shouldPreserveExisting("OPENAI_API_KEY=\n")).toBe(false);
-    expect(shouldPreserveExisting("OPENAI_API_KEY=   \n")).toBe(false);
-    expect(shouldPreserveExisting(undefined)).toBe(false);
+describe("nothing key-shaped is ever written", () => {
+  it("REFUSES to write a template that carries a key", async () => {
+    // The opt-in `--write-env` road exists for inspection, and it can only ever
+    // produce a secret-free file: a keyed arm serializes the credential, so the
+    // content guard refuses the write outright rather than trimming it.
+    await expect(
+      generate({
+        writeEnvPath: templatePath,
+        resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+      }),
+    ).rejects.toThrow(/REFUSED to write/);
+    expect(existsSync(templatePath)).toBe(false);
+  });
+
+  it("DOES write the keyless wiring, which carries no credential", async () => {
+    const result = await generate({
+      writeEnvPath: templatePath,
+      resolveKey: async () => ({ key: null, reason: "no key" }),
+    });
+    expect(result.wrote).toBe(true);
+    const written = parseDotenv(readFileSync(templatePath, "utf8"));
+    expect(written.LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
+    expect(carriesMaterializedKey(readFileSync(templatePath, "utf8"))).toBe(false);
+    // Owner-only even so: it describes an install.
+    expect(statSync(templatePath).mode & 0o777).toBe(0o600);
+  });
+
+  it("REFUSES any path under docker/, secret-free content included", () => {
+    // Structural, and stricter than the content check on purpose: docker/ is
+    // read by compose and outlives every container, branch and checkout.
+    expect(() => assertWritablePath("docker/graphiti/.graphiti.env")).toThrow(/REFUSED to write/);
+    expect(() => assertWritablePath("docker/anything.env")).toThrow(/REFUSED to write/);
+    expect(() => assertWritablePath(path.join(tmpdir(), "somewhere.env"))).not.toThrow();
+  });
+
+  it("REFUSES an OPAQUE credential that matches no known key shape", async () => {
+    // The shapes cannot see every credential: an Azure-hosted deployment, a
+    // gateway or a self-hosted vendor issues values with no `sk-` prefix at all.
+    // A template judged only by shape would write such a value out in clear and
+    // call itself secret-free, so the variable SEMANTICS decide as well.
+    const OPAQUE = "kg-converge-opaque-provider-value";
+    expect(containsKeyShapedValue(OPAQUE)).toBe(false);
+    await expect(
+      generate({
+        writeEnvPath: templatePath,
+        resolveKey: async () => ({ key: OPAQUE, reason: "stored config" }),
+      }),
+    ).rejects.toThrow(/REFUSED to write/);
+    expect(existsSync(templatePath)).toBe(false);
+    // …and the refusal names the variable, never the value.
+    let message = "";
+    try {
+      assertNoMaterializedKey(`OPENAI_API_KEY=${OPAQUE}\n`, "the template");
+    } catch (err) {
+      message = String(err.message);
+    }
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(message).not.toContain(OPAQUE);
+  });
+
+  it("REFUSES a path that lands under docker/ through a SYMLINKED parent", () => {
+    // The guard is physical, not lexical: `path.resolve` alone reads a
+    // symlinked parent as the path the caller typed, which would let a write
+    // land in the subtree the gate owns while passing the check.
+    const link = path.join(dir, "looks-innocent");
+    symlinkSync(path.join(CHECKOUT_ROOT, "docker", "graphiti"), link, "dir");
+    expect(() => assertWritablePath(path.join(link, ".graphiti.env"))).toThrow(/REFUSED to write/);
+  });
+
+  it("names the SHAPE and the LINE it refused, never the value", () => {
+    let message = "";
+    try {
+      assertNoKeyShapedValue(`# header\nOPENAI_API_KEY=${FAKE_KEY}\n`, "the template");
+    } catch (err) {
+      message = String(err.message);
+    }
+    expect(message).toContain("line 2");
+    expect(message).toContain("openai-api-key");
+    expect(message).not.toContain(FAKE_KEY);
+  });
+});
+
+describe("the key is never handed to a child that would print it", () => {
+  it("REFUSES `docker compose config`, which renders every resolved value", async () => {
+    // The seam takes any command on purpose — this script stands in for compose
+    // in an `&&` chain. But `config` PRINTS the resolved environment, so running
+    // it here would put the credential on a terminal and into a CI log.
+    await expect(
+      generate({
+        command: ["docker", "compose", "-f", "docker-compose.yml", "config"],
+        resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+      }),
+    ).rejects.toThrow(/REFUSED to run/);
+    expect(runs).toEqual([]);
+  });
+
+  it("still runs the bring-up it exists for", async () => {
+    const result = await generate({
+      command: ["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "graphiti"],
+      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+    });
+    expect(result.ran).toBe(true);
+    expect(lastEnv().OPENAI_API_KEY).toBe(FAKE_KEY);
+  });
+
+  it("reads the subcommand past the flags that take a value", () => {
+    // `-f config` must not read as the `config` subcommand, and a non-compose
+    // command has no subcommand to judge at all.
+    expect(composeSubcommand(["docker", "compose", "-f", "config", "up"])).toBe("up");
+    expect(composeSubcommand(["docker", "compose", "--profile", "config", "up", "-d"])).toBe("up");
+    expect(composeSubcommand(["docker-compose", "config"])).toBe("config");
+    expect(composeSubcommand(["printenv", "OPENAI_API_KEY"])).toBe(null);
+    expect(() => assertRunnableCommand(["printenv", "config"])).not.toThrow();
+    expect(() => assertRunnableCommand(["docker", "compose", "convert"])).toThrow(/REFUSED to run/);
+  });
+});
+
+describe("the old plaintext file is swept away", () => {
+  const legacyPath = () => path.join(sweepDir, ".graphiti.env");
+
+  it("DELETES a pre-existing file that carries a key, and says so LOUDLY", async () => {
+    writeFileSync(
+      legacyPath(),
+      GRAPHITI_KEY_NAMES.map((name) => `${name}=${FAKE_KEY}`).join("\n"),
+      { mode: 0o600 },
+    );
+
+    const result = await generate({
+      resolveKey: async () => ({ key: FAKE_KEY, reason: "stored config" }),
+    });
+
+    expect(existsSync(legacyPath())).toBe(false);
+    expect(result.sweptKeyBearing).toEqual([legacyPath()]);
+    const warning = warns.join("\n");
+    expect(warning).toContain("REMOVED");
+    expect(warning).toContain("in CLEAR");
+    // The operator is told what to DO about it — the file is gone, the key was
+    // still at rest on this disk.
+    expect(warning).toContain("rotate it");
+    expect(warning).not.toContain(FAKE_KEY);
+  });
+
+  it("DELETES an Anthropic file too — the credential is on its own variable", async () => {
+    writeFileSync(legacyPath(), `${GRAPHITI_ANTHROPIC_KEY_NAME}=${FAKE_ANTHROPIC_KEY}\n`);
+    const result = await generate({ resolveKey: async () => ({ key: null, reason: "no key" }) });
+    expect(existsSync(legacyPath())).toBe(false);
+    expect(result.sweptKeyBearing).toEqual([legacyPath()]);
+  });
+
+  it("DELETES a stranded `.tmp-<pid>` sibling of an interrupted write", async () => {
+    const stranded = path.join(sweepDir, ".graphiti.env.tmp-424242");
+    writeFileSync(stranded, `OPENAI_API_KEY=${FAKE_KEY}\n`);
+    const result = await generate({ resolveKey: async () => ({ key: null, reason: "no key" }) });
+    expect(existsSync(stranded)).toBe(false);
+    expect(result.sweptKeyBearing).toEqual([stranded]);
+  });
+
+  it("removes a keyless leftover QUIETLY — there is nothing to act on", async () => {
+    writeFileSync(legacyPath(), serializeDotenv(buildGraphitiEnv(null).env));
+    const result = await generate({ resolveKey: async () => ({ key: null, reason: "no key" }) });
+    expect(existsSync(legacyPath())).toBe(false);
+    expect(result.swept).toEqual([legacyPath()]);
+    expect(result.sweptKeyBearing).toEqual([]);
+    expect(warns.join("\n")).not.toContain("REMOVED");
+    expect(logs.join("\n")).toContain("leftover from the old road");
+  });
+
+  it("leaves every other file in the directory alone", async () => {
+    writeFileSync(path.join(sweepDir, "config.yaml"), "llm:\n  provider: openai\n");
+    writeFileSync(path.join(sweepDir, "Dockerfile"), "FROM python:3.13-slim\n");
+    await generate({ resolveKey: async () => ({ key: null, reason: "no key" }) });
+    expect(readdirSync(sweepDir).sort()).toEqual(["Dockerfile", "config.yaml"]);
+  });
+
+  it("is a no-op on a checkout that never took the old road", () => {
+    const empty = path.join(dir, "never-generated");
+    const result = sweepLegacyEnvFiles({ dir: empty, ...sink });
+    expect(result).toEqual({ removed: [], keyBearing: [] });
+    expect([...logs, ...warns]).toEqual([]);
+  });
+});
+
+describe("the command line", () => {
+  it("takes everything after a bare `--` as the command", () => {
+    expect(parseArgs(["--", "docker", "compose", "up", "-d", "graphiti"])).toEqual({
+      writeEnvPath: null,
+      command: ["docker", "compose", "up", "-d", "graphiti"],
+    });
+  });
+
+  it("reports the state and runs nothing when given no command", () => {
+    expect(parseArgs([])).toEqual({ writeEnvPath: null, command: [] });
+  });
+
+  it("takes --write-env before the separator", () => {
+    expect(parseArgs(["--write-env", "/tmp/x.env", "--", "docker", "compose", "up"])).toEqual({
+      writeEnvPath: "/tmp/x.env",
+      command: ["docker", "compose", "up"],
+    });
+  });
+
+  it("refuses an unknown option rather than guessing", () => {
+    // A typo'd flag that is silently ignored is how a bring-up ends up not
+    // doing the thing its author asked for.
+    expect(() => parseArgs(["--write-en", "/tmp/x"])).toThrow(/unknown option/);
+    expect(() => parseArgs(["--write-env"])).toThrow(/needs a path/);
+  });
+});
+
+describe("carriesMaterializedKey (pure)", () => {
+  it("is true only when the text really carries a key", () => {
+    expect(carriesMaterializedKey(serializeDotenv(buildGraphitiEnv(FAKE_KEY).env))).toBe(true);
+    expect(carriesMaterializedKey(serializeDotenv(buildGraphitiEnv(null).env))).toBe(false);
+    expect(carriesMaterializedKey("OPENAI_API_KEY=\n")).toBe(false);
+    expect(carriesMaterializedKey("OPENAI_API_KEY=   \n")).toBe(false);
+    expect(carriesMaterializedKey(undefined)).toBe(false);
+  });
+});
+
+describe("docker-compose.yml declares exactly what the generator hands over", () => {
+  // THE TWO HALVES MUST AGREE, and nothing else makes them. A variable the
+  // generator sets but the service does not declare is silently dropped by
+  // compose and the container never sees it; a variable the service declares
+  // but the generator never sets is a name that would quietly take whatever the
+  // invoking shell exported. Both failures are invisible at run time — the
+  // indexer just behaves as if it were configured differently — so the
+  // agreement is asserted here instead of being trusted.
+  const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+
+  /** The VALUE-LESS entries of the graphiti service's `environment:` block —
+   *  `NAME:` with nothing after it, which is how compose is told to take the
+   *  value from its own environment. Read by line rather than with a YAML
+   *  parser so this suite stays free of a dependency the gate half cannot use. */
+  function declaredPassThroughNames() {
+    const text = readFileSync(path.join(REPO_ROOT, "docker-compose.yml"), "utf8");
+    const lines = text.split("\n");
+    const start = lines.findIndex((line) => line === "  graphiti:");
+    expect(start, "the graphiti service").toBeGreaterThan(-1);
+    const names = [];
+    let inEnvironment = false;
+    for (const line of lines.slice(start + 1)) {
+      // A new top-level service ends the block.
+      if (/^ {2}\S/.test(line)) break;
+      if (/^ {4}environment:\s*$/.test(line)) {
+        inEnvironment = true;
+        continue;
+      }
+      // A new service-level key ends the environment block.
+      if (inEnvironment && /^ {4}\S/.test(line)) break;
+      if (!inEnvironment) continue;
+      const match = line.match(/^ {6}([A-Z0-9_]+):\s*$/);
+      if (match) names.push(match[1]);
+    }
+    return names;
+  }
+
+  it("declares every generated name, value-less, and no others", () => {
+    expect(declaredPassThroughNames().sort()).toEqual([...GRAPHITI_GENERATED_NAMES].sort());
+  });
+
+  /** The graphiti service block, from its own key to the next service's. */
+  function graphitiServiceBlock() {
+    const lines = readFileSync(path.join(REPO_ROOT, "docker-compose.yml"), "utf8").split("\n");
+    const start = lines.findIndex((line) => line === "  graphiti:");
+    expect(start, "the graphiti service").toBeGreaterThan(-1);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => /^ {2}\S/.test(line));
+    return (end === -1 ? rest : rest.slice(0, end)).join("\n");
+  }
+
+  it("does NOT read an env_file — that road is gone", () => {
+    // `env_file:` on this service is the defect: it is what made a decrypted
+    // key on disk the way the container got configured. Comment lines are
+    // stripped first — the block explains the old road at length, and the
+    // assertion is about the WIRING, not the prose describing it.
+    const directives = graphitiServiceBlock()
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    expect(directives).not.toContain("env_file");
+    expect(directives).not.toContain(".graphiti.env");
+  });
+
+  it("interpolates none of them with an empty default", () => {
+    // `${NAME:-}` would set the empty string, which OVERRIDES config.yaml's
+    // keyless-safe defaults and crash-loops the server — the same override trap
+    // the nango and wayflow services document.
+    const text = readFileSync(path.join(REPO_ROOT, "docker-compose.yml"), "utf8");
+    for (const name of GRAPHITI_GENERATED_NAMES) {
+      expect(text, name).not.toContain(`${name}: \${${name}:-}`);
+    }
   });
 });

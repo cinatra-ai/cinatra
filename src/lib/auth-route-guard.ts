@@ -32,7 +32,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/connect/site-inventory", // cinatra#2018 (S3) PR-D, absorbed by cinatra#2021 (S6): the authenticated WordPress site-inventory intake — server-to-server (the site plugin, never a browser); auth enforced inside via the per-site `cnx_` credential + paired Origin binding (no session, no cookies), mirrors /api/connect/token.
   "/api/widget-auth", // cinatra#2674 (epic #2564 S8e) — the hosted-PKCE login's API surface. `/frame/init` + `/frame/token` are the FRAME-OWNED flow: called SAME-ORIGIN by cinatra's own embed iframe, which holds no session (that is what the flow is for), and authorized INSIDE each handler by the same-origin gate plus the server-side re-derivation of site/org/origin/agent/instance from cinatra's own rows — never by a caller-presented credential. `/init` + `/token` are the RETIRED site-mediated pair: exempted so a legacy CMS backend receives their honest 410 instead of a /sign-in redirect that would read as a network fault. NOTE: the /widget-auth PAGE is exempted separately below (it must render the login form for a SESSIONLESS visitor instead of 307→/sign-in).
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available
-  "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only, mirrors /api/skills/reset-repo). Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
+  "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only). /api/skills/reset-repo carries those same three fences AND requires a platform-administrator session in-handler, so it is deliberately NOT exempted here: a caller must present one, which the published CLI does not do yet. Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
   "/webhook", // cinatra#340 generic inbound-webhook namespace — a webhook arrives from an unauthenticated connected site; auth is the Standard-Webhooks signature enforced INSIDE the route (verified via the per-binding secret resolved from the server-issued opaque bindingId, never the payload). One static namespace prefix (the route owns the declared→dispatch / undeclared→404 verdict, so an undeclared hook 404s rather than 307s); do NOT import GENERATED_WEBHOOK_PUBLIC_PREFIXES here.
 ];
 
@@ -163,6 +163,14 @@ const PUBLIC_EXACT_PATHS = [
 // and the suite's assertions then fail on a fixture that never rendered — which
 // is exactly what design-visual-verify reported at 7ba5e7fc (all 8 cases:
 // "element(s) not found" waiting for the rail's rows).
+// "/design-fixtures/overlay-header-band" (cinatra#3105): the overlay-vs-header
+// GEOMETRY harness — the REAL shared select mounted under the app shell's own
+// sticky header geometry, so the gate can assert an open panel never occupies
+// the header band. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data). It is listed here for the SAME
+// reason the header-rule entry above is: without it guardAppRoute 307s the
+// unauthenticated harness to /sign-in before the fixture renders, and every
+// assertion then fails on a fixture that never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -173,6 +181,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/header-rule",
   "/design-fixtures/extension-settings",
   "/design-fixtures/run-step-rail",
+  "/design-fixtures/overlay-header-band",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

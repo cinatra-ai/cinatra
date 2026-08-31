@@ -44,6 +44,11 @@ import {
   SEEDED_MODAL_FIXTURE,
 } from "../../../../src/app/design-fixtures/conformance/seed-data";
 import {
+  BREADCRUMB_ENTITY_DISPLAY_NAME,
+  BREADCRUMB_ENTITY_ID,
+  BREADCRUMB_ENTITY_PLACEHOLDER,
+} from "../../../../src/app/design-fixtures/conformance/breadcrumb-conformance-seed";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -80,15 +85,40 @@ const SEED_BASE_URL =
 let seedOnce: Promise<void> | undefined;
 
 /**
+ * The capability the seed endpoint requires
+ * (src/lib/test-support/conformance-seed-fence.ts). The endpoint drives REAL
+ * extension-lifecycle writes and is exempt from the sign-in redirect, so the
+ * token — not the build shape — is what authorizes this harness. CI mints one
+ * per run and hands it to the server and to this process alike; a local run
+ * must arm the SAME value in both places before `pnpm test:e2e:design`.
+ *
+ * Read at call time, never at module load, so a Playwright worker that inherits
+ * the value later still sees it.
+ */
+const SEED_CAPABILITY_ENV = "CINATRA_CONFORMANCE_SEED_TOKEN";
+
+/**
  * Idempotent, converging seed provisioning: POSTs the seed endpoint, which
  * makes the run namespace equal EXACTLY the committed kit (extra/stale rows
  * removed). Memoized per worker; a retry re-runs it and converges again.
  */
 export function ensureSeeded(): Promise<void> {
   seedOnce ??= (async () => {
+    const capability = process.env[SEED_CAPABILITY_ENV] ?? "";
+    if (capability.length === 0) {
+      // Named explicitly rather than left to surface as a bare 404: an unarmed
+      // capability and a missing route are deliberately indistinguishable to
+      // the CALLER, so the harness has to say which one it is looking at.
+      throw new Error(
+        `seed provisioning cannot run: ${SEED_CAPABILITY_ENV} is unset in this process, so ${SEED_ENDPOINT} answers 404 by design. Arm the SAME value (at least 32 characters) on the server under test and here.`,
+      );
+    }
     const ctx = await playwrightRequest.newContext({ baseURL: SEED_BASE_URL });
     try {
-      const res = await ctx.post(SEED_ENDPOINT, { data: { runId: RUN_ID } });
+      const res = await ctx.post(SEED_ENDPOINT, {
+        data: { runId: RUN_ID },
+        headers: { authorization: `Bearer ${capability}` },
+      });
       if (!res.ok()) {
         throw new Error(
           `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}`,
@@ -1271,23 +1301,145 @@ const SCHEDULING_STEP_DRIVER: SurfaceDriver = {
   },
 };
 
-const SCHEDULING_TRIGGER_TAB_DRIVER: SurfaceDriver = {
+/**
+ * scheduling-step-configured — the surface that REPLACED scheduling-trigger-tab
+ * when the design system redrew the schedule step after cinatra#2972 (adopted
+ * by the cinatra#3057 pin reconciliation). The two operations are the ones the
+ * shipped card draws: Save changes (`save-schedule-changes`, settling to
+ * "Saved — the trigger is re-armed on these rows") and Cancel schedule
+ * (`cancel-trigger-schedule`), which asks once before it stops the schedule.
+ * Run now is gone with its whole action path, which is why the retired
+ * surface's `release -> released` has no counterpart here.
+ */
+const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
-  root: harnessRoot("scheduling-trigger-tab"),
-  present: presentButton("Cancel trigger"),
+  root: harnessRoot("scheduling-step-configured"),
+  present: presentButton("Save changes"),
   fields: {},
   actions: {
-    cancel: outcomeAction("cancelled", "Cancel trigger", {
-      confirm: "Confirm cancel",
-      pillStatus: "archived",
+    "save-schedule": outcomeAction("rearmed", "Save changes", {
+      pillStatus: "scheduled",
     }),
-    release: outcomeAction("released", "Release now", {
-      confirm: "Confirm release",
-      pillStatus: "running",
+    "cancel-schedule": outcomeAction("stopped", "Cancel schedule", {
+      confirm: "Confirm cancel schedule",
+      pillStatus: "archived",
     }),
   },
   states: {
-    error: variantSlotState("scheduling-trigger-tab", "error", "alert"),
+    error: variantSlotState("scheduling-step-configured", "error", "alert"),
+    loading: async (page) => {
+      await expect(
+        page.locator(
+          '[data-surface-id="scheduling-step-configured"][data-variant="loading"] [data-testid="scheduling-step-configured-loading"]',
+        ),
+      ).toBeVisible();
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// App-shell drivers adopted with the cinatra#3057 pin reconciliation:
+// `sidebar-assistants-entry` (conformance/app.json) and
+// `breadcrumb-entity-resolution` (conformance/app-components.json). Both name
+// mechanisms this repo already ships — the §IX Assistants nav entry
+// (src/components/app-sidebar.tsx, epic #1873 W3) and the crumb-contributions
+// resolution road (src/lib/breadcrumb-contributions.ts +
+// src/lib/breadcrumb-trail.ts, cinatra#1737/#1738) — so the adoption is
+// harness and test-id catch-up, not product work.
+// ---------------------------------------------------------------------------
+
+const SIDEBAR_ASSISTANTS_ENTRY_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("sidebar-assistants-entry"),
+  present: async (_page, root) => {
+    // The two literals testid-contract.json pins on the REAL entry, asserted
+    // here on the mount that carries them, plus the label and the glyph.
+    await expect(
+      root.locator('[data-conformance-id="sidebar-assistants-entry"]'),
+    ).toBeVisible();
+    await expect(
+      root.locator('[data-action="open-assistants -> assistants"]'),
+    ).toBeVisible();
+    await expect(root.getByRole("button", { name: "Assistants", exact: true })).toBeVisible();
+  },
+  fields: {},
+  actions: {
+    "open-assistants": outcomeAction("assistants", "Assistants"),
+  },
+  states: {},
+};
+
+const BREADCRUMB_ENTITY_RESOLUTION_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("breadcrumb-entity-resolution"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-testid="crumb-label"]')).toBeVisible();
+    await expect(root.locator('[data-testid="crumb-placeholder"]')).toBeVisible();
+  },
+  fields: {
+    // The resolved crumb carries the entity's DISPLAY NAME, published by the
+    // gated route onto the contributions bus — never the id it was resolved
+    // from. The seed shares no token with the id, so asserting the wrong
+    // source cannot accidentally pass.
+    "crumb-label": {
+      source: "entity.displayName",
+      assert: async (_page, root) => {
+        const crumb = root
+          .locator('[data-testid="crumb-label"] [data-slot="breadcrumb-page"]')
+          .last();
+        await expect(crumb).toHaveText(BREADCRUMB_ENTITY_DISPLAY_NAME);
+        await expect(crumb).not.toContainText(BREADCRUMB_ENTITY_ID);
+      },
+    },
+    // With nothing resolved, the crumb is the short-id placeholder DERIVED
+    // from the entity id — the cinatra#1737 floor rule that keeps
+    // title-cased hex ("9c0dfce6 B2cb 4dab …") off the screen.
+    "crumb-placeholder": {
+      source: "entity.id",
+      assert: async (_page, root) => {
+        const crumb = root
+          .locator('[data-testid="crumb-placeholder"] [data-slot="breadcrumb-page"]')
+          .last();
+        await expect(crumb).toHaveText(BREADCRUMB_ENTITY_PLACEHOLDER);
+        await expect(crumb).not.toHaveText(BREADCRUMB_ENTITY_DISPLAY_NAME);
+      },
+    },
+  },
+  actions: {
+    // Visiting a negative surface clears the parked snapshot, so a
+    // previously-authorized name cannot survive into the unauthorized visit:
+    // the resolved crumb falls back to its placeholder.
+    "visit-unauthorized": {
+      outcome: "resolved-names-cleared",
+      run: async (page, root) => {
+        await expect(
+          root.locator('[data-testid="crumb-label"] [data-slot="breadcrumb-page"]').last(),
+        ).toHaveText(BREADCRUMB_ENTITY_DISPLAY_NAME);
+        await outcomeAction("resolved-names-cleared", "Visit an unauthorized page").run(
+          page,
+          root,
+        );
+        await expect(
+          root.locator('[data-testid="crumb-label"] [data-slot="breadcrumb-page"]').last(),
+        ).toHaveText(BREADCRUMB_ENTITY_PLACEHOLDER);
+      },
+    },
+  },
+  states: {
+    loading: async (page) => {
+      const loadingRoot = page.locator(
+        '[data-surface-id="breadcrumb-entity-resolution"][data-variant="loading"]',
+      );
+      await expect(loadingRoot).toBeVisible();
+      // The loading treatment IS the placeholder floor — an empty or skeleton
+      // crumb would be a different contract, so assert the content, not just
+      // the wrapper (the convention every other loading driver here follows).
+      const crumb = loadingRoot
+        .locator('[data-testid="crumb-placeholder-loading"] [data-slot="breadcrumb-page"]')
+        .last();
+      await expect(crumb).toHaveText(BREADCRUMB_ENTITY_PLACEHOLDER);
+      await expect(crumb).not.toHaveText(BREADCRUMB_ENTITY_DISPLAY_NAME);
+    },
   },
 };
 
@@ -2701,7 +2853,9 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-your-requests": APPROVALS_YOUR_REQUESTS_DRIVER,
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
-  "scheduling-trigger-tab": SCHEDULING_TRIGGER_TAB_DRIVER,
+  "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
+  "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
   ),

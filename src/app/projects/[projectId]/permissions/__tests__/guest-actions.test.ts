@@ -8,10 +8,13 @@
 //     a SELF-FETCH of the public sign-up endpoint (public-path semantics —
 //     respects the closed-registration gate; keeps the auto-sign-in cookie
 //     OFF the inviting admin's response) with a ≥12-char random password; on
-//     REGISTRATION_CLOSED a
-//     platform-admin inviter falls back to the admin plugin's create-user
-//     endpoint (ADMIN_CREATE_USER_PATH, D1) with the actor's headers, anyone else gets a
-//     structured "registration-closed" error. Create races re-read by email.
+//     REGISTRATION_CLOSED the invite falls back to the admin plugin's
+//     create-user endpoint (ADMIN_CREATE_USER_PATH, D1) for EVERY inviter the
+//     project-admin check already authorized — an invitation is an explicit
+//     admin road and must keep working on a closed instance. That call carries
+//     no session headers, because the endpoint refuses a session whose own
+//     role is not "admin" and a project admin's is not. Create races re-read
+//     by email.
 //  4. New guests get a password-reset email (redirectTo the reset view); a
 //     send failure is surfaced as resetEmailSent:false, never unwound.
 //  5. Guests are never org members — no membership write exists in the module.
@@ -138,6 +141,10 @@ describe("inviteGuestByEmailAction — gating and validation", () => {
     const r = await inviteGuestByEmailAction(PROJECT, "x@example.com", null);
     expect(r).toEqual({ ok: false, error: "forbidden" });
     expect(h.grantCustomerAccess).not.toHaveBeenCalled();
+    // The privileged create-user road is reachable ONLY behind this check —
+    // an unauthorized actor never reaches an account-creating call at all.
+    expect(h.createUser).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -233,26 +240,49 @@ describe("inviteGuestByEmailAction — account creation", () => {
     expect(h.revalidatePath).toHaveBeenCalledWith(`/projects/${PROJECT}/settings`);
   });
 
-  it("REGISTRATION_CLOSED + non-platform-admin → structured registration-closed", async () => {
+  it("REGISTRATION_CLOSED + a project admin who is NOT a platform admin → the invitation still lands", async () => {
     primeAdminSession({ platformAdmin: false });
     h.readUserByEmail.mockResolvedValue(null);
     fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
+    h.createUser.mockResolvedValue({ user: { id: "u-invited" } });
     const r = await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
-    expect(r).toEqual({ ok: false, error: "registration-closed" });
-    expect(h.createUser).not.toHaveBeenCalled();
-    expect(h.grantCustomerAccess).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ ok: true, guest: { userId: "u-invited", existed: false } });
+    expect(h.grantCustomerAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ subjectUserId: "u-invited", projectId: PROJECT, orgId: ORG }),
+    );
   });
 
-  it("REGISTRATION_CLOSED + platform admin → sanctioned admin create-user (D1) fallback with actor headers", async () => {
+  it("REGISTRATION_CLOSED + platform admin → the same sanctioned admin create-user (D1) road", async () => {
     primeAdminSession({ platformAdmin: true });
     h.readUserByEmail.mockResolvedValue(null);
     fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
     h.createUser.mockResolvedValue({ user: { id: "u-admin-made" } });
     const r = await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
     expect(r).toMatchObject({ ok: true, guest: { userId: "u-admin-made", existed: false } });
-    expect(h.createUser).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: expect.anything() }),
-    );
+  });
+
+  it("the create-user call carries NO session headers — the endpoint's own role check would refuse an authorized project admin's session", async () => {
+    primeAdminSession({ platformAdmin: false });
+    h.readUserByEmail.mockResolvedValue(null);
+    fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
+    h.createUser.mockResolvedValue({ user: { id: "u-invited" } });
+    await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
+    expect(h.createUser).toHaveBeenCalledTimes(1);
+    const arg = h.createUser.mock.calls[0][0];
+    expect(arg).not.toHaveProperty("headers");
+    expect(h.headers).not.toHaveBeenCalled();
+    expect(arg.body).toMatchObject({ email: "n@g.com", name: "n", role: "user" });
+    expect(String(arg.body.password).length).toBeGreaterThanOrEqual(12);
+  });
+
+  it("a create-user failure with no raced row is reported as unknown, never as a silent success", async () => {
+    primeAdminSession({ platformAdmin: false });
+    h.readUserByEmail.mockResolvedValue(null);
+    fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
+    h.createUser.mockRejectedValue(new Error("adapter down"));
+    const r = await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
+    expect(r).toEqual({ ok: false, error: "unknown" });
+    expect(h.grantCustomerAccess).not.toHaveBeenCalled();
   });
 
   it("create race: sign-up self-fetch fails, re-read by email finds the row → grant proceeds", async () => {
