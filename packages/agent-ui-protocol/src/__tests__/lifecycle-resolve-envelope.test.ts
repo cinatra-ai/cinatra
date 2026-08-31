@@ -104,7 +104,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
     const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", wire);
     // The answer adds the one field the envelope itself does not carry: the
     // server-minted island URL (cinatra#2754), `null` when none was sent.
-    expect(parsed).toEqual({ ...wire, islandSrc: null });
+    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -126,7 +126,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual({ ...wire, islandSrc: null });
+    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
   });
 
   it("verification_summary tells `null` advisory comments apart from none", () => {
@@ -164,7 +164,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
           "trigger_schedule_proposal",
           JSON.parse(JSON.stringify(wire)),
         ),
-      ).toEqual({ ...wire, islandSrc: null });
+      ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
     }
   });
 
@@ -358,6 +358,43 @@ describe("an unknown or undeclared kind fails closed", () => {
 // `absent` privacy
 // ---------------------------------------------------------------------------
 
+describe("a target header belongs to the review gate and to no other kind", () => {
+  const HEADER = {
+    title: "Q3 re-engagement email",
+    typeLabel: "Email",
+    objectType: "@cinatra-ai/email:draft",
+    revisionId: "rev_8f3a1c2d4e5f6a7b",
+    facts: ["Ownership: team", "Visibility: private", "text/html", "updated 8 minutes ago"],
+  };
+
+  it("reads it on the REVIEW GATE, which is the one kind that has a target", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true, canComment: true },
+      body: null,
+      targetHeaders: [HEADER],
+    });
+    expect(parsed?.targetHeaders).toEqual([HEADER]);
+  });
+
+  it("REFUSES one on another kind — an answer to a question that kind never asks", () => {
+    // The control first: this exact answer, WITHOUT the header, parses. So the
+    // refusal below is the header's doing and not a body that was wrong anyway.
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "settled" as const },
+      body: VERIFICATION_BODY,
+    };
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", {
+        ...answer,
+        targetHeaders: [HEADER],
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("`absent` reveals nothing about the target", () => {
   it("parses for every kind, and carries no body", () => {
     for (const kind of LIFECYCLE_DATA_PART_VIEW_TYPES) {
@@ -371,12 +408,17 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: null,
         islandSrc: null,
+        // `absent` CARRIES NOTHING BESIDE ITSELF, the target header included
+        // (cinatra#3141 item 7): a header names an artifact, so one arriving
+        // next to the collapse of every denial would be the oracle the collapse
+        // exists to close.
+        targetHeaders: null,
       });
       // The body key may also be omitted entirely — same answer, byte for byte.
       expect(
         parseLifecycleResolveEnvelope(kind, { kind, state: { state: "absent" } }),
         kind,
-      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null });
+      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null, targetHeaders: null });
     }
   });
 
@@ -529,7 +571,7 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
         state,
         body: null,
       }),
-    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null });
+    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null, targetHeaders: null });
   });
 
   it("REFUSES an outcome this build cannot read, rather than dropping it", () => {

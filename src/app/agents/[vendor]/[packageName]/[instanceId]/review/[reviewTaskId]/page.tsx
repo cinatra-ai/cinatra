@@ -69,7 +69,6 @@ import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
-import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
@@ -344,6 +343,10 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                     ref: gateCardRef,
                   }}
                   submitAction={submitAction}
+                  // §VI — the gate's own conversational prompt window keeps its
+                  // exchange with the RUN (cinatra#3141 item 1); the card draws
+                  // the window now, so the page names the run and mounts none.
+                  runId={runId}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>
@@ -369,22 +372,14 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
         })()}
       </div>
 
-      {/* owner ruling (1) — the REAL conversational prompt window (the
-          changes-request channel). Sticky, portalled into <main>; mounted only when
-          the reviewer may Comment (respond access) on a gate that is still OPEN.
-          A settled gate carries no comment channel and no permission answer to
-          read one from: the loader resolves the decision axis for a pending gate
-          only, and the card's own settled branch draws no floor either, so the
-          foot of the page agrees with the card above it. */}
-      {surface.kind === "ready" ? (
-        <ReviewPromptWindow
-          submitAction={submitAction}
-          canComment={surface.permissions.canComment}
-          runId={runId}
-          boundCardRef={gateCardRef}
-          storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
-        />
-      ) : null}
+      {/* §VI's conversational prompt window IS THE GATE'S, and the gate is the
+          card (cinatra#3141 item 1). It used to be mounted here, at page level
+          and outside the card — which is why the run page's own review gate
+          carried no window at all while this page carried one. The drawing puts
+          it inside the gate's frame, beneath the decision bar, so `ReviewGateCard`
+          draws it on every surface the gate opens on and this page mounts none:
+          one card per gate is one window per gate, and the review page cannot
+          draw a second. */}
     </ReviewShell>
   );
 }

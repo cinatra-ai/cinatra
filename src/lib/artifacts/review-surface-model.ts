@@ -16,6 +16,13 @@
  * renderer identity is host-resolved from the artifact TYPE upstream and reaches
  * this model only as the opaque `ReviewTargetMount` kind.
  */
+// THE DEEP ENTRY, DELIBERATELY. This module is reachable from the chat
+// surface's own module graph, and the package barrel pulls the whole library in
+// behind one function — enough extra graph that the conversation column's
+// timing-sensitive first paint measurably slowed. One function is what is used
+// and one module is what is imported.
+import { formatDistance } from "date-fns/formatDistance";
+
 import type {
   PreparedReviewTarget,
   ReviewTargetMount,
@@ -224,18 +231,48 @@ export function reviewTypeLabel(objectType: string): string {
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
-export function reviewTargetRowFacts(artifact: {
-  ownerLevel: string;
-  visibility: string;
-  mime: string;
-  updatedAt: string;
-}): string[] {
+export function reviewTargetRowFacts(
+  artifact: {
+    ownerLevel: string;
+    visibility: string;
+    mime: string;
+    updatedAt: string;
+  },
+  /** The instant the line is read against. An argument so the reading is
+   * deterministic under test; every caller omits it and reads the wall clock. */
+  now: Date = new Date(),
+): string[] {
   return [
     `Ownership: ${artifact.ownerLevel}`,
     `Visibility: ${artifact.visibility}`,
     artifact.mime,
-    `updated ${artifact.updatedAt}`,
+    `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
   ];
+}
+
+/**
+ * The updated fact as a RELATIVE reading, which is what the drawing draws
+ * ("… · text/html · updated 8 min ago", specs/app-artifact-review.html §IV).
+ * The line used to interpolate the row's raw stored instant, so the header read
+ * "updated 2026-08-31T08:19:26.458Z" — a machine timestamp where the drawing
+ * asks how long ago.
+ *
+ * It reuses the app's own relative-time reading (date-fns' distance wording
+ * with a suffix), the same one the artifact library's rows read, so the two
+ * surfaces cannot word the same fact differently. The base instant is an
+ * argument rather than the wall clock so the reading is deterministic under
+ * test — `formatDistanceToNow` is exactly this call against `Date.now()`.
+ *
+ * A VALUE THAT IS NOT AN INSTANT IS PASSED THROUGH UNCHANGED. The row's column
+ * is an instant, but this function is pure and is fed by callers this module
+ * does not own; formatting a value it cannot read would either throw or invent
+ * one ("Invalid Date"), and printing back exactly what it was handed is the only
+ * honest degrade.
+ */
+function relativeUpdatedTime(updatedAt: string, now: Date): string {
+  const at = new Date(updatedAt);
+  if (Number.isNaN(at.getTime())) return updatedAt;
+  return formatDistance(at, now, { addSuffix: true });
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,

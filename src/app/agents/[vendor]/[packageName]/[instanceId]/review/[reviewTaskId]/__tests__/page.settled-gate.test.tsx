@@ -83,11 +83,14 @@ vi.mock("../actions", () => ({
 // from the live resolve, and a stub that produced one would be this suite
 // asserting a fact it invented.
 vi.mock("@cinatra-ai/agents/review-gate-card", () => ({
-  ReviewGateCard: ({ view }: { view: { ref: string } }) => (
+  ReviewGateCard: ({ view, runId }: { view: { ref: string }; runId?: string | null }) => (
     <div
       data-lifecycle-card="artifact_review_gate"
       data-testid="review-gate-card"
       data-card-ref={view.ref}
+      // cinatra#3141 item 1 — the run the card's prompt window keeps its
+      // exchange with. The page names it; the card draws the window.
+      data-card-run={runId ?? ""}
     />
   ),
 }));
@@ -123,11 +126,6 @@ vi.mock("../review-gate-states", () => ({
 }));
 vi.mock("../review-run-steps", () => ({
   ReviewRunSteps: () => <div data-testid="review-run-steps" />,
-}));
-vi.mock("../review-prompt-window", () => ({
-  ReviewPromptWindow: ({ canComment }: { canComment: boolean }) => (
-    <div data-testid="review-prompt-window" data-can-comment={String(canComment)} />
-  ),
 }));
 vi.mock("../verification-view", () => ({
   VerificationView: () => <div data-testid="verification-view" />,
@@ -219,10 +217,17 @@ describe("a DECIDED gate composes the one card on the review page (cinatra#2904)
     expect(await renderPage()).toContain('data-testid="review-run-steps"');
   });
 
-  it("draws NO prompt window: a decided gate carries no comment channel", async () => {
+  it("the PAGE composes no window of its own on a decided gate", async () => {
+    // NAMED FOR WHAT IT PROVES. The card is stubbed in this suite — it is the
+    // component under discussion, not the component under test — so this
+    // assertion is about this page's own composition: it mounts the card and
+    // nothing else that could draw a second channel. Whether a DECIDED gate
+    // carries a window is the card's answer, and it is proven on the card, in
+    // `packages/agents/src/__tests__/review-gate-card.drawing-departures-3141.test.tsx`
+    // ("a SETTLED gate carries no window").
     mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled" });
 
-    expect(await renderPage()).not.toContain('data-testid="review-prompt-window"');
+    expect(await renderPage()).not.toContain('data-conformance-id="review-prompt-window"');
   });
 
   it("draws no card at all when the instance cannot mint a ref (no second composition)", async () => {
@@ -273,28 +278,39 @@ describe("what the settled composition must NOT swallow (cinatra#2904 AC 3–5)"
 
     expect(html).toContain('data-conformance-id="review-not-authorized"');
     expect(html).not.toContain('data-lifecycle-card="artifact_review_gate"');
-    expect(html).not.toContain('data-testid="review-prompt-window"');
+    expect(html).not.toContain('data-conformance-id="review-prompt-window"');
   });
 });
 
 describe("the PENDING composition is unchanged (cinatra#2904 regression floor)", () => {
-  it("still mounts the card AND the prompt window with the server's comment answer", async () => {
+  // THE WINDOW MOVED INTO THE CARD (cinatra#3141 item 1). The drawing puts the
+  // conversational prompt window inside the gate's own frame, beneath the
+  // decision bar; this page mounted it separately, at page level, which is why
+  // the run page's own gate carried no window at all while this page carried
+  // one. `ReviewGateCard` draws it now, so what this page mounts is the card —
+  // and the window's own permission reading is proven where the window lives,
+  // by `packages/agents/src/__tests__/review-gate-card.drawing-departures-3141.test.tsx`
+  // and its render suite.
+  it("still mounts the card, which is what carries the gate AND its prompt window (and the page composes no second)", async () => {
     mocks.loadReviewGateSurface.mockResolvedValue(READY);
 
     const html = await renderPage();
 
     expect(html).toContain('data-lifecycle-card="artifact_review_gate"');
     expect(html).toContain('data-lifecycle-card-host="page_gate_region"');
-    expect(html).toContain('data-testid="review-prompt-window"');
-    expect(html).toContain('data-can-comment="true"');
+    // Exactly one card, so exactly one window — and the window is the CARD's:
+    // this page composes none, which is the whole of what this assertion (over
+    // a stubbed card) can and does prove. The window's own permission readings
+    // live with the window.
+    expect(html).not.toContain('data-conformance-id="review-prompt-window"');
   });
 
-  it("carries the server's canComment=false through unchanged", async () => {
-    mocks.loadReviewGateSurface.mockResolvedValue({
-      ...READY,
-      permissions: { canDecide: true, canComment: false },
-    });
-
-    expect(await renderPage()).toContain('data-can-comment="false"');
+  it("names the run the card's window keeps its exchange with", async () => {
+    // The window is the run's conversation (cinatra#2933), so a card mounted
+    // without a run would draw the gate and no channel — the exact defect on the
+    // run page that #3141 item 1 fixes. The page names it here.
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+    const html = await renderPage();
+    expect(html).toContain('data-card-run="run-1"');
   });
 });

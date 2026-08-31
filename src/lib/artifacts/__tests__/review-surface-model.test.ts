@@ -349,14 +349,19 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
   // print the two scope facts bare, so the common case read the SAME WORD twice
   // for two different facts.
   it("labels the two scope facts so they are not the same word twice", () => {
-    const facts = reviewTargetRowFacts({
-      ownerLevel: "organization",
-      visibility: "organization",
-      mime: "text/markdown",
-      updatedAt: "8 min ago",
-    });
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
     const line = facts.join(" · ");
-    expect(line).toBe("Ownership: organization · Visibility: organization · text/markdown · updated 8 min ago");
+    expect(line).toBe(
+      "Ownership: organization · Visibility: organization · text/markdown · updated 8 minutes ago",
+    );
     expect(line).not.toContain("organization · organization");
   });
 
@@ -365,18 +370,70 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     // facts the host authorized — owner level / visibility, MIME, and updated
     // time" — and §II's example line "… · Team · Private · text/html · updated 8
     // min ago". Neither fact is dropped; both are labelled.
-    const facts = reviewTargetRowFacts({
-      ownerLevel: "team",
-      visibility: "private",
-      mime: "text/html",
-      updatedAt: "8 min ago",
-    });
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
     expect(facts).toEqual([
       "Ownership: team",
       "Visibility: private",
       "text/html",
-      "updated 8 min ago",
+      "updated 8 minutes ago",
     ]);
+  });
+
+  // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
+  // time on the header's mono line ("… · text/html · updated 8 min ago"); the
+  // line printed the raw ISO timestamp the row carries instead. The labelled
+  // Ownership:/Visibility: half is a DOCUMENTED deliberate departure and is
+  // deliberately NOT changed here — it is an open decision on that issue.
+  it("draws a relative updated time, never the raw ISO timestamp (the drawing: \u201cupdated 8 min ago\u201d)", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
+  });
+
+  it("keeps the labelled scope facts untouched while the relative time lands (#3141 item 6 stays an open decision)", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts).toEqual([
+      "Ownership: team",
+      "Visibility: private",
+      "text/html",
+      "updated 8 minutes ago",
+    ]);
+  });
+
+  it("falls back to the value it was handed when that value is not a readable instant", () => {
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "user",
+      visibility: "private",
+      mime: "text/plain",
+      updatedAt: "not-an-instant",
+    });
+    expect(facts[3]).toBe("updated not-an-instant");
   });
 
   it("carries no type keying — every artifact type reads the same line", () => {

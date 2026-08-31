@@ -44,7 +44,10 @@ const RUN_SURFACE = readRepo("packages/agents/src/instance-screens.tsx");
 const RUN_STEP_RAIL = readRepo("packages/agents/src/run-step-rail-panel.tsx");
 const RUN_CHIP_ROW = readRepo("packages/agents/src/run-recommendation-chip-row.tsx");
 const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts");
-const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
+// THE WINDOW IS PART OF THE GATE NOW (cinatra#3141 item 1) — the drawing draws
+// it inside the gate's frame, so it is drawn by the one card every surface
+// mounts rather than by this route. The anchor and its action travelled with it.
+const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
 // gate-region COMPOSITION (header + target stack + one floor) moved out of this
@@ -112,6 +115,19 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
+  // cinatra#3141 item 7 — §IV's target HEADER, drawn by the card. The header is
+  // the older spec's own ("Every target opens with a header that names what is
+  // under review and fixes it in place"), and it used to be part of
+  // `review-target` inside the island document; it is anchored separately now
+  // because it has to be drawn in the states where that document has not
+  // painted at all — the loading skeleton and the preview-recovery panel — and
+  // an anchor is what makes "exactly one header per pinned target" checkable.
+  "review-target-header",
+  // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
+  // it is the SAME `review-prompt-window` the run-embedded closed set below
+  // already carries, and it appears in this list only because the window moved
+  // out of this route and into the card, which this scan reads as chrome.
+  "review-prompt-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
   // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are

@@ -10,8 +10,6 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
-  reviewRevisionMarker,
-  reviewTargetRowFacts,
   reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
@@ -58,11 +56,9 @@ export function ReviewTargetPanel({
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
-  const { target, props, mount } = prepared;
-  const title = props?.artifact.title ?? target.artifactId;
+  const { props, mount } = prepared;
   const objectType = props?.artifact.objectType ?? "";
   const typeLabel = objectType ? reviewTypeLabel(objectType) : "Artifact";
-  const revision = reviewRevisionMarker(target.representationRevisionId);
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
@@ -72,27 +68,19 @@ export function ReviewTargetPanel({
       data-field="name=type.displayName"
       className="overflow-hidden rounded-control border border-line bg-surface-strong"
     >
-      {/* §II — the immutable target header (inert). */}
-      <div className="border-b border-line px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-sans text-sm font-bold text-foreground">{title}</span>
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-xs font-semibold text-blue">
-            {typeLabel}
-          </span>
-        </div>
-        <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
-          {objectType ? <span>{objectType} · </span> : null}
-          <span title={revision.full}>revision {revision.short}</span>
-          <span className="text-mustard-ink"> · pinned</span>
-          {props ? (
-            <>
-              {" · "}
-              {reviewTargetRowFacts(props.artifact).join(" · ")}
-            </>
-          ) : null}
-        </p>
-      </div>
+      {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
+          The header used to be drawn here, inside the island document, which is
+          the one part of the review a reader only sees once an iframe has
+          painted: while the frame was still arriving the card drew a skeleton
+          over it, and past the island's bounded wait it drew a recovery panel,
+          and neither carried a title, a type or a revision. A pending gate on
+          the run page drew with no header at all.
 
+          `ReviewTargetHeader`, in the card, draws it in every one of those
+          states — so what stays here is the part that genuinely needs the
+          server: the provenance reading and the representation itself. Exactly
+          one header per pinned target, and the card is the only place one can
+          come from. */}
       {/* §III — renderer provenance chip. NOTHING is drawn above the reviewed
           work when the host itself rendered a declared text form: that target
           has no provenance region at all (cinatra#2931 W4). */}
@@ -106,7 +94,7 @@ export function ReviewTargetPanel({
               Floor
             </span>
           ) : (
-            <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
+            <span className="inline-flex items-center rounded-full border border-info/30 bg-info/10 px-2 py-0.5 text-badge-xs font-semibold text-info">
               {typeLabel}
             </span>
           )}

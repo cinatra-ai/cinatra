@@ -1660,6 +1660,9 @@ export function AgenticRunPanel({
           schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
           ref: inPlaceReviewRef,
         }}
+        // §VI — the gate's conversational prompt window keeps its exchange with
+        // the RUN (cinatra#3141 item 1).
+        runId={runId}
       />
     </LifecycleCardSurfaceProvider>
   ) : null;

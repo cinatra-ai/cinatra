@@ -506,10 +506,15 @@ describe("every token the panel paints with reads the same on both hosts", () =>
 
     // The enumeration is the panel's own, so it must not quietly become empty.
     expect(Array.from(island.keys()).sort()).toEqual(Array.from(run.keys()).sort());
+    // `--foreground` is NOT on this list any more (cinatra#3141 item 7): the
+    // target's own header — its title, its type chip and its pinned revision —
+    // is drawn by the CARD now, not inside this document, because the header
+    // has to survive the states in which this document has not painted at all.
+    // What the island still paints is the provenance reading and the
+    // representation, and those are the tokens enumerated here.
     for (const name of [
       "--surface-strong",
       "--line",
-      "--foreground",
       "--muted-foreground",
       "--border",
     ]) {
