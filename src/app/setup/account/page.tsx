@@ -36,6 +36,16 @@
 // longer sessionless.
 //
 // PasswordToggleA11y (cinatra#484) is retained, matching /sign-up.
+//
+// REGISTRATION CHOICE: a new instance is closed — nobody but this first account
+// can be created until someone says otherwise. This step is where that answer
+// is given, through the opt-in control in ./bootstrap-registration-choice.tsx
+// (off by default). Nothing is written to the instance here: the answer waits
+// in the operator's own browser and is applied with the admin account this step
+// creates (src/lib/bootstrap-registration-choice.ts), so a passer-by can never
+// leave an open door behind on an instance that is not theirs. It stays
+// changeable afterwards on the access-control screen, which owns the setting
+// from then on.
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -46,6 +56,8 @@ import { getAuthSession } from "@/lib/auth-session";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import { buildSignInPath, sanitizeNextPath } from "@/lib/auth-redirect-target";
 import { SignUpForm } from "@/components/auth-view-client";
+import { readBootstrapRegistrationChoice } from "@/lib/bootstrap-registration-choice";
+import { BootstrapRegistrationChoice } from "./bootstrap-registration-choice";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 
 export const metadata: Metadata = { title: "Setup: Account" };
@@ -109,6 +121,10 @@ export default async function SetupSignUpPage({ searchParams }: SetupSignUpPageP
   // who just created the very first account, so redirecting there is never
   // more meaningful than going straight into the wizard, and it would only
   // add an extra hop back through "/"'s own incomplete-setup redirect.
+  // The answer this browser has already given, if any — a reload shows what
+  // the operator said, not a fresh OFF.
+  const heldChoice = await readBootstrapRegistrationChoice();
+
   const safeNext = sanitizeNextPath(sp.next);
   const redirectTarget = safeNext && safeNext !== "/" ? safeNext : "/setup";
 
@@ -122,17 +138,22 @@ export default async function SetupSignUpPage({ searchParams }: SetupSignUpPageP
         </p>
       </div>
       <div className="mx-auto w-full max-w-md">
-        <PasswordToggleA11y>
-          {/* cinatra#2477 — `justify-self-end w-auto` right-aligns the submit
-              inside the form's grid (twMerge lets `w-auto` supersede the
-              form's default full-width button), Continue-button parity with
-              the other setup steps. */}
-          <SignUpForm
-            classNames={{ primaryButton: "w-auto justify-self-end" }}
-            localization={{ SIGN_UP_ACTION: SETUP_SIGN_UP_CONTINUE_LABEL }}
-            redirectTo={redirectTarget}
-          />
-        </PasswordToggleA11y>
+        {/* The instance is closed to everyone but this first account until the
+            operator says otherwise. The choice is offered here, on the step
+            that creates that first account, and it starts OFF. */}
+        <BootstrapRegistrationChoice initialOpen={heldChoice === "open"}>
+          <PasswordToggleA11y>
+            {/* cinatra#2477 — `justify-self-end w-auto` right-aligns the submit
+                inside the form's grid (twMerge lets `w-auto` supersede the
+                form's default full-width button), Continue-button parity with
+                the other setup steps. */}
+            <SignUpForm
+              classNames={{ primaryButton: "w-auto justify-self-end" }}
+              localization={{ SIGN_UP_ACTION: SETUP_SIGN_UP_CONTINUE_LABEL }}
+              redirectTo={redirectTarget}
+            />
+          </PasswordToggleA11y>
+        </BootstrapRegistrationChoice>
       </div>
     </div>
   );

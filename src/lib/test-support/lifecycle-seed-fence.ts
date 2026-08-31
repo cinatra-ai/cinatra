@@ -59,7 +59,19 @@
 // PRODUCTION-SHAPED environment without loading a single server module.
 // ---------------------------------------------------------------------------
 
-import { timingSafeEqual } from "node:crypto";
+import {
+  LOOPBACK_HOSTS,
+  type SeedFenceEnv,
+  forwardedChainIsLocal,
+  presentedBearer,
+  secretEquals,
+  // The constant-time compare and the forwarded-chain reader live in
+  // `seed-capability` because the design-conformance seed route needs the SAME
+  // two primitives (src/lib/test-support/conformance-seed-fence.ts). A second
+  // copy of a constant-time compare is not redundancy, it is a second thing to
+  // keep correct — and the copy nobody is reading is the one that drifts. The
+  // prose that explains WHY each behaves as it does travels with them.
+} from "./seed-capability";
 
 import {
   SCRIPTED_TEST_PROVIDER_ENV,
@@ -72,7 +84,7 @@ import {
   // graph behind a fence that must stay cheap enough to evaluate on every call.
 } from "@cinatra-ai/llm/scripted-test-provider";
 
-export type SeedFenceEnv = Record<string, string | undefined>;
+export type { SeedFenceEnv };
 
 export type SeedFenceVerdict =
   | { ok: true }
@@ -91,71 +103,9 @@ export const SEED_CAPABILITY_MIN_LENGTH = 32;
  *  caller can make the process hold. */
 export const SEED_MAX_BODY_BYTES = 4096;
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-
-/**
- * THE FORWARDED CHAIN MUST BE LOCAL — not absent.
- *
- * The first draft disqualified on PRESENCE, copying `/api/skills/reset-repo`.
- * Measured on the live stack, that refuses every request there is: Next's own dev
- * server synthesises `x-forwarded-for` / `-host` / `-proto` on the way into a
- * route handler, so the chain is always there and the header says nothing about a
- * proxy the operator installed. The check that was actually MEANT is "no hop from
- * off this machine", so that is what it now asks.
- *
- * IT IS A NARROWING SIGNAL, NEVER A PROOF, and the distinction matters because a
- * caller can also just send these headers. It is deliberately one-directional: a
- * chain that names a REMOTE hop refuses; a chain that names only loopback does
- * not thereby prove anything. The capability (fence 3) is the proof.
- */
-function isLoopbackAddress(raw: string): boolean {
-  let value = raw.trim().toLowerCase();
-  if (value.length === 0) return false;
-  // Strip RFC 7239 quoting and IPv6 brackets, and a trailing :port on either.
-  value = value.replace(/^"|"$/g, "");
-  if (value.startsWith("[")) {
-    value = value.slice(1, value.indexOf("]") === -1 ? undefined : value.indexOf("]"));
-  } else if ((value.match(/:/g)?.length ?? 0) === 1) {
-    value = value.slice(0, value.lastIndexOf(":"));
-  }
-  if (value.startsWith("::ffff:")) value = value.slice("::ffff:".length);
-  return LOOPBACK_HOSTS.has(value);
-}
-
-/** True when every hop the request advertises is on this machine. An UNPARSEABLE
- *  or empty entry counts as remote — fail closed. */
-export function forwardedChainIsLocal(headers: {
-  get(name: string): string | null;
-}): boolean {
-  const xff = headers.get("x-forwarded-for");
-  if (xff !== null) {
-    const hops = xff.split(",").map((h) => h.trim());
-    if (hops.length === 0 || !hops.every(isLoopbackAddress)) return false;
-  }
-  const xfh = headers.get("x-forwarded-host");
-  if (xfh !== null && !isLoopbackAddress(xfh)) return false;
-  const fwd = headers.get("forwarded");
-  if (fwd !== null) {
-    const fors = [...fwd.matchAll(/for=([^;,\s]+)/gi)].map((m) => m[1]);
-    if (fors.length === 0 || !fors.every(isLoopbackAddress)) return false;
-  }
-  return true;
-}
-
-/** Constant-time compare of two secrets of possibly different length. */
-function secretEquals(presented: string, expected: string): boolean {
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  // `timingSafeEqual` throws on a length mismatch, which would itself leak the
-  // length; compare fixed-width digests of equal size instead by padding to the
-  // longer of the two and folding the length difference into the result.
-  const width = Math.max(a.length, b.length);
-  const pa = Buffer.alloc(width);
-  const pb = Buffer.alloc(width);
-  a.copy(pa);
-  b.copy(pb);
-  return timingSafeEqual(pa, pb) && a.length === b.length;
-}
+/** Re-exported so the fence keeps ONE public surface for its callers; the
+ *  implementation and its rationale live in `./seed-capability`. */
+export { forwardedChainIsLocal };
 
 /**
  * FENCES 1 + 2 — the environment. Split out so a caller can refuse before it
@@ -213,8 +163,7 @@ export function lifecycleSeedRequestVerdict(
   if (typeof secret !== "string" || secret.length < SEED_CAPABILITY_MIN_LENGTH) {
     return { ok: false, status: 404, reason: `${SEED_CAPABILITY_ENV} is not armed` };
   }
-  const authorization = request.headers.get("authorization") ?? "";
-  const presented = /^Bearer (.+)$/i.exec(authorization)?.[1] ?? "";
+  const presented = presentedBearer(request.headers);
   if (presented.length === 0 || !secretEquals(presented, secret)) {
     return { ok: false, status: 403, reason: "capability-not-presented" };
   }
