@@ -139,6 +139,7 @@
       "@cinatra-ai/apify-connector/setup-page": ["./extensions/cinatra-ai/apify-connector/src/setup-page.tsx"],
       "@cinatra-ai/sdk-ui/prompt-field": ["./packages/sdk-ui/src/prompt-field.tsx"],
       "@cinatra-ai/sdk-ui/widget": ["./packages/sdk-ui/src/widget.tsx"],
+      "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell": ["./packages/sdk-ui/src/artifacts/pdf-detail-shell.tsx"],
       "@cinatra-ai/sdk-ui": ["./packages/sdk-ui/src/index.ts"],
       "@cinatra-ai/design": ["./packages/design/src/index.ts"],
       "@cinatra-ai/design/brand/colors": ["./packages/design/src/brand/colors.ts"],
