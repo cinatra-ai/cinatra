@@ -143,3 +143,117 @@ test.describe("tab-row rule position — the rule closes the row on its baseline
     });
   }
 });
+
+/**
+ * BOTH PALETTES (cinatra#3142 acceptance 6). The assertions above pin the
+ * rule's colour in the palette a review is written in — the light one — and its
+ * position in both. Nothing pinned the INK in dark, which is how the rule came
+ * to keep its light-palette navy there: `--line-strong` was never declared for
+ * the dark palette, so the token cascaded in at `#15213a` and the paired band
+ * measured grey 32 of 255 in BOTH themes on twelve frames, while the hairlines
+ * beside it read 224 in light and 23 in dark.
+ *
+ * These assertions guard #3106's fix and the drawing's pairing while the ink
+ * changes underneath them: the trailing rule stays the paired etched band — two
+ * 1px lines with the drawing's 5px gap — painted in ONE ink that is the
+ * palette's own, reaching the content gutter, in light and in dark.
+ */
+test.describe("tab-row rule — the paired etched band in both palettes", () => {
+  /** The gradient's opaque colour stops, as the browser serializes them. */
+  async function inkStops(
+    locator: import("@playwright/test").Locator,
+  ): Promise<string[]> {
+    return locator.evaluate((el) => {
+      const image = getComputedStyle(el as Element).backgroundImage;
+      const stops =
+        image.match(
+          /(rgba?\([^)]*\)|oklch\([^)]*\)|lab\([^)]*\)|color\([^)]*\)|#[0-9a-fA-F]{3,8})/g,
+        ) ?? [];
+      return stops.filter((stop) => !/,\s*0\s*\)$/.test(stop) && !/\/\s*0\s*\)$/.test(stop));
+    });
+  }
+
+  const inkPerTheme: Record<string, string> = {};
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`the trailing rule is the paired etched band in one palette ink (${theme} theme)`, async ({
+      page,
+    }) => {
+      await page.goto(FIXTURE);
+      await page.evaluate((t) => {
+        document.documentElement.classList.toggle("dark", t === "dark");
+      }, theme);
+
+      const row = page.getByTestId("fixture-tabs-row");
+      const rule = row.locator('[data-slot="separator"][data-major]');
+      await expect(rule).toBeVisible();
+
+      const stops = await inkStops(rule);
+      expect(
+        stops.length,
+        `the ${theme} rule paints no opaque stops — it is invisible, not a rule`,
+      ).toBeGreaterThan(0);
+      expect(
+        new Set(stops).size,
+        `the ${theme} rule paints ${stops.join(", ")} — a two-tone bevel, not one ink`,
+      ).toBe(1);
+
+      const ink = stops[0];
+      inkPerTheme[theme] = ink;
+
+      const cs = await ruleComputed(rule);
+      const verdict = classifyEtchedRule(cs, ink);
+      expect(
+        verdict.ok,
+        `the ${theme} tab-row rule is no longer the paired etched band — ` +
+          `${verdict.reason}. Spec: two 1px lines of one ink with a 5px gap. ` +
+          `Computed: ${JSON.stringify(cs)}`,
+      ).toBe(true);
+      expect(verdict.form).toBe("gradient");
+
+      if (theme === "light") {
+        expect(
+          ink,
+          "the light palette's section rule must stay the drawing's full navy",
+        ).toBe(SPEC_NAVY);
+      } else {
+        expect(
+          ink,
+          "the dark palette paints the section rule in the light palette's full " +
+            "navy — the token is inherited, not declared, and the rule all but " +
+            "vanishes on a dark ground",
+        ).not.toBe(SPEC_NAVY);
+        expect(ink).not.toBe(inkPerTheme.light);
+      }
+    });
+
+    test(`the trailing rule reaches the content gutter (${theme} theme)`, async ({
+      page,
+    }) => {
+      await page.goto(FIXTURE);
+      await page.evaluate((t) => {
+        document.documentElement.classList.toggle("dark", t === "dark");
+      }, theme);
+
+      const row = page.getByTestId("fixture-tabs-row");
+      const rule = row.locator('[data-slot="separator"][data-major]');
+      await expect(rule).toBeVisible();
+
+      const ruleBox = await rule.boundingBox();
+      const rowBox = await row.boundingBox();
+      expect(ruleBox && rowBox, "the tab row must be laid out").toBeTruthy();
+
+      const ruleRight = ruleBox!.x + ruleBox!.width;
+      const rowRight = rowBox!.x + rowBox!.width;
+      expect(
+        Math.abs(ruleRight - rowRight),
+        `the trailing rule ends at x=${ruleRight} while the content gutter is at ` +
+          `x=${rowRight} — the rule stops short of the edge it is drawn to reach`,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        ruleBox!.width,
+        "the trailing rule must span the room left of the last tab, not a sliver",
+      ).toBeGreaterThan(0);
+    });
+  }
+});

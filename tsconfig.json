@@ -82,6 +82,8 @@
       "@cinatra-ai/agents/schema": ["./packages/agents/src/schema.ts"],
       "@cinatra-ai/agents/execution-config": ["./packages/agents/src/execution-config.ts"],
       "@cinatra-ai/agents/run-status": ["./packages/agents/src/run-status.ts"],
+      "@cinatra-ai/agents/trigger-timezone": ["./packages/agents/src/trigger-timezone.ts"],
+      "@cinatra-ai/agents/timezone-field": ["./packages/agents/src/timezone-field.tsx"],
       "@cinatra-ai/agents/run-surface-status": ["./packages/agents/src/run-surface-status.ts"],
       "@cinatra-ai/agents/owner-containment-port": ["./packages/agents/src/owner-containment-port.ts"],
       "@cinatra-ai/agents/mcp-client": ["./packages/agents/src/mcp/client/deterministic-client.ts"],

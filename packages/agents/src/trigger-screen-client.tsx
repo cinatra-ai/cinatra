@@ -25,6 +25,19 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+// THE TIMEZONE FIELD'S ONE RESOLUTION (cinatra#3142). The value and the option
+// list used to be resolved here, independently, with nothing tying them
+// together — which is how both Timezone controls came to draw empty. The
+// invariant (the bound value is always a member of the list beneath it), the
+// non-silent degrade, and the drawing's "~8" size rule for the select family
+// all live in that one module now, so neither call site below can restate them
+// differently.
+import {
+  readBrowserTimezone,
+  readSupportedTimezones,
+  resolveTimezoneField,
+} from "./trigger-timezone";
+import { TimezoneField } from "./timezone-field";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
 // `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
@@ -248,21 +261,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const browserTz = useMemo(() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    } catch {
-      return "UTC";
-    }
-  }, []);
+  const browserTz = useMemo(() => readBrowserTimezone(), []);
 
-  const allTimezones = useMemo(() => {
-    try {
-      return Intl.supportedValuesOf("timeZone") as string[];
-    } catch {
-      return ["UTC"];
-    }
-  }, []);
+  // `null` — not a one-entry list — when the platform told us nothing, so the
+  // render can say so instead of degrading in silence.
+  const supportedTimezones = useMemo(() => readSupportedTimezones(), []);
 
   // THE ROW THIS FORM OPENS ON (cinatra#2936). Not a default of this form's:
   // the two inputs go to the runner's own decision and the answer comes back as
@@ -301,6 +304,55 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
   const triggerType = watch("triggerType");
   const timezone = watch("timezone");
+
+  // ONE resolution for both Timezone controls (cinatra#3142). The value handed
+  // to a control is always a member of the list rendered beneath it — including
+  // when the platform's zone list could not be read, and including a bound
+  // value of the empty string, which `??` never coalesced.
+  const timezoneField = useMemo(
+    () =>
+      resolveTimezoneField({
+        bound: timezone,
+        browserTimezone: browserTz,
+        supported: supportedTimezones,
+      }),
+    [timezone, browserTz, supportedTimezones],
+  );
+
+  // THE FIELD HOLDS WHAT THE CONTROL DRAWS (cinatra#3142). The resolution above
+  // decides what a reader SEES; this writes that same zone back into the form,
+  // so what is submitted cannot differ from what was read before Continue. It
+  // matters twice over: a bound empty string (which an applied suggestion can
+  // set) draws the browser's zone while the schema's min(1) refuses the submit,
+  // and a bound run of spaces draws the browser's zone while passing that check
+  // and persisting the blank. The write converges in one pass -- the resolved
+  // value is non-blank, so re-resolving it returns itself -- and it never
+  // overwrites a zone the person chose, because a chosen zone already resolves
+  // to itself.
+  useEffect(() => {
+    if (timezone === timezoneField.value) return;
+    setValue("timezone", timezoneField.value);
+  }, [timezone, timezoneField.value, setValue]);
+
+  /**
+   * The Timezone control, drawn once for the scheduled block and once for the
+   * recurring one. What it draws lives in `TimezoneField` — one render for both
+   * call sites, and the same render a conformance fixture mounts — and what it
+   * commits is this form's business: the zone, and the block that owns it.
+   */
+  const renderTimezoneControl = (
+    controlId: "timezone-scheduled" | "timezone-recurring",
+    selects: "scheduled" | "recurring",
+  ) => (
+    <TimezoneField
+      id={controlId}
+      field={timezoneField}
+      onValueChange={(v) => {
+        setValue("timezone", v);
+        setValue("triggerType", selects);
+      }}
+    />
+  );
   const scheduledAtValue = (watch as (n: string) => string)("scheduledAt") ?? "";
 
   // ---------------------------------------------------------------------------
@@ -569,22 +621,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-scheduled" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "scheduled");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-scheduled" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-scheduled", "scheduled")}
                   </div>
                 </div>
               </div>
@@ -775,22 +812,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-recurring" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "recurring");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-recurring" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-recurring", "recurring")}
                   </div>
                   <Input type="hidden" {...register("cronExpression" as never)} />
                   {errorBag.cronExpression?.message && (
