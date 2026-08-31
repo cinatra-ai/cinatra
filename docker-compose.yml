@@ -567,37 +567,82 @@ services:
       # the only other consumer is a developer on the box. So the binding stays,
       # scoped to 127.0.0.1.
       - "127.0.0.1:8000:8000"
-    # PROVIDER CONFIG (cinatra#2582, extended to multi-provider by cinatra#2591)
-    # — sourced from a NARROW, generated file, NOT inlined as
-    # `environment: OPENAI_API_KEY: "${OPENAI_API_KEY:-}"`. That interpolation
-    # reads the *shell* env, and the app's provider keys do not live there: they
-    # live in the app database, configured in-app. So every normal install
-    # started this container with an EMPTY key, it logged "No LLM client
-    # configured - entity extraction will be limited", and — because extraction
-    # runs BEFORE the graph write — every episode was accepted and then dropped.
-    # The graph was silently empty. And an empty `environment:` value OVERRIDES
-    # an `env_file:` value on the same key (the nango/wayflow precedent above),
-    # so NO key this generator writes may appear in `environment:` below.
-    # `scripts/gen-graphiti-env.mjs` (run by `npm run services`) resolves the
-    # extraction provider AND the embedder choice from the app's stored provider
-    # configuration and writes docker/graphiti/.graphiti.env;
-    # `required: false` keeps a fresh checkout bootable, and a keyless bring-up
-    # is a reported state ("knowledge-graph indexing OFF"), not a silent one.
-    env_file:
-      - path: ./docker/graphiti/.graphiti.env
-        required: false
+    # PROVIDER CONFIG (cinatra#2582, multi-provider by cinatra#2591) — delivered
+    # through the PROCESS ENVIRONMENT of the `docker compose` command that
+    # creates this container. NO FILE HOLDS THE KEY, and none ever will:
+    # `docker/graphiti/.graphiti.env` is never written and is never present.
+    #
+    # THE FIRST DEFECT this replaces: the key was inlined here as
+    # `OPENAI_API_KEY: "${OPENAI_API_KEY:-}"`. That interpolation reads the
+    # *shell* env, and the app's provider keys do not live there — they live in
+    # the app database, configured in-app. So every normal install started this
+    # container with an EMPTY key, logged "No LLM client configured - entity
+    # extraction will be limited", and — because extraction runs BEFORE the graph
+    # write — accepted and then dropped every episode. The graph was silently
+    # empty.
+    #
+    # THE SECOND DEFECT, which the first fix created: the generator wrote the
+    # decrypted key in clear to `docker/graphiti/.graphiti.env` and this service
+    # read it with `env_file:`. That file outlived `docker compose down`, `make
+    # clean`, a branch switch and a whole checkout, and being gitignored no gate
+    # could see it. `scripts/gen-graphiti-env.mjs` now resolves the key in memory
+    # and RUNS the compose command itself with the variables below set in its
+    # environment:
+    #
+    #     npm run kg:refresh      (or `npm run services`, which ends with it)
+    #
+    # VALUE-LESS ON PURPOSE. Each provider entry below is written `NAME:` with no
+    # value — "take it from the environment of the compose process". Compose
+    # OMITS such a variable from the container when it is unset, rather than
+    # setting it to the empty string, so `docker/graphiti/config.yaml`'s
+    # keyless-safe defaults (the named boot sentinel and the no-egress local
+    # URLs) still apply to a bare `docker compose up` that never ran the
+    # generator. Writing `${NAME:-}` instead would set the empty string and
+    # override those defaults — the same override trap the nango and wayflow
+    # services document above, and it would crash-loop this server.
+    #
+    # A BARE `docker compose up` IS THEREFORE KEYLESS, and that is the designed
+    # behaviour, not an oversight: extraction is off, nothing reaches a vendor,
+    # and the app reports the state. Bring the indexer up with a key through the
+    # generator; there is no file to inspect instead.
+    #
+    # …KEYLESS UNLESS THE INVOKING SHELL HAS ONE. "Value-less" means "take it
+    # from the environment of the compose process", so a compose invocation
+    # whose shell happens to export `OPENAI_API_KEY` — `npm run services` does
+    # `set -a && source .env.local` — would hand the container a key the app's
+    # own resolver never approved: the wrong vendor on an Anthropic install, or
+    # a key the operator disconnected in the app. The generator cannot prevent
+    # that, because it is not in that road at all. So every whole-stack entry
+    # point (`npm run services`, `make dev`, `scripts/setup.sh`) strips exactly
+    # the names below with `env -u …` before its `up`, and hands the key over
+    # afterwards through `kg:up`. A suite asserts that list stays in step with
+    # `GRAPHITI_GENERATED_NAMES`.
     environment:
       # The upstream server is YAML-first: CONFIG_PATH selects the file, and env
       # vars (pydantic-settings, `__` nested delimiter) deep-merge OVER it. So
-      # this file holds the static shape and the generated env file holds the
-      # provider selection — the two never share a key.
+      # this file holds the static shape and the generator supplies the provider
+      # selection — the two never share a key.
       CONFIG_PATH: /app/mcp/config/cinatra.yaml
-      # Database wiring is static and shares no key with the generated file.
+      # Database wiring is static and shares no key with the generated set.
       DATABASE__PROVIDER: neo4j
       DATABASE__PROVIDERS__NEO4J__URI: bolt://neo4j:7687
       DATABASE__PROVIDERS__NEO4J__USERNAME: neo4j
       DATABASE__PROVIDERS__NEO4J__PASSWORD: ${NEO4J_PASSWORD:-cinatra-local}
       SEMAPHORE_LIMIT: "10"
+      # Resolved and handed over by scripts/gen-graphiti-env.mjs. This list is
+      # `GRAPHITI_GENERATED_NAMES` in that script, and a suite asserts the two
+      # agree — a variable declared in one place and not the other is a
+      # setting the container silently never receives.
+      LLM__PROVIDER:
+      LLM__PROVIDERS__OPENAI__API_KEY:
+      LLM__PROVIDERS__OPENAI__API_URL:
+      LLM__PROVIDERS__ANTHROPIC__API_KEY:
+      EMBEDDER__PROVIDER:
+      EMBEDDER__MODEL:
+      EMBEDDER__DIMENSIONS:
+      EMBEDDER__PROVIDERS__OPENAI__API_URL:
+      EMBEDDER__PROVIDERS__OPENAI__API_KEY:
+      OPENAI_API_KEY:
     volumes:
       - ./docker/graphiti/config.yaml:/app/mcp/config/cinatra.yaml:ro
     depends_on:

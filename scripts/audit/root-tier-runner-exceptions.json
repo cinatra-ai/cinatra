@@ -5,8 +5,9 @@
     "`slice` is the issue whose work the tier IS \u2014 where wiring it belongs. It may be CLOSED, and that is exactly what",
     "this ledger records: the tier shipped and its runner did not. An entry for a tier that IS run, or for a config file",
     "that no longer exists, fails the gate, so this list can only shrink honestly.",
-    "Every entry below was found by the cinatra#2936 audit; that change wired the four proof tiers of its own plan and left",
-    "these untouched, because each belongs to another slice and wiring one needs that slice's services and its judgement."
+    "The first seven entries below were found by the cinatra#2936 audit; that change wired the four proof tiers of its own plan and left",
+    "these untouched, because each belongs to another slice and wiring one needs that slice's services and its judgement.",
+    "The eighth entry records the same shape for its own slice, and was added by that slice's own change."
   ],
   "exceptions": [
     {
@@ -43,6 +44,11 @@
       "config": "vitest/integration/2911.config.ts",
       "slice": "https://github.com/cinatra-ai/cinatra/issues/2911",
       "reason": "Reached by `pnpm test:created-at-immutable`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/loopback-peer.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/3123",
+      "reason": "Reached by `pnpm test:loopback-peer`, which no workflow invokes. This tier boots the application's OWN development server and drives it over HTTP, so a runner needs a whole development stack inside one job: a real Postgres, a real Redis (with the queue backend unreachable the boot never reaches ready and the suite's readiness poll simply times out), the per-boot secrets the start-up path refuses to run without, the development runtime mode (the production path needs a baked seed that a plain source-tree run does not produce), the companion extension tree the start-up hook imports, and a ready budget of minutes for a cold compile. One job DOES carry that combination today, the chat-HITL held-turn dev-runtime e2e job, but giving this tier a step there is a workflow change and this change does not make one; that wiring is a CI-wiring change of its own. Folding the suite into a tier that job already runs is not an answer either: each of those configs pins SUPABASE_SCHEMA to a throwaway schema, which the spawned development server would inherit and boot against."
     }
   ]
 }
