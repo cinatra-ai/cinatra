@@ -103,12 +103,16 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
-// THE HOST THIS FILE DRIVES (cinatra#3062). It pins §V's SETTLED CHIP row —
-// one chip per skill the hold asked about, each stating what it recorded — and
-// that row is drawn on the review page's gate region now that the run page
-// (cinatra#3047) and the two conversation hosts (cinatra#3062) take §V's
-// checklist reading. The rule itself is host-independent and is asserted as a
-// pure function below; what moved is the host the DOM half is read on.
+// WHAT THE DOM HALF READS (cinatra#3047, then cinatra#3062). The rule is
+// unchanged — one pill per skill the hold ASKED ABOUT, each stating what the run
+// recorded — and it is host-independent, which the pure-function half below
+// asserts directly. What moved is how a host STATES it: every declared host
+// draws §V's checklist now (the run page and the review page with cinatra#3047,
+// the chat and the widget with cinatra#3062), so a settled pill states its
+// outcome with a read-only box — ticked for a skill the run applied, clear for
+// one it did not — instead of the retired per-chip face and its tint. Neither
+// the set of pills nor their order changed with it, and those are what
+// cinatra#2790 was about.
 async function renderRow(
   decision: Decision,
   host: "page_gate_region" | "site_widget" | "run_card" = "page_gate_region",
@@ -134,6 +138,11 @@ async function renderRow(
 const chips = () => [...document.querySelectorAll("[data-recommendation-chip]")];
 const chipFor = (skillId: string) =>
   document.querySelector(`[data-recommendation-chip][data-skill-id="${CSS.escape(skillId)}"]`);
+/** What a settled pill states: ticked = the run applied this skill. */
+const appliedState = (skillId: string) =>
+  document
+    .querySelector(`[data-skills-step-checkbox][data-skill-id="${CSS.escape(skillId)}"]`)
+    ?.getAttribute("aria-checked") ?? null;
 
 describe("§V settled — one chip per skill the hold asked about (cinatra#2790)", () => {
   it("draws FOUR chips for four candidates with three decision rows, and the fourth is SKIPPED", async () => {
@@ -141,26 +150,27 @@ describe("§V settled — one chip per skill the hold asked about (cinatra#2790)
 
     expect(chips()).toHaveLength(4);
 
-    // The three that recorded a row keep exactly what they recorded.
-    expect(chipFor(CANDIDATES[0]!.skillId)?.getAttribute("data-chip-mark")).toBe("confirmed");
-    expect(chipFor(CANDIDATES[1]!.skillId)?.getAttribute("data-chip-mark")).toBe("adjusted");
-    expect(chipFor(CANDIDATES[3]!.skillId)?.getAttribute("data-chip-mark")).toBe("confirmed");
+    // The three that recorded a row state exactly what they recorded: a row
+    // whose mark is anything but `skipped` is a skill the run applied, and its
+    // box says so.
+    expect(appliedState(CANDIDATES[0]!.skillId)).toBe("true");
+    expect(appliedState(CANDIDATES[1]!.skillId)).toBe("true");
+    expect(appliedState(CANDIDATES[3]!.skillId)).toBe("true");
 
     // THE ONE THE CARD USED TO LOSE — present, named, and stating its outcome.
     const skipped = chipFor(SKIPPED.skillId);
     expect(skipped).not.toBeNull();
-    expect(skipped!.getAttribute("data-chip-mark")).toBe("skipped");
     expect(skipped!.textContent).toContain(SKIPPED.name);
-    expect(skipped!.textContent).toContain("Skipped");
+    expect(appliedState(SKIPPED.skillId)).toBe("false");
 
-    // THE TREATMENT §V draws for it: the dashed edge and the muted ground, and
-    // NOT a status colour the outcome does not carry.
-    const cls = skipped!.className;
-    expect(cls).toContain("border-dashed");
-    expect(cls).toContain("bg-transparent");
-    expect(cls).toContain("text-muted-foreground");
-    expect(cls).not.toContain("border-success");
-    expect(cls).not.toContain("bg-warning");
+    // AND NOTHING TO PRESS on it: the box is the statement, read-only, and the
+    // retired per-chip face and its tint are drawn on no host at all.
+    const box = document.querySelector(
+      `[data-skills-step-checkbox][data-skill-id="${CSS.escape(SKIPPED.skillId)}"]`,
+    ) as HTMLButtonElement;
+    expect(box.disabled).toBe(true);
+    expect(skipped!.getAttribute("data-chip-mark")).toBeNull();
+    expect(document.querySelectorAll("[data-skill-action]")).toHaveLength(0);
   });
 
   it("draws them in the order the hold OFFERED them — the held row, settled in place", async () => {
@@ -188,24 +198,29 @@ describe("§V settled — one chip per skill the hold asked about (cinatra#2790)
     expect(chips().at(-1)?.getAttribute("data-skill-id")).toBe(extra.skillId);
   });
 
-  it("a WHOLLY skipped offer states every skill it asked about, none of them tinted", async () => {
+  it("a WHOLLY skipped offer states every skill it asked about, none of them applied", async () => {
     await renderRow({ kind: "skipped", decided: [], candidates: CANDIDATES });
     expect(chips()).toHaveLength(4);
-    for (const chip of chips()) {
-      expect(chip.getAttribute("data-chip-mark")).toBe("skipped");
-      expect(chip.className).toContain("border-dashed");
-    }
+    for (const c of CANDIDATES) expect(appliedState(c.skillId)).toBe("false");
     // Still the settled reading: nothing left to press.
     expect(document.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+    expect(document.querySelector("[data-skills-step-continue]")).toBeNull();
   });
 
-  it("the ZERO-CHIP outcome panel is untouched — no offer and no row still draws it", async () => {
-    await renderRow({ kind: "skipped", decided: [] });
+  it("no offer and no row draws the card and states its emptiness, not the retired panel", async () => {
+    // THE ZERO-CHIP ROW, and the face it is stated with moved. cinatra#2893's
+    // criterion is that this row draws its card and says something rather than
+    // vanishing; the bordered outcome plate was how the per-chip hosts said it,
+    // and no host draws that plate now. `zero-chip-settled-reading.test.tsx`
+    // reads the criterion in full — what is pinned here is only that the wider
+    // row left it alone.
+    const { container } = await renderRow({ kind: "skipped", decided: [] });
     expect(chips()).toHaveLength(0);
-    const panel = document.querySelector("[data-recommendation-outcome-panel]");
-    expect(panel).not.toBeNull();
-    expect(panel!.getAttribute("data-recommendation-outcome")).toBe("skipped");
-    expect(panel!.textContent).toContain("Skipped");
+    expect(document.querySelector("[data-recommendation-outcome-panel]")).toBeNull();
+    const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+    expect(root.getAttribute("data-run-recommendation-decision")).toBe("skipped");
+    expect(root.getAttribute("data-run-recommendation-settled")).toBe("true");
+    expect(document.querySelector("[data-skills-step-list]")?.textContent?.trim()).toBeTruthy();
   });
 
   it("the HELD reading is untouched — an offer on a pending decision changes nothing", async () => {
@@ -227,7 +242,13 @@ describe("§V settled — one chip per skill the hold asked about (cinatra#2790)
     expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(root.getAttribute("data-lifecycle-card-state")).toBe("decided");
     expect(root.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
-    expect(root.hasAttribute("data-can-decide")).toBe(false);
+    // NOTHING IS OFFERED ON A SETTLED ROW, which the settled reading states as
+    // its own two attributes: the step is not editable and it draws no control.
+    // The arm used to read this off the ABSENCE of `data-can-decide`, which the
+    // retired per-chip settled root omitted; §V's step publishes the reading
+    // positively instead, and that is the stronger statement of the same thing.
+    expect(root.getAttribute("data-skills-step-editable")).toBe("false");
+    expect(document.querySelector("[data-skills-step-continue]")).toBeNull();
   });
 });
 

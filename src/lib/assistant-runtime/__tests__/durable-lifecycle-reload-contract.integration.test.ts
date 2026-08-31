@@ -71,7 +71,7 @@
  * graphs reach server-only code, so without them the column does not mount at
  * all. Everything this contract measures stays real.
  *
- * LOCAL NOTE: this suite runs under `vitest.integration-2823.config.ts` (jsdom +
+ * LOCAL NOTE: this suite runs under `vitest/integration/2823.config.ts` (jsdom +
  * the chat package's alias set + a live Postgres). It is NOT in the root include.
  */
 

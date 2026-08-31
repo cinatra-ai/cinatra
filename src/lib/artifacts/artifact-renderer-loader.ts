@@ -8,6 +8,7 @@ import {
   type GeneratedArtifactRendererEntry,
 } from "@/lib/generated/artifact-renderers";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
+import { negotiatePropsApiVersion } from "@/lib/artifacts/props-version-negotiation";
 import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,11 @@ import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-pr
 //                        result (a post-build marketplace uninstall removed the
 //                        module). Renders generic + "requires rebuild".
 //   - invalid-export   — the module loaded but exports no component default.
-//   - abi-incompatible — the build entry's propsApiVersion ≠ the host snapshot's.
+//   - abi-incompatible — the build entry's propsApiVersion is OUTSIDE the host's
+//                        supported window (enabler 0.4: it used to be `≠ the
+//                        host snapshot's`, a strict equality that would have
+//                        darkened every display in the fleet the day the host
+//                        emitted a new version — a flag day, now a ratchet).
 //   - quarantined      — the key crossed the repeat-failure threshold; the host
 //                        stops loading it and renders generic until restart.
 // A PRESENT-but-BROKEN module (a top-level throw) is NOT degraded here — it
@@ -44,7 +49,19 @@ export type ArtifactRendererFailureClass =
   | "quarantined";
 
 export type ArtifactRendererLoadResult =
-  | { ok: true; Component: ComponentType<ArtifactRendererProps>; entry: GeneratedArtifactRendererEntry }
+  | {
+      ok: true;
+      Component: ComponentType<ArtifactRendererProps>;
+      entry: GeneratedArtifactRendererEntry;
+      /**
+       * THE NEGOTIATED PROPS VERSION (enabler 0.4). The version THIS display
+       * declared and the host admitted — the version the caller must build the
+       * snapshot at. It is the display's own, not the host's newest: "resolve
+       * the display, read its declared props version, then build the snapshot at
+       * that version".
+       */
+      negotiatedPropsApiVersion: number;
+    }
   | { ok: false; failureClass: ArtifactRendererFailureClass };
 
 /** A renderer key is quarantined after this many pre-render/load failures. */
@@ -97,6 +114,11 @@ export async function loadArtifactRenderer(args: {
   generatedKey: string;
   packageName: string;
   slot: ArtifactUiSlot;
+  /**
+   * The host's NEWEST props version — the CEILING of the negotiation window,
+   * not an equality target (enabler 0.4). Kept under its historical name so no
+   * caller has to move; what changed is what the host does with it.
+   */
   expectedPropsApiVersion: number;
 }): Promise<ArtifactRendererLoadResult> {
   const { generatedKey, packageName, slot, expectedPropsApiVersion } = args;
@@ -111,13 +133,20 @@ export async function loadArtifactRenderer(args: {
     return { ok: false, failureClass: "not-built" };
   }
 
-  // ABI / props-contract compatibility is known at build time from the entry —
-  // a deterministic pre-render check (no module executed).
-  if (entry.propsApiVersion !== expectedPropsApiVersion) {
+  // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4). Known at build time from the
+  // entry — a deterministic pre-render check (no module executed). A display
+  // inside the host's supported window is admitted AT ITS OWN VERSION; only a
+  // version the host cannot build (`too-new`) or no longer builds (`retired`)
+  // degrades, and both keep the existing `abi-incompatible` failure class so no
+  // caller's taxonomy widens.
+  const negotiated = negotiatePropsApiVersion(entry.propsApiVersion, {
+    max: expectedPropsApiVersion,
+  });
+  if (!negotiated.ok) {
     recordRendererFailure(generatedKey);
     console.error(
       `[artifact-renderer] ${artifactRendererDiagnostic(packageName, slot, "abi-incompatible")} ` +
-        `(build entry propsApiVersion ${entry.propsApiVersion} ≠ host ${expectedPropsApiVersion})`,
+        `(build entry propsApiVersion ${entry.propsApiVersion} ${negotiated.reason} for host ceiling ${expectedPropsApiVersion})`,
     );
     return { ok: false, failureClass: "abi-incompatible" };
   }
@@ -149,5 +178,10 @@ export async function loadArtifactRenderer(args: {
     return { ok: false, failureClass: "invalid-export" };
   }
 
-  return { ok: true, Component: Component as ComponentType<ArtifactRendererProps>, entry };
+  return {
+    ok: true,
+    Component: Component as ComponentType<ArtifactRendererProps>,
+    entry,
+    negotiatedPropsApiVersion: negotiated.version,
+  };
 }

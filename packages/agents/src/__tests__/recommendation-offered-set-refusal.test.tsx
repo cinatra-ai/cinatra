@@ -109,15 +109,17 @@ const OFFERED = [
 async function mountRow() {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
-  // THE HOST THAT STILL DRAWS §V's PER-CHIP ROW (cinatra#3062). What this file
-  // pins — a refused confirm draws the server's reason in place and leaves every
-  // control operable — is a property of the chip row, and the chip row is drawn
-  // on the review page's gate region now that the run page (cinatra#3047) and
-  // the two conversation hosts (cinatra#3062) take §V's checklist reading. The
-  // conversation's own refusal reading is pinned on its own hosts, in
-  // `skills-card-on-the-conversation-hosts.test.tsx`.
+  // PRESSED THROUGH §V's CONTINUE, because no host draws the per-chip row any
+  // more. This file's own note used to name the review page's gate region as
+  // "the host that still draws §V's per-chip row"; cinatra#3047's re-shoot round
+  // moved that host too, so with cinatra#3062's conversation move in, all four
+  // declared hosts take the checklist reading and the Confirm this file pressed
+  // exists nowhere. What the file PINS is untouched by that — a refused decision
+  // draws the server's reason in place, keeps the hold parked and reports
+  // nothing upward — because it is a property of the row's refusal path, which
+  // both readings share. Only the control that reaches it moved.
   return render(
-    <LifecycleCardSurfaceProvider host="page_gate_region">
+    <LifecycleCardSurfaceProvider host="run_card">
       <RunRecommendationChipRow
         runId="run-2906"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -130,14 +132,23 @@ async function mountRow() {
   );
 }
 
-describe("cinatra#2906 AC-5 — a refused confirm draws the reason in place", () => {
+/** §V's one control, once the row has drawn it. */
+async function continueControl(): Promise<HTMLButtonElement> {
+  return await waitFor(() => {
+    const btn = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+    if (btn === null) throw new Error("the row drew no Continue");
+    return btn;
+  });
+}
+
+describe("cinatra#2906 AC-5 — a refused decision draws the reason in place", () => {
   it("renders the server's refusal as the row's one red line and stays HELD", async () => {
     confirmMock.mockResolvedValue({ ok: false, error: RECOMMENDATION_OFFER_STALE_REFUSAL });
 
     await mountRow();
-    const confirmBtn = await screen.findByRole("button", { name: "Confirm" });
+    const continueBtn = await continueControl();
     await act(async () => {
-      confirmBtn.click();
+      continueBtn.click();
     });
 
     // ONE red line, carrying the server's own words — no new chrome beside it.
@@ -156,17 +167,25 @@ describe("cinatra#2906 AC-5 — a refused confirm draws the reason in place", ()
     confirmMock.mockResolvedValue({ ok: false, error: RECOMMENDATION_OFFER_STALE_REFUSAL });
 
     await mountRow();
-    const confirmBtn = await screen.findByRole("button", { name: "Confirm" });
+    const continueBtn = await continueControl();
     await act(async () => {
-      confirmBtn.click();
+      continueBtn.click();
     });
     await screen.findByRole("alert");
 
-    for (const action of ["confirm", "adjust", "skip"]) {
-      const btn = document.querySelector(`[data-skill-action="${action}"]`);
-      expect(btn).not.toBeNull();
-      expect((btn as HTMLButtonElement).disabled).toBe(false);
-    }
+    // THE ONE CONTROL §V DRAWS IS OPERABLE AGAIN, and the boxes with it. The
+    // arm used to walk the three per-chip affordances; the reading has one
+    // control and a box per pill now, and "the reader can act on the reason"
+    // means exactly that they are all live. `submitted` is written on the press
+    // and cleared with the refusal message in one commit, which is what makes
+    // the Continue press-able a second time.
+    const again = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+    expect(again).not.toBeNull();
+    expect(again!.disabled).toBe(false);
+    const boxes = document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]');
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const box of boxes) expect(box.disabled).toBe(false);
+    expect(document.querySelectorAll("[data-skill-action]")).toHaveLength(0);
   });
 
   it("a REFUSED confirm writes no selection row and no rejected-recommendation evidence", async () => {
@@ -179,10 +198,9 @@ describe("cinatra#2906 AC-5 — a refused confirm draws the reason in place", ()
 
     const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
     const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
-    // Driven on the host that still draws the per-chip row (cinatra#3062) — see
-    // the note on `mountRow` above.
+    // Driven through §V's Continue — see the note on `mountRow` above.
     render(
-      <LifecycleCardSurfaceProvider host="page_gate_region">
+      <LifecycleCardSurfaceProvider host="run_card">
         <RunRecommendationChipRow
           runId="run-2906"
           agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -195,9 +213,9 @@ describe("cinatra#2906 AC-5 — a refused confirm draws the reason in place", ()
       </LifecycleCardSurfaceProvider>,
     );
 
-    const confirmBtn = await screen.findByRole("button", { name: "Confirm" });
+    const continueBtn = await continueControl();
     await act(async () => {
-      confirmBtn.click();
+      continueBtn.click();
     });
     await screen.findByRole("alert");
 

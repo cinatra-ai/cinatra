@@ -24,7 +24,19 @@
 //      have no path to is a photograph, and a validator that let one be claimed
 //      would be inviting a staged picture.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// A REAL capture root for the observer — `observeCapture` resolves its
+// destination before the shutter, so the two cases that drive it need a real
+// tree to write into rather than a fake repo root.
+// NOTHING PRE-CREATED — the recorder makes the run directory, and the capture
+// root, on the first capture. A suite that made them first would not notice
+// when that stopped working, which is precisely what happened.
+const OBSERVE_ROOT = mkdtempSync(join(tmpdir(), "observe-fifth-"));
+afterAll(() => rmSync(OBSERVE_ROOT, { recursive: true, force: true }));
 import { createHash } from "node:crypto";
 
 import {
@@ -46,7 +58,7 @@ import {
 } from "../../ci/lib/capture-record-contract.mjs";
 
 const KIND = "agent_hitl_screen";
-const PNG = "evidence/2821-fixture/shot.png";
+const PNG = "test-results/capture-fixture/shot.png";
 const HASH = createHash("sha256").update("fixture-bytes").digest("hex");
 const hashOf = (rel) => {
   if (rel !== PNG) throw new Error(`no such file: ${rel}`);
@@ -144,9 +156,10 @@ describe("the fifth kind is admitted everywhere the four were enumerated", () =>
   });
 
   it("accepts a truthful chat_thread record of it — the refusal that made its pictures unindexable", () => {
-    expect(validateCaptureRecord(recordOn("chat_thread", "pending"), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(recordOn("chat_thread", "pending"), { hashOf, virtualFilesystem: true })).toEqual([]);
     expect(
       validateCanonicalRecord(recordOn("chat_thread", "pending"), {
+        virtualFilesystem: true,
         fileExists: () => true,
         hashFile: () => HASH,
       }),
@@ -154,7 +167,7 @@ describe("the fifth kind is admitted everywhere the four were enumerated", () =>
   });
 
   it("accepts a truthful run_card record of it", () => {
-    expect(validateCaptureRecord(recordOn("run_card", "pending"), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(recordOn("run_card", "pending"), { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 });
 
@@ -180,7 +193,7 @@ describe("the settled reading of this kind is an absence, and only of this kind"
   });
 
   it("accepts a decided record that photographed the card gone", () => {
-    expect(validateCaptureRecord(recordOn("chat_thread", "decided"), { hashOf })).toEqual([]);
+    expect(validateCaptureRecord(recordOn("chat_thread", "decided"), { hashOf, virtualFilesystem: true })).toEqual([]);
   });
 
   it("refuses a decided record that still shows the card", () => {
@@ -192,7 +205,7 @@ describe("the settled reading of this kind is an absence, and only of this kind"
           a.selector === `[data-lifecycle-card="${KIND}"]` ? { ...a, count: 1, visible: 1 } : a,
         ),
       },
-      { hashOf },
+      { hashOf, virtualFilesystem: true },
     );
     expect(violations.length).toBeGreaterThan(0);
   });
@@ -220,7 +233,7 @@ describe("the settled reading of this kind is an absence, and only of this kind"
 
 const PNG_BYTES = Buffer.from("hitl-decided-fixture");
 const PNG_HASH = createHash("sha256").update(PNG_BYTES).digest("hex");
-const WALK_PNG = "evidence/2930-fixture/decided.png";
+const WALK_PNG = "test-results/capture-fixture/decided.png";
 
 /** A screen with the transcript intact and no card of this kind on it. */
 function decidedChatPage({ rootCount = 0 } = {}) {
@@ -242,7 +255,8 @@ function decidedChatPage({ rootCount = 0 } = {}) {
         ? { count: async (sel) => countOf(sel), countVisible: async (sel) => countOf(sel) }
         : null,
     frame: async () => null,
-    screenshot: async () => {},
+    // A REAL SHUTTER LEAVES A FILE — the recorder renames it into place.
+    screenshot: async (abs) => writeFileSync(abs, PNG_BYTES),
   };
 }
 
@@ -262,7 +276,7 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
     const record = await observeWalkCell({
       page: decidedChatPage(),
       cell: walkCell(),
-      repoRoot: "/anywhere",
+      repoRoot: OBSERVE_ROOT,
       readImpl: () => PNG_BYTES,
       now: () => "2026-08-27T09:23:53.927Z",
     });
@@ -280,9 +294,10 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
     });
     expect(record.declaredState).toBe("decided");
     // And BOTH halves take it — the refusal was the two disagreeing.
-    expect(validateCaptureRecord(record, { hashOf: () => PNG_HASH, tier: "audit" })).toEqual([]);
+    expect(validateCaptureRecord(record, { hashOf: () => PNG_HASH, virtualFilesystem: true, tier: "audit" })).toEqual([]);
     expect(
-      validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => PNG_HASH }),
+      validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => PNG_HASH }),
     ).toEqual([]);
   });
 
@@ -294,16 +309,17 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
       observeWalkCell({
         page: decidedChatPage({ rootCount: 1 }),
         cell: walkCell(),
-        repoRoot: "/anywhere",
+        repoRoot: OBSERVE_ROOT,
         readImpl: () => PNG_BYTES,
         now: () => "2026-08-27T09:23:53.927Z",
       }),
     ).rejects.toThrow(/still on the screen|not decided/);
 
     const claimed = { ...recordOn("chat_thread", "decided"), instance: { ...ABSENCE_INSTANCE, matched: 1 } };
-    expect(validateCaptureRecord(claimed, { hashOf }).join("\n")).toMatch(/still on the screen/);
+    expect(validateCaptureRecord(claimed, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/still on the screen/);
     expect(
-      validateCanonicalRecord(claimed, { fileExists: () => true, hashFile: () => HASH })
+      validateCanonicalRecord(claimed, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })
         .map((x) => x.detail)
         .join("\n"),
     ).toMatch(/still on the screen/);
@@ -320,9 +336,10 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
         attributes: { "data-lifecycle-card": KIND },
       },
     };
-    expect(validateCaptureRecord(pinsACard, { hashOf }).join("\n")).toMatch(/absent: true/);
+    expect(validateCaptureRecord(pinsACard, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/absent: true/);
     expect(
-      validateCanonicalRecord(pinsACard, { fileExists: () => true, hashFile: () => HASH })
+      validateCanonicalRecord(pinsACard, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })
         .map((x) => x.detail)
         .join("\n"),
     ).toMatch(/absent: true/);
@@ -359,9 +376,10 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
         absent: true,
       },
     };
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(/has no absence to pin/);
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/has no absence to pin/);
     expect(
-      validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })
+      validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })
         .map((x) => x.detail)
         .join("\n"),
     ).toMatch(/has no absence to pin/);
@@ -406,9 +424,10 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
         ...recordOn("chat_thread", "decided"),
         instance: { ...ABSENCE_INSTANCE, ...over },
       };
-      expect(validateCaptureRecord(record, { hashOf }).join("\n"), what).toMatch(matcher);
+      expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true }).join("\n"), what).toMatch(matcher);
       expect(
-        validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH })
+        validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH })
           .map((x) => x.detail)
           .join("\n"),
         what,
@@ -450,9 +469,10 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
           attributes: { "data-lifecycle-card": other },
         },
       };
-      expect(validateCaptureRecord(record, { hashOf, tier: "audit" }), other).toEqual([]);
+      expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true, tier: "audit" }), other).toEqual([]);
       expect(
-        validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH }),
+        validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH }),
         other,
       ).toEqual([]);
     }
@@ -491,11 +511,12 @@ describe("a decided record of a kind that settles to an absence pins THE ABSENCE
         attributes: { "data-lifecycle-card": "verification_summary" },
       },
     };
-    expect(validateCaptureRecord(record, { hashOf, tier: "audit" }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, virtualFilesystem: true, tier: "audit" }).join("\n")).toMatch(
       /is not one "verification_summary" resolves \(advisory\)/,
     );
     expect(
-      validateCanonicalRecord(record, { fileExists: () => true, hashFile: () => HASH }).map(
+      validateCanonicalRecord(record, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH }).map(
         (v) => v.code,
       ),
     ).toContain("record/state-not-in-kind-vocabulary");
@@ -525,7 +546,7 @@ describe("the two host cells with no reachable subject are recorded, with the re
   });
 
   it("refuses a RECORD claiming one of them, and says why", () => {
-    const violations = validateCaptureRecord(recordOn("site_widget", "pending"), { hashOf });
+    const violations = validateCaptureRecord(recordOn("site_widget", "pending"), { hashOf, virtualFilesystem: true });
     expect(violations.join("\n")).toMatch(/composition-only/);
   });
 
@@ -535,9 +556,10 @@ describe("the two host cells with no reachable subject are recorded, with the re
     // subject could walk past by saying nothing while its NAME still named the
     // kind. Both validators read the EFFECTIVE kind.
     const { declaredKind: _dropped, ...undeclared } = recordOn("site_widget", "pending");
-    expect(validateCaptureRecord(undeclared, { hashOf }).join("\n")).toMatch(/composition-only/);
+    expect(validateCaptureRecord(undeclared, { hashOf, virtualFilesystem: true }).join("\n")).toMatch(/composition-only/);
     expect(
-      validateCanonicalRecord(undeclared, { fileExists: () => true, hashFile: () => HASH }).map(
+      validateCanonicalRecord(undeclared, { virtualFilesystem: true,
+        fileExists: () => true, hashFile: () => HASH }).map(
         (x) => x.detail,
       ).join("\n"),
     ).toMatch(/composition-only/);

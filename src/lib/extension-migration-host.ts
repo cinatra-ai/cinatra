@@ -31,9 +31,24 @@ import "server-only";
 
 import {
   extensionMigrationNamespace,
-  runNamespacedMigrations,
+  runExtensionMigrationsUnderRole,
   validateNamespacedMigrationsDir,
 } from "@cinatra-ai/migrations";
+// TYPE-ONLY (erased) + dynamic value imports. The W7 road pulls the extension
+// table/role machinery and the role-switching migration runner; this module is
+// reachable from four ROUTE-GRAPH-RATCHETED routes (/chat, /api/mcp, /api/a2a,
+// /api/llm-bridge) whose ceilings may only ever shrink, and those routes never
+// run a migration. Same posture as the artifact stack's dynamic imports in the
+// passthrough route: the machinery is loaded where it is used.
+import {
+  assertNoDeclaredTablePrefixCollision,
+  declaredIndexPhysicalName,
+  declaredTablePhysicalName,
+  extensionDatabaseRoleName,
+  extensionTablePrefix,
+  parseDeclaredTables,
+  type DeclaredTable,
+} from "@cinatra-ai/sdk-extensions/manifest";
 import { recordDeclaresHostMigrations } from "@cinatra-ai/sdk-extensions";
 import { comparePluginVersions } from "@cinatra-ai/registries";
 
@@ -143,6 +158,100 @@ export async function preflightExtensionMigrationsFromStore(input: {
   return { packageName, dirAbs: realDir, namespace, files };
 }
 
+/**
+ * Validate-only preflight of a materialized package's DECLARED TABLES
+ * (cinatra#3031, plan (C) 0.23/0.24). NO database: the declaration is parsed,
+ * the prefix and role are derived, the 63-byte identifier limit is checked and
+ * a prefix that collides with an installed extension's is refused — "a
+ * declaration that breaks either is refused at preflight, before anything
+ * runs".
+ *
+ * An unreadable/unparsable store manifest is "declares nothing", exactly as the
+ * migrations preflight treats it; a manifest that DOES declare tables and
+ * declares them wrongly throws.
+ */
+export async function preflightExtensionDeclaredTablesFromStore(input: {
+  storeDir: string;
+  packageName?: string;
+  /** Every other installed package, for 0.23's prefix-collision refusal. */
+  installedPackageNames?: readonly string[];
+}): Promise<ExtensionDeclaredTablesPlan | null> {
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  let manifest: { name?: unknown; cinatra?: { declaredTables?: unknown } };
+  try {
+    manifest = JSON.parse(
+      await readFile(path.join(input.storeDir, "package.json"), "utf8"),
+    ) as typeof manifest;
+  } catch {
+    return null;
+  }
+  const declared = manifest.cinatra?.declaredTables;
+  if (declared === undefined || declared === null) return null;
+  const packageName =
+    input.packageName ?? (typeof manifest.name === "string" ? manifest.name : null);
+  if (!packageName) {
+    throw new Error("[ext-tables] cannot resolve package name from store manifest");
+  }
+  if (
+    input.packageName &&
+    typeof manifest.name === "string" &&
+    manifest.name !== input.packageName
+  ) {
+    throw new Error(
+      `[ext-tables] store manifest name "${manifest.name}" does not match the trusted package name ` +
+        `"${input.packageName}" — refusing to create tables under another package's prefix`,
+    );
+  }
+  return planExtensionDeclaredTables({
+    packageName,
+    declaredTables: declared,
+    ...(input.installedPackageNames ? { installedPackageNames: input.installedPackageNames } : {}),
+  });
+}
+
+/**
+ * Put the extension's database objects in place under the HOST credential: the
+ * role first, then the declared tables and their grants. Called BEFORE any
+ * extension statement runs.
+ *
+ * A package that declares a `migrationsDir` and NO tables still gets its role —
+ * with schema usage and not one table grant — so every statement its migration
+ * issues is refused by the database. That is the enabler's posture, not an
+ * oversight: "an extension's own migrations are data migrations on its declared
+ * tables".
+ */
+async function ensureExtensionDatabaseObjectsDefault(input: {
+  connectionString: string;
+  schemaName: string;
+  packageName: string;
+  roleName: string;
+  plan: ExtensionDeclaredTablesPlan | null;
+}): Promise<void> {
+  const { Client } = await import("pg");
+  const client = new Client({ connectionString: input.connectionString });
+  await client.connect();
+  try {
+    const plan: ExtensionDeclaredTablesPlan = input.plan ?? {
+      packageName: input.packageName,
+      prefix: `${input.roleName}_`,
+      roleName: input.roleName,
+      tables: [],
+      physicalTableNames: [],
+    };
+    await ensureExtensionDatabaseObjects({
+      client: client as unknown as Parameters<typeof ensureExtensionDatabaseObjects>[0]["client"],
+      schemaName: input.schemaName,
+      plan,
+      log: (msg: string) => console.log(msg),
+    });
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+export type EnsureExtensionDatabaseObjectsFn = typeof ensureExtensionDatabaseObjectsDefault;
+
 export type ApplyMigrationsInput = {
   /** Absolute store dir of the materialized package (`…/<pkg>@<ver>/<digest>/`). */
   storeDir: string;
@@ -152,11 +261,27 @@ export type ApplyMigrationsInput = {
   packageVersion?: string;
   /** Host schema the migrations run against (default SUPABASE_SCHEMA / `cinatra`). */
   schema?: string;
+  /**
+   * Every OTHER installed package, for the prefix-collision refusal of enabler
+   * 0.23 ("two names can normalise to one"). Absent = the caller has no
+   * inventory to compare against; the derivation and identifier checks still
+   * run.
+   */
+  installedPackageNames?: readonly string[];
 };
 
 export type ApplyMigrationsDeps = {
-  /** The shared runner (injected -> unit-testable without a database). */
-  run?: typeof runNamespacedMigrations;
+  /**
+   * The extension migration runner (injected -> unit-testable without a
+   * database). Defaults to the role-switching runner of plan (C) 8.3.
+   */
+  run?: typeof runExtensionMigrationsUnderRole;
+  /**
+   * The host-credential step that creates the extension's role and declared
+   * tables before any extension statement runs (injected -> unit-testable
+   * without a database).
+   */
+  ensureDatabaseObjects?: EnsureExtensionDatabaseObjectsFn;
 };
 
 /**
@@ -176,7 +301,15 @@ export async function applyExtensionMigrationsFromStore(
     storeDir: input.storeDir,
     ...(input.packageName ? { packageName: input.packageName } : {}),
   });
-  if (!preflight) return { applied: [] };
+  const tablesPlan = await preflightExtensionDeclaredTablesFromStore({
+    storeDir: input.storeDir,
+    ...(input.packageName ? { packageName: input.packageName } : {}),
+    ...(input.installedPackageNames
+      ? { installedPackageNames: input.installedPackageNames }
+      : {}),
+  });
+  // A package that declares neither is a clean no-op, exactly as before.
+  if (!preflight && !tablesPlan) return { applied: [] };
 
   const connectionString = process.env.SUPABASE_DB_URL;
   if (!connectionString) {
@@ -185,16 +318,29 @@ export async function applyExtensionMigrationsFromStore(
   // `||` (not `??`): a blank input.schema or SUPABASE_SCHEMA must fall
   // through to the default, never reach the runner as "".
   const schemaName = input.schema?.trim() || process.env.SUPABASE_SCHEMA?.trim() || DEFAULT_SCHEMA;
+  const packageName = preflight?.packageName ?? tablesPlan?.packageName;
+  if (!packageName) {
+    throw new Error("[ext-migration] cannot resolve the package name for the migration road");
+  }
+  const roleName = extensionDatabaseRoleName(packageName);
 
-  const run = deps.run ?? runNamespacedMigrations;
+  // THE HOST creates the tables and the role — before the extension's own
+  // statements exist as a possibility (plan (C) 0.23).
+  const ensure = deps.ensureDatabaseObjects ?? ensureExtensionDatabaseObjectsDefault;
+  await ensure({ connectionString, schemaName, packageName, roleName, plan: tablesPlan });
+
+  if (!preflight) return { applied: [] };
+
+  const run = deps.run ?? runExtensionMigrationsUnderRole;
   const result = await run({
     connectionString,
     schemaName,
     dirAbs: preflight.dirAbs,
     namespace: preflight.namespace,
+    roleName,
     direction: "up",
     log: (msg: string) => console.log(msg),
-  });
+  } as Parameters<typeof runExtensionMigrationsUnderRole>[0]);
   return { applied: result.ranNames };
 }
 
@@ -238,10 +384,18 @@ export async function applyMigrationsForTrustedRecords(
   const applyOne = deps.applyOne ?? applyExtensionMigrationsFromStore;
   const applied: DiscoveredMigrationResult[] = [];
   const refused: { packageName: string; error: string }[] = [];
+  // Every trusted package in this pass — the inventory 0.23's prefix-collision
+  // refusal compares a derived prefix against (not only the ones that declare
+  // migrations: a table-only package owns a prefix just the same).
+  const installedInventory = [...new Set(records.map((r) => r.packageName))];
   for (const rec of records) {
     if (!recordDeclaresHostMigrations(rec)) continue;
     try {
-      const result = await applyOne({ storeDir: rec.storeDir, packageName: rec.packageName });
+      const result = await applyOne({
+        storeDir: rec.storeDir,
+        packageName: rec.packageName,
+        installedPackageNames: installedInventory,
+      });
       if (result.applied.length > 0) {
         console.log(`[ext-migration] ${rec.packageName}: applied ${result.applied.length} migration(s)`);
       }
@@ -321,6 +475,9 @@ export async function applyMigrationUnionForTrustedRecords(
 
   const applied: DiscoveredMigrationResult[] = [];
   const refused: { packageName: string; error: string }[] = [];
+  // See `applyMigrationsForTrustedRecords`: the pass IS the inventory 0.23's
+  // prefix-collision refusal compares against.
+  const installedInventory = [...new Set(records.map((r) => r.packageName))];
 
   for (const [packageName, recs] of byName) {
     const ordered = [...recs].sort((a, b) =>
@@ -350,6 +507,12 @@ export async function applyMigrationUnionForTrustedRecords(
           storeDir: rec.storeDir,
           packageName: rec.packageName,
           ...(rec.version ? { packageVersion: rec.version } : {}),
+          // cinatra#3031 (plan (C) 0.23): the union IS the inventory the
+          // prefix-collision refusal compares against — every other package in
+          // this pass. Without it `@acme-co/thing` and `@acme_co/thing` both
+          // normalise to `ext_acme_co_thing_` and share one role and one set of
+          // tables, which is the collision the enabler refuses.
+          installedPackageNames: installedInventory,
         });
         appliedNames.push(...result.applied);
       }
@@ -366,4 +529,208 @@ export async function applyMigrationUnionForTrustedRecords(
   }
 
   return { applied, refused };
+}
+
+
+// The HOST half of extension-owned tables (cinatra#3031, epic #3023 W7; plan
+// (C) enablers 0.23/0.24, technical notes 8.2/8.3/8.7).
+//
+// "The host, not the migration, creates the declared tables and indexes, from
+// the declaration, under the prefix of item 0.24 and within the database's
+// 63-byte identifier limit." So this module compiles a parsed declaration into
+// DDL and executes it under the HOST credential — before any extension
+// statement runs — and creates the extension's own database role with
+// privileges on those tables and nothing else.
+//
+// WHAT THE ROLE MAY DO. `USAGE` on the application schema, and
+// SELECT/INSERT/UPDATE/DELETE on the extension's OWN prefixed tables. Not
+// CREATE, not TRUNCATE, not REFERENCES, and nothing at all on any other table
+// — so an extension's data migration that touches another table, another
+// extension's table or the migration ledger is refused BY THE DATABASE, which
+// is the only place that refusal cannot be argued with.
+//
+// WHAT SURVIVES AN UNINSTALL. Nothing here drops anything: enabler 0.23 —
+// "tables outlive an uninstall as the organisation's data until an
+// organisation owner drops them explicitly". `CREATE TABLE IF NOT EXISTS` is
+// what makes a reinstall a no-op over data that is already there.
+//
+// THE CATALOGUE COMPARE IS AN AUDIT, NEVER THE GUARD (§8.7). The guard is the
+// role; the before/after catalogue is recorded so an operator can read what an
+// install actually added.
+
+
+/** The privileges an extension's role holds on its OWN tables, and no others. */
+export const EXTENSION_TABLE_PRIVILEGES = "SELECT, INSERT, UPDATE, DELETE";
+
+const q = (id: string) => `"${id.replaceAll('"', '""')}"`;
+
+export type ExtensionDeclaredTablesPlan = {
+  packageName: string;
+  /** `ext_<scope>_<slug>_` */
+  prefix: string;
+  /** The extension's own database role. */
+  roleName: string;
+  /** The parsed declaration. */
+  tables: DeclaredTable[];
+  /** Physical table names, prefix included. */
+  physicalTableNames: string[];
+};
+
+/**
+ * Compile a parsed declaration into the exact DDL the host executes. Pure, so
+ * the shape of what an extension can make the host run is readable in a test
+ * rather than only in a database.
+ */
+export function buildDeclaredTableQueries(input: {
+  schemaName: string;
+  packageName: string;
+  roleName: string;
+  tables: readonly DeclaredTable[];
+}): string[] {
+  const s = q(input.schemaName);
+  const role = q(input.roleName);
+  const out: string[] = [];
+  for (const table of input.tables) {
+    const physical = declaredTablePhysicalName(input.packageName, table.name);
+    const cols = table.columns.map((c) => {
+      const parts = [q(c.name), c.type];
+      if (c.notNull) parts.push("NOT NULL");
+      if (c.default !== null) parts.push(`DEFAULT ${c.default}`);
+      return parts.join(" ");
+    });
+    const pk = table.columns.filter((c) => c.primaryKey).map((c) => q(c.name));
+    if (pk.length > 0) cols.push(`PRIMARY KEY (${pk.join(", ")})`);
+    out.push(`CREATE TABLE IF NOT EXISTS ${s}.${q(physical)} (${cols.join(", ")})`);
+    for (const idx of table.indexes) {
+      const physicalIdx = declaredIndexPhysicalName(input.packageName, idx.name);
+      out.push(
+        `CREATE ${idx.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(physicalIdx)} ` +
+          `ON ${s}.${q(physical)} (${idx.columns.map(q).join(", ")})`,
+      );
+    }
+    out.push(
+      `GRANT ${EXTENSION_TABLE_PRIVILEGES} ON ${s}.${q(physical)} TO ${role}`,
+    );
+  }
+  return out;
+}
+
+/** The DDL that puts the extension's role in place, with nothing but schema usage. */
+export function buildExtensionRoleQueries(input: {
+  schemaName: string;
+  roleName: string;
+}): string[] {
+  const s = q(input.schemaName);
+  const role = q(input.roleName);
+  return [
+    // Start from nothing every time: a re-install must not inherit a grant an
+    // earlier declaration handed out and this one no longer names. The TABLE
+    // grants are revoked too, not only the schema's: a version that declared
+    // `a` and `b` and then declares only `a` keeps `b` (declared tables are
+    // retained on uninstall, 0.23), and a table ACL the host never withdrew
+    // would leave the role reaching a table its current declaration does not
+    // name. PostgreSQL warns rather than errors for a table the role holds
+    // nothing on, so this is safe on a first install.
+    `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${s} FROM ${role}`,
+    `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${s} FROM ${role}`,
+    `REVOKE ALL PRIVILEGES ON SCHEMA ${s} FROM ${role}`,
+    `GRANT USAGE ON SCHEMA ${s} TO ${role}`,
+  ];
+}
+
+/**
+ * Resolve the plan for one package: parse its declaration, derive the prefix
+ * and role, and refuse a prefix that collides with an installed extension's.
+ * Pure — no database.
+ */
+export function planExtensionDeclaredTables(input: {
+  packageName: string;
+  declaredTables: unknown;
+  /** Every OTHER installed package, for the collision refusal of 0.23. */
+  installedPackageNames?: readonly string[];
+}): ExtensionDeclaredTablesPlan | null {
+  const tables = parseDeclaredTables(input.declaredTables, input.packageName);
+  if (tables.length === 0) return null;
+  assertNoDeclaredTablePrefixCollision(input.packageName, input.installedPackageNames ?? []);
+  return {
+    packageName: input.packageName,
+    prefix: extensionTablePrefix(input.packageName),
+    roleName: extensionDatabaseRoleName(input.packageName),
+    tables,
+    physicalTableNames: tables.map((t) => declaredTablePhysicalName(input.packageName, t.name)),
+  };
+}
+
+type MinimalClient = {
+  query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>;
+};
+
+/** The application schema's table catalogue — the before/after audit of §8.7. */
+export async function readSchemaCatalogue(
+  client: MinimalClient,
+  schemaName: string,
+): Promise<string[]> {
+  const res = await client.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
+    [schemaName],
+  );
+  return (res.rows as { table_name: string }[]).map((r) => r.table_name);
+}
+
+/** What an install added or removed from the catalogue, as an audit record. */
+export function compareCatalogues(
+  before: readonly string[],
+  after: readonly string[],
+): { added: string[]; removed: string[] } {
+  const b = new Set(before);
+  const a = new Set(after);
+  return {
+    added: after.filter((t) => !b.has(t)),
+    removed: before.filter((t) => !a.has(t)),
+  };
+}
+
+/**
+ * Create the role and the declared tables, under the HOST credential. The
+ * caller owns the connection so the install path can do this on the same client
+ * it does everything else on.
+ */
+export async function ensureExtensionDatabaseObjects(input: {
+  client: MinimalClient;
+  schemaName: string;
+  plan: ExtensionDeclaredTablesPlan;
+  log?: (msg: string) => void;
+}): Promise<{ created: string[]; catalogue: { added: string[]; removed: string[] } }> {
+  const { client, schemaName, plan } = input;
+  const log = input.log ?? (() => {});
+  const before = await readSchemaCatalogue(client, schemaName);
+
+  const roleRow = await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [plan.roleName]);
+  if ((roleRow.rowCount ?? 0) === 0) {
+    // NOLOGIN: this role is only ever assumed with SET ROLE by the host; it is
+    // not a credential anybody connects with, and there is nothing to leak.
+    await client.query(`CREATE ROLE ${q(plan.roleName)} NOLOGIN NOINHERIT`);
+    log(`[ext-tables] created the database role ${plan.roleName} for ${plan.packageName}`);
+  }
+  for (const sql of buildExtensionRoleQueries({ schemaName, roleName: plan.roleName })) {
+    await client.query(sql);
+  }
+  for (const sql of buildDeclaredTableQueries({
+    schemaName,
+    packageName: plan.packageName,
+    roleName: plan.roleName,
+    tables: plan.tables,
+  })) {
+    await client.query(sql);
+  }
+
+  const after = await readSchemaCatalogue(client, schemaName);
+  const catalogue = compareCatalogues(before, after);
+  if (catalogue.added.length > 0 || catalogue.removed.length > 0) {
+    log(
+      `[ext-tables] ${plan.packageName}: catalogue audit — added [${catalogue.added.join(", ")}] ` +
+        `removed [${catalogue.removed.join(", ")}]`,
+    );
+  }
+  return { created: plan.physicalTableNames, catalogue };
 }

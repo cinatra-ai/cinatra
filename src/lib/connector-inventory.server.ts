@@ -53,6 +53,23 @@ import "server-only";
 // connection YOU are authorized to use" — it never means "nobody has connected
 // this". The tool description carries the same sentence, because the defect
 // this ships against is an assistant implying the negative.
+//
+// A CONNECTOR THAT HOLDS NO CONNECTION OF ITS OWN (cinatra#3108). Some
+// connectors work off another connector's connection and never write a
+// connection row of their own. Keyed on their own package id such a connector
+// is unconnected for EVERY person, FOREVER — which dropped its chat primitives
+// from every turn and made this tool answer "not connected" for a connector
+// with no connect road to offer. So the connector DECLARES the connection it
+// consumes (`consumesConnectionFrom`, a catalog connector key) and this module
+// judges it on that connection instead. The declaration is the connector's and
+// the reading is generic: no connector is named in this file.
+//
+// The declaration only ever moves the QUESTION, never the answer. The consumed
+// connection goes through the same per-row `use` gate as every other row here,
+// so a person who may not use it does not get the consuming connector's tools
+// either — the protection is preserved, not loosened. It is ONE hop and fails
+// closed: a declaration naming a connector the catalog has not got, or naming
+// itself, reads as no authorized connection.
 // ---------------------------------------------------------------------------
 
 import type { ActorContext } from "@/lib/authz/actor-context";
@@ -72,8 +89,12 @@ export type ConnectorInventoryRow = {
   /** The connector's user-facing label (its own manifest name when it declares one). */
   displayName: string;
   /**
-   * Whether the actor holds a `use` grant on at least one live connection for
-   * this connector. FALSE means "none you may use" — never "none exist".
+   * Whether the actor holds a `use` grant on at least one live connection that
+   * gates this connector. FALSE means "none you may use" — never "none exist".
+   *
+   * The gating connection is this connector's OWN unless it declares one it
+   * consumes (`consumesConnectionFrom` below), in which case it is the declared
+   * connector's — the connection this connector actually uses.
    */
   hasAuthorizedConnection: boolean;
   /**
@@ -103,6 +124,24 @@ export type ConnectorInventoryRow = {
    * snapshot test in the same change, so a reviewer sees it.
    */
   mcpPrimitivePrefixes: string[];
+  /**
+   * The connector key whose connection gates this connector, when this
+   * connector holds NONE of its own (cinatra#3108) — `null` for a connector
+   * judged on its own connection, which is nearly all of them.
+   *
+   * WHY IT IS ON THE ROW. It is the difference between "no connection YOU are
+   * authorized to use" and "this connector holds no connection at all", and a
+   * reader holding only `hasAuthorizedConnection` cannot tell them apart. A
+   * non-null value also says the connector has no connect road of its own: the
+   * road to make it live is the NAMED connector's, so an assistant that reads
+   * this row can never tell a person to connect something unconnectable.
+   *
+   * MODEL-FACING, AND DELIBERATELY SO — like `mcpPrimitivePrefixes` above, this
+   * is public build-time CATALOG data (the same string the CLI-importable
+   * descriptor file ships), carrying no actor, tenant, connection or credential
+   * material, and it grants nothing.
+   */
+  consumesConnectionFrom: string | null;
 };
 
 export type ConnectorInventoryResult = {
@@ -120,6 +159,7 @@ export const CONNECTOR_INVENTORY_ROW_FIELDS = [
   "hasAuthorizedConnection",
   "authorizedConnectionIds",
   "mcpPrimitivePrefixes",
+  "consumesConnectionFrom",
 ] as const;
 
 /** The allowlisted TOP-LEVEL result keys (same rule as the row fields). */
@@ -135,15 +175,40 @@ export function projectConnectorInventoryRow(input: {
   displayName: string;
   authorizedConnectionIds: string[];
   mcpPrimitivePrefixes?: readonly string[];
+  /** The catalog's `consumesConnectionFrom` for this connector, if it declares one. */
+  consumesConnectionFrom?: string | null;
+  /**
+   * Whether the CONSUMED connection is authorized for this actor — already
+   * resolved by the caller through the same per-row `use` gate, exactly as
+   * `authorizedConnectionIds` is. Meaningless without a declaration, and read
+   * as `false` when absent, so an undeclared connector cannot be widened by it.
+   */
+  consumedConnectionAuthorized?: boolean;
 }): ConnectorInventoryRow {
   return {
     connectorKey: input.connectorKey,
     displayName: input.displayName,
-    hasAuthorizedConnection: input.authorizedConnectionIds.length > 0,
+    // The connection that GATES this connector: its own when it has one, and
+    // the declared connector's when it holds none. Written as a disjunction so
+    // a connector with no declaration reads exactly as it did before
+    // cinatra#3108 — the second operand is `false` for every one of them.
+    //
+    // The consumed operand is READ ONLY THROUGH A DECLARATION. This projector
+    // is exported, so `consumedConnectionAuthorized: true` with no
+    // `consumesConnectionFrom` is a malformed call, and it must not be able to
+    // mint an available row that names no connector to connect. Guarded here
+    // rather than trusted, so the two inputs can never disagree on a row.
+    hasAuthorizedConnection:
+      input.authorizedConnectionIds.length > 0 ||
+      (input.consumesConnectionFrom != null && input.consumedConnectionAuthorized === true),
+    // OWN connections only. A consuming connector owns none, so it carries no
+    // ids: the ids behind its reading sit on the row of the connector its
+    // declaration names, never duplicated onto this one.
     authorizedConnectionIds: [...input.authorizedConnectionIds],
     // Copied, never aliased: the catalog's array must not be mutable through
     // a serialized row (`listConnectorDescriptors` defends the same way).
     mcpPrimitivePrefixes: [...(input.mcpPrimitivePrefixes ?? [])],
+    consumesConnectionFrom: input.consumesConnectionFrom ?? null,
   };
 }
 
@@ -154,6 +219,11 @@ export type ConnectorInventoryCatalogEntry = {
   displayName: string;
   /** The descriptor's `mcpPrimitivePrefixes`. Absent reads as "gates nothing". */
   mcpPrimitivePrefixes?: readonly string[];
+  /**
+   * The descriptor's `consumesConnectionFrom` — the connector key whose
+   * connection gates this one. Absent reads as "judged on its own connection".
+   */
+  consumesConnectionFrom?: string | null;
 };
 
 /**
@@ -220,15 +290,43 @@ export async function buildConnectorInventory(
     }),
   );
 
-  const connectors = (await deps.listCatalog()).map((entry) =>
-    projectConnectorInventoryRow({
+  const catalog = await deps.listCatalog();
+
+  // THE DECLARED CONNECTION, RESOLVED (cinatra#3108). A connector that declares
+  // one is judged on the AUTHORIZED state of the connector it names, which is
+  // already computed above for every catalog connector — so the resolution is a
+  // catalog lookup, not a second authorization road, and the connection still
+  // passed the same per-row `use` gate.
+  //
+  // ONE HOP, AND FAIL-CLOSED. The named connector's OWN connection decides; a
+  // declaration is never followed through a second one, which keeps the
+  // derivation total and cycle-free by construction. A declaration naming a
+  // connector this catalog has not got — or naming itself — CONTRIBUTES
+  // NOTHING: it resolves to no authorized connection, so a malformed
+  // declaration can only ever withhold, never widen. It does not force the row
+  // false either — a connector that does hold an authorized connection of its
+  // own still reads exactly as it did before this change, whatever it
+  // declares, because the person genuinely holds that connection.
+  const packageIdByConnectorKey = new Map(catalog.map((e) => [e.connectorKey, e.packageId]));
+  const hasOwnAuthorized = (packageId: string | undefined) =>
+    packageId != null && (authorizedByPackageId.get(packageId)?.length ?? 0) > 0;
+
+  const connectors = catalog.map((entry) => {
+    const consumesConnectionFrom = entry.consumesConnectionFrom ?? null;
+    const declaresAnother =
+      consumesConnectionFrom != null && consumesConnectionFrom !== entry.connectorKey;
+    return projectConnectorInventoryRow({
       connectorKey: entry.connectorKey,
       displayName: entry.displayName,
       // Sorted so the same workspace state serializes identically turn to turn.
       authorizedConnectionIds: [...(authorizedByPackageId.get(entry.packageId) ?? [])].sort(),
       mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
-    }),
-  );
+      consumesConnectionFrom,
+      consumedConnectionAuthorized:
+        declaresAnother &&
+        hasOwnAuthorized(packageIdByConnectorKey.get(consumesConnectionFrom)),
+    });
+  });
 
   return { connectors };
 }
@@ -373,6 +471,7 @@ export const DEFAULT_CONNECTOR_INVENTORY_DEPS: ConnectorInventoryDeps = {
       connectorKey: entry.slug,
       displayName: entry.displayName,
       mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
+      consumesConnectionFrom: entry.consumesConnectionFrom,
     }));
   },
   listConnectionRows: async (organizationId, subjectUserId) => {

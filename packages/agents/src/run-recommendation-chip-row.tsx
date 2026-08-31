@@ -150,28 +150,43 @@ import {
  * Only the frame changes."
  *
  * SO THIS IS A LIST OF HOSTS THAT HAVE BEEN MOVED, not a claim about where the
- * drawing applies. cinatra#3047 moved the run page; cinatra#3062 moves the two
- * conversation hosts — `/chat` and the embedded site widget, which are one
- * column and therefore one move.
+ * drawing applies. cinatra#3047 moved the run page and then, in its re-shoot
+ * round, the review page — which is the run's OWN second page: the same run, the
+ * same rail, the same Skills step at its head, and the change request names it
+ * in the same breath as the run page ("Do not show the skills on top of the
+ * review card or the schedule card or any other card either"). cinatra#3062
+ * moves the two conversation hosts — `/chat` and the embedded site widget, which
+ * are one column and therefore one move.
  *
- * NAMED DEVIATION, and it is why this is still a predicate rather than `true`:
- * `page_gate_region` — the review page's own gate region — is not in either
- * issue's scope, and it keeps the per-chip reading it draws today until its own
- * change lands. §IX's parity is therefore owed on one host, and it is recorded
- * here rather than quietly closed by a predicate that answers for a host nobody
- * has driven.
+ * WITH BOTH LEGS IN, NO HOST IS LEFT OUT. The named deviation cinatra#3062
+ * carried — `page_gate_region` keeping the per-chip reading until its own change
+ * landed — is closed by cinatra#3047's re-shoot round, which landed exactly
+ * that. §IX's parity is owed on no host now. The seam stays a predicate rather
+ * than collapsing to `true` because what it reads is the HOST DECLARATION: a
+ * surface that never declared itself still draws no card, and a host added
+ * tomorrow states its reading here rather than inheriting one by silence.
  *
  * WHY THE HOST DECLARATION IS THE SEAM. Each surface declares itself once, in
  * one production place — the run page's own frame (`instance-screens.tsx`), the
- * conversation column (`chat_thread`, and `site_widget` for the widget arm of
- * the same column), the review page's gate region — so "which host is this" is a
- * fact the card reads off the provider it is already mounted under, rather than
- * a prop a host could pass by accident, and a host that never declared itself
- * draws no card at all. It is the same declaration the card root publishes as
- * `data-lifecycle-card-host`, so the reading and the anchor a capture is graded
- * by can never disagree.
+ * review route's gate region, the conversation column (`chat_thread`, and
+ * `site_widget` for the widget arm of the same column) — so "which host is this"
+ * is a fact the card reads off the provider it is already mounted under, rather
+ * than a prop a host could pass by accident. It is the same declaration the card
+ * root publishes as `data-lifecycle-card-host`, so the reading and the anchor a
+ * capture is graded by can never disagree.
+ *
+ * AND THE MOUNT KEEPS ITS HOST. The review page's Skills step declares
+ * `page_gate_region` exactly as its gate region always did — re-declaring it as
+ * `run_card` would take `recommendation_hold` off a host the anchor contract's
+ * `hostParity` records it on, which the host-parity ratchet raises `host-lost`
+ * for. The same four hosts, the same two methods; they now draw one reading.
  */
-const SKILLS_CHECKLIST_HOSTS = new Set(["run_card", "chat_thread", "site_widget"]);
+const SKILLS_CHECKLIST_HOSTS = new Set([
+  "run_card",
+  "page_gate_region",
+  "chat_thread",
+  "site_widget",
+]);
 
 export function chipRowDrawsSkillChecklist(host: string | null): boolean {
   return host !== null && SKILLS_CHECKLIST_HOSTS.has(host);
@@ -1150,7 +1165,11 @@ export function RunRecommendationChipRow({
    * all, because a skip has never meant that and this screen does not change
    * what a skip means. NO `adjusted` mark can come from this screen, because a
    * checkbox has two positions and neither of them means "I opened this one and
-   * shaped it"; the mark stays reachable from the hosts that still draw Adjust.
+   * shaped it". With cinatra#3047's review-page move and cinatra#3062's
+   * conversation move both in, NO declared host draws Adjust any more, so no
+   * screen can produce the mark; the type keeps it because the store still
+   * carries rows that recorded it before the drawing withdrew the affordance,
+   * and a settled reading must state what a run actually decided.
    *
    * ONE RELEASE PER RUN. `releasedRef` is written synchronously, so a double
    * press submits once; the server's own binding is the other half — a decision
@@ -1311,7 +1330,22 @@ export function RunRecommendationChipRow({
             size="sm"
             data-action="continue-skills-step -> released"
             data-skills-step-continue=""
-            disabled={!canDecide || pending || submitted}
+            // INERT EXACTLY WHEN THE READING SAYS SO (cinatra#3047, review point
+            // B — the re-shoot round). `submitted` is the step's own answer: it
+            // is written synchronously on the press and cleared, together with
+            // the refusal message, in ONE commit. `pending` was read here too,
+            // and it does NOT move with it — React clears the transition flag in
+            // a later commit of its own — so a refusal painted a frame that said
+            // the hold was live and the step decidable while the one control it
+            // offers was greyed out. The control now follows the single answer
+            // the row publishes as `data-skills-step-submitted`, which covers
+            // the in-flight window as well: it is true from the press until the
+            // decision comes back, and only a refusal clears it.
+            disabled={!canDecide || submitted}
+            // …and the press still carries the RE-DECIDABLE flag cinatra#3062
+            // added, because `onContinue` takes it as its first argument: a bare
+            // `onClick={onContinue}` would hand the click event to that
+            // parameter and read as `true` on every press.
             onClick={() => onContinue(opts.reDecidable === true)}
           >
             Continue
@@ -1349,8 +1383,9 @@ export function RunRecommendationChipRow({
       // READ-ONLY. One pill per skill the hold asked about — the offer's own
       // vendor and name where it can be read, the run's durable evidence where
       // it cannot — with the box stating what the run recorded and nothing to
-      // press. NO OUTCOME PANEL and NO DECIDER NAME reaches this host (review
-      // point 2): an all-clear row IS the row, with every box clear.
+      // press. NO OUTCOME PANEL and NO DECIDER NAME reaches this reading
+      // (review point 2): an all-clear row IS the row, with every box clear.
+      // Every declared host takes this reading now, so nothing draws the panel.
       const vendorBySkillId = new Map(
         stepCandidates.map((c) => [c.skillId, c.vendorName] as const),
       );
@@ -1369,11 +1404,14 @@ export function RunRecommendationChipRow({
       });
     }
 
-    // THE ONE HOST THAT STILL DRAWS §V's PER-CHIP SETTLED ROW — the review
-    // page's gate region (`page_gate_region`), the host neither cinatra#3047 nor
-    // cinatra#3062 names. It keeps the chips with their recorded outcome and the
-    // zero-chip outcome panel, byte for byte, until its own change lands; see
-    // the named deviation on `chipRowDrawsSkillChecklist`.
+    // THE PER-CHIP SETTLED ROW, which NO DECLARED HOST reaches any more.
+    // cinatra#3047 moved the run page and then the review page's gate region;
+    // cinatra#3062 moves the chat and the widget. What is left below this line
+    // is the reading a mount with NO declared host falls to — the component
+    // renders outside a provider only in tests — so it is kept as the shape the
+    // seam's `false` answer produces, not as a host's drawing. The suites that
+    // used to read it host by host state the retirement instead, each naming
+    // what it replaced.
     // A settled hold whose durable evidence names no skill at all has nothing
     // PER-SKILL to state — and since cinatra#2893 §V draws the reading for
     // exactly that row: the outcome panel below, in place of the chips. The card
@@ -2085,6 +2123,7 @@ export function RecommendationHoldCard({
   agentPackageName,
   wireRef,
   onStateChange,
+  initialState = null,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
@@ -2112,6 +2151,29 @@ export function RecommendationHoldCard({
    * Hosts with no stream pass `null` and still get mount/focus/decision resolves.
    */
   wireRef?: string | null;
+  /**
+   * THE HOST'S OWN READING, RESOLVED BEFORE THE FIRST PAINT (cinatra#3047,
+   * review point C — the re-shoot round).
+   *
+   * WHAT WAS WRONG WITHOUT IT. Everything this card drew came from one client
+   * round trip made after hydration, and until that answer landed the card drew
+   * NO DOM AT ALL (the two returns below). For a LIVE hold that is right — there
+   * is nothing to say about a question whose offer has not been read. For a
+   * SETTLED step it is not: the run's answer is already on file, the host that
+   * mounted this card read the same run's rows to know the step is settled at
+   * all, and a step drawn only after a round trip is a step drawn NEVER when
+   * that round trip does not land. That is what the re-shoot photographed —
+   * a settled Skills step over an empty detail column — and the frame around it
+   * cannot catch it, because a surface that is an ELEMENT is a non-null value
+   * however the component later resolves (`run-surface-rail-step.ts`).
+   *
+   * So a host that has already resolved this run's state SERVER-SIDE hands it
+   * over, and the card draws it immediately. It is a READING, not an override:
+   * the card still resolves for itself, and the moment its own answer lands
+   * that answer wins — same run, fresher reading. A host with nothing to hand
+   * over passes nothing and is unchanged.
+   */
+  initialState?: RunRecommendationHoldState | null;
 }): ReactElement | null {
   // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
   // it — the per-surface matrix that withheld this card from the widget is gone.
@@ -2151,14 +2213,31 @@ export function RecommendationHoldCard({
     reloadToken,
     auth,
   });
-  const state = resolution.state;
+  // WHAT THE CARD DRAWS: its own answer where it has one, the host's server-side
+  // reading until then. `resolution.state` is non-null only on `answered`, so
+  // the fallback covers exactly the two readings that drew nothing before — the
+  // resolve still in flight, and the resolve that gave up.
+  const state = resolution.state ?? initialState;
 
   // A surface with NO declared host never asks, so its reading is not "waiting"
   // — nothing is coming. Saying so is what stops a host that withholds on
   // `resolving` from withholding for ever on a surface this card never reads on.
-  const published: RunRecommendationHoldResolution = present
-    ? resolution
-    : RECOMMENDATION_UNREADABLE;
+  //
+  // AND WHAT IT PUBLISHES IS WHAT IT DRAWS. A host's own reading is an answer
+  // about this run — it was resolved by the same core, through the same access
+  // door — so publishing "still resolving" while drawing that answer would put
+  // the card's two statements about one run in contradiction, which is the
+  // seam this card exists to close. A host that hands over nothing publishes
+  // exactly what it always did.
+  const published: RunRecommendationHoldResolution = useMemo(
+    () =>
+      !present
+        ? RECOMMENDATION_UNREADABLE
+        : resolution.phase !== "answered" && initialState !== null
+          ? { phase: "answered", state: initialState }
+          : resolution,
+    [present, resolution, initialState],
+  );
 
   // Published on every change, and only on a change. `onStateChange` is in the
   // dependency list, so a caller passing a fresh closure every render is told

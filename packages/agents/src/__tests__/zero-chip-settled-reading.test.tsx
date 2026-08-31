@@ -148,23 +148,29 @@ type Decision = Parameters<
 >[0]["decision"];
 
 /**
- * THE HOST THIS READING LIVES ON, since cinatra#3047 review point 2 and
+ * THE PANEL HAS NO HOST LEFT, since cinatra#3047's re-shoot round and
  * cinatra#3062.
  *
- * The outcome panel is §V's zero-chip settled face, and it is drawn by the hosts
- * that draw §V's chip row — which is now the review page's gate region alone. It
- * is NOT drawn on the run page (cinatra#3047) and not in the chat or the widget
- * (cinatra#3062): with checkboxes there is no skip ACT for an outcome word to
- * report, so the settled all-clear reading on those three hosts is the row
- * itself with every box clear, and their own suites
- * (`skills-step-all-clear-is-the-skip.test.tsx`,
- * `skills-card-on-the-conversation-hosts.test.tsx`) pin that. Everything this
- * file measures about the PANEL is unchanged and is measured where the panel is,
- * plus the arms below that pin its absence on the checklist hosts.
+ * The bordered outcome panel is §V's zero-chip settled face for a host that
+ * draws the per-chip row, and no declared host draws that row any more:
+ * cinatra#3047 moved the run page and then the review page's gate region — the
+ * run's own second page — and cinatra#3062 moves the chat and the widget. With
+ * checkboxes there is no skip ACT for an outcome word to report, so the settled
+ * all-clear reading everywhere is the row itself with every box clear, and where
+ * the hold offered nothing at all the row says so in its own words.
+ *
+ * WHAT THIS FILE STILL PINS is cinatra#2893's criterion, which is not the panel
+ * but what the panel existed to satisfy: a settled, skipped row with NO decided
+ * skill must draw its card and state something, rather than vanish and leave a
+ * reader with an empty column. That is measured here on the reading that ships,
+ * on every declared host, together with the panel's absence on each of them and
+ * the rule that a decider is never invented. The per-box all-clear reading — the
+ * different case, where the hold DID offer skills and the reader kept none — is
+ * pinned in `skills-step-all-clear-is-the-skip.test.tsx`.
  */
 async function renderRow(
   decision: Decision,
-  host: "page_gate_region" | "chat_thread" | "run_card" = "page_gate_region",
+  host: "page_gate_region" | "chat_thread" | "run_card" | "site_widget" = "page_gate_region",
 ) {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
@@ -180,28 +186,34 @@ async function renderRow(
 }
 
 const panel = () => document.querySelector("[data-recommendation-outcome-panel]");
+/** The checklist's own list region, which states its emptiness in words. */
+const list = () => document.querySelector("[data-skills-step-list]");
 
 describe("§V — the settled reading for an empty decided set (cinatra#2893)", () => {
-  it("RED ON MAIN: a settled, skipped row with no decided skill draws the outcome panel, not nothing", async () => {
+  it("THE CRITERION: a settled, skipped row with no decided skill draws its CARD, not nothing", async () => {
     const { container } = await renderRow({ kind: "skipped", decided: [] });
-    await waitFor(() => expect(panel()).not.toBeNull());
+    await waitFor(() =>
+      expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+    );
 
     // The card did not vanish: it is still a `recommendation_hold` card root,
     // declaring its kind, its host and its settled state — the three attributes
-    // a capture of this card is identified by.
+    // a capture of this card is identified by. THAT is what cinatra#2893 fixed,
+    // and it is untouched by which face states the emptiness.
     const root = container.querySelector("[data-run-recommendation-chip-row]");
     expect(root).not.toBeNull();
     expect(root!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(root!.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
     expect(root!.getAttribute("data-lifecycle-card-state")).toBe("decided");
     expect(root!.getAttribute("data-run-recommendation-settled")).toBe("true");
+    expect(root!.getAttribute("data-run-recommendation-decision")).toBe("skipped");
 
-    // "the outcome word, and beneath it the one sentence for that outcome".
-    expect(panel()!.getAttribute("data-recommendation-outcome")).toBe("skipped");
-    expect(panel()!.textContent).toContain("Skipped");
-    expect(panel()!.textContent).toContain(
-      "The recommendation is recorded as skipped, and the run went ahead with its default skill set.",
-    );
+    // …and it STATES the emptiness rather than drawing an empty column. The
+    // bordered plate is not how it states it any more — no host draws that —
+    // so the words are read off the list region the checklist ships.
+    expect(panel()).toBeNull();
+    expect(list()).not.toBeNull();
+    expect(list()!.textContent?.trim()).toBeTruthy();
 
     // There is no chip, because there is no skill to state one for — and
     // nothing left to press, exactly as the settled row has nothing.
@@ -210,12 +222,20 @@ describe("§V — the settled reading for an empty decided set (cinatra#2893)", 
     expect(container.querySelectorAll("[data-skill-action]")).toHaveLength(0);
   });
 
-  it.each(["run_card", "chat_thread"] as const)(
-    "is NOT drawn on %s — its skills row states an all-clear reading instead",
+  // THE WIDGET IS NOT DRIVEN HERE, and the reason is a property of the product
+  // rather than a gap: `site_widget` is not a cookie host, so the surface
+  // provider declares no host for it without a credential declaration, and a
+  // bare mount would fall to the undeclared-host reading rather than to the
+  // widget's own. It is driven through its broker transport in
+  // `recommendation-hold-card.test.tsx`, whose four-host arm compares its
+  // drawing with the other three byte for byte.
+  it.each(["run_card", "chat_thread", "page_gate_region"] as const)(
+    "the outcome panel is NOT drawn on %s — its skills row states an all-clear reading instead",
     async (host) => {
-      // Review point 2 (cinatra#3047) for the run page, and cinatra#3062 for the
-      // conversation: no skip outcome, no decider naming, and none of the
-      // panel's visuals on a host that draws the checklist.
+      // Review point 2 (cinatra#3047) for the run page and then the review
+      // page's gate region, and cinatra#3062 for the conversation: no skip
+      // outcome, no decider naming, and none of the panel's visuals — on any
+      // declared host, because every one of them draws the checklist.
       const { container } = await renderRow(
         { kind: "skipped", decided: [], decidedByName: "Dana Okafor" },
         host,
@@ -231,31 +251,37 @@ describe("§V — the settled reading for an empty decided set (cinatra#2893)", 
     },
   );
 
-  it("names the decider only when it can be named — and never invents one", async () => {
-    // The NAMED face, when a safely displayable name is supplied.
+  it("never names a decider — the face that could is drawn on no host", async () => {
+    // THE RULE THIS ARM CARRIES survives the panel's retirement, and gets
+    // stricter rather than weaker: it used to be "name the decider only when it
+    // can be safely named, and never invent one", and the two faces it drove
+    // (`recommendation-settled-outcome-named` and `-outcome-only`) are the
+    // panel's. No host draws the panel, so nothing prints a decider at all —
+    // and a name supplied by the record must not leak into the reading by any
+    // other route either. Both inputs are driven, so a face that started
+    // printing one again would be caught.
     const named = await renderRow({
       kind: "skipped",
       decided: [],
       decidedByName: "Dana Okafor",
     });
-    await waitFor(() => expect(panel()).not.toBeNull());
-    expect(panel()!.textContent).toContain("Skipped by Dana Okafor");
-    expect(panel()!.getAttribute("data-conformance-id")).toBe(
-      "recommendation-settled-outcome-named",
-    );
+    await waitFor(() => expect(list()).not.toBeNull());
+    expect(panel()).toBeNull();
+    expect(named.container.textContent).not.toContain("Dana Okafor");
+    expect(named.container.textContent ?? "").not.toMatch(/\bby\s/);
+    expect(document.querySelector("[data-conformance-id='recommendation-settled-outcome-named']"))
+      .toBeNull();
     named.unmount();
     cleanup();
 
-    // The FALLBACK face, when none is. "Skipped" alone — no dangling "by", no
-    // placeholder, and nothing pressed into service as a name.
-    await renderRow({ kind: "skipped", decided: [] });
-    await waitFor(() => expect(panel()).not.toBeNull());
-    const text = panel()!.textContent ?? "";
-    expect(text).toContain("Skipped");
-    expect(text).not.toMatch(/Skipped\s+by/);
-    expect(panel()!.getAttribute("data-conformance-id")).toBe(
-      "recommendation-settled-outcome-only",
-    );
+    // …and with no name in the record, the same reading and still no dangling
+    // "by", no placeholder, nothing pressed into service as a name.
+    const anon = await renderRow({ kind: "skipped", decided: [] });
+    await waitFor(() => expect(list()).not.toBeNull());
+    expect(panel()).toBeNull();
+    expect(anon.container.textContent ?? "").not.toMatch(/\bby\s/);
+    expect(document.querySelector("[data-conformance-id='recommendation-settled-outcome-only']"))
+      .toBeNull();
   });
 
   it("the resolver's answer and the rendered face agree — the SAME answer drives both", async () => {
@@ -269,15 +295,19 @@ describe("§V — the settled reading for an empty decided set (cinatra#2893)", 
     // 2. The card, mapped from THAT answer exactly as `RecommendationHoldCard`
     //    maps it — the object below is the resolver's own, not a copy of it.
     if (state.state !== "skipped") throw new Error("unreachable: asserted above");
-    await renderRow({ kind: "skipped", decided: state.decided });
-    await waitFor(() => expect(panel()).not.toBeNull());
-
-    // 3. The face states the outcome the resolver recorded, and the fallback
-    //    face is the true one because the answer carries no decider at all.
-    expect(panel()!.getAttribute("data-recommendation-outcome")).toBe("skipped");
-    expect(panel()!.getAttribute("data-conformance-id")).toBe(
-      "recommendation-settled-outcome-only",
+    const { container } = await renderRow({ kind: "skipped", decided: state.decided });
+    await waitFor(() =>
+      expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
     );
+
+    // 3. The card states the outcome the resolver recorded — on its root, which
+    //    is where the reading publishes it now that the panel that carried the
+    //    word is drawn on no host — and it names no decider, because the
+    //    answer carries none at all.
+    const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+    expect(root.getAttribute("data-run-recommendation-decision")).toBe("skipped");
+    expect(root.getAttribute("data-run-recommendation-settled")).toBe("true");
+    expect(panel()).toBeNull();
     expect(Object.keys(state)).not.toContain("decidedByName");
   });
 

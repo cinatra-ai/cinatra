@@ -269,12 +269,16 @@ async function setupSteps(opts: RunFixture = {}): Promise<SetupRailStep[]> {
   const opens = recommendationRailStepOpens({ entry, parkStatus: park?.status });
   const reading = runReviewStepReading(opts.slot ?? null);
   return [
-    { key: "schedule", surface: <SchedulerForm /> },
+    // THE SKILLS QUESTION FIRST, exactly as the screen lists it (cinatra#3047):
+    // the drawing puts this entry at the head of the rail, ahead of the steps it
+    // authorizes, and a harness that mirrored the screen in the other order
+    // would agree with the defect instead of catching it.
     {
       key: "recommendation",
       reached: opens,
       surface: opens ? await recommendationSurface() : null,
     },
+    { key: "schedule", surface: <SchedulerForm /> },
     {
       key: "review",
       reached: reading !== "none",
@@ -303,6 +307,20 @@ const detailColumn = (c: HTMLElement) =>
   c.querySelectorAll<HTMLElement>('[data-conformance-id="run-detail-column"]');
 const rows = (c: HTMLElement) =>
   Array.from(c.querySelectorAll<HTMLElement>('[data-conformance-id="run-surface-rail-step"]'));
+/**
+ * THE ROW FOR A STEP, BY KEY (cinatra#3047, the standing review point).
+ *
+ * The ORDER the rail draws its steps in is pinned once — by the case above that
+ * is about the order — and every other case here is about a particular step
+ * rather than about a position. Reading them by key says which step each
+ * assertion means, and keeps a reordering failing the one case that rules on
+ * order instead of a dozen that do not.
+ */
+const rowFor = (c: HTMLElement, key: "recommendation" | "schedule" | "review") => {
+  const row = rows(c).find((r) => r.getAttribute("data-run-surface-rail-step-key") === key);
+  if (!row) throw new Error(`the rail drew no row for the ${key} step`);
+  return row;
+};
 const holdCard = (c: HTMLElement) =>
   c.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
 const reviewSlot = (c: HTMLElement) =>
@@ -333,17 +351,24 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(surface.children[1]).toBe(detailColumn(container)[0]);
   });
 
-  it("lists the three setup steps on the rail, in order, numbered from one", async () => {
+  it("lists the three setup steps on the rail, in order, and numbers the two the drawing numbers", async () => {
+    // THE SKILLS ROW CARRIES A GLYPH, NOT A NUMERAL (cinatra#3047, the
+    // re-shoot's third defect), so the series numbers around it: the drawing at
+    // the capture contract's pin draws this entry with its own clipboard-check
+    // glyph and starts the rail's numerals on the step after it.
     const { container } = await renderSetupSurface();
 
     expect(rows(container).map((r) => r.textContent)).toEqual([
+      "Skills",
       "1Schedule",
-      "2Skills",
-      "3Review",
+      "2Review",
     ]);
+    expect(
+      rows(container)[0].querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-step-key"))).toEqual([
-      "schedule",
       "recommendation",
+      "schedule",
       "review",
     ]);
   });
@@ -354,10 +379,10 @@ describe("the setup run page draws the two-column run surface", () => {
     const { container } = await renderSetupSurface();
 
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-reached"))).toEqual([
+      "false",
       // the scheduler: the step this page IS, and no page claims the run is
       // still short of the step it is standing on;
       null,
-      "false",
       "false",
     ]);
   });
@@ -371,12 +396,14 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(railColumn(container)[0].contains(form)).toBe(false);
     expect(container.textContent).toContain("When should this run?");
     expect(container.textContent).toContain("Continue");
-    expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows(container)[0].getAttribute("aria-current")).toBe("step");
+    expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+      "true",
+    );
+    expect(rowFor(container, "schedule").getAttribute("aria-current")).toBe("step");
     // The step the page is standing on is always openable — it has its form and
     // no page claims the run is still short of it.
-    expect(rows(container)[0].hasAttribute("aria-disabled")).toBe(false);
-    expect(rows(container)[0].getAttribute("data-action")).toBe("open-schedule-step");
+    expect(rowFor(container, "schedule").hasAttribute("aria-disabled")).toBe(false);
+    expect(rowFor(container, "schedule").getAttribute("data-action")).toBe("open-schedule-step");
   });
 
   it("never draws a step's surface under its rail row", async () => {
@@ -411,8 +438,10 @@ describe("the skills-recommendation step opens exactly when the run has one to s
     holdStateMock.mockImplementation(async () => HELD);
     const { container } = await renderSetupSurface({ park: LIVE_HOLD });
 
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("true");
-    expect(rows(container)[1].hasAttribute("aria-disabled")).toBe(false);
+    expect(rowFor(container, "recommendation").getAttribute("data-run-surface-rail-reached")).toBe(
+      "true",
+    );
+    expect(rowFor(container, "recommendation").hasAttribute("aria-disabled")).toBe(false);
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
     await waitFor(() => expect(holdCard(container)).not.toBeNull());
 
@@ -423,8 +452,12 @@ describe("the skills-recommendation step opens exactly when the run has one to s
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
     // One step at a time: the scheduler is not drawn beside it.
     expect(container.querySelector('[data-testid="scheduler-form"]')).toBeNull();
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("false");
+    expect(
+      rowFor(container, "recommendation").getAttribute("data-run-surface-rail-selected"),
+    ).toBe("true");
+    expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+      "false",
+    );
   });
 
   it("opens the SETTLED reading once a person has decided — the row keeps its place", async () => {
@@ -436,8 +469,12 @@ describe("the skills-recommendation step opens exactly when the run has one to s
     holdStateMock.mockImplementation(async () => DECIDED);
     const { container } = await renderSetupSurface({ park: DECIDED_HOLD });
 
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("true");
-    expect(rows(container)[1].getAttribute("data-action")).toBe("open-recommendation-step");
+    expect(rowFor(container, "recommendation").getAttribute("data-run-surface-rail-reached")).toBe(
+      "true",
+    );
+    expect(rowFor(container, "recommendation").getAttribute("data-action")).toBe(
+      "open-recommendation-step",
+    );
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
     await waitFor(() => expect(holdCard(container)).not.toBeNull());
 
@@ -445,7 +482,9 @@ describe("the skills-recommendation step opens exactly when the run has one to s
     expect(card.getAttribute("data-lifecycle-card-state")).toBe("decided");
     expect(detailColumn(container)[0].contains(card)).toBe(true);
     expect(detailColumn(container)[0].textContent).toContain("Skill A");
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
+    expect(
+      rowFor(container, "recommendation").getAttribute("data-run-surface-rail-selected"),
+    ).toBe("true");
   });
 
   it("CLOSES the step on a run that never held — the row stays, muted", async () => {
@@ -457,22 +496,29 @@ describe("the skills-recommendation step opens exactly when the run has one to s
 
     // Still a row, still named, still in the series — muted, not removed.
     expect(rows(container).length).toBe(3);
-    expect(rows(container)[1].textContent).toBe("2Skills");
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
-    expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
+    // Named and glyphed, never numbered (cinatra#3047).
+    expect(rowFor(container, "recommendation").textContent).toBe("Skills");
+    expect(rowFor(container, "recommendation").getAttribute("data-run-surface-rail-reached")).toBe(
+      "false",
+    );
+    expect(rowFor(container, "recommendation").getAttribute("aria-disabled")).toBe("true");
     // The row's action NAMES the state instead of promising an open.
-    expect(rows(container)[1].getAttribute("data-action")).toBe(
+    expect(rowFor(container, "recommendation").getAttribute("data-action")).toBe(
       "recommendation-step-unavailable",
     );
     expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
 
     // Clicking it does nothing: the scheduler stays open and the detail column
     // never goes empty.
-    fireEvent.click(rows(container)[1]);
+    fireEvent.click(rowFor(container, "recommendation"));
     await waitFor(() =>
-      expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"),
+      expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+        "true",
+      ),
     );
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("false");
+    expect(
+      rowFor(container, "recommendation").getAttribute("data-run-surface-rail-selected"),
+    ).toBe("false");
     const form = container.querySelector('[data-testid="scheduler-form"]')!;
     expect(form).not.toBeNull();
     expect(detailColumn(container)[0].contains(form)).toBe(true);
@@ -491,13 +537,17 @@ describe("the skills-recommendation step opens exactly when the run has one to s
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await renderSetupSurface({ park: EXPIRED_HOLD });
 
-    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
-    expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
+    expect(rowFor(container, "recommendation").getAttribute("data-run-surface-rail-reached")).toBe(
+      "false",
+    );
+    expect(rowFor(container, "recommendation").getAttribute("aria-disabled")).toBe("true");
     expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
 
-    fireEvent.click(rows(container)[1]);
+    fireEvent.click(rowFor(container, "recommendation"));
     await waitFor(() =>
-      expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"),
+      expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+        "true",
+      ),
     );
     expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
     expect(holdStateMock).not.toHaveBeenCalled();
@@ -533,6 +583,42 @@ describe("recommendationRailStepOpens — a terminal park is not a decided one",
     );
   });
 
+  it("a decision that RACED THE SWEEPER still opens the step (cinatra#3047, convergence)", () => {
+    // The park's status and the decision's evidence are not written atomically:
+    // a confirm or a skip landing as the TTL sweeper fires leaves
+    // `policy_unresolved` behind with the answer on file, and the card reads
+    // that run as decided and draws its settled row. Read from the status
+    // alone, the rail closed the step over a card that draws — a settled
+    // history row whose press does nothing and whose answer is nowhere.
+    expect(
+      recommendationRailStepOpens({
+        entry: "settled",
+        parkStatus: "policy_unresolved",
+        decided: true,
+      }),
+    ).toBe(true);
+    // And nobody's answer is still nobody's: the fail-closed park with no
+    // evidence behind it stays closed and muted, which is the reading
+    // cinatra#2970 ruled for a step that opens onto an empty column.
+    expect(
+      recommendationRailStepOpens({
+        entry: "settled",
+        parkStatus: "policy_unresolved",
+        decided: false,
+      }),
+    ).toBe(false);
+    // `decided` never manufactures an entry that does not exist, and never
+    // re-opens a live hold's answer: it is read only for a SETTLED entry.
+    expect(
+      recommendationRailStepOpens({ entry: "none", parkStatus: null, decided: true }),
+    ).toBe(false);
+    // Omitting it states nothing and leaves the status-only reading exactly as
+    // it was for every caller that has no run id to ask with.
+    expect(
+      recommendationRailStepOpens({ entry: "settled", parkStatus: "policy_unresolved" }),
+    ).toBe(false);
+  });
+
   it("is the ENTRY question's companion, not a replacement for it", () => {
     // The entry says whether the row EXISTS — a settled entry keeps its place on
     // the rail even where the card it opens draws no DOM, because the run page
@@ -558,8 +644,8 @@ describe("the review step opens the run's review slot", () => {
   it("opens the PLACEHOLDER while the run's review question is still open", async () => {
     const { container } = await renderSetupSurface({ slot: AWAITING_REVIEW });
 
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-reached")).toBe("true");
-    expect(rows(container)[2].getAttribute("data-action")).toBe("open-review-step");
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(rowFor(container, "review").getAttribute("data-action")).toBe("open-review-step");
     fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
 
     const slot = reviewSlot(container)!;
@@ -578,7 +664,7 @@ describe("the review step opens the run's review slot", () => {
   it("opens the REVIEW CARD in place once a gate is on file", async () => {
     const { container } = await renderSetupSurface({ slot: PENDING_REVIEW });
 
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-reached")).toBe("true");
     fireEvent.click(container.querySelector('[data-action="open-review-step"]')!);
 
     // THE CARD ITSELF, resolved. The box around it proves nothing — the card
@@ -597,7 +683,7 @@ describe("the review step opens the run's review slot", () => {
     expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).toBeNull();
     expect(detailColumn(container)[0].contains(card)).toBe(true);
     expect(railColumn(container)[0].contains(card)).toBe(false);
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-selected")).toBe("true");
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-selected")).toBe("true");
   });
 
   it("CLOSES the review step for a run with no review to show — the row stays, muted", async () => {
@@ -606,12 +692,12 @@ describe("the review step opens the run's review slot", () => {
     // The row is THERE — the rail is the run's series of steps and a missing row
     // would hide the series — and it says what it is.
     expect(rows(container).length).toBe(3);
-    expect(rows(container)[2].getAttribute("aria-disabled")).toBe("true");
+    expect(rowFor(container, "review").getAttribute("aria-disabled")).toBe("true");
     // No reader can address it as an opening it cannot perform.
     expect(container.querySelector('[data-action="open-review-step"]')).toBeNull();
-    expect(rows(container)[2].getAttribute("data-action")).toBe("review-step-unavailable");
+    expect(rowFor(container, "review").getAttribute("data-action")).toBe("review-step-unavailable");
 
-    fireEvent.click(rows(container)[2]);
+    fireEvent.click(rowFor(container, "review"));
 
     // Clicking did NOTHING: the scheduler is still the open step, its form is
     // still the surface, and the right column never went empty.
@@ -621,14 +707,18 @@ describe("the review step opens the run's review slot", () => {
     );
     expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
     expect(detailColumn(container)[0].textContent).toContain("When should this run?");
-    expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-selected")).toBe("false");
-    expect(rows(container)[2].hasAttribute("aria-current")).toBe(false);
+    expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+      "true",
+    );
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-selected")).toBe(
+      "false",
+    );
+    expect(rowFor(container, "review").hasAttribute("aria-current")).toBe(false);
   });
 
   it("the muted row keeps every anchor the capture recorder measures", async () => {
     const { container } = await renderSetupSurface();
-    const row = rows(container)[2];
+    const row = rowFor(container, "review");
 
     expect(row.tagName).toBe("BUTTON");
     expect(row.getAttribute("type")).toBe("button");
@@ -636,7 +726,8 @@ describe("the review step opens the run's review slot", () => {
     expect(row.hasAttribute("data-run-surface-rail-step")).toBe(true);
     expect(row.getAttribute("data-run-surface-rail-step-key")).toBe("review");
     expect(row.getAttribute("data-run-surface-rail-reached")).toBe("false");
-    expect(row.textContent).toBe("3Review");
+    // "2", not "3": the Skills entry above it takes no numeral (cinatra#3047).
+    expect(row.textContent).toBe("2Review");
     expect(
       row.querySelector('[data-conformance-id="run-surface-rail-indicator"]'),
     ).not.toBeNull();
@@ -787,8 +878,12 @@ describe("no selectable row ever opens an empty run detail", () => {
       "schedule",
     );
     expect(container.querySelector('[data-testid="scheduler-form"]')).not.toBeNull();
-    expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows(container)[2].getAttribute("data-run-surface-rail-selected")).toBe("false");
+    expect(rowFor(container, "schedule").getAttribute("data-run-surface-rail-selected")).toBe(
+      "true",
+    );
+    expect(rowFor(container, "review").getAttribute("data-run-surface-rail-selected")).toBe(
+      "false",
+    );
   });
 
   it("closes a row its page read as still ahead, even when that step HAS a surface", () => {

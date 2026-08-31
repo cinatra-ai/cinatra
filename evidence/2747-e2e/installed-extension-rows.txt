@@ -1,3 +1,0 @@
-@cinatra-ai/mcp-server-connector|0.1.1|active|platform|{"type": "bundled", "version": "0.1.1", "packageName": "@cinatra-ai/mcp-server-connector"}
-@cinatra-ai/google-appointment-schedules-connector|0.1.0|active|organization|{"type": "verdaccio", "version": "0.1.0", "integrity": "sha512-OVAk/v2JezFp62doWru8H6fy+81BSHb03/3Cb1XFXTui8q+5ycysA2db5MHkemS5sJklkpF8zLvTJNkcmJFMVw==", "contentHash": "fcceed1591df4c65d7e2b0912e0649
-@cinatra-ai/google-appointment-schedules-connector|0.0.0|finalized|395024fefd897b3169eb67685abbbc1fa7f2fbcd414876f4dffdc26f55c55d3ba2f2afb9c9ccac03675be4c1e47a64b9b0992592917cccbbd324d91c98914c57

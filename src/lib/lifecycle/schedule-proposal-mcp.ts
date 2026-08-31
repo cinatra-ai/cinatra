@@ -64,7 +64,42 @@ type McpToolResult = {
   structuredContent: Record<string, unknown>;
 };
 
-function refusal(): McpToolResult {
+/**
+ * THE STAGE A REFUSAL CAME FROM — the SERVER's record, never the reader's.
+ *
+ * The sentence stays generic (see the header: a refusal that named what was
+ * refused would be a durable enumeration oracle in the transcript). What is new
+ * is that the server can now tell its own cases apart. Before this, every one of
+ * them produced one indistinguishable string on the wire AND no record at all,
+ * so "which stage refuses this person's schedule" was unanswerable without
+ * re-deriving it by hand — which is the whole reason cinatra#3052 had to be
+ * measured before it could be fixed.
+ *
+ * It carries NO identifiers: not the person, not the org, not the agent, not the
+ * schedule. A stage name is a fact about this build's own control flow, and
+ * nothing in it is about any row.
+ */
+export type ScheduleProposalRefusalStage =
+  | "no_request_context"
+  | "a2a_frame"
+  | "no_lifecycle_grant"
+  | "no_identity"
+  | "invalid_input"
+  | "no_agent_named"
+  | "two_agents_named"
+  | "ref_refused"
+  | "unknown_agent"
+  | "cross_org"
+  | "past_time"
+  | "mint_failed"
+  | "envelope_refused"
+  | "threw";
+
+/** The one prefix the record is written under, so it can be found by grep. */
+export const SCHEDULE_PROPOSAL_REFUSAL_LOG_PREFIX = "[schedule-proposal] refused";
+
+function refusal(stage: ScheduleProposalRefusalStage): McpToolResult {
+  console.warn(`${SCHEDULE_PROPOSAL_REFUSAL_LOG_PREFIX} stage=${stage}`);
   return {
     content: [{ type: "text", text: LIFECYCLE_REFUSAL_RESULT }],
     structuredContent: { result: LIFECYCLE_REFUSAL_RESULT },
@@ -119,9 +154,37 @@ const scheduleSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/**
+ * THE AGENT ARGUMENT, IN BOTH THE SHAPES A CONVERSATION HAS (cinatra#3052).
+ *
+ * `templateId` was the only one, and on the surface this defect was found on it
+ * is a handle the assistant cannot hold: inside a third-party application the
+ * closed widget toolbox exposes no primitive that returns a template id — the
+ * one start it holds takes a package NAME and deliberately refuses ids, "a uuid
+ * is not something a person names in a sentence". So the name the person said
+ * arrived here as a name, the lookup missed, and they read the fixed refusal.
+ *
+ * EXACTLY ONE is required and both are optional at the schema level, because
+ * the XOR is a decision this handler makes and records a stage for, not a shape
+ * error: `agent_run` states the same rule for the same pair, and stating it the
+ * same way keeps one contract in the model's head.
+ */
 const inputSchema = z
   .object({
-    templateId: z.string().min(1).max(128).describe("The agent to schedule."),
+    templateId: z
+      .string()
+      .min(1)
+      .max(128)
+      .optional()
+      .describe("The agent to schedule, by id. Use only when a prior tool result returned one."),
+    packageName: z
+      .string()
+      .min(3)
+      .max(214)
+      .optional()
+      .describe(
+        "The agent to schedule, by its canonical scoped package name (it looks like '@cinatra-ai/<slug>'). Prefer this — it is the name the person says.",
+      ),
     schedule: scheduleSchema,
   })
   .strict();
@@ -130,7 +193,7 @@ export const SCHEDULE_PROPOSAL_TOOL_NAME = "schedule_proposal_render";
 
 export const SCHEDULE_PROPOSAL_TOOL_META = {
   description:
-    "PROPOSE a schedule for an agent and show it in the conversation as its scheduling card. Creates NOTHING: no run, no schedule, no server record — the card asks the person to Confirm or Adjust, and only their Confirm arms anything. Use it whenever the person asks for an agent to run later or on a repeating schedule. Give the schedule the way the scheduling form expresses it (immediate / a local date-time / a recurrence), never as a cron expression. Answers a fixed 'not available to you' when the proposal cannot be made.",
+    "PROPOSE a schedule for an agent and show it in the conversation as its scheduling card. Name the agent the way the person did — pass `packageName` (the canonical scoped form looks like '@cinatra-ai/<slug>'), or `templateId` when a prior tool result returned one; pass exactly one. Creates NOTHING: no run, no schedule, no server record — the card asks the person to Confirm or Adjust, and only their Confirm arms anything. Use it whenever the person asks for an agent to run later or on a repeating schedule. Give the schedule the way the scheduling form expresses it (immediate / a local date-time / a recurrence), never as a cron expression. Answers a fixed 'not available to you' when the proposal cannot be made.",
   inputSchema,
 } as const;
 
@@ -152,39 +215,49 @@ export const SCHEDULE_PROPOSAL_TOOL_META = {
  * only the person's own Confirm — a browser session action from the card, with
  * no transport-reachable primitive behind it — arms anything.
  */
-function resolveProposer(): { userId: string; orgId: string } | null {
+function resolveProposer():
+  | { ok: true; userId: string; orgId: string }
+  | { ok: false; stage: ScheduleProposalRefusalStage } {
   const ctx = mcpRequestContextStorage.getStore();
-  if (!ctx) return null;
-  if (ctx.a2aActorContext) return null;
+  if (!ctx) return { ok: false, stage: "no_request_context" };
+  if (ctx.a2aActorContext) return { ok: false, stage: "a2a_frame" };
   const delegated = ctx.delegatedActor;
   if (
     delegated?.delegation === "public_site_widget" &&
     delegated.lifecycleRead !== true
   ) {
-    return null;
+    return { ok: false, stage: "no_lifecycle_grant" };
   }
   const userId = ctx.userId ?? null;
   const orgId = ctx.orgId ?? null;
-  if (!userId || !orgId) return null;
-  return { userId, orgId };
+  if (!userId || !orgId) return { ok: false, stage: "no_identity" };
+  return { ok: true, userId, orgId };
 }
 
 export async function handleScheduleProposalRender(
   input: unknown,
 ): Promise<McpToolResult> {
   const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) return refusal();
+  if (!parsed.success) return refusal("invalid_input");
   const proposer = resolveProposer();
-  if (!proposer) return refusal();
+  if (!proposer.ok) return refusal(proposer.stage);
 
   try {
     const proposed = await proposeTriggerSchedule({
-      templateId: parsed.data.templateId,
+      // Whichever of the two the caller named — the XOR itself is the propose
+      // leaf's rule, so this surface forwards and records rather than deciding
+      // it a second time and drifting from the one that matters.
+      ...(parsed.data.templateId === undefined
+        ? {}
+        : { templateId: parsed.data.templateId }),
+      ...(parsed.data.packageName === undefined
+        ? {}
+        : { packageName: parsed.data.packageName }),
       userId: proposer.userId,
       orgId: proposer.orgId,
       schedule: parsed.data.schedule,
     });
-    if (!proposed.ok) return refusal();
+    if (!proposed.ok) return refusal(proposed.reason);
 
     // The ref IS the proposal token — see the module header of
     // `trigger-schedule-proposal-token`. `buildLifecycleViewEnvelope` re-checks
@@ -194,14 +267,14 @@ export async function handleScheduleProposalRender(
       viewType: "trigger_schedule_proposal",
       ref: proposed.token,
     });
-    if (!envelope) return refusal();
+    if (!envelope) return refusal("envelope_refused");
     return {
       content: [{ type: "text", text: envelope }],
       structuredContent: JSON.parse(envelope) as Record<string, unknown>,
     };
   } catch {
     // A store/transport failure must not become an existence signal either.
-    return refusal();
+    return refusal("threw");
   }
 }
 

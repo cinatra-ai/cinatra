@@ -56,14 +56,18 @@ describe("the rail's vocabulary", () => {
 });
 
 describe("the rows that print it", () => {
-  it("the run page's own row prints 'Skills' beside its numeral", () => {
-    const { container } = render(<RecommendationRailStepRow displayStep={1} settled={false} />);
+  it("the run page's own row prints 'Skills' beside its glyph", () => {
+    // BESIDE ITS GLYPH, not beside a numeral (cinatra#3047, the re-shoot's
+    // third defect): the drawing gives this entry its own glyph on the open
+    // reading, and the numerals start on the step after it. The WORD is what
+    // this file is about, and the word is unchanged.
+    const { container } = render(<RecommendationRailStepRow settled={false} />);
     const row = container.querySelector('[data-conformance-id="recommendation-rail-step"]')!;
-    expect(row.textContent).toBe("1Skills");
+    expect(row.textContent).toBe("Skills");
   });
 
   it("the run page's SETTLED row prints it too — the history row keeps the name", () => {
-    const { container } = render(<RecommendationRailStepRow displayStep={1} settled />);
+    const { container } = render(<RecommendationRailStepRow settled />);
     const row = container.querySelector('[data-conformance-id="recommendation-rail-step"]')!;
     expect(row.textContent).toBe("Skills");
   });
@@ -78,6 +82,8 @@ describe("the rows that print it", () => {
     const rows = Array.from(
       container.querySelectorAll('[data-conformance-id="run-surface-rail-step"]'),
     );
-    expect(rows.map((r) => r.textContent)).toEqual(["1Skills", "2Schedule", "3Review"]);
+    // The Skills row draws its glyph and takes no numeral, so its siblings
+    // number from 1 around it (cinatra#3047). The words are unchanged.
+    expect(rows.map((r) => r.textContent)).toEqual(["Skills", "1Schedule", "2Review"]);
   });
 });

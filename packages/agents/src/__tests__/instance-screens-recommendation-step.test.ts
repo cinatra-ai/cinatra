@@ -24,7 +24,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { recommendationRailEntry } from "../recommendation-rail-entry";
+import {
+  recommendationRailEntry,
+  recommendationRailStepOpens,
+} from "../recommendation-rail-entry";
 import {
   runDetailInitialStep,
   runDetailPanelKind,
@@ -200,8 +203,16 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     const scheduleAt = SCREEN_SRC.indexOf('key: "schedule"');
     expect(recommendationAt).toBeGreaterThan(-1);
     expect(scheduleAt).toBeGreaterThan(recommendationAt);
-    // The rail below renumbers around however many gate steps there are.
-    expect(SCREEN_SRC).toMatch(/stepOffset=\{railSteps\.length\}/);
+    // AND THE RAIL BELOW RENUMBERS AROUND THE NUMBERED ONES ONLY
+    // (cinatra#3047). It used to be `railSteps.length`, which counted the Skills
+    // entry — and the drawing gives that entry its own glyph and no numeral, so
+    // counting it pushed the run's first work step to "2". The offset is the
+    // rail's own rule now (`runSurfaceRailNumberedCount`), asked once, and the
+    // arithmetic itself is pinned in `skills-step-glyph-and-numerals.test.tsx`.
+    expect(SCREEN_SRC).toMatch(
+      /stepOffset=\{runSurfaceRailNumberedCount\(railSteps\.map\(\(step\) => step\.key\)\)\}/,
+    );
+    expect(SCREEN_SRC).not.toMatch(/stepOffset=\{railSteps\.length\}/);
   });
 
   it("asks the entry predicate for the step rather than restating the branch inline", () => {
@@ -308,5 +319,85 @@ describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps,
     expect(SCREEN_SRC).toContain("const railDraws = screenDrawsPageRail({");
     expect(SCREEN_SRC).toMatch(/gateStepCount: railSteps\.length,/);
     expect(SCREEN_SRC).not.toMatch(/run\.status !== "pending_input" &&/);
+  });
+});
+
+describe("the SETTLED step is drawn from the page's own reading (cinatra#3047, point C)", () => {
+  it("resolves the settled reading server-side and hands it to the one card", () => {
+    // The page projected the decision as ONE BOOLEAN and nothing else, so the
+    // settled step's entire content came from a client round trip made after
+    // hydration — and drew nothing at all until it landed. The rows are the
+    // page's own read now, resolved through the same core the card resolves
+    // with, behind the access door this screen already cleared.
+    expect(RUN_SCREEN_SRC).toContain("const recommendationSettledReading =");
+    expect(RUN_SCREEN_SRC).toContain("resolveRecommendationHoldStateForActor({");
+    expect(RUN_SCREEN_SRC).toMatch(/initialState=\{recommendationSettledReading\}/);
+    // ONLY on the settled branch: a live hold's offer is the card's own read,
+    // and a run that never held resolves nothing at all.
+    expect(RUN_SCREEN_SRC).toMatch(/recommendationEntry === "settled"/);
+  });
+
+  it("says the same thing on the ROW that it says to the frame", () => {
+    // The run page composes its OWN Skills row, so the rail does not decorate
+    // it: `reached` refuses the selection while the row went on naming
+    // `open-recommendation-step` and carrying a click handler. ONE answer, read
+    // once and handed to both.
+    expect(RUN_SCREEN_SRC).toMatch(/const recommendationRailStepReached = recommendationRailStepOpens\(\{/);
+    expect(RUN_SCREEN_SRC).toMatch(/openable=\{recommendationRailStepReached\}/);
+    expect(RUN_SCREEN_SRC).toMatch(/reached: recommendationRailStepReached/);
+  });
+
+  it("closes the step when the page's own reading is empty", () => {
+    // A hold RELEASED with no selection and no skip on file resolves to `none`,
+    // and the card draws no DOM for it: the status-only answer opened that step
+    // over a blank column. The page holds the reading now.
+    expect(RUN_SCREEN_SRC).toMatch(/settledReadingIsEmpty: recommendationSettledReading\?\.state === "none"/);
+    expect(recommendationRailStepOpens({
+      entry: "settled",
+      parkStatus: "released",
+      decided: true,
+    })).toBe(true);
+    expect(recommendationRailStepOpens({
+      entry: "settled",
+      parkStatus: "released",
+      decided: true,
+      settledReadingIsEmpty: true,
+    })).toBe(false);
+    // A reading that FAILED to resolve states nothing, so the step still opens.
+    expect(recommendationRailStepOpens({
+      entry: "settled",
+      parkStatus: "released",
+      decided: true,
+      settledReadingIsEmpty: false,
+    })).toBe(true);
+  });
+
+  it("asks the settled reading a second time before giving it up", () => {
+    // A refusal is an answer and it repeats; a torn read is a moment. Giving the
+    // whole reading up on the first failure puts the reader back in front of the
+    // empty column this leg exists to close.
+    expect(
+      (RUN_SCREEN_SRC.match(/resolveRecommendationHoldStateForActor\(\{/g) ?? []).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not open the step over a park nobody answered", () => {
+    // `policy_unresolved` with no evidence behind it is a terminal park that no
+    // person decided: there are no rows to draw and no page reading either, so
+    // the row stays on the rail closed and muted rather than opening an empty
+    // column. ONE definition of "opens", shared with the setup run page.
+    expect(RUN_SCREEN_SRC).toMatch(/const recommendationRailStepReached = recommendationRailStepOpens\(\{/);
+    expect(recommendationRailStepOpens({
+      entry: "settled",
+      parkStatus: "policy_unresolved",
+      decided: false,
+    })).toBe(false);
+    // …and a decision that raced the sweeper still opens it.
+    expect(recommendationRailStepOpens({
+      entry: "settled",
+      parkStatus: "policy_unresolved",
+      decided: true,
+    })).toBe(true);
+    expect(recommendationRailStepOpens({ entry: "live", parkStatus: "parked" })).toBe(true);
   });
 });

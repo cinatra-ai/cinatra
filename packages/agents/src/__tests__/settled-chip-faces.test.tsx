@@ -28,17 +28,30 @@
  * the skill name, the `data-chip-mark` and the element structure are kept for
  * the same reason.
  *
- * THE HOST THIS IS TAKEN ON MOVED (cinatra#3047, the review's points C and E),
- * and the baseline did NOT. The faces below are §V's per-chip settled faces, and
- * §V is now the reading of the conversation, the widget and the review page: the
- * run page draws the review's own Skills step, whose settled pill carries a
- * read-only checkbox in front of the name. So the faces are rendered where they
- * still live — `page_gate_region`, a composition host with no transcript marker
- * of its own — and they must still match the recorded bytes exactly, which is
- * the whole point: the reading that changed is one host's, and these faces are
- * every other host's. The ONE normalization this costs is named at its own line
- * below: the card root carries the host that declared it, and the host is a
- * property of the mount rather than of the face.
+ * THE HOST THIS IS TAKEN ON MOVED THREE TIMES, and then ran out; the baseline
+ * did NOT — which is the whole point of the file. The faces below are §V's
+ * per-chip settled faces. Review point C made the RUN PAGE draw the Skills step
+ * instead of them, so they were re-aimed at `page_gate_region`; the re-shoot
+ * then found the REVIEW PAGE still drawing them above its review card, and the
+ * review page is the run's own second page, so they were re-aimed again at the
+ * CONVERSATION; cinatra#3062 moves the conversation and the widget too. Every
+ * declared host draws the Skills step now, so these faces are no host's drawing
+ * any more: they are the shape `chipRowDrawsSkillChecklist` produces for its
+ * FALSE answer, which is what a mount that declared no host falls to.
+ *
+ * SO THE FACES ARE RENDERED WITH NO SURFACE PROVIDER AT ALL, which is that
+ * answer's own mount, and they must still match the recorded bytes exactly.
+ * That is the record this file exists to keep: the cells cinatra#2893 promised
+ * not to disturb are byte-for-byte what they were, and a change to them would
+ * be a change nobody asked for rather than a consequence of moving a host.
+ *
+ * ONE NORMALIZATION, on the ROOT and about the MOUNT rather than the face: the
+ * root declares the host that mounted it and the baseline was recorded on
+ * `run_card`, while a mount with no provider declares none and omits the
+ * attribute. That is a property of WHERE the card is mounted. The FACES — the
+ * three cells this file exists for — are compared with no normalization at all
+ * and match the recorded bytes exactly, and the root's other seven attributes
+ * are compared as recorded.
  *
  * Run:
  *   cd packages/agents && npx vitest run src/__tests__/settled-chip-faces.test.tsx
@@ -98,18 +111,20 @@ export function normalizeFace(el: Element): string {
 export async function renderSettledFaces(): Promise<Record<string, string>> {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+  // NO SURFACE PROVIDER — see the note at the head of this file. This is the
+  // mount `chipRowDrawsSkillChecklist`'s false answer belongs to now, and it is
+  // the only one that still draws these faces.
+  void LifecycleCardSurfaceProvider;
   render(
-    <LifecycleCardSurfaceProvider host="page_gate_region">
-      <RunRecommendationChipRow
-        runId="run-2893"
-        agentPackageName="@cinatra-test/hold-fixture-agent"
-        decision={{
-          kind: "confirmed",
-          skillNames: ["Enrich contacts", "Draft email"],
-          decided: SETTLED_FIXTURE,
-        }}
-      />
-    </LifecycleCardSurfaceProvider>,
+    <RunRecommendationChipRow
+      runId="run-2893"
+      agentPackageName="@cinatra-test/hold-fixture-agent"
+      decision={{
+        kind: "confirmed",
+        skillNames: ["Enrich contacts", "Draft email"],
+        decided: SETTLED_FIXTURE,
+      }}
+    />,
   );
   await waitFor(() =>
     expect(document.querySelectorAll("[data-recommendation-chip]")).toHaveLength(3),
@@ -127,13 +142,16 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   // carries, so a root that moved would break every settled capture on file.
   const root = document.querySelector("[data-run-recommendation-chip-row]");
   if (!root) throw new Error("no card root");
-  out["settled-card-root"] = normalizeFace(root)
-    .replace(/>[\s\S]*<\//, "></")
-    // THE ONE NORMALIZATION (cinatra#3047). The root declares the host that
-    // mounted it, and the baseline was recorded on `run_card` — the host whose
-    // reading the review changed. Nothing else about the root may move, and the
-    // comparison below is what proves it did not.
-    .replace('data-lifecycle-card-host="page_gate_region"', 'data-lifecycle-card-host="run_card"');
+  // THE ONE NORMALIZATION. The root declares the host that mounted it, and the
+  // baseline was recorded on `run_card`; a mount with no provider declares none
+  // and omits the attribute altogether, so it is put back — on the ELEMENT,
+  // before the face is normalized, so the attribute order the comparison reads
+  // is the sorted one either way. Nothing else about the root may move, and the
+  // comparison below is what proves it did not.
+  if (!root.hasAttribute("data-lifecycle-card-host")) {
+    root.setAttribute("data-lifecycle-card-host", "run_card");
+  }
+  out["settled-card-root"] = normalizeFace(root).replace(/>[\s\S]*<\//, "></");
   return out;
 }
 

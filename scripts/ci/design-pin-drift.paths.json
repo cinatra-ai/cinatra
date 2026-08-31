@@ -1,0 +1,56 @@
+{
+  "$comment": "Pin id -> the repository paths that CONSUME that conformance manifest (cinatra#3057). The design-pin-drift job is red on a pull_request / merge_group only for the non-match pins whose paths this diff touched, so an unrelated PR is never blocked by a manifest change it does not adopt and a PR that fixes one pin is never blocked by the others. Three classes per pin, and no others: the committed manifest copy, the DRIVERS that answer what it declares (tests/e2e/design/conformance/contract.ts, one shared file for every surface), and the HARNESS MOUNTS that render those surfaces. The two harness ROUTE entries are listed under every pin whose surfaces they mount. globalPaths change what the gate itself decides, so touching one of them touches every id — after such a change no pin's silence is trustworthy. Every path here must exist: the gate refuses to run when the map and the pin file disagree, and its unit suite refuses a mapped path that is gone.",
+  "globalPaths": [
+    "scripts/ci/design-pin-drift.mjs",
+    "scripts/ci/design-pin-drift.paths.json",
+    ".github/workflows/gates.yml"
+  ],
+  "pins": {
+    "app": [
+      "tests/e2e/design/conformance/manifests/app.json",
+      "tests/e2e/design/conformance/contract.ts",
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/sidebar-assistants-fixture.tsx"
+    ],
+    "app-components": [
+      "tests/e2e/design/conformance/manifests/app-components.json",
+      "tests/e2e/design/conformance/contract.ts",
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/approvals-scheduling-fixtures.tsx",
+      "src/app/design-fixtures/conformance/marketplace-not-connected-group.tsx",
+      "src/app/design-fixtures/conformance/breadcrumb-conformance-fixtures.tsx",
+      "src/app/design-fixtures/conformance/breadcrumb-conformance-seed.ts"
+    ],
+    "app-extensions": [
+      "tests/e2e/design/conformance/manifests/app-extensions.json",
+      "tests/e2e/design/conformance/contract.ts",
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/card-fixtures.tsx",
+      "src/app/design-fixtures/conformance/fixture-data.ts",
+      "src/app/design-fixtures/conformance/install-config-needs-fixture.tsx",
+      "src/app/design-fixtures/conformance/seed-data.ts",
+      "src/app/design-fixtures/conformance/seeded/page.tsx",
+      "src/app/design-fixtures/conformance/seeded/marketplace-grid-fixture.tsx",
+      "src/app/design-fixtures/conformance/seeded/installed-extensions-fixture.tsx",
+      "src/app/design-fixtures/conformance/seeded/detail-modal-fixture.tsx"
+    ],
+    "app-connectors": [
+      "tests/e2e/design/conformance/manifests/app-connectors.json",
+      "tests/e2e/design/conformance/contract.ts",
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/connector-setup-fixture.tsx",
+      "src/app/design-fixtures/conformance/connector-setup-seed.ts",
+      "src/app/design-fixtures/conformance/connector-multi-connection-fixture.tsx",
+      "src/app/design-fixtures/conformance/seed-data.ts",
+      "src/app/design-fixtures/conformance/seeded/page.tsx",
+      "src/app/design-fixtures/conformance/seeded/connector-grid-fixture.tsx"
+    ],
+    "app-notifications": [
+      "tests/e2e/design/conformance/manifests/app-notifications.json",
+      "tests/e2e/design/conformance/contract.ts",
+      "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/notifications-conformance-fixtures.tsx",
+      "src/app/design-fixtures/conformance/notification-config-needs-fixture.tsx"
+    ]
+  }
+}

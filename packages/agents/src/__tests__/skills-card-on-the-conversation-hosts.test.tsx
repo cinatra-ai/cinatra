@@ -436,6 +436,19 @@ describe("the card settles IN PLACE, and stays decidable until the run starts", 
     const crm = pills(container).find((p) => p.getAttribute("data-skill-id") === "skill-crm")!;
     fireEvent.click(crm.querySelector('[role="checkbox"]')!);
     await waitFor(() => expect(checkedState(container)["skill-crm"]).toBe("true"));
+    // TWO PRESSES INSIDE ONE DECISION ARE ONE DECISION, and the guard that says
+    // so is `inFlightRef` / `releasedRef` — both written synchronously on the
+    // press, before any render. The arm used to take this reading AFTER the
+    // decision had landed, where it passed only because React's transition flag
+    // still had the control disabled in the committed frame; cinatra#3047's
+    // review point B took that flag out of the control's disabled reading,
+    // because it clears in a later commit than the row's own `submitted` answer
+    // and painted a decidable row with a dead control. Once the decision has
+    // landed on a settled-but-not-started reading the step is decidable again
+    // BY DESIGN (§V, "Continue is not a lock"), so the press that must be inert
+    // is the one made while the first is still in flight, and that is the one
+    // taken here.
+    fireEvent.click(continueButton(container)!);
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(2));
     expect([...confirmMock.mock.calls[1]![0].confirmedSkillIds].sort()).toEqual([
@@ -443,8 +456,7 @@ describe("the card settles IN PLACE, and stays decidable until the run starts", 
       "skill-crm",
     ]);
     expect(confirmMock.mock.calls[1]![0].holdRef).toBe("hold-ref-3062");
-    // A second press inside THAT decision is still one decision.
-    fireEvent.click(continueButton(container)!);
+    // …and the second press really produced no third decision.
     expect(confirmMock).toHaveBeenCalledTimes(2);
   });
 
@@ -540,21 +552,24 @@ describe("the widget host draws the same card, under its own credential", () => 
 // ---------------------------------------------------------------------------
 // THE HOST THIS ISSUE DOES NOT NAME (the deviation, pinned rather than implied)
 // ---------------------------------------------------------------------------
-describe("the review page's gate region keeps §V's per-chip row", () => {
-  it("still draws Confirm / Adjust / Skip and no checkbox", async () => {
-    // NAMED DEVIATION (cinatra#3062). §IX rules that every host draws the same
-    // card; this issue names the chat and the widget, and the review page's gate
-    // region is not in its scope. The host keeps the reading it has today, and
-    // that is recorded here as a fact rather than left to be discovered.
+describe("the review page's gate region draws the same card", () => {
+  it("draws the checkbox pills and one Continue, and nothing per chip", async () => {
+    // THE DEVIATION THIS ARM RECORDED IS CLOSED. It read "the review page's gate
+    // region keeps §V's per-chip row", which was true while cinatra#3062 was the
+    // only leg in flight: §IX rules the same card onto every host, this issue
+    // named the chat and the widget, and the gate region was in neither issue's
+    // scope. cinatra#3047's re-shoot round then moved it — the review page is
+    // the run's OWN second page, and the change request names it beside the run
+    // page — so the exception has no host. The arm keeps its job, which is to
+    // state the fourth host's reading as a driven fact rather than leave it to
+    // be discovered, and states the one it now draws.
     holdStateMock.mockResolvedValue(HELD);
     const { container } = mount("page_gate_region");
     await waitFor(() => expect(pills(container)).toHaveLength(2));
 
-    expect(container.querySelectorAll('[data-skill-action="confirm"]')).toHaveLength(2);
-    expect(container.querySelectorAll('[data-skill-action="adjust"]')).toHaveLength(2);
-    expect(container.querySelectorAll('[data-skill-action="skip"]')).toHaveLength(2);
-    expect(boxes(container)).toHaveLength(0);
-    expect(continueButton(container)).toBeNull();
+    expect(container.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+    expect(boxes(container)).toHaveLength(2);
+    expect(continueButton(container)).not.toBeNull();
   });
 });
 

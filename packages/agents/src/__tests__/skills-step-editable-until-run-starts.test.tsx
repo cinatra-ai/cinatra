@@ -321,15 +321,28 @@ describe("the conversation takes the SAME reading (cinatra#3062)", () => {
   });
 });
 
-describe("the one host this reading has not reached", () => {
-  it("keeps its own settled chips on the review page's gate region", async () => {
-    // NAMED DEVIATION — see `chipRowDrawsSkillChecklist`.
+describe("the reading has reached every host", () => {
+  it("the review page's gate region is editable pre-start and frozen after", async () => {
+    // THE LAST EXCEPTION IS GONE. This arm read "the one host this reading has
+    // not reached" and pinned the review page's gate region to its own settled
+    // chips; cinatra#3047's re-shoot round moved that host onto §V, so the
+    // run-start boundary — the one shipped predicate the chat cannot disagree
+    // with either — now governs all four hosts alike. The arm keeps measuring
+    // the fourth host, on both sides of the boundary rather than one.
     holdStateMock.mockResolvedValue(settled(false));
     const { container } = mount("page_gate_region");
     await waitFor(() => expect(row(container)).not.toBeNull());
-    expect(boxes(container)).toHaveLength(0);
-    expect(continueButton(container)).toBeNull();
-    expect(row(container)!.getAttribute("data-skills-step-editable")).toBeNull();
-    expect(container.querySelectorAll("[data-recommendation-chip]")).toHaveLength(2);
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    expect(boxes(container).length).toBeGreaterThan(0);
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+    expect(continueButton(container)).not.toBeNull();
+
+    cleanup();
+    holdStateMock.mockResolvedValue(settled(true));
+    const frozen = mount("page_gate_region");
+    await waitFor(() => expect(row(frozen.container)).not.toBeNull());
+    expect(row(frozen.container)!.getAttribute("data-skills-step-editable")).toBe("false");
+    for (const box of boxes(frozen.container)) expect(box.hasAttribute("disabled")).toBe(true);
+    expect(continueButton(frozen.container)).toBeNull();
   });
 });

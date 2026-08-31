@@ -117,6 +117,7 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { ReviewIslandHeightReport } from "./island-height-report";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
@@ -151,7 +152,17 @@ function emptyIsland(scheme: IslandColorScheme | null) {
       data-conformance-id="review-target-island-empty"
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
-    />
+    >
+      {/* A DENIAL REPORTS ITS HEIGHT TOO (cinatra#3047), and draws nothing while
+          doing it. Without the report the frame around this document has no
+          height to size from, and its no-report rule — keep the control, take
+          the ceiling — turns a refusal into an expanded panel of empty ground
+          with only its own control in it, which is the defect this closes. What
+          it reports fits the collapsed box, so the frame stays that box and
+          offers no Expand; it is the same number for every refusal, so nothing
+          here becomes distinguishable from anything else. */}
+      <ReviewIslandHeightReport />
+    </div>
   );
 }
 
@@ -257,6 +268,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           scrollbar and the canvas an overscroll exposes. Composed from the
           closed enum, never from the request's text. */}
       {groundCss ? <style>{groundCss}</style> : null}
+
+      {/* The island tells the frame around it how tall its content actually is
+          (cinatra#3047), so an expanded frame is the reading's own height rather
+          than a fixed ceiling with empty ground under it. Draws nothing. */}
+      <ReviewIslandHeightReport />
 
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}

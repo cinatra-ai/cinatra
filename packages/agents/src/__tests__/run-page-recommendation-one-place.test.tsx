@@ -331,12 +331,9 @@ function RunSurface({
   if (entry !== "none") {
     steps.push({
       key: "recommendation",
-      row: (
-        <RecommendationRailStepRow
-          displayStep={steps.length + 1}
-          settled={entry === "settled"}
-        />
-      ),
+      // The row takes no numeral (cinatra#3047): the drawing gives this entry
+      // its own glyph, and the rail's numerals start on the step after it.
+      row: <RecommendationRailStepRow settled={entry === "settled"} />,
       surface: card,
     });
   }

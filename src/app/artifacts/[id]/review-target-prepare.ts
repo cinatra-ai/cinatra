@@ -36,10 +36,19 @@ import "server-only";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   readArtifactForDetail,
+  readArtifactForSettledReview,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
-import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import {
+  resolveArtifactVersionForServe,
+  resolveNonFileArtifactRevision,
+} from "@/lib/artifacts/artifact-read";
 import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  buildArtifactContentProjection,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -48,6 +57,7 @@ import {
   type PrepareReviewResult,
   type ResolvedRendererMount,
   type RevisionMemberOutcome,
+  isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
 
 import { pickArtifactRenderer } from "./renderer-dispatch";
@@ -68,31 +78,104 @@ export type ReviewRunGatePorts = Pick<
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
-}): Pick<PrepareReviewPorts, "readArtifact" | "revisionMember" | "resolveMount" | "buildProps"> {
+}): Pick<
+  PrepareReviewPorts,
+  | "readArtifact"
+  | "readArtifactHistorical"
+  | "revisionMember"
+  | "revisionMemberHistorical"
+  | "resolveMount"
+  | "buildProps"
+> {
   const { orgId, actor } = ctx;
 
-  const readArtifact = (artifactId: string): ArtifactReadOutcome => {
-    const access = readArtifactForDetail({ artifactId, orgId, actor });
+  const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
     if (access.kind === "denied") return { kind: "denied" };
     return { kind: "ok", artifact: access.artifact };
   };
 
-  const revisionMember = (
+  const readArtifact = (artifactId: string): ArtifactReadOutcome =>
+    toOutcome(readArtifactForDetail({ artifactId, orgId, actor }));
+
+  /**
+   * THE ARTIFACT-LEVEL HISTORICAL READ (enabler 0.9), the twin of
+   * `revisionMemberHistorical` below. Same authorization, tombstone-tolerant —
+   * without it the live read floors a settled card at `unknown-or-tombstoned`
+   * before the historical revision reader is ever consulted, and the enabler
+   * delivers nothing. Reached only on the settled reading, only for a target the
+   * gate itself pinned.
+   */
+  const readArtifactHistorical = (artifactId: string): ArtifactReadOutcome =>
+    toOutcome(readArtifactForSettledReview({ artifactId, orgId, actor }));
+
+  /**
+   * Membership for ONE pinned revision.
+   *
+   * TWO ARMS, ONE ANSWER (enabler 0.10). The FILE arm is the byte resolver this
+   * path has always used; the NON-FILE arm is the membership-and-projection
+   * reader for resources that are not files, which "verifies the exact
+   * organization, artifact and representation-revision tuple and returns its
+   * form and the pinned configuration record". A dashboard revision used to
+   * answer null here and floor "before any renderer runs"; it now answers with
+   * its form and its pinned configuration, and carries no byte address at all.
+   *
+   * The file arm is tried first and stays byte-identical: nothing about a
+   * file-backed review moved.
+   */
+  const memberFor = (
     artifactId: string,
     representationRevisionId: string,
+    liveOnly: boolean,
   ): RevisionMemberOutcome => {
-    // liveOnly: a review surface reviews LIVE artifacts — a tombstoned-but-pinned
-    // representation must NOT resolve here (it degrades to the floor via a
-    // not-found readArtifact / a null member), never serve stale bytes.
-    const resolved = resolveArtifactVersionForServe({
+    const file = resolveArtifactVersionForServe({
       orgId,
       artifactId,
       representationRevisionId,
-      liveOnly: true,
+      liveOnly,
     });
-    return resolved ? { mime: resolved.mime } : null;
+    // The bound this answer was made under travels WITH it (see
+    // `RevisionMemberOutcome.historical`), so the content read that follows
+    // resolves the same revision under the same rule rather than guessing.
+    const historical = !liveOnly;
+    if (file) return { mime: file.mime, form: "file", historical };
+    const nonFile = resolveNonFileArtifactRevision({
+      orgId,
+      artifactId,
+      representationRevisionId,
+      liveOnly,
+    });
+    if (!nonFile) return null;
+    return {
+      mime: nonFile.mime,
+      form: nonFile.form,
+      configuration: nonFile.configuration,
+      configurationDigest: nonFile.configurationDigest,
+      historical,
+    };
   };
+
+  const revisionMember = (
+    artifactId: string,
+    representationRevisionId: string,
+  ): RevisionMemberOutcome =>
+    // liveOnly: a review surface reviews LIVE artifacts — a tombstoned-but-pinned
+    // representation must NOT resolve here (it degrades to the floor via a
+    // not-found readArtifact / a null member), never serve stale bytes.
+    memberFor(artifactId, representationRevisionId, true);
+
+  /**
+   * THE RUN- OR GATE-AUTHORIZED HISTORICAL READER (enabler 0.9). Consulted only
+   * on the settled reading, and only for a target the gate itself pinned — so
+   * the tombstoned-pin replay this opens is bounded by the frozen set, exactly
+   * as the byte routes' own pin override is bounded by their visibility check.
+   * "The ordinary artifact page stays live and latest": nothing on the page's
+   * own path reaches this.
+   */
+  const revisionMemberHistorical = (
+    artifactId: string,
+    representationRevisionId: string,
+  ): RevisionMemberOutcome => memberFor(artifactId, representationRevisionId, false);
 
   const resolveMount = async (input: {
     artifact: ArtifactSummary;
@@ -121,6 +204,22 @@ export function bindArtifactReviewPorts(ctx: {
         // Pass the descriptor through even when it carries a pre-import `reason`
         // (peer/abi/archived) — the client loader renders its floor from the reason,
         // exactly as the detail route does. Never blank.
+        //
+        // AND CARRY THE VERSION THIS DISPLAY NEGOTIATED (enabler 0.4): "resolve
+        // the display, read its declared props version, then build the snapshot
+        // at that version". The tuple names the version the display itself
+        // declared, and admission has already put it inside the host's window,
+        // so the core builds the snapshot at it rather than at the host's
+        // newest. A descriptor carrying a pre-import floor `reason` never
+        // renders, so it keeps the host's own version and nothing changes.
+        if (descriptor.reason === undefined) {
+          return {
+            kind: "runtime",
+            packageName,
+            descriptor,
+            propsApiVersion: descriptor.tuple.propsApiVersion,
+          };
+        }
         return { kind: "runtime", packageName, descriptor };
       }
       return { kind: "floor", packageName, reason: "requires-rebuild" };
@@ -169,26 +268,94 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
-  const buildProps = (input: {
+  const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
+    propsApiVersion: number;
+    member: NonNullable<RevisionMemberOutcome>;
   }) => {
     // Host-authorized, version-PINNED hrefs (the exact reviewed revision, never
     // the artifact's latest) — the same content/preview endpoints the detail
     // route points at.
+    //
+    // AND NONE AT ALL FOR A NON-FILE REVISION (enabler 0.10): "non-file props
+    // carry no preview or download address". A dashboard has no bytes, so an
+    // href pointing at the byte routes would be a link that 404s from the moment
+    // it is drawn — a dead end of exactly the kind this wave exists to remove.
     const { artifact, representationRevisionId, mime } = input;
-    const previewHref = `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/preview`;
-    const downloadHref = `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`;
+    const fileBacked = isFileFormMember(input.member);
+    const previewHref = fileBacked
+      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/preview`
+      : null;
+    const downloadHref = fileBacked
+      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`
+      : null;
     return buildArtifactRendererProps({
       artifact,
       representation: { revisionId: representationRevisionId, mime },
       previewHref,
       downloadHref,
+      // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
+      // before this builder ran.
+      propsApiVersion: input.propsApiVersion,
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED.
+      //
+      // It used to pass the named absence here, and the consequence was the
+      // whole of the defect: a display that draws from `props.content` — the
+      // build-map renderer a text artifact resolves to — was handed "nothing is
+      // pinned" for a revision holding a real draft, and drew its own floor over
+      // it. The slot read as empty on a run whose work was right there.
+      //
+      // The read is the channel's own: the class comes from the FORM the
+      // substrate recorded (never from a caller claim), the caps are the
+      // channel's, and every failure comes back as a NAMED absence the display
+      // can tell apart from "too large to carry". Under the SAME bound the
+      // membership answer was made under, so a settled card keeps its work and a
+      // live reading never replays a tombstoned pin.
+      content: await buildArtifactContentProjection(
+        {
+          orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId,
+          form: memberForm(input.member),
+          mime,
+        },
+        createPinnedSubstanceReader({
+          liveOnly: input.member.historical !== true,
+          // The non-file membership answer already carried the pinned
+          // configuration record and its digest; the channel takes THAT rather
+          // than resolving the same row a second time.
+          carriedConfiguration: fileBacked
+            ? null
+            : {
+                configuration: input.member.configuration ?? null,
+                digest: input.member.configurationDigest ?? null,
+              },
+        }),
+      ),
     });
   };
 
-  return { readArtifact, revisionMember, resolveMount, buildProps };
+  return {
+    readArtifact,
+    readArtifactHistorical,
+    revisionMember,
+    revisionMemberHistorical,
+    resolveMount,
+    buildProps,
+  };
+}
+
+/**
+ * The member's own recorded form, as the content channel names it. An absent
+ * form reads as `file` for the reason `isFileFormMember` gives: that is what
+ * every caller written before enabler 0.10 meant.
+ */
+function memberForm(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactRepresentationForm {
+  return member.form ?? "file";
 }
 
 /**

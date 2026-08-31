@@ -91,18 +91,47 @@ export function recommendationRailEntry(params: {
  * simply closed and muted, which is what the rail says about a step that has
  * nothing to show.
  *
- * WHY THE STATUS AND NOT THE EVIDENCE. The decision's evidence — the run's
- * selected revisions, its skip record — belongs to the card, which is the one
- * authority on this interaction (cinatra#2573). A screen that read it back to
- * draw around it is the parallel derivation the one-renderer rule retired. The
- * park's own status is a fact about the RAIL's entry, and it is the same read
- * that decides the entry exists at all.
+ * WHY THE STATUS AND NOT THE EVIDENCE, AND WHERE THE STATUS IS NOT ENOUGH. The
+ * decision's evidence — the run's selected revisions, its skip record — belongs
+ * to the card, which is the one authority on this interaction (cinatra#2573),
+ * and a screen that read it back to draw around it is the parallel derivation
+ * the one-renderer rule retired. So the park's own status answers this for every
+ * ordinary run, and it is the same read that decides the entry exists at all.
+ *
+ * THE ONE CASE THE STATUS GETS WRONG (cinatra#3047, convergence). A confirm or a
+ * skip that RACES THE TTL SWEEPER leaves a `policy_unresolved` park with real
+ * evidence behind it — the status and the evidence are not written atomically —
+ * and the card reads that run as DECIDED and draws its settled row. A status-only
+ * answer closes the step over a card that would have drawn, so the reader is
+ * shown a settled history row on the rail whose press does nothing and whose
+ * answer is nowhere on the page. `decided` is that run's own answer, and it has
+ * exactly one definition: `recommendationDecidedForRun`, the same ladder the
+ * card applies, asked by the SERVER caller that already holds the run id and has
+ * cleared its access door. It is optional because a caller with no run id to ask
+ * with states nothing, and stating nothing keeps the status-only reading.
  */
 export function recommendationRailStepOpens(params: {
   entry: RecommendationRailEntry;
   parkStatus: string | null | undefined;
+  /** Did this run's own evidence record an answer? `recommendationDecidedForRun`
+   *  is the one definition; omit it to leave the status-only reading. */
+  decided?: boolean;
+  /**
+   * THE READING ITSELF, WHERE THE CALLER HAS IT (cinatra#3047, convergence).
+   *
+   * Everything above is a PROXY for "will the card draw?". A caller that has
+   * already resolved the settled reading server-side does not need a proxy: a
+   * reading of `none` is the card's own answer that it will draw no DOM, and a
+   * `released` park can carry one — a hold released with no selection and no
+   * skip on file resolves to `none`, and the status-only answer opens that step
+   * over an empty column. Pass `true` ONLY for a reading that answered `none`;
+   * a reading that failed to resolve states nothing here, because a failed read
+   * is not an empty decision and the card's own read may still answer.
+   */
+  settledReadingIsEmpty?: boolean;
 }): boolean {
   if (params.entry === "live") return true;
   if (params.entry !== "settled") return false;
-  return params.parkStatus === "released";
+  if (params.settledReadingIsEmpty === true) return false;
+  return params.parkStatus === "released" || params.decided === true;
 }

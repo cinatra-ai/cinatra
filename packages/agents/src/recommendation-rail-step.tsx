@@ -32,6 +32,8 @@ import { Button } from "@/components/ui/button";
 
 import {
   RUN_SURFACE_RAIL_ROW_CLASS,
+  RUN_SURFACE_RAIL_ROW_CLOSED_CLASS,
+  RunSurfaceRailStepGlyph,
   runSurfaceRailIndicatorClass,
   runSurfaceRailTitleClass,
   useRunStepSelection,
@@ -51,15 +53,27 @@ import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 export const RECOMMENDATION_RAIL_STEP_LABEL = RUN_SURFACE_RAIL_LABELS.recommendation;
 
 export function RecommendationRailStepRow({
-  displayStep,
   settled,
+  openable = true,
 }: {
-  /** The numeral this row shows while the question is open — 1, the trigger
-   *  position, ahead of the work steps it would authorize (§6.2). */
-  displayStep: number;
   /** Has the question been decided? A decided row is the rail's read-only
    *  history row; a live one is the step the run is paused on. */
   settled: boolean;
+  /**
+   * CAN THIS ROW BE OPENED (cinatra#3047, convergence)?
+   *
+   * The rail's own rule, written on its generic row: "A row that cannot be
+   * opened is handed the name of THAT state instead, so a walk (or a suite)
+   * selecting `open-<key>-step` finds no element it cannot actually press." This
+   * row named `open-recommendation-step` unconditionally and carried a click
+   * handler with it, while the FRAME refuses a selection onto a step that opens
+   * onto nothing — so on a page whose Skills step is closed (the TTL sweeper's
+   * fail-closed park nobody answered) the row advertised an affordance that did
+   * nothing, and a capture walk graded against `data-action` measured a press it
+   * could never take. Closed is the exception rather than the rule, so it
+   * defaults to open and the one page that can close it says so.
+   */
+  openable?: boolean;
 }): ReactElement {
   const selection = useRunStepSelection();
   const selected = selection?.selected === "recommendation";
@@ -72,16 +86,30 @@ export function RecommendationRailStepRow({
       data-recommendation-rail-step=""
       data-recommendation-step-selected={selected ? "true" : "false"}
       data-recommendation-step-settled={settled ? "true" : "false"}
-      data-action="open-recommendation-step"
+      // The same two names the rail's generic row uses, so one walk reads one
+      // vocabulary on every row of the rail.
+      data-action={openable ? "open-recommendation-step" : "recommendation-step-unavailable"}
       aria-current={selected ? "step" : undefined}
-      onClick={() => selection?.select("recommendation")}
-      className={RUN_SURFACE_RAIL_ROW_CLASS}
+      // `aria-disabled`, never the native `disabled`: the row stays on the rail
+      // and in the tab order — the series is the run's — and announces itself as
+      // unavailable when focus arrives (cinatra#2970).
+      aria-disabled={openable ? undefined : "true"}
+      onClick={openable ? () => selection?.select("recommendation") : undefined}
+      className={openable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
     >
       <span
         data-conformance-id="recommendation-rail-indicator"
         className={runSurfaceRailIndicatorClass(selected || settled)}
       >
-        {settled ? <Check className="h-3 w-3" /> : displayStep}
+        {/* A GLYPH ON EITHER READING, NEVER A NUMERAL (cinatra#3047, the
+            re-shoot's third defect). The drawing gives this entry its own
+            clipboard-check glyph while the question is open and the rail's
+            ordinary completed circle once it is answered, and it numbers the
+            WORK steps from 1 under both. The row used to take a `displayStep`
+            and draw it, which is what put "1" on the pending Skills row and
+            pushed the run's first work step to "2"; the prop is gone rather
+            than ignored, so no caller can hand this row a numeral again. */}
+        {settled ? <Check className="h-3 w-3" /> : <RunSurfaceRailStepGlyph />}
       </span>
       <span className={runSurfaceRailTitleClass(selected)}>
         {RECOMMENDATION_RAIL_STEP_LABEL}

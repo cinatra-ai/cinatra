@@ -28,10 +28,66 @@ import type { ReactNode } from "react";
  */
 export type RunStepSelection = "recommendation" | "schedule" | "review" | "detail";
 
+/** A step that HEADS the rail — every selection but the run's own detail. */
+export type RunSurfaceRailStepKey = Exclude<RunStepSelection, "detail">;
+
+/**
+ * DOES THIS STEP'S ROW DRAW A GLYPH IN PLACE OF A NUMERAL? (cinatra#3047, the
+ * re-shoot's third defect.)
+ *
+ * The ratified drawing at the capture contract's pin gives the SKILLS entry its
+ * own fixed glyph on the reading where the question is still open — never a
+ * numeral — and starts the rail's numerals on the step after it. Its own rail
+ * illustration beside the Skills page reads `[glyph] Skills · 1 Fetch cohort ·
+ * 2 Draft email`, and the fuller one reads `[glyph] Skills · 1 Fetch cohort ·
+ * 2 Draft email · 3 Review · 4 Send sequence`.
+ *
+ * THE SCHEDULE ENTRY IS NOT ONE OF THEM, and that is measured rather than
+ * assumed: every schedule illustration in the same drawing draws "1 Schedule"
+ * with the run's own steps numbered under it. So exactly one step is unnumbered,
+ * and the rule says which.
+ */
+export function runSurfaceStepDrawsGlyph(key: RunSurfaceRailStepKey): boolean {
+  return key === "recommendation";
+}
+
+/**
+ * THE NUMERALS A RAIL'S STEPS CARRY, in the order the page lists them: `null`
+ * for a step that draws its own glyph, and 1, 2, 3 … for the rest.
+ *
+ * WHY THIS IS A FUNCTION RATHER THAN THREE INLINE SUMS. Three rails draw this
+ * series — the run page's, the setup run page's and the review page's — and each
+ * computed its own `displayStep` and its own work-step `stepOffset` from the
+ * LENGTH of the gate-step list. A step that takes no numeral cannot be expressed
+ * that way without all three subtracting it again, which is three places for one
+ * rule and one of them to miss; the re-shoot photographed exactly that failure
+ * mode from the other direction, with the Skills entry numbered "1" and the
+ * run's first work step pushed to "2". There is one rule now and the three read
+ * it.
+ */
+export function runSurfaceRailNumerals(
+  keys: readonly RunSurfaceRailStepKey[],
+): (number | null)[] {
+  let next = 0;
+  return keys.map((key) => (runSurfaceStepDrawsGlyph(key) ? null : (next += 1)));
+}
+
+/**
+ * HOW MANY NUMERALS THE GATE STEPS CONSUMED — the offset the run's own work
+ * steps start after. A rail whose only gate step is the Skills entry offsets its
+ * work steps by NOTHING, so the first of them reads "1", which is what the
+ * drawing shows and what the re-shoot did not.
+ */
+export function runSurfaceRailNumberedCount(
+  keys: readonly RunSurfaceRailStepKey[],
+): number {
+  return keys.filter((key) => !runSurfaceStepDrawsGlyph(key)).length;
+}
+
 /** A step that heads the rail: its row, and the surface it opens onto. */
 export type RunSurfaceRailStep = {
   /** The selection value this step answers to. */
-  key: Exclude<RunStepSelection, "detail">;
+  key: RunSurfaceRailStepKey;
   /** The rail ROW. Drawn inside the rail column, above the page's own rows. */
   row: ReactNode;
   /**

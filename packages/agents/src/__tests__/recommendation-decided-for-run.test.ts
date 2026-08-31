@@ -26,6 +26,20 @@
  *     src/__tests__/recommendation-decided-for-run.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * THE MODULE IS PULLED IN AT COLLECTION, NOT INSIDE THE FIRST CASE.
+ *
+ * `vi.mock` is hoisted above every import in this file, so a static import sees
+ * exactly the mocked store the dynamic one saw — and nothing here resets the
+ * module registry between cases, so there was never a reason to re-import per
+ * case. What the dynamic form DID do was charge the whole transform of
+ * `run-recommendation-core` and its graph — ten seconds on an idle machine — to
+ * whichever case ran first, against that case's own timeout. On a loaded runner
+ * that one case crossed the budget and the file went red while every other case
+ * in it measured zero. Importing at the top moves that cost to the file's
+ * collection, where it belongs and where no per-case timeout applies.
+ */
+import { recommendationDecidedForRun } from "../run-recommendation-core";
 
 const evidence = vi.hoisted(() => ({
   selected: false,
@@ -68,10 +82,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const load = async () => {
-  const mod = await import("../run-recommendation-core");
-  return mod.recommendationDecidedForRun;
-};
+const load = async () => recommendationDecidedForRun;
 
 describe("recommendationDecidedForRun — the run's own reading of an answered question", () => {
   it("a run that never held is not decided, whatever is on file", async () => {

@@ -225,14 +225,20 @@ describe("the conversation takes the same all-clear reading (cinatra#3062)", () 
   });
 });
 
-describe("the one host still drawing the outcome panel", () => {
-  it("still draws it, and still names the decider on it", () => {
-    // NAMED DEVIATION — see `chipRowDrawsSkillChecklist`.
+describe("no host is left drawing the outcome panel", () => {
+  it("the review page's gate region takes the all-clear reading too", () => {
+    // THE PANEL HAS NO HOST NOW. This arm read "the one host still drawing the
+    // outcome panel" and drove the review page's gate region, which was the
+    // last mount cinatra#3062's leg left on the retired reading. cinatra#3047's
+    // re-shoot round moved that host onto §V, so the bordered outcome plate the
+    // drawing withdrew is drawn on no declared host at all — and this arm says
+    // so by driving the host that used to be the exception and finding the
+    // all-clear row instead, including with evidence that names a decider the
+    // panel would have printed.
     const { container } = mountRow("page_gate_region", SETTLED_NO_EVIDENCE);
-    const panel = outcomePanel(container);
-    expect(panel).not.toBeNull();
-    expect(panel!.getAttribute("data-recommendation-outcome")).toBe("skipped");
-    expect(panel!.textContent).toContain("Skipped by Alex Fisher");
-    expect(boxes(container)).toHaveLength(0);
+    expect(row(container)).not.toBeNull();
+    expect(outcomePanel(container)).toBeNull();
+    expect(container.querySelectorAll("[data-recommendation-outcome]")).toHaveLength(0);
+    expect(container.textContent).not.toContain("Alex Fisher");
   });
 });
