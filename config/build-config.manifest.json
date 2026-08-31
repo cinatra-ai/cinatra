@@ -127,6 +127,7 @@
     { "alias": "@cinatra-ai/apify-connector/setup-page", "target": "./extensions/cinatra-ai/apify-connector/src/setup-page.tsx" },
     { "alias": "@cinatra-ai/sdk-ui/prompt-field", "target": "./packages/sdk-ui/src/prompt-field.tsx" },
     { "alias": "@cinatra-ai/sdk-ui/widget", "target": "./packages/sdk-ui/src/widget.tsx" },
+    { "alias": "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell", "target": "./packages/sdk-ui/src/artifacts/pdf-detail-shell.tsx" },
     { "alias": "@cinatra-ai/sdk-ui", "target": "./packages/sdk-ui/src/index.ts" },
     { "alias": "@cinatra-ai/design", "target": "./packages/design/src/index.ts" },
     { "alias": "@cinatra-ai/design/brand/colors", "target": "./packages/design/src/brand/colors.ts" },
