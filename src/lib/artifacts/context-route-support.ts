@@ -272,6 +272,12 @@ export function buildSelectionRows(input: {
   slotId: string;
   selectionMode: "interactive" | "autonomous";
   trusted: ContextCandidate[];
+  /** Who chose these refs, when that is not what `selectionMode` implies
+   *  (cinatra#3080). A repair that inherits its producing run's answered
+   *  screen runs the slot with NO person in it — `autonomous` — but the pick
+   *  itself was a person's, made on the producing run, so the audit row must
+   *  keep saying so. Omitted everywhere else, where the mode is the answer. */
+  selectedBy?: "user" | "autonomous";
 }): Array<{
   orgId: string;
   parentRunId: string;
@@ -285,7 +291,8 @@ export function buildSelectionRows(input: {
   selectedBy: "user" | "autonomous";
   selectionMode: "interactive" | "autonomous";
 }> {
-  const selectedBy = input.selectionMode === "autonomous" ? "autonomous" : "user";
+  const selectedBy =
+    input.selectedBy ?? (input.selectionMode === "autonomous" ? "autonomous" : "user");
   return input.trusted.map((c) => ({
     orgId: input.orgId,
     parentRunId: input.parentRunId,

@@ -15,6 +15,10 @@ import {
   type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
 import {
+  effectiveSelectionMode,
+  resolveInheritedContextSelection,
+} from "@/lib/artifacts/context-repair-inheritance";
+import {
   extractContextRouteLogIds,
   recordContextRouteRejection,
   recordContextRouteSuccess,
@@ -77,17 +81,37 @@ export async function POST(req: Request): Promise<Response> {
     // Actor + audit-store scoping below stays on the run package (trustedPackageName).
     const slot = await loadTrustedSlot(ctx.trustedSlotPackageName, body.slotId);
 
-    // Trusted modes come from the SLOT, not the body/envelope. Validate the
-    // caller-supplied values match (defends against OAS/renderer drift), then
-    // use the slot's values for all provenance + the selection key.
-    if (body.selectionMode !== slot.selectionMode) {
+    // Re-resolve the trusted candidate set FIRST: the mode this run actually
+    // ran the slot in is decided from server-read facts, and one of them —
+    // whether a repair's inherited answer still resolves — is a reading of
+    // that set. Re-ordering a pure read changes nothing else.
+    const candidates = await resolveCandidates({
+      actor: ctx.actor,
+      slot,
+      projectId: ctx.projectId,
+    });
+
+    // Trusted modes come from the SLOT, not the body/envelope — except that a
+    // repair inheriting its own producing run's answered screen runs the slot
+    // in the flow's no-person mode (cinatra#3080). `/api/context-resolve`
+    // derives that mode from the SAME server-read facts through the SAME
+    // helper, so the value the flow carried here can be checked against it
+    // exactly as the declared mode always was: a body claiming `autonomous`
+    // for an ordinary interactive slot is still refused, because nothing a
+    // caller can say makes this run a repair with a stored answer.
+    const inherited = resolveInheritedContextSelection({
+      run: ctx.run,
+      slotId: body.slotId,
+      candidates,
+    });
+    const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
+    if (body.selectionMode !== selectionMode) {
       throw new ContextRouteError(
         422,
         "selection_mode_mismatch",
-        `body selectionMode '${body.selectionMode}' != slot '${slot.selectionMode}'`,
+        `body selectionMode '${body.selectionMode}' != slot '${selectionMode}'`,
       );
     }
-    const selectionMode = slot.selectionMode;
 
     // Parse the selection envelope; reject a slotId / resolutionMode that
     // disagrees with the trusted slot.
@@ -107,12 +131,6 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // Re-resolve the trusted candidate set and revalidate the submission.
-    const candidates = await resolveCandidates({
-      actor: ctx.actor,
-      slot,
-      projectId: ctx.projectId,
-    });
     const trusted = revalidateSelectedRefs({
       submitted: envelope.selectedRefs,
       candidates,
@@ -133,6 +151,10 @@ export async function POST(req: Request): Promise<Response> {
       slotId: body.slotId,
       selectionMode,
       trusted,
+      // An inherited pick ran with no person in THIS run, but a person made
+      // it, on the producing run — so the audit row keeps saying `user`
+      // rather than crediting the machine with someone else's choice.
+      ...(inherited ? { selectedBy: "user" as const } : {}),
     });
     // epic #1785 wave A4: warm the object-type registry before finalize. The
     // finalizer is a sync store-leaf (it cannot import the heavy registrar), so

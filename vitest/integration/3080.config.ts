@@ -30,6 +30,14 @@ export default defineConfig({
         find: "server-only",
         replacement: path.join(root, "tests/__stubs__/server-only.ts"),
       },
+      {
+        // The bare `@cinatra-ai/skills` barrel pulls heavy deps this tier does
+        // not resolve, exactly as in the root config — stub the bare specifier
+        // and let real subpaths fall through to tsconfigPaths. Reached from the
+        // repair-inheritance file below through the artifact-type registrar.
+        find: /^@cinatra-ai\/skills$/,
+        replacement: path.join(root, "tests/__stubs__/cinatra-skills.ts"),
+      },
     ],
   },
   test: {
@@ -38,7 +46,16 @@ export default defineConfig({
     hookTimeout: 120_000,
     // Serial: the suite owns ONE shared schema.
     fileParallelism: false,
-    include: ["src/app/artifacts/[id]/__tests__/review-floor.integration.test.ts"],
+    include: [
+      "src/app/artifacts/[id]/__tests__/review-floor.integration.test.ts",
+      // The repair's half of the same floor: a Regenerate reaches the work with
+      // NO human step, because the screen the producing run already answered is
+      // not asked again. It needs the un-stubbed `@/lib/database` this config
+      // gives (the root config aliases it away), and it builds and drops its
+      // OWN schema from inside its `beforeAll` — the tier is serial, so the two
+      // files never overlap.
+      "src/lib/artifacts/__tests__/context-repair-inheritance.integration.test.ts",
+    ],
     exclude: ["**/node_modules/**"],
     env: {
       SUPABASE_SCHEMA: TEST_SCHEMA,

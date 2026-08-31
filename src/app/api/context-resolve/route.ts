@@ -14,6 +14,10 @@ import {
   type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
 import {
+  effectiveSelectionMode,
+  resolveInheritedContextSelection,
+} from "@/lib/artifacts/context-repair-inheritance";
+import {
   extractContextRouteLogIds,
   recordContextRouteRejection,
   recordContextRouteSuccess,
@@ -74,8 +78,22 @@ export async function POST(req: Request): Promise<Response> {
       slot,
       projectId: ctx.projectId,
     });
-    const slotMeta = buildSlotMeta(slot);
-    const selectedRefs = computeRouteSelectedRefs(candidates, slot);
+    const declaredSlotMeta = buildSlotMeta(slot);
+    // cinatra#3080 — a slot the producing run ALREADY ANSWERED is not a
+    // question for the repair that follows it. When this run is a repair
+    // carrying its own producing run's audited answer for this slot, the slot
+    // runs in the flow's own no-person mode with THAT answer as the selection,
+    // so nothing human stands between the press and the work. Every other run
+    // — and a repair whose producing run answered nothing, or whose answer no
+    // longer resolves — keeps the slot exactly as the slot declares it.
+    const inherited = resolveInheritedContextSelection({
+      run: ctx.run,
+      slotId: parsed.data.slotId,
+      candidates,
+    });
+    const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
+    const slotMeta = { ...declaredSlotMeta, selectionMode };
+    const selectedRefs = inherited ?? computeRouteSelectedRefs(candidates, slot);
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({
       kind: "resolve",
@@ -88,7 +106,9 @@ export async function POST(req: Request): Promise<Response> {
     // context-selection-agent OAS: select_mode (BranchingNode) routes on
     // `selectionMode`, and finalize_interactive + finalize_autonomous DFE
     // both fields into their data payloads. They are derived from the trusted
-    // slot loaded server-side (slotMeta), not from request input.
+    // slot loaded server-side (slotMeta) and — for a repair inheriting its own
+    // producing run's answer — from that stored answer, never from request
+    // input. `/api/context-finalize` re-derives the same mode the same way.
     return NextResponse.json({
       candidates,
       slotMeta,
