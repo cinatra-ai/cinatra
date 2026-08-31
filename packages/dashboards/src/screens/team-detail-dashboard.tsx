@@ -260,6 +260,10 @@ export async function TeamDetailDashboardPage({
             member — the settings page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}
+          assistantsHref={`/teams/${encodeURIComponent(team.id)}/assistants`}
+          agentsHref={`/teams/${encodeURIComponent(team.id)}/agents`}
+          artifactsHref={`/teams/${encodeURIComponent(team.id)}/artifacts`}
+          skillsHref={`/teams/${encodeURIComponent(team.id)}/skills`}
           settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
           active="dashboards"
         />

@@ -225,6 +225,10 @@ export async function OrganizationDetailDashboardPage({
             member — the settings page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/organizations/${encodeURIComponent(id)}`}
+          assistantsHref={`/organizations/${encodeURIComponent(id)}/assistants`}
+          agentsHref={`/organizations/${encodeURIComponent(id)}/agents`}
+          artifactsHref={`/organizations/${encodeURIComponent(id)}/artifacts`}
+          skillsHref={`/organizations/${encodeURIComponent(id)}/skills`}
           settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
           active="dashboards"
         />

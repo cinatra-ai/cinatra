@@ -191,10 +191,26 @@ describe("the `/<scope>/<id>/dashboards` collection routes are GONE (#2474 PR2)"
   });
 });
 
-describe("personal keeps its Dashboards-only tablist (#2474 PR1 leaves it alone)", () => {
-  it("still mounts EntityScopeTabs with no settingsHref (#1904 — no personal Settings pane)", () => {
-    const src = read(PERSONAL_LANDING);
-    expect(src).toContain('<EntityScopeTabs dashboardsHref="/personal" active="dashboards" />');
+describe("personal keeps a Settings-LESS tablist (#2474 PR1 left it alone; #2807 widens it)", () => {
+  it("mounts EntityScopeTabs with the five scope tabs and no settingsHref (#1904 — no personal Settings pane)", () => {
+    // #2807 replaced the one-line Dashboards-only call with the five-tab strip
+    // (Dashboards | Assistants | Agents | Artifacts | Skills). The invariant
+    // this lock actually guards is unchanged and is the LAST assertion:
+    // personal never grows a Settings tab.
+    const src = stripComments(read(PERSONAL_LANDING));
+    // The lock binds to the ELEMENT the landing actually mounts, so a matching
+    // string somewhere else in the file can never satisfy it, and it stays a
+    // single-mount lock the way the retired one-line lock was.
+    const mounts = src.match(/<EntityScopeTabs[\s\S]*?\/>/g) ?? [];
+    expect(mounts).toHaveLength(1);
+    const el = mounts[0]!;
+    expect(el).toContain('dashboardsHref="/personal"');
+    expect(el).toContain('assistantsHref="/personal/assistants"');
+    expect(el).toContain('agentsHref="/personal/agents"');
+    expect(el).toContain('artifactsHref="/personal/artifacts"');
+    expect(el).toContain('skillsHref="/personal/skills"');
+    expect(el).toContain('active="dashboards"');
+    expect(el).not.toContain("settingsHref");
     expect(src).not.toContain("settingsHref");
   });
 });

@@ -339,6 +339,10 @@ export default async function ProjectDetailPage({ params }: Props) {
             reader — the settings page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
+          assistantsHref={`/projects/${encodeURIComponent(project.id)}/assistants`}
+          agentsHref={`/projects/${encodeURIComponent(project.id)}/agents`}
+          artifactsHref={`/projects/${encodeURIComponent(project.id)}/artifacts`}
+          skillsHref={`/projects/${encodeURIComponent(project.id)}/skills`}
           settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
           active="dashboards"
         />

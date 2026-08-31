@@ -120,9 +120,16 @@ export async function PersonalDashboardPage() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        {/* Personal has no Settings pane (#1904), so its entity-page tablist is
-            Dashboards alone (spec §IX). */}
-        <EntityScopeTabs dashboardsHref="/personal" active="dashboards" />
+        {/* Personal has no Settings pane (#1904), so its entity-page tablist
+            ends at Skills — the five scope tabs without Settings (#2807). */}
+        <EntityScopeTabs
+          dashboardsHref="/personal"
+          assistantsHref="/personal/assistants"
+          agentsHref="/personal/agents"
+          artifactsHref="/personal/artifacts"
+          skillsHref="/personal/skills"
+          active="dashboards"
+        />
         {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3/PR4).
             Personal gets the catalog and NEVER the §IX.1 reference source. */}
         <ScopeAddSourcesProvider
