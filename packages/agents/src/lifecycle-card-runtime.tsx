@@ -1448,9 +1448,22 @@ export function useRunReviewSlot({
     // the row has not been saying parked past all reason, and when either of
     // those ends the surface falls back to the run's own rendering rather than
     // holding a spinner nothing can end.
+    // AND ON THE WAIT'S COUNT, NOT THE MOUNT'S (cinatra#3007, leg 7 completed).
+    // This is the reading both surfaces DRAW the parked window on - the panel
+    // holds its wordless box and its card on it, the stepper column draws its
+    // park arm on it - so it has to carry the same number `stillReading` above
+    // carries, and for the same reason. `reads` is the CADENCE's counter and
+    // only ever grows for the life of a mount; the measured shape takes no
+    // status edge anywhere, so a page open long enough before its run parked
+    // reached the park with that budget already spent and refused to draw a park
+    // its own reader had just delivered - the surface fell back to the run's own
+    // rendering, which on both hosts is the arm the graded readings photographed.
+    // `parkLooks` counts consecutive looks that said nothing new, so it starts at
+    // the WAIT, any evidence re-arms it at no cost, and it still ends the case
+    // the ceiling was written for: a row repeating itself past all reason.
     mayStillOpen:
       (isProducedReviewPark &&
-        probe.reads < PARK_READ_LIMIT &&
+        probe.parkLooks < PARK_READ_LIMIT &&
         probe.failures < PARK_READ_FAILURE_LIMIT) ||
       (probe.reads < SLOT_READ_LIMIT &&
         ((status === "completed" && (slot.awaiting || unheardUnderThisStatus)) ||

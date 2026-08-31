@@ -170,4 +170,40 @@ describe("useRunReviewSlot: the park a mount waited a long time for", () => {
     // finds the gate row is the only thing that can still end the wait.
     expect(looks, "the reader must keep looking past the drawing's bound").toBeGreaterThan(spent);
   }, 60_000);
+  it("lets the SURFACE draw the park the mount waited a long time for", async () => {
+    // THE SAME SHAPE AS THE FIRST CASE, READ ON THE OTHER PUBLISHED READING.
+    // Delivering the park into `slot` is only half of it: what both surfaces
+    // actually draw the parked window on is `mayStillOpen` — the panel holds its
+    // wordless box and its card on it (`agentic-run-panel.tsx`), and the stepper
+    // column draws its park arm on it (`orchestrator-stepper-panel.tsx`). If that
+    // reading is false the row is delivered to a surface that has already fallen
+    // back to the run's own rendering, which on both hosts is the noisy arm the
+    // graded readings photographed.
+    //
+    // It was still counting the MOUNT's looks after leg 7 moved `stillReading`
+    // onto the wait's. So a page open long enough before the park began reached
+    // the park with that budget already spent and refused to draw a park its own
+    // reader had just delivered — the same wrong number, on the reading that
+    // decides the pixels.
+    let answer: RunReviewSlot = NOT_PARKED;
+    const read = async () => answer;
+    const { result } = renderHook(() =>
+      useRunReviewSlot({ status: "pending_approval", initial: NOT_PARKED, read }),
+    );
+
+    await letItLook(PAST_THE_CEILING_MS);
+
+    answer = PARKED_WITH_GATE;
+    await letItLook(60_000);
+
+    expect(result.current.slot.producedReviewPark).toBe(true);
+    expect(
+      result.current.mayStillOpen,
+      "the surface must be entitled to draw a park its own reader has just delivered",
+    ).toBe(true);
+    // And the wait has evidence behind it again, so the box is not wordless
+    // waiting on nothing: the answer that MOVED re-armed the ceiling.
+    expect(result.current.stillReading).toBe(true);
+  }, 60_000);
+
 });
