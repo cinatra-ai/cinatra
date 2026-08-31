@@ -319,7 +319,15 @@ describe("criterion 3 — the fixture account's secret is minted for the boot, n
 // Criterion 4 — no seeding under a public exposure signal, and BOTH are read.
 // ---------------------------------------------------------------------------
 
-const LOCAL_ORIGINS = ["http://127.0.0.1:3000", "http://[::1]:3000", "http://[fd00::1]:3000"] as const;
+// The last of these is the container-network alias a container uses to reach
+// the app on the machine that runs it — the value the end-to-end harness boots
+// the app with, and a name nothing outside that machine can resolve.
+const LOCAL_ORIGINS = [
+  "http://127.0.0.1:3000",
+  "http://[::1]:3000",
+  "http://[fd00::1]:3000",
+  "http://host.docker.internal:3000",
+] as const;
 const PUBLIC_ORIGINS = ["https://instance.example.net", "https://app.example.org:8443", "https://example.com"] as const;
 
 /**

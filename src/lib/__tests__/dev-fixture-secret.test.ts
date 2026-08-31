@@ -12,7 +12,9 @@
 //      is read by whoever can read the log and this boot runs on runners whose
 //      logs are public;
 //   2. seeding is REFUSED, with a printed sentence, whenever any origin the
-//      instance is configured to serve is not loopback or private-network;
+//      instance is configured to serve is not loopback, private-network or
+//      otherwise local-only — a container-network alias, a reserved local name
+//      ending and a single-label name are all local, and none of them refuses;
 //   3. a fixture row an earlier boot left behind has its password rotated to
 //      this boot's secret, so a password from an earlier boot stops working;
 //   4. the end-to-end harnesses read the secret from the environment the
@@ -35,6 +37,7 @@ import {
   MIN_DEV_FIXTURE_PASSWORD_LENGTH,
   devFixturePasswordFilePath,
   devFixtureSeedRefusal,
+  devFixtureSeedingAllowed,
   generateDevFixturePassword,
   readDevFixturePasswordFile,
   removeDevFixturePasswordFile,
@@ -254,9 +257,29 @@ describe("seeding is refused unless every configured origin is loopback or priva
     ["http://172.20.0.4", true],
     ["http://[fd00::1]:3000", true],
     ["http://[fe80::1]", true],
+    // The container-network alias a WordPress or Drupal container uses to
+    // reach the app on the machine that runs it. It names THIS machine from
+    // inside a container; nothing outside the machine can resolve it.
+    ["http://host.docker.internal:3000", true],
+    ["http://gateway.docker.internal:3000", true],
+    // Names reserved for one machine or one network. None of them is
+    // delegated in the public domain name system, so none can be an origin
+    // somebody else reaches this instance at.
+    ["http://app.internal", true],
+    ["http://printer.local:631", true],
+    ["http://box.lan", true],
+    ["http://gateway.home.arpa", true],
+    // A single-label name is a machine on this network, never a public host.
+    ["http://build-box:3000", true],
+    ["http://build-box.:3000", true],
     ["https://example.com", false],
     ["https://app.example.org:8443", false],
     ["http://203.0.113.7", false],
+    ["https://app.example.com", false],
+    ["http://203.0.113.10:3000", false],
+    // A public name is public whatever it is dressed in: a trailing root dot
+    // does not make one local.
+    ["https://app.example.com.", false],
     ["not-a-url", false],
     ["", false],
     // A value with NO SCHEME parses as a URL whose hostname is empty. Reading
@@ -314,6 +337,67 @@ describe("seeding is refused unless every configured origin is loopback or priva
   it("refuses an instance configured to be served on every interface", () => {
     expect(devFixtureSeedRefusal({ NEXT_PUBLIC_APP_URL: "http://0.0.0.0:3000" })).toBeTruthy();
     expect(devFixtureSeedRefusal({ BETTER_AUTH_URL: "http://[::]:3000" })).toBeTruthy();
+  });
+
+  // The exact pair the WordPress/Drupal end-to-end harness boots the app with:
+  // the containers reach the app through the docker-host alias, and the sign-in
+  // stack is built on the loopback address. Neither is an exposure signal, so
+  // the fixture account is seeded and the harness gets its credential.
+  it("allows the container-network alias the end-to-end harness serves the app at", () => {
+    expect(
+      devFixtureSeedingAllowed({
+        runtimeMode: "development",
+        nodeEnv: "development",
+        authBaseUrl: "http://localhost:3000",
+        publicBaseUrl: "http://host.docker.internal:3000",
+      }).allowed,
+    ).toBe(true);
+    expect(
+      devFixtureSeedRefusal({
+        BETTER_AUTH_URL: "http://localhost:3000",
+        NEXT_PUBLIC_BETTER_AUTH_URL: "http://localhost:3000",
+        NEXT_PUBLIC_APP_URL: "http://host.docker.internal:3000",
+      }),
+    ).toBeNull();
+  });
+
+  it("allows an instance served only on a name its own network resolves", () => {
+    for (const local of [
+      "http://gateway.docker.internal:3000",
+      "http://app.internal",
+      "http://printer.local:631",
+      "http://box.lan",
+      "http://gateway.home.arpa",
+      "http://build-box:3000",
+    ]) {
+      expect(devFixtureSeedRefusal({ NEXT_PUBLIC_APP_URL: local }), local).toBeNull();
+    }
+  });
+
+  // Widening what counts as local must not widen what counts as private on
+  // either arm of the rule: a public name or a public address still refuses,
+  // whether it arrives as the authentication base URL or as the public one.
+  it("keeps refusing a public host name or a public address on either arm", () => {
+    for (const exposed of ["https://app.example.com", "http://203.0.113.10:3000", "https://app.example.org:8443"]) {
+      expect(
+        devFixtureSeedingAllowed({
+          runtimeMode: "development",
+          nodeEnv: "development",
+          authBaseUrl: "http://127.0.0.1:3000",
+          publicBaseUrl: exposed,
+        }).allowed,
+        exposed,
+      ).toBe(false);
+      expect(
+        devFixtureSeedingAllowed({
+          runtimeMode: "development",
+          nodeEnv: "development",
+          authBaseUrl: exposed,
+          publicBaseUrl: null,
+        }).allowed,
+        exposed,
+      ).toBe(false);
+    }
   });
 
   it("allows an instance served on a private IPv6 address", () => {

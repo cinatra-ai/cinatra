@@ -795,7 +795,8 @@ async function retireStaleDevFixtureAccount(): Promise<void> {
  * the fixture's IDENTITY for the Playwright suite — never its password.
  *
  * Refuses outright, with a printed sentence, on an instance configured to be
- * served anywhere but a loopback or private-network address, and rotates an
+ * served anywhere but a loopback, private-network or otherwise local-only
+ * origin, and rotates an
  * account an earlier boot left behind onto this boot's secret so an older
  * password stops working. Returns null (soft) if seeding is unavailable or
  * refused.
