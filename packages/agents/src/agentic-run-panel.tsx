@@ -431,6 +431,12 @@ export function AgenticRunPanel({
   // (SSE owns status/error); they retain their initial values and serve as the
   // independent guard for the polling useEffect firing condition.
   const [pollStatus, setPollStatus] = useState(initialStatus);
+  // HOW MANY TIMES THIS PANEL HAS HEARD BACK FROM THE RUN (cinatra#3007, fix
+  // leg 6). Bumped on every tick that got an ANSWER, on either transport, and
+  // handed to the review slot's reader as its liveness evidence: that reader's
+  // failure belt is terminal, and this is the fact that tells it the transport
+  // is alive after all. Nothing draws from it.
+  const [heardFromRun, setHeardFromRun] = useState(0);
   // THE RUN ROW'S OWN STATUS, ALWAYS RECORDED (cinatra#3046).
   //
   // `pollStatus` is deliberately NOT written while the stream is enabled — the
@@ -767,10 +773,17 @@ export function AgenticRunPanel({
   const {
     slot: reviewSlot,
     mayStillOpen: reviewMayStillOpen,
+    stillReading: reviewStillReading,
   } = useRunReviewSlot({
     status,
     initial: initialReviewGate,
     read: readReviewSlot ?? fallbackSlotReader,
+    // The panel's own tick, as the reader's liveness evidence (cinatra#3007,
+    // fix leg 6). Two mounts of this panel on one run measured 962 s apart on
+    // the same park because one of them had spent its five consecutive
+    // failures and had no way back; this is the way back, and it is a fact the
+    // surface already has rather than a second request.
+    liveSignal: heardFromRun,
   });
   // KNOWN COST, stated rather than hidden: for a run with no A2A task id this
   // panel's own tick reads the SAME seed route on its own 2s schedule, so during
@@ -1267,6 +1280,7 @@ export function AgenticRunPanel({
           // owns), so on this transport the park keeps coming from the slot's
           // own read - which now runs, because the status finally moves.
           setRowStatus(s.cinatraStatus);
+          setHeardFromRun((n) => n + 1);
           // When stream is enabled: poll updates messages + HITL only; SSE owns status/error.
           // When stream is disabled: poll updates everything.
           if (!streamEnabled) {
@@ -1306,6 +1320,7 @@ export function AgenticRunPanel({
           // the only reader, and it takes it only where the stream is provably
           // mute.
           if (typeof data?.status === "string") setRowStatus(data.status);
+          setHeardFromRun((n) => n + 1);
           if (data?.reviewGate !== undefined) {
             producedReviewParkRef.current = Boolean(data.reviewGate?.producedReviewPark);
             setRowProducedReviewPark(producedReviewParkRef.current);
@@ -1802,11 +1817,68 @@ export function AgenticRunPanel({
   //
   // AND A PAUSE WHOSE KIND IS NOT KNOWN YET IS NOT A QUESTION (cinatra#3007) —
   // `parkKindUnheard`, read beside the park itself above.
+  //
+  // AND A PAUSE WITH NOTHING TO DRAW IS NOT A QUESTION EITHER (cinatra#3007,
+  // fix leg 6). `parkKindUnheard` above is about the READER — it holds while
+  // the slot may still say "park". It closes the moment the reader has spent
+  // its budgets, and what the panel falls to then is the branch at the foot of
+  // this file: "Agentic Run Progress" with a status word on a badge, "Run
+  // paused - awaiting human approval before continuing." with a link out to the
+  // notifications feed, "Loading the approval step for this run..." with a
+  // Re-check, and an empty transcript reading "No messages yet." Photographed
+  // on the fifth capture, in the conversation, at the first tick of a park.
+  //
+  // THERE IS NOTHING TO PRESS IN IT. Every control in that branch acts on an
+  // approval step, and this arm is reached only when there is no approval step
+  // at all: no marked gate, no interrupt on file, no renderer. The drawing at
+  // the pin gives this window one reading - "the card frame, and a spinning
+  // icon ... It names no status, reports no result and draws nothing to press."
+  //
+  // THE CONVERSATION TAKES IT, THE RUN PAGE KEEPS WHAT IT HAS. Inside a
+  // transcript the run's card is a card in a conversation and the drawing above
+  // is its whole specification. The run page is the operator's own surface and
+  // its recovery affordance - the Re-check that re-runs the hydration, and the
+  // named reason once the derivation has actually failed - is a shipped reading
+  // with its own pins; this leg does not take it away from the surface it was
+  // written for.
+  //
+  // AND IT IS BOUNDED BY THE READER, not by a clock: it holds while the slot's
+  // reader is still able to look, and when that reader stops the panel falls
+  // back to the run's own rendering rather than holding a spinner nothing can
+  // end - the same bound the park's own placeholder carries.
+  const conversationHostedPanel = ambientLifecycleHost === "chat_thread";
+  //
+  // AND "NOTHING TO DRAW" MEANS THE RUN RECORDED NO QUESTION, not merely that
+  // this render is not drawing one (cinatra#3007, fix leg 6, convergence).
+  // `effectiveHitlContext` reaches null down two very different roads. One is
+  // the road this placeholder is for: the row carries no interrupt at all,
+  // because the person answered it and the run moved past it. The other is
+  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt for as
+  // long as the just-submitted renderer matches - and it matches on the
+  // renderer alone, never on the review task, while a run's sequential setup
+  // fields deliberately reuse one renderer. So the step AFTER a submitted one
+  // can be a real, live, unanswered question wearing a null context.
+  //
+  // Drawing the quiet placeholder over that would hide a question the run is
+  // waiting on, and hide with it the Re-check that is the one control which
+  // clears the suppression - leaving a conversation with a spinner, no
+  // question, and no way to ask for it back. So the raw reading is consulted
+  // too: no interrupt on file, not merely none being drawn. A suppressed live
+  // gate keeps exactly the rendering it had before this leg.
+  const pauseWithNothingToDraw =
+    isPendingApproval &&
+    !markedReviewGate &&
+    !parkedOnProducedReview &&
+    rawEffectiveHitlContext === null &&
+    effectiveHitlContext === null;
+  const conversationPausePlaceholder =
+    conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;
   const blockedOnInputGate =
     isPendingApproval &&
     !markedReviewGate &&
     !parkedOnProducedReview &&
-    !parkKindUnheard;
+    !parkKindUnheard &&
+    !conversationPausePlaceholder;
   //
   // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
   // deliberately NOT enough on its own: a run carries its gate for ever, so a
@@ -1889,7 +1961,7 @@ export function AgenticRunPanel({
     !blockedOnInputGate &&
     (status === "queued" ||
       status === "running" ||
-      (reviewMayStillOpen && !widgetHostedPanel));
+      ((reviewMayStillOpen || conversationPausePlaceholder) && !widgetHostedPanel));
 
   // The recommendation card's ONE mount, lifted to a value so the slot's three
   // readings share it instead of each carrying a copy (the one-card rule is

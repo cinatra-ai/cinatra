@@ -1051,11 +1051,51 @@ export function useRunReviewSlot({
   status,
   initial,
   read,
+  liveSignal,
 }: {
   status: string;
   initial?: RunReviewSlot | null;
   read: RunReviewSlotReader;
-}): { slot: RunReviewSlot; answered: boolean; mayStillOpen: boolean } {
+  /**
+   * THE SURFACE'S OWN EVIDENCE THAT THE TRANSPORT ANSWERS (cinatra#3007,
+   * fix leg 6). A number the caller bumps every time IT has just heard back
+   * from this run on its own schedule — the panel's tick, which reads the run
+   * every two to five seconds for the status and the messages it draws.
+   *
+   * WHY THE READER NEEDS IT. The park's failure belt below is TERMINAL: five
+   * consecutive failed looks and this reader stops asking for the life of the
+   * mount, because "a reader that cannot read does not know the park is still
+   * real". That is the right reading of a transport that has died — and the
+   * wrong reading of a transport that hiccuped. It has no way back on its own:
+   * the count is cleared by a successful look, and once it has stopped looking
+   * there are no more looks to clear it with. Measured on the fifth capture,
+   * on ONE of two conversations open on the same run at the same time: the
+   * older mount stopped, and 962 s after the gate was minted its card had still
+   * not arrived, while the mount opened minutes later swapped within 35 s. Both
+   * ran the same code; the difference was which of them had spent its five.
+   *
+   * A BUMP IS EVIDENCE, NOT A COMMAND. It says only "something on this surface
+   * just read this run and got an answer", which is exactly the fact the
+   * failure belt is a proxy for, measured on a transport that is actually
+   * working rather than inferred from this reader's own silence. So a bump
+   * clears the consecutive-failure count and the reader re-arms; it does not
+   * touch the park's read CEILING, which answers the other question (a row that
+   * keeps saying parked while no gate ever arrives) and stays a real bound.
+   *
+   * Optional, and absent it nothing changes: a caller that passes none keeps
+   * the terminal belt exactly as it was.
+   */
+  liveSignal?: number;
+}): {
+  slot: RunReviewSlot;
+  answered: boolean;
+  mayStillOpen: boolean;
+  /** Is this reader still able to look — inside both of the park's budgets, or
+   *  inside the completed window's belt? A surface that draws a wordless
+   *  placeholder while it waits needs to know when the waiting has a reader
+   *  behind it and when it does not. */
+  stillReading: boolean;
+} {
   const [seenStatus, setSeenStatus] = useState(status);
   const [slot, setSlot] = useState<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
   const [probe, setProbe] = useState<{
@@ -1067,10 +1107,26 @@ export function useRunReviewSlot({
     reads: 0,
     failures: 0,
   });
+  const [seenLiveSignal, setSeenLiveSignal] = useState(liveSignal);
   if (seenStatus !== status) {
     setSeenStatus(status);
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0 });
+  }
+  // THE RE-ARM (cinatra#3007, fix leg 6). Adjusted during render, for the same
+  // reason the status reset above is: the surface has to see the reader come
+  // back in the frame the evidence arrives, not one frame later.
+  //
+  // Only the FAILURE count is cleared, and only when there is one to clear.
+  // Bumping the signal is not an answer about the park — it says nothing about
+  // the row — so it neither marks this reader answered nor spends a look; it
+  // withdraws the one conclusion that was drawn from this reader's own silence
+  // and is now contradicted by the surface around it.
+  if (seenLiveSignal !== liveSignal) {
+    setSeenLiveSignal(liveSignal);
+    if (probe.failures > 0) {
+      setProbe((prev) => (prev.failures > 0 ? { ...prev, failures: 0 } : prev));
+    }
   }
   const answered = probe.answered;
   // THE UNHEARD WINDOW, named once because two statuses hold it. It is the span
@@ -1224,6 +1280,27 @@ export function useRunReviewSlot({
   return {
     slot,
     answered,
+    // IS THERE STILL A READER BEHIND THE WAIT (cinatra#3007, fix leg 6)? The
+    // same two budgets the effect schedules on, read as one answer, because a
+    // surface that draws a wordless box while it waits owes the reader the
+    // difference between "nobody has answered yet" and "nobody is asking any
+    // more". `mayStillOpen` cannot carry it: that reading is about the SLOT
+    // (has a review been ruled out), and a pause whose kind this surface has
+    // not been told at all has no slot reading to be about.
+    //
+    // AND IT IS THE EFFECT'S OWN RETURNS, on BOTH branches (fix leg 6,
+    // convergence). The completed window stops on its settle condition as well
+    // as on its belt - answered, nothing awaited, no park - and a reading that
+    // counted only the belt would have told a caller "still reading" about a
+    // reader that had settled and gone quiet thirty looks early. No caller is
+    // exposed to that today (both require the parked status), which is the
+    // reason it is corrected rather than defended: this is a newly published
+    // contract, and it should be true before something reads it.
+    stillReading: parkedStatus
+      ? probe.reads < PARK_READ_LIMIT && probe.failures < PARK_READ_FAILURE_LIMIT
+      : status === "completed" &&
+        probe.reads < SLOT_READ_LIMIT &&
+        !(answered && !slot.awaiting && !isProducedReviewPark),
     // The window between "the run reports done" and "its review exists": the
     // outbox still holds an unanswered review question, or this surface has not
     // heard back yet under the current status.
