@@ -58,6 +58,23 @@ export type RunInputFieldSchema = {
   [key: string]: unknown;
 };
 
+/**
+ * ONE ANSWERED FIELD OF AN INPUT FORM, as the settled reading draws it.
+ *
+ * The ratified drawing: a resolved gate's entry "keeps its place and RECORDS
+ * HOW IT WAS SETTLED", and opening it shows "what was decided". So the answer
+ * travels ON the step, and whoever draws the read-only reading reads it here
+ * rather than re-deriving it from the run row a second time.
+ */
+export type RunInputStepAnswer = {
+  /** The schema field this answer belongs to. */
+  field: string;
+  /** The field's declared title, or the field's own name. */
+  label: string;
+  /** The recorded value, as text. */
+  value: string;
+};
+
 /** ONE input form, as a step. */
 export type RunInputStep = {
   /** The selection value this step answers to. */
@@ -78,7 +95,45 @@ export type RunInputStep = {
   reached: boolean;
   /** An answered form is the rail's read-only history row. */
   settled: boolean;
+  /**
+   * WHAT IT WAS ANSWERED WITH (cinatra#3068 fix leg 2) — empty while the form
+   * is still open or still ahead, because there is nothing settled to record
+   * yet. The settled row opens this and nothing else.
+   */
+  answers: readonly RunInputStepAnswer[];
 };
+
+/**
+ * IS THE RECORDED VALUE THE ANSWER ITS OWN FIELD DECLARES?
+ *
+ * (cinatra#3068 fix leg 2 convergence.) `assertValuesMatchDeclaredObjectTypes`
+ * -- the declared-type gate in `input-schema-resolver.ts` -- refuses a run at
+ * dispatch when an `object`-typed input carries something that is not a plain
+ * object, and the run FAILS having never run. The value is nonetheless on the
+ * run row, so "the run carries a value" alone would draw that dead run a
+ * SETTLED history row for a form nobody ever answered -- the exact refusal the
+ * first leg's convergence bought.
+ *
+ * So the history side asks the gate's own question. Narrow in the same way the
+ * gate is narrow: only `object`-typed inputs are checked, and only at the top
+ * level, because that is the class the gate refuses the run over. The PENDING
+ * walk above is deliberately NOT narrowed -- it mirrors the setup loop, which
+ * asks nothing more than whether the run carries a value, and a rail that drew
+ * an OPEN form the loop will never emit would be a new wrongness.
+ */
+function isPlainJsonObject(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
+}
+
+function recordsADeclaredAnswer(
+  value: unknown,
+  schema: RunInputFieldSchema | undefined,
+): boolean {
+  if (schema?.type !== "object") return true;
+  return isPlainJsonObject(value);
+}
 
 function declaredTitle(schema: RunInputFieldSchema | undefined): string | null {
   const title = schema?.title;
@@ -96,6 +151,62 @@ function declaredTitle(schema: RunInputFieldSchema | undefined): string | null {
  */
 function isHidden(schema: RunInputFieldSchema | undefined): boolean {
   return Boolean(schema?.["x-hidden"]);
+}
+
+/**
+ * THE RECORDED VALUE, AS TEXT, AND AS THE FORM ITSELF READS IT.
+ *
+ * A field whose schema declares `x-object-text-property` is drawn by the form
+ * as ONE control over that property — the blog draft writer's `idea` is an
+ * object whose readable text is its `title` — so the settled reading takes the
+ * same word rather than showing the record it was stored in. Everything else
+ * falls down a plain ladder: a string is the string, a number or a boolean is
+ * its own word, and anything else is the JSON the run stored, never
+ * `[object Object]`. Nothing is truncated: what is on file is what a reader of
+ * the run's history is owed.
+ */
+function resolvedObjectTextProperty(
+  schema: RunInputFieldSchema | undefined,
+): string | null {
+  // THE FORM'S OWN RULE, NOT A LOOSER ONE (cinatra#3068 fix leg 2 convergence).
+  // `resolveObjectTextProperty` in the field renderer honours the hint ONLY
+  // when it names a DECLARED `string` sub-property, and falls back to the
+  // structured/JSON leg otherwise. Reading the hint loosely here would make the
+  // settled reading show a stray inner string for a field the person answered
+  // on the structured control -- the history and the form disagreeing about
+  // what the answer was. The rule is restated rather than imported: the
+  // renderer is a `"use client"` module and this projection is walked by server
+  // components; a test pins the two against each other.
+  const declared = schema?.["x-object-text-property"];
+  if (typeof declared !== "string" || declared.trim() === "") return null;
+  const properties = (schema as { properties?: unknown } | undefined)?.properties;
+  if (!properties || typeof properties !== "object") return null;
+  const target = (properties as Record<string, { type?: unknown } | undefined>)[
+    declared
+  ];
+  if (!target || target.type !== "string") return null;
+  return declared;
+}
+
+function answerText(value: unknown, schema: RunInputFieldSchema | undefined): string {
+  const textProperty = resolvedObjectTextProperty(schema);
+  if (
+    textProperty !== null &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    const inner = (value as Record<string, unknown>)[textProperty];
+    if (typeof inner === "string") return inner;
+  }
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -134,6 +245,54 @@ export function buildRunInputSteps(params: {
       (fieldName) => properties[fieldName]?.["x-renderer"] === GROUPED_SETUP_FORM_RENDERER_ID,
     );
 
+  // THE GROUPED FORM IS STILL ONE FORM ONCE IT IS ANSWERED (cinatra#3068 fix
+  // leg 2 convergence). The clause above reads `pending.length >= 2`, which is
+  // the LOOP's own condition for emitting the grouped interrupt and must stay
+  // exactly that while the form is open. But it goes false the moment the form
+  // is answered, and the settled projection then fell through to the per-field
+  // path: one row per required field, the optional answers dropped, and the
+  // steps below renumbered -- the rail recording a walk the person never took
+  // instead of the ONE form they filled in. So a fully-answered form that the
+  // agent opted into grouping stays one settled row, read from the SCHEMA's
+  // opt-in rather than from pendingness, which no longer exists to be read.
+  const groupedOptIn = visible.some(
+    (fieldName) => properties[fieldName]?.["x-renderer"] === GROUPED_SETUP_FORM_RENDERER_ID,
+  );
+  if (!groupedForm && groupedOptIn && visible.length >= 2 && pending.length === 0) {
+    // The fields that form asked: its visible required ones, and the visible
+    // optional ones the run carries an answer for -- the same list
+    // `execution.ts` composes for the grouped interrupt, minus the optional
+    // fields left blank, which have nothing to record.
+    const answeredOptional = Object.keys(properties).filter(
+      (fieldName) =>
+        !required.includes(fieldName) &&
+        !isHidden(properties[fieldName]) &&
+        answeredField(fieldName),
+    );
+    const fields = [...visible, ...answeredOptional];
+    const settled = fields.every((fieldName) =>
+      recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]),
+    );
+    return [
+      {
+        key: "input:0",
+        label: RUN_INPUT_STEP_FALLBACK_LABEL,
+        fields,
+        answered: true,
+        open: false,
+        reached: true,
+        settled,
+        answers: settled
+          ? fields.map((fieldName) => ({
+              field: fieldName,
+              label: declaredTitle(properties[fieldName]) ?? fieldName,
+              value: answerText(inputParams[fieldName], properties[fieldName]),
+            }))
+          : [],
+      },
+    ];
+  }
+
   if (groupedForm) {
     // THE FIELDS THE GROUPED FORM ACTUALLY ASKS: the pending required ones, and
     // then the visible OPTIONAL ones the run does not carry either — which is
@@ -156,6 +315,9 @@ export function buildRunInputSteps(params: {
         open: atInputMoment,
         reached: true,
         settled: false,
+        // A grouped form exists only while two or more of its fields are still
+        // pending, so it is never the settled row.
+        answers: [],
       },
     ];
   }
@@ -167,6 +329,10 @@ export function buildRunInputSteps(params: {
   return visible.map((fieldName, index) => {
     const answered = answeredField(fieldName);
     const open = atInputMoment && fieldName === firstPending;
+    // SETTLED is the narrower fact: the run carries a value AND that value is
+    // the one its own field declares (see `recordsADeclaredAnswer`).
+    const settled =
+      answered && recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]);
     return {
       key: `input:${index}` as RunInputStepKey,
       label: declaredTitle(properties[fieldName]) ?? RUN_INPUT_STEP_FALLBACK_LABEL,
@@ -174,7 +340,16 @@ export function buildRunInputSteps(params: {
       answered,
       open,
       reached: answered || open,
-      settled: answered,
+      settled,
+      answers: settled
+        ? [
+            {
+              field: fieldName,
+              label: declaredTitle(properties[fieldName]) ?? fieldName,
+              value: answerText(inputParams[fieldName], properties[fieldName]),
+            },
+          ]
+        : [],
     };
   });
 }
@@ -201,16 +376,38 @@ export function runOwesInputStep(steps: readonly RunInputStep[]): boolean {
  * — because the same answer retires the panel's heading — take that run's only
  * status badge away with it.
  *
- * So the steps ride exactly while the run is AT its input: standing at the
- * setup interrupt, or not yet dispatched (`pending_input`), which is the "the
- * rail exists from the run's first render, before anything has run" the issue
- * asks for. Every other moment keeps the surface it had.
+ * So the steps ride while the run is AT its input: standing at the setup
+ * interrupt, or not yet dispatched (`pending_input`), which is the "the rail
+ * exists from the run's first render, before anything has run" the issue asks
+ * for.
+ *
+ * AND THEY STAY ONCE THE FORM IS ANSWERED (cinatra#3068 fix leg 2). The
+ * ratified drawing: "A resolved gate stays on the rail as read-only history --
+ * its entry keeps its place and records how it was settled ... so the rail is
+ * the run's whole lifecycle at a glance, not just its live tip." Retiring the
+ * answered row made the rail the live TIP: the first step a person took
+ * vanished the moment they took it, and the rail renumbered as though the run
+ * had never been asked anything.
+ *
+ * THE REFUSAL THE CONVERGENCE BOUGHT STANDS EXACTLY WHERE IT WAS BOUGHT. What
+ * carries the history is an ANSWER, never an unanswered field: a run that
+ * failed before dispatch, one cancelled at its form, one refused by the
+ * declared-type gate and one paused at a mid-run review gate with its input
+ * never given all carry no input row at all, exactly as before.
  */
+export function runHasAnsweredInputStep(steps: readonly RunInputStep[]): boolean {
+  // `settled`, not `answered` (cinatra#3068 fix leg 2 convergence): the history
+  // rides on an answer the field's own declared type accepts, so a run the
+  // declared-type gate refused before it ever ran still carries no input row.
+  return steps.some((step) => step.settled);
+}
+
 export function runCarriesInputSteps(
   steps: readonly RunInputStep[],
   atInputMoment: boolean,
 ): boolean {
-  return atInputMoment && runOwesInputStep(steps);
+  if (atInputMoment) return runOwesInputStep(steps);
+  return runHasAnsweredInputStep(steps);
 }
 
 /** The step the run detail opens on, or `null` when no form is being asked. */

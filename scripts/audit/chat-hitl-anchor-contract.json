@@ -3,6 +3,16 @@
  "issue": 2826,
  "epic": 2784,
  "specCommit": "design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f specs/app-lifecycle-cards.html",
+ "runSurfaceDrawingPin": {
+  "pin": "c73c68f5e39ed5b8da06b4dfd575ccf3692974c8",
+  "specs": [
+   "specs/app-artifact-review.html",
+   "specs/app-lifecycle-cards.html"
+  ],
+  "surface": "The agent run surface: the step rail down the left and the run detail on the right (app-artifact-review section I), and the card an OPEN step draws (lifecycle cards section V). Recorded for cinatra#3068, whose fix leg 2 draws the run's own input form as the rail's first step: the entry that keeps its place as read-only history, the settled row that opens read-only, and the steps still to come below the highlighted one.",
+  "whyItIsRecordedHere": "Neither drawing publishes a generated conformance manifest, so neither is a `design-pin-drift` id and there is no manifest hash to pin. This file is the repository's pin record for this card family, so the run surface's own drawing pin is recorded beside it rather than in a mechanism invented for one pull request. It is a RECORD, not a second binding: `specCommit` below is the only pin the anchor digest is computed over, and adding this key moves no anchor and no digest.",
+  "specCommitDeliberatelyNotMoved": "`specCommit` still pins the lifecycle-cards drawing at the commit it was ratified at, and cinatra#3068 does NOT move it. Between that commit and the pin above, section V of that drawing retired the per-skill Confirm / Adjust / Skip floor in favour of a checkbox pill per skill and ONE Continue beneath the list. The shipped card still draws the retired floor (`packages/agents/src/run-recommendation-chip-row.tsx`, `data-skill-action` confirm / adjust / skip), which is exactly what `domExpectations.carriage.recommendation_hold` records. Moving the pin here would therefore make this file assert a conformance the shipped card does not have, and would re-ratify another program's contract inside a run-page fix. The move belongs to the change that redraws that card."
+ },
  "domExpectations": {
   "carriage": {
    "artifact_review_gate": {

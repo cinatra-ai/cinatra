@@ -139,9 +139,15 @@ describe("the screen's JSX composes the input step and retires the step-less pan
   it("tells BOTH run panels that the rail carries the input step", () => {
     // Neither panel may draw the step-less "Agentic Run Progress" section over
     // a form the rail already names.
-    expect(SCREEN_SRC).toContain("inputStepInRail={inputStepsInRail}");
+    //
+    // AND THE FACT THEY ARE TOLD IS THAT THE STEP IS OPEN (cinatra#3068 fix leg
+    // 2). The rail now keeps the ANSWERED form too, as read-only history, so
+    // "the rail carries an input row" and "this panel is drawing that form"
+    // stopped being the same fact — and a run that has moved on must keep the
+    // progress panel, and its status badge, that it had.
+    expect(SCREEN_SRC).toContain("inputStepInRail={inputStepIsOpen}");
     expect(
-      SCREEN_SRC.split("inputStepInRail={inputStepsInRail}").length - 1,
+      SCREEN_SRC.split("inputStepInRail={inputStepIsOpen}").length - 1,
     ).toBe(2);
   });
 
@@ -185,31 +191,36 @@ describe("only the OPEN input form opens (cinatra#3068 convergence)", () => {
     });
   }
 
-  it("closes the ANSWERED form's row, which would otherwise show the live one", () => {
+  it("gives the ANSWERED form its own screen, so it never shows the live one", () => {
     // Every input step falls back to the ONE run detail, and that detail holds
-    // the form the run is asking right now. So a settled "Idea" row that could
-    // be opened would select Idea and display the live Audience question — the
+    // the form the run is asking right now. So a settled "Idea" row that fell
+    // back would select Idea and display the live Audience question — the
     // rail's one contract, that the selected step shows THAT step's screen,
-    // broken. It keeps its place as read-only history and opens nothing.
+    // broken. The first leg answered that by closing the settled row; the
+    // ratified drawing answers it the other way — "A resolved gate opens
+    // read-only: what was decided" — so the row keeps its place AND its own
+    // read-only screen, and the fallback is never what it opens.
     const railSteps = buildRunInputRailSteps(askingAudience(), "the run detail");
 
     expect(railSteps.map((step) => step.key)).toEqual(["input:0", "input:1"]);
     expect(railSteps[0].settled).toBe(true);
-    expect(railSteps[0].selectable).toBe(false);
-    expect(isRunSurfaceStepSelectable(railSteps[0], "the run detail")).toBe(false);
-    // And the frame refuses the selection, wherever it is asked from.
+    expect(railSteps[0].surface).not.toBeNull();
+    expect(railSteps[0].selectable).toBe(true);
+    expect(isRunSurfaceStepSelectable(railSteps[0], "the run detail")).toBe(true);
+    // And the frame opens exactly the step that was asked for.
     expect(
       resolveRunSurfaceSelection(railSteps, "the run detail", "input:0"),
-    ).not.toBe("input:0");
+    ).toBe("input:0");
   });
 
-  it("keeps the form the run IS asking openable, and it is what a stale selection resolves to", () => {
+  it("keeps the form the run IS asking openable, on the run detail's fallback", () => {
     const railSteps = buildRunInputRailSteps(askingAudience(), "the run detail");
 
     expect(railSteps[1].selectable).toBe(true);
+    expect(railSteps[1].surface).toBeNull();
     expect(isRunSurfaceStepSelectable(railSteps[1], "the run detail")).toBe(true);
     expect(
-      resolveRunSurfaceSelection(railSteps, "the run detail", "input:0"),
+      resolveRunSurfaceSelection(railSteps, "the run detail", "input:1"),
     ).toBe("input:1");
   });
 

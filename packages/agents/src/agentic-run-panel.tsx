@@ -2223,7 +2223,16 @@ export function AgenticRunPanel({
         />
       )}
 
-      {messages.length > 0 ? (
+      {/* THE STEP'S OWN CARD, AND NOTHING ELSE (cinatra#3068 fix leg 2). The
+          ratified drawing: "One page per gate -- the step's own card, and
+          nothing else. Selecting a step opens that step's page in the run
+          detail, and the page carries the one card of the step it belongs to
+          ... two cards are never stacked in one detail." The graded picture of
+          the input moment showed the run-progress reading -- "No messages yet."
+          -- stacked under the form, which is a second reading of a run that has
+          not run. It leaves this detail; every other host keeps it, and the
+          chat thread's run card is byte-identical. */}
+      {inputStepInRail ? null : messages.length > 0 ? (
         <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto">
           {messages.map((msg) => (
             <ThreadRow key={msg.id} message={msg} />

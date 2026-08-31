@@ -935,6 +935,14 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // review gate is not at its input either, so it keeps the surface it had.
   const inputStepsInRail = runCarriesInputSteps(runInputSteps, atInputMoment);
   const openInputStepKey = openRunInputStepKey(runInputSteps);
+  // TWO FACTS, NOT ONE (cinatra#3068 fix leg 2). Since the rail keeps an
+  // ANSWERED form as read-only history, "the rail carries an input row" and
+  // "this panel is drawing the input form" stopped being the same fact. The
+  // panels are told the SECOND one: the step-less heading and the run-progress
+  // reading retire only while the form is the step being drawn, so a run that
+  // has moved on keeps the progress panel -- and its status badge -- it had.
+  const openInputStep = runInputSteps.find((step) => step.open) ?? null;
+  const inputStepIsOpen = openInputStepKey !== null;
 
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
@@ -1200,6 +1208,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
         agentId={agentId}
         instanceId={instanceId}
         activeTab="setup"
+        // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
+        // schedule step is named in the page header because it answers at its
+        // own sub-route; the run's first step answers on the run's own path, so
+        // the trail stopped at the run's name and told the reader the run but
+        // never the step. The step's own declared title travels through the ONE
+        // crumb channel instead, and only while the run is standing at it.
+        stepCrumbLabel={openInputStep?.label ?? null}
         templateName={template.name}
         initialRunName={runName}
         runId={run?.id ?? null}
@@ -1385,7 +1400,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // instead of being drawn by a second column beside it.
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
-                    inputStepInRail={inputStepsInRail}
+                    inputStepInRail={inputStepIsOpen}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -1421,7 +1436,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     initialStreamedText={run.streamedText ?? ""}
                     initialHitlContext={initialHitlContext}
                     initialReviewGate={initialReviewGate}
-                    inputStepInRail={inputStepsInRail}
+                    inputStepInRail={inputStepIsOpen}
                   />
                 )
               )}
@@ -1491,6 +1506,42 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     />
                   ),
                 });
+              }
+              // THE STEPS STILL TO COME (cinatra#3068 fix leg 2). The
+              // ratified drawing puts the run's later steps BELOW the
+              // highlighted one -- "so the rail is the run's whole lifecycle at
+              // a glance, not just its live tip" -- and the graded picture of
+              // the input moment drew ONE row with nothing beneath it. These
+              // are the setup flow's own three steps, the same three the
+              // schedule screen's rail names, drawn as steps the run has NOT
+              // reached: muted, opening nothing, because the plan draws no "not
+              // reached yet" screen and none is invented for them.
+              //
+              // ONLY WHILE THE RUN STANDS AT ITS INPUT -- afterwards the rows
+              // above are the run's real ones -- and never twice: a key the
+              // rail already drew (a live recommendation hold, an armed
+              // schedule) keeps the row it has.
+              const UPCOMING_RUN_RAIL_STEPS = [
+                "schedule",
+                "recommendation",
+                "review",
+              ] as const;
+              if (inputStepIsOpen) {
+                const drawnRailStepKeys = new Set(railSteps.map((step) => step.key));
+                const upcomingRailStepKeys = UPCOMING_RUN_RAIL_STEPS.filter(
+                  (key) => !drawnRailStepKeys.has(key),
+                );
+                railSteps.push(
+                  ...buildSetupRailSteps(
+                    upcomingRailStepKeys.map((key) => ({
+                      key,
+                      reached: false,
+                      settled: false,
+                      surface: null,
+                    })),
+                    railSteps.length,
+                  ),
+                );
               }
               // The page's OWN rail rows. The gate rows above are drawn by
               // their own step components rather than by this rail, because the
@@ -2340,7 +2391,41 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // word, and the closed treatment for a step that has nothing to open. The
   // schedule and recommendation steps on the RUN page draw their own rows
   // instead, because those carry anchors of their own; these three carry none.
-  const setupRailSteps: RunSurfaceRailStep[] = buildSetupRailSteps(setupSteps);
+  //
+  // ── THE RUN'S ANSWERED INPUT STEPS, KEPT ON THE RAIL (cinatra#3068 fix leg 2)
+  //
+  // The run's FIRST step is the agent's own input form, and this screen is
+  // where a run arrives once that form has been answered. The ratified drawing:
+  // "A resolved gate stays on the rail as read-only history -- its entry keeps
+  // its place and records how it was settled ... so the rail is the run's whole
+  // lifecycle at a glance, not just its live tip." It did not keep its place:
+  // the answered entry left the rail and the schedule renumbered to 1, so the
+  // step the person had just taken was drawn nowhere at all. It stays now,
+  // settled, opening its own read-only reading, and the three steps below it
+  // renumber around however many stand above them.
+  //
+  // THE RESOLVED SCHEMA, the same one the run page reads and the setup loop
+  // walks: a stored schema that is empty names no step for exactly the agents
+  // whose form the loop still asks.
+  const triggerInputSchema = await resolveTemplateInputSchema(template);
+  const runInputSteps = run
+    ? buildRunInputSteps({
+        required: triggerInputSchema.required,
+        properties: triggerInputSchema.properties,
+        inputParams,
+        // This screen is never the input moment -- a run reaches it by having
+        // answered -- so no form is open here and every answered one is history.
+        atInputMoment: false,
+      })
+    : [];
+  const inputRailSteps: RunSurfaceRailStep[] = runCarriesInputSteps(
+    runInputSteps,
+    false,
+  )
+    ? buildRunInputRailSteps(runInputSteps, null)
+    : [];
+  const setupRailSteps: RunSurfaceRailStep[] = buildSetupRailSteps(setupSteps, inputRailSteps.length);
+  const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];
 
   return (
     <Main className="min-h-screen">
@@ -2403,7 +2488,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
               data-run-detail-contract=""
               data-conformance-id="run-surface"
             >
-              <RunSurfaceRail steps={setupRailSteps} initialSelection="schedule" />
+              <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
             </div>
           </AgentPanelBody>
         ) : (

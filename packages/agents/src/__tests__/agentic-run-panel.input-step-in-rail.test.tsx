@@ -211,3 +211,36 @@ describe("the run page's first step (cinatra#3068)", () => {
     expect(progressHeading()).not.toBeNull();
   });
 });
+
+/**
+ * THE DETAIL IS THE FORM ALONE (cinatra#3068, fix leg 2).
+ *
+ * The graded picture of the input moment showed the run-progress line
+ * "No messages yet." stacked under the form, in the step's own detail column.
+ * The ratified drawing, in the section that draws this surface: "One page per
+ * gate — the step's own card, and nothing else. Selecting a step opens that
+ * step's page in the run detail, and the page carries the one card of the step
+ * it belongs to ... two cards are never stacked in one detail."
+ */
+describe("the input step's detail carries the step's own card and nothing else", () => {
+  it("draws no run-progress line under the form", async () => {
+    const view = await renderPanel({ inputStepInRail: true });
+
+    await waitFor(() =>
+      expect(view.container.querySelector("#field-idea")).not.toBeNull(),
+    );
+    expect(document.body.textContent).not.toMatch(/No messages yet/i);
+    expect(document.body.textContent).not.toMatch(/Waiting to start/i);
+  });
+
+  it("keeps the run-progress line for a host that draws no rail", async () => {
+    // The chat thread's run card is unchanged: the panel there is a progress
+    // panel and says so when it has nothing to report.
+    const view = await renderPanel();
+
+    await waitFor(() =>
+      expect(view.container.querySelector("#field-idea")).not.toBeNull(),
+    );
+    expect(document.body.textContent).toMatch(/No messages yet/i);
+  });
+});

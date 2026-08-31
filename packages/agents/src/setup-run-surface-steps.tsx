@@ -44,6 +44,11 @@ export type SetupRailStep = Omit<RunSurfaceRailStep, "row" | "key"> & {
 /**
  * The same steps, each with the row the rail draws for it.
  *
+ * `displayOffset` is how many rows already stand above these -- 0 where these
+ * three ARE the rail, and the count of the run's own settled input steps where
+ * they stand beneath it (cinatra#3068 fix leg 2), so the numerals count the
+ * whole rail rather than restarting under it.
+ *
  * The setup page composes no run detail of its own — the rail IS the page — so
  * the fallback handed to the predicate is `null`: a step with nothing drawn for
  * it has nothing to fall back to, and its row closes rather than opening the
@@ -51,6 +56,7 @@ export type SetupRailStep = Omit<RunSurfaceRailStep, "row" | "key"> & {
  */
 export function buildSetupRailSteps(
   steps: readonly SetupRailStep[],
+  displayOffset = 0,
 ): RunSurfaceRailStep[] {
   return steps.map((step, index) => {
     const selectable = isRunSurfaceStepSelectable(step, null);
@@ -60,7 +66,7 @@ export function buildSetupRailSteps(
         <RunSurfaceRailRow
           selectionKey={step.key}
           label={RUN_SURFACE_RAIL_LABELS[step.key]}
-          displayStep={index + 1}
+          displayStep={index + 1 + displayOffset}
           reached={step.reached}
           settled={step.settled}
           selectable={selectable}
