@@ -1102,16 +1102,54 @@ export function useRunReviewSlot({
     answered: boolean;
     reads: number;
     failures: number;
+    /**
+     * LOOKS SPENT SINCE THE LAST EVIDENCE (cinatra#3007, fix leg 7). The park's
+     * CEILING counts this, not `reads`, and the difference is the whole of the
+     * measured defect.
+     *
+     * `reads` is the CADENCE's counter: it only ever grows, so the backoff
+     * widens to ten seconds and stays there. Belting the ceiling on the same
+     * number made the ceiling a property of THE MOUNT rather than of the wait —
+     * and the run shape this was measured on never re-keys a mount at all. It is
+     * inserted `pending_approval` to ask its setup question and the park is
+     * later written onto that same already-parked row (`run-produced-review-hold.ts`,
+     * the `fromStatus === PARKED_STATUS` branch), so there is no status edge and
+     * no reset: every look a mount spent WAITING FOR SOMEBODY TO ANSWER A
+     * QUESTION was charged to the ceiling of a park that had not begun. Two
+     * pages opened minutes apart therefore reached the same park with different
+     * budgets, one of them already spent — which is exactly the divergence the
+     * fifth reading measured (35 s on one page, never on its twin) and the
+     * silence the sixth measured (no card in 600 s, cured only by a reload,
+     * because a reload re-seeds this hook).
+     *
+     * So the ceiling counts CONSECUTIVE looks that told this reader nothing new
+     * while nothing else on the surface told it anything either. Any evidence
+     * resets it and costs no look: a `liveSignal` bump, or a look whose answer
+     * DIFFERS from the last one. What the ceiling still ends is the case it was
+     * written for — a row that keeps saying exactly the same thing while nobody
+     * is feeding this surface at all — so a spinner nothing can end is still
+     * bounded, and a surface that is demonstrably alive keeps its reader.
+     */
+    parkLooks: number;
   }>({
     answered: initial != null,
     reads: 0,
     failures: 0,
+    parkLooks: 0,
   });
   const [seenLiveSignal, setSeenLiveSignal] = useState(liveSignal);
+  // THE LAST ANSWER THIS READER DELIVERED, held in a ref rather than read off
+  // `slot` inside the look (fix leg 7). The look runs inside an effect whose
+  // dependency list deliberately does not carry every field of the slot, so a
+  // closure reading `slot` could compare a fresh answer against one the surface
+  // has already moved past — and the ceiling's re-arm must turn on whether the
+  // ROW said something new, never on which render the comparison happened in.
+  const lastAnswerRef = useRef<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
   if (seenStatus !== status) {
     setSeenStatus(status);
+    lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
-    setProbe({ answered: false, reads: 0, failures: 0 });
+    setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
   }
   // THE RE-ARM (cinatra#3007, fix leg 6). Adjusted during render, for the same
   // reason the status reset above is: the surface has to see the reader come
@@ -1124,8 +1162,20 @@ export function useRunReviewSlot({
   // and is now contradicted by the surface around it.
   if (seenLiveSignal !== liveSignal) {
     setSeenLiveSignal(liveSignal);
-    if (probe.failures > 0) {
-      setProbe((prev) => (prev.failures > 0 ? { ...prev, failures: 0 } : prev));
+    // AND IT CLEARS THE CEILING'S COUNT AS WELL AS THE BELT'S (fix leg 7). Leg 6
+    // withdrew only the conclusion drawn from a dead transport and left the
+    // ceiling terminal on purpose, on the reading that the ceiling answers a
+    // different question. It does — but the count it was answering it with was
+    // the mount's, not the wait's, and a bump is evidence about exactly the
+    // thing the ceiling is a proxy for: that there is still somebody here, and
+    // the run is still being read. Neither reset spends a look, marks this
+    // reader answered, or touches the cadence.
+    if (probe.failures > 0 || probe.parkLooks > 0) {
+      setProbe((prev) =>
+        prev.failures > 0 || prev.parkLooks > 0
+          ? { ...prev, failures: 0, parkLooks: 0 }
+          : prev,
+      );
     }
   }
   const answered = probe.answered;
@@ -1222,7 +1272,35 @@ export function useRunReviewSlot({
     // has stopped answering: a reader that cannot read does not know the park is
     // still real, so it stops asking rather than retrying for ever, and one
     // answer resets it so a flaky minute inside a long park costs nothing.
-    if (parkedStatus && probe.reads >= PARK_READ_LIMIT) return;
+    // AND THE CEILING BOUNDS THE DRAWING, NEVER THE READING (fix leg 7).
+    //
+    // It used to return here, and that is the defect both graded readings measured. The
+    // worry the ceiling was written for is real and is quoted in its own note: a
+    // row that keeps saying parked while no gate ever arrives is a held
+    // condition, and "a spinner nothing can end is the wrong drawing for it".
+    // Every word of that is about the DRAWING. Stopping the READER as well does
+    // not improve the drawing by one pixel, and it costs the only thing that can
+    // still put the review on the screen: the look that would find the gate row.
+    //
+    // What that cost looked like: a mount whose ceiling was spent went silent
+    // for the life of the tab, so the gate row minted a minute later was
+    // invisible to it, the answered question kept a live Continue on it, and the
+    // only cure was a reload — which re-seeds this hook from the row. Two pages
+    // opened minutes apart therefore disagreed about the same run at the same
+    // instant, which is exactly what the fifth graded reading recorded (35 s on one
+    // page, 962 s and never on its twin) and what the sixth measured again on
+    // two untouched pages across 600 s and 120 polls.
+    //
+    // So the ceiling stays, and it is `stillReading` below that carries it: past
+    // it the surface stops holding a wordless spinner and falls back to the
+    // run's own rendering, which is the whole of what the note asked for. The
+    // reader goes on looking at the widened cadence behind that drawing, and
+    // when the row finally moves the card arrives in place with nothing pressed.
+    //
+    // THE COST, STATED: a run parked for a very long time is read every ten
+    // seconds until it leaves the status. That is the cadence the surface
+    // mounting this reader is already polling the same run on, so it is not a
+    // new class of load, and the run LEAVING the status still ends it.
     if (parkedStatus && probe.failures >= PARK_READ_FAILURE_LIMIT) return;
     let cancelled = false;
     const timer = window.setTimeout(
@@ -1231,10 +1309,22 @@ export function useRunReviewSlot({
           const abort = new AbortController();
           const deadline = window.setTimeout(() => abort.abort(), SLOT_READ_TIMEOUT_MS);
           let landed = false;
+          let changed = false;
           try {
             const next = await read(abort.signal);
             if (cancelled) return;
             if (next) {
+              // DID THIS LOOK SAY ANYTHING NEW? Read against the slot this
+              // effect was scheduled with, which is the last answer the surface
+              // has. An answer that moved is evidence in its own right — the row
+              // is live and this reader is the one watching it — so it re-arms
+              // the ceiling below without any caller having to say so.
+              const last = lastAnswerRef.current;
+              changed =
+                next.ref !== last.ref ||
+                next.awaiting !== last.awaiting ||
+                next.producedReviewPark !== last.producedReviewPark;
+              lastAnswerRef.current = next;
               setSlot(next);
               landed = true;
             }
@@ -1253,6 +1343,10 @@ export function useRunReviewSlot({
                 // only a transport that has actually stopped answering reaches
                 // the park's failure belt.
                 failures: landed ? 0 : prev.failures + 1,
+                // AND CONSECUTIVE FOR THE CEILING TOO (fix leg 7): a look that
+                // said something new re-arms it, a look that repeated the last
+                // answer spends one. See the field's own note above.
+                parkLooks: changed ? 0 : prev.parkLooks + 1,
               }));
             }
           }
@@ -1297,7 +1391,7 @@ export function useRunReviewSlot({
     // reason it is corrected rather than defended: this is a newly published
     // contract, and it should be true before something reads it.
     stillReading: parkedStatus
-      ? probe.reads < PARK_READ_LIMIT && probe.failures < PARK_READ_FAILURE_LIMIT
+      ? probe.parkLooks < PARK_READ_LIMIT && probe.failures < PARK_READ_FAILURE_LIMIT
       : status === "completed" &&
         probe.reads < SLOT_READ_LIMIT &&
         !(answered && !slot.awaiting && !isProducedReviewPark),

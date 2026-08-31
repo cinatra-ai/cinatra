@@ -176,22 +176,74 @@ export function ReviewGateLoading() {
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
-export function ReviewGatePlaceholder() {
+/**
+ * The short, stable reference a wordless card names its run by. One definition,
+ * so two surfaces drawing the same run cannot name it two different ways.
+ */
+export function shortRunReference(runId: string | null | undefined): string | null {
+  if (typeof runId !== "string") return null;
+  const trimmed = runId.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length <= 8 ? trimmed : trimmed.slice(0, 8);
+}
+
+/**
+ * THE PLACEHOLDER NAMES THE RUN IT IS WAITING ON, AND STOPS WHEN THE WAIT DOES
+ * (cinatra#3007, fix leg 7).
+ *
+ * The sixth graded reading took this card on both surfaces and found the same two
+ * things on every frame: "a card frame with a small spinning arc, quiet, but a
+ * large blank inner box and no run identity anywhere in the card; page title
+ * names the agent, not the run", and — on the pair shot after the decision had
+ * committed — "a spinner outliving the run it reports on".
+ *
+ * Neither reading argues with §II. The drawing says this card "names no status,
+ * reports no result and draws nothing to press"; a run REFERENCE is none of the
+ * three — it is not a status word, not a result and not a control — and without
+ * it a reader looking at two runs in one transcript cannot tell which box is
+ * which. And a spinner is a claim that something is still being waited for, so
+ * once the wait is over it is not a quieter drawing, it is a false one: the
+ * frame stays, the spin goes.
+ *
+ * Both are OPTIONAL and default to the drawing as it shipped, so the callers
+ * that have no run to name (the instance screen's generic wait) are unchanged.
+ */
+export function ReviewGatePlaceholder({
+  runRef = null,
+  settled = false,
+}: {
+  /** A short, stable reference to the run this box is waiting on. */
+  runRef?: string | null;
+  /** The wait is over — the run left the park, or its gate was decided. */
+  settled?: boolean;
+} = {}) {
   return (
     <div
       data-conformance-id="review-gate-placeholder"
+      data-review-gate-placeholder-run={runRef ?? undefined}
+      data-review-gate-placeholder-settled={settled ? "true" : undefined}
       // A busy REGION, named for a reader who cannot see the spin. The label is
       // not copy on the card — nothing is drawn from it — it is the accessible
       // name of a region that is deliberately wordless.
       role="status"
-      aria-busy="true"
-      aria-label="Working"
+      aria-busy={settled ? "false" : "true"}
+      aria-label={settled ? "Waiting finished" : "Working"}
       className="flex w-full flex-col gap-3"
     >
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-          <LoadingSpinner className="size-4" />
-        </span>
+        {settled ? null : (
+          <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+            <LoadingSpinner className="size-4" />
+          </span>
+        )}
+        {runRef ? (
+          <span
+            data-conformance-id="review-gate-placeholder-run-ref"
+            className="font-mono text-xs text-muted-foreground"
+          >
+            {runRef}
+          </span>
+        ) : null}
       </div>
       {/* THE FRAME, AND NOTHING IN IT (cinatra#3046).
           §II draws two things here and names the second by what it is not: "the

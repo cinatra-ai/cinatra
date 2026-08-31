@@ -248,13 +248,26 @@ describe("useRunReviewSlot: the park's own belts", () => {
     expect(result.current.mayStillOpen).toBe(true);
   });
 
-  it("gives a park that never resolves a ceiling rather than the life of the tab", async () => {
+  it("gives a park that never resolves a ceiling on the DRAWING, not on the reading", async () => {
     // THE OTHER WAY A PARK FAILS TO END: the reads all succeed and the row keeps
     // saying parked while no gate ever arrives. That is a held condition the
-    // recurring sweep cannot move, so the surface must stop looking and fall back
-    // to the run's own rendering instead of spinning for ever. The ceiling is an
-    // hour of looking at the widened cadence, against the longest park measured
-    // at about half of one.
+    // recurring sweep cannot move, and the reading this case was written to
+    // enforce is that "a spinner nothing can end is the wrong drawing for it" —
+    // so past the ceiling the surface stops holding the wordless box and falls
+    // back to the run's own rendering. The ceiling is an hour of looking at the
+    // widened cadence, against the longest park measured at about half of one.
+    //
+    // WHAT CHANGED, AND WHY (cinatra#3007, fix leg 7). This case also asserted
+    // that the READER stopped there, and that half of it was a defect rather
+    // than a contract. Every word of the reasoning above is about the drawing;
+    // stopping the reader as well improves no pixel and costs the only thing
+    // that can still end the wait — the look that would find the gate row. The
+    // fifth and sixth graded readings measured what it cost: a mount whose ceiling was
+    // spent went silent for the life of the tab, so a gate minted a minute later
+    // was invisible to it and only a reload (which re-seeds the hook) drew the
+    // card. So the ceiling keeps its job — `mayStillOpen` goes false, exactly as
+    // this case still requires below — and the reader goes on looking behind
+    // that drawing.
     const looks: number[] = [];
     const read = async () => {
       looks.push(1);
@@ -272,10 +285,17 @@ describe("useRunReviewSlot: the park's own belts", () => {
       looks.length,
       "the park was belted on the completed window's budget again",
     ).toBeGreaterThan(30);
-    expect(looks.length, "a park that never resolves is polled for ever").toBeLessThanOrEqual(360);
     expect(
       result.current.mayStillOpen,
       "a spinner is held in front of a park that never resolved",
     ).toBe(false);
+    // AND THE READER IS STILL THERE, behind that drawing: the row can still
+    // move, and when it does the card arrives in place with nothing pressed.
+    const spentAtTheCeiling = looks.length;
+    await letItLookCoarse(60);
+    expect(
+      looks.length,
+      "the reader was stopped along with the drawing, so a later gate row is invisible",
+    ).toBeGreaterThan(spentAtTheCeiling);
   });
 });

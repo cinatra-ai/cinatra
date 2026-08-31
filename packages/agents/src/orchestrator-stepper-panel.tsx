@@ -83,7 +83,7 @@ import {
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
-import { ReviewGatePlaceholder } from "./review-gate-states";
+import { ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
   ReviewGateCard,
@@ -2030,7 +2030,15 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     ) : (
       <Card data-run-review-slot="working">
         <CardContent className="p-6">
-          <ReviewGatePlaceholder />
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
         </CardContent>
       </Card>
     );
@@ -2196,7 +2204,15 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = (
       <Card data-run-review-slot="working">
         <CardContent className="p-6">
-          <ReviewGatePlaceholder />
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
         </CardContent>
       </Card>
     );

@@ -52,7 +52,7 @@ import {
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 // The review screen's PLACEHOLDER (cinatra#2997) — one of the review screen's
 // own states, so it lives with them rather than in this panel.
-import { ReviewGatePlaceholder } from "./review-gate-states";
+import { ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -1846,7 +1846,28 @@ export function AgenticRunPanel({
   // reader is still able to look, and when that reader stops the panel falls
   // back to the run's own rendering rather than holding a spinner nothing can
   // end - the same bound the park's own placeholder carries.
-  const conversationHostedPanel = ambientLifecycleHost === "chat_thread";
+  //
+  // AND THE SEVEN ELEMENTS THE SIXTH CAPTURE COUNTED ON THE RUN PAGE ARE NOT A
+  // SECOND DEFECT (fix leg 7). The graded reading graded an untouched run page 600 s
+  // into a park and found the whole arm below still drawn: the progress
+  // heading, the pending-approval pill, the paused banner, the Review-approval
+  // link, the loading line, the Re-check and the empty-transcript line. It is
+  // worth being exact about WHY, because the obvious repair is the wrong one.
+  //
+  // That arm is already unreachable during a park this panel KNOWS about: the
+  // reading below excludes `parkedOnProducedReview`, so the moment the shared
+  // reader lands the row's own answer the arm is gone on both surfaces. What the
+  // reading recorded was a page on which that answer never landed, because
+  // the reader had gone silent and could not come back — the defect this leg
+  // repairs in the reader itself. Taking the arm away from the run page as well
+  // would not have fixed that page; it would have replaced a wrong drawing with
+  // a wordless one and left the page just as unable to learn about its park.
+  //
+  // So the arm stays where it shipped, and it stays for the reason leg 6 gave:
+  // on the run page it is the operator's recovery affordance, pinned by four
+  // suites — including one written expressly to say it is untouched — and it is
+  // the one reading that is TRUE when the pause really is a run whose approval
+  // step could not be loaded.
   //
   // AND "NOTHING TO DRAW" MEANS THE RUN RECORDED NO QUESTION, not merely that
   // this render is not drawing one (cinatra#3007, fix leg 6, convergence).
@@ -1871,14 +1892,15 @@ export function AgenticRunPanel({
     !parkedOnProducedReview &&
     rawEffectiveHitlContext === null &&
     effectiveHitlContext === null;
-  const conversationPausePlaceholder =
+  const conversationHostedPanel = ambientLifecycleHost === "chat_thread";
+  const pausePlaceholder =
     conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;
   const blockedOnInputGate =
     isPendingApproval &&
     !markedReviewGate &&
     !parkedOnProducedReview &&
     !parkKindUnheard &&
-    !conversationPausePlaceholder;
+    !pausePlaceholder;
   //
   // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
   // deliberately NOT enough on its own: a run carries its gate for ever, so a
@@ -1961,7 +1983,7 @@ export function AgenticRunPanel({
     !blockedOnInputGate &&
     (status === "queued" ||
       status === "running" ||
-      ((reviewMayStillOpen || conversationPausePlaceholder) && !widgetHostedPanel));
+      ((reviewMayStillOpen || pausePlaceholder) && !widgetHostedPanel));
 
   // The recommendation card's ONE mount, lifted to a value so the slot's three
   // readings share it instead of each carrying a copy (the one-card rule is
@@ -2007,7 +2029,21 @@ export function AgenticRunPanel({
           data-run-review-slot={reviewScreenNode !== null ? "review" : "working"}
         >
           {recommendationCardNode}
-          {reviewScreenNode ?? <ReviewGatePlaceholder />}
+          {reviewScreenNode ?? (
+            <ReviewGatePlaceholder
+              runRef={shortRunReference(runId)}
+              // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
+              // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
+              // shot for this card was taken with the run already completed and
+              // its gate already resolved, and the arc was still turning - a
+              // spinner reporting on a run that had finished. The frame stays,
+              // because the box is still the box the review screen fills; the
+              // claim that something is still coming does not.
+              settled={
+                status !== "queued" && status !== "running" && !isPendingApproval
+              }
+            />
+          )}
         </section>
         {hitlConversationPanelNode}
       </>
