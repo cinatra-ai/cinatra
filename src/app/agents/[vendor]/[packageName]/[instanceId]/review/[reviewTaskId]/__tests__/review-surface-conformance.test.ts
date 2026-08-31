@@ -144,6 +144,15 @@ const HOST_STANDARD_IDS = new Set([
   // present, no bar-skeleton motif inside it) is pinned in
   // packages/agents/src/__tests__/review-gate-placeholder-drawing.test.tsx.
   "review-gate-placeholder-frame",
+  // cinatra#3046 -- the run the wordless box is waiting on, named beside the
+  // spinner so a page that has been open a while says WHICH run it holds for
+  // rather than drawing one anonymous empty box. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (the
+  // reference is drawn on BOTH hosts, and the box stops claiming something is
+  // coming once the run settles) is pinned in
+  // packages/agents/src/__tests__/agentic-run-panel.park-drawing-both-surfaces.test.tsx.
+  "review-gate-placeholder-run-ref",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer
