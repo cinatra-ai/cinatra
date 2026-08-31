@@ -185,9 +185,13 @@ import {
 } from "@/components/ui/select";
 
 import {
+  useComposerFocusBinding,
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useLifecycleCardReplacement,
+  useLifecycleCardSettleBus,
+  useLifecycleCardSettleSignal,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import {
@@ -403,22 +407,97 @@ export function ScheduleProposalCard({
   // with the previous proposal's ref still live, and this card's ref is what
   // every decision is taken against.
   const [wireRef, setWireRef] = useState(view.ref);
-  if (wireRef !== view.ref) {
+  const wireChanged = wireRef !== view.ref;
+  if (wireChanged) {
     setWireRef(view.ref);
     setLiveRef(view.ref);
   }
+  // THE REF THIS RENDER IS ABOUT. On a wire change the state updates above are
+  // queued, not applied, so `liveRef` still reads as the PREVIOUS proposal for
+  // the rest of this pass — and everything below must be about the new one.
+  const currentRef = wireChanged ? view.ref : liveRef;
   const [reloadToken, setReloadToken] = useState(0);
 
+  // THE SAME-SESSION SETTLE (cinatra#2853, the picture leg) — the same seam the
+  // review card takes, on the ref this card is CURRENTLY drawn from, so an
+  // adjust that replaced the ref is answered about the proposal in front of the
+  // reader and not about the one it replaced.
+  const settleSignal = useLifecycleCardSettleSignal(liveRef);
+  const settleBus = useLifecycleCardSettleBus();
+
+  // A TYPED CHANGE RE-DRAWS THIS CARD IN PLACE (cinatra#2853, the second fix
+  // leg; plan (A) §2.2 — "a typed change re-draws the bound card IN PLACE,
+  // never a second card; the stale Confirm gone").
+  //
+  // THE DEFECT THIS CLOSES. Adjusting from the prompt window reaches the same
+  // `adjust` the card's own button reaches, and adjust RE-PROPOSES: the new
+  // rows live behind a NEW ref and the old one stays addressable, because a
+  // proposal ref IS the proposal and there is no row to edit. The button knows
+  // the replacement because it made the call itself (`setLiveRef(outcome.ref)`
+  // below); the typed road's answer went to the assistant, so this card kept
+  // drawing the 09:00 it had been asked to change, Confirm and all, while the
+  // 08:00 rows existed behind a ref nothing on the page knew.
+  //
+  // THE SAME SWAP, THE SAME LINE. Whichever road took the decision, the card
+  // ends up on the replacement ref and re-resolves it — one card, the adjusted
+  // rows, one Confirm, and the stale ref no longer drawn anywhere.
+  //
+  // DURING RENDER, for the reason the wire-ref swap above states: an effect
+  // would let one paint go out with the superseded ref still live, and this
+  // card's ref is what every decision is taken against. It settles in one extra
+  // render — the replacement's own entry is absent, so the next read is `null`
+  // — and a chain of adjusts walks itself forward the same way.
+  //
+  // THE WIRE CHANGE WINS. Asked about the PREVIOUS ref while the wire is handing
+  // this instance a different proposal, a replacement announced for that
+  // previous ref would queue AFTER the wire reset and land last — the card would
+  // draw, and decide about, a proposal the turn already moved off. So the lookup
+  // is about `currentRef`, and on the render that resets the wire ref nothing is
+  // swapped: the next render reads the new ref's own replacement, if it has one.
+  const replacementRef = useLifecycleCardReplacement(currentRef);
+  if (!wireChanged && replacementRef !== null && replacementRef !== currentRef) {
+    setLiveRef(replacementRef);
+  }
   const resolved = useLifecycleCardResolve({
     viewType: "trigger_schedule_proposal",
     ref: liveRef,
     enabled: present,
-    reloadToken,
+    reloadToken: reloadToken + settleSignal,
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  // ONE BINDING ROAD FOR EVERY LIFECYCLE CARD KIND (cinatra#2853, the picture
+  // leg; plan (A) §2.2 — "the prompt window acts on the ACTIVE card").
+  //
+  // THE DEFECT THIS CLOSES. The server road for a typed schedule change has been
+  // complete since this branch opened: the schedule card lends `adjust`, the
+  // grant carries it and the decide road presses it through the card's own
+  // entry. None of it was reachable, because the claim a send carries is built
+  // from the refs cards REGISTER, and only the review card registered. So a
+  // person who typed "make it 8 in the morning on weekdays" at a schedule card
+  // minted no grant at all; the assistant answered the only way left to it and
+  // called the PRODUCER again, drawing a SECOND proposal underneath the first
+  // and leaving the stale one live with its own Confirm.
+  //
+  // THE REF IS THE LIVE ONE, not the wire one: Adjust re-proposes and mints a
+  // new ref, and the card the reader is looking at after an adjust is the one a
+  // second message must reach.
+  //
+  // NO COMMENT ROAD, AND NO CHROME. This card has no comment path — its typed
+  // road is the grant the send mints — and §VI draws no pick control on it, so
+  // none is invented here. What that leaves is stated as a deviation: a lone
+  // schedule card binds with no press, exactly as a lone review does, and with a
+  // review card open beside it nothing routes and only the review card offers
+  // the control the refusal names.
+  const composerEligible =
+    state !== null &&
+    state.state === "pending" &&
+    state.canDecide &&
+    (body?.phase === "proposal" || body?.phase === "expired");
+  useComposerFocusBinding({ ref: liveRef, eligible: composerEligible });
 
   const decide = useCallback(
     async (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => {
@@ -435,9 +514,16 @@ export function ScheduleProposalCard({
       ) {
         refresh();
       }
+      // AND EVERY OTHER COPY OF THIS CARD, for the reason the review card states
+      // where it does the same: one proposal can be drawn on more than one
+      // surface in one page, and settling only the copy that was pressed leaves
+      // the others offering a decision that has already been taken.
+      if (outcome.kind !== "not-permitted" && outcome.kind !== "error") {
+        settleBus?.announceSettled(liveRef);
+      }
       return outcome;
     },
-    [liveRef, auth, refresh],
+    [liveRef, auth, refresh, settleBus],
   );
 
   if (!present || state === null || body === null) return null;

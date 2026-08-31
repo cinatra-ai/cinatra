@@ -223,6 +223,66 @@ export type BoundReview = {
   readonly pinnedTargets: readonly ArtifactReviewTarget[];
 };
 
+/**
+ * The SKILLS-RECOMMENDATION card a run is held at (cinatra#2853).
+ *
+ * Plan (A) §2.2: "with a skills card, 'drop the research skill and confirm'".
+ * The card's own controls are Confirm and Skip, so those are what it lends, and
+ * the kept set a typed confirm carries is bounded by `offered` — the very skills
+ * the card put in front of the person, read here on the server under their own
+ * access. A model can therefore keep or drop only what the card is showing.
+ *
+ * A HOLD THAT HAS SETTLED IS NOT A CARD. Only the `held` state resolves; a
+ * confirmed or skipped hold, a run with no park and a reader the hold reader
+ * answers nothing for are all one `absent`, exactly as every other arm.
+ */
+export type BoundRecommendationHold = {
+  readonly kind: "recommendation_hold";
+  readonly runId: string;
+  /** The hold instance this card was drawn from — the decision's own binding. */
+  readonly holdRef: string;
+  readonly agentPackageName: string;
+  /** The skills the card offered, ids and display names. The only set a typed
+   *  keep/drop may name. */
+  readonly offered: readonly { readonly skillId: string; readonly name: string }[];
+};
+
+/**
+ * The SCHEDULE (trigger) card, as a conversation holds it (cinatra#2853).
+ *
+ * Plan (A) §2.2: "with a schedule card, 'make it 8 in the morning on weekdays
+ * and confirm'". Its own controls are Adjust and Confirm, and they are different
+ * in kind: Adjust RE-PROPOSES — it writes nothing and arms nothing — while
+ * Confirm is the act that creates the run. The card lends both, and the words
+ * gate only the second (`typed-decision-words.ts`).
+ *
+ * NOT THE SCHEDULER FORM. `schedule_form` above is the run page's own form,
+ * whose button stays the person's (§X, W5c). This is the card the conversation
+ * draws, which has a Confirm of its own.
+ */
+export type BoundScheduleProposal = {
+  readonly kind: "schedule_proposal";
+  /** The card's own ref — the proposal token, or the run-scoped schedule ref. */
+  readonly ref: string;
+  /** The run the card belongs to, where the ref names one. */
+  readonly runId: string | null;
+  /** What the card's rows are holding right now, in the card's own words. */
+  readonly summary: string;
+  /**
+   * Whether the card's token has EXPIRED (convergence round 2, finding 5).
+   *
+   * An expired proposal still draws a live floor — the plan keeps it visible and
+   * still editable — so it resolves like any other pending card. But its token
+   * is UNSPENDABLE, which is why the card's own Confirm on an expired card is
+   * not a bare confirm at all: it re-proposes the rows the reader is looking at
+   * and confirms the replacement. The typed road cannot do that in one act (see
+   * the schedule arm of the handler), so an expired card lends ADJUST ALONE and
+   * a typed "confirm" on one is refused before anything is spent, rather than
+   * spending the message's one press on a token that could never land.
+   */
+  readonly expired: boolean;
+};
+
 /** Everything else. One shape, no reason. */
 export type BoundReferenceAbsent = { readonly kind: "absent" };
 
@@ -231,9 +291,26 @@ export type BoundReferenceResolution =
   | BoundScheduleForm
   | BoundArmedScheduleForm
   | BoundReview
+  | BoundRecommendationHold
+  | BoundScheduleProposal
   | BoundReferenceAbsent;
 
 const ABSENT: BoundReferenceAbsent = { kind: "absent" };
+
+/** What the skills-hold reader answers, as this module needs it. */
+type HoldStateRead = {
+  readonly state: string;
+  readonly agentPackageName?: string;
+  readonly holdRef?: string;
+  readonly canDecide?: boolean;
+  readonly recommendations?: readonly { readonly skillId: string; readonly name?: string }[];
+};
+
+/** What the schedule-card reader answers, as this module needs it. */
+type ScheduleCardRead = {
+  readonly state: { readonly state: string; readonly canDecide?: boolean };
+  readonly view: unknown;
+};
 
 /** The reads this resolver performs, injectable for test. */
 export type BoundReferencePorts = {
@@ -244,6 +321,32 @@ export type BoundReferencePorts = {
   readonly readPinnedTargets: typeof readGatePinnedTargets;
   readonly readParkedScreen: typeof readLatestDurableHitlGateArtifact;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
+  /**
+   * The skills hold, for one verified reader — the SAME read the chip row and
+   * the widget broker take (`resolveRecommendationHoldStateForActor`), which
+   * runs the run's own access door before it touches a park row.
+   */
+  readonly readRecommendationHold: (input: {
+    runId: string;
+    who: { actor: unknown; roleHints: unknown };
+  }) => Promise<HoldStateRead>;
+  /**
+   * The schedule card, for one verified reader — the SAME read every host's
+   * schedule card takes (`resolveTriggerScheduleProposalCard`), which answers
+   * `absent` for a token minted for anybody else.
+   */
+  readonly readScheduleProposal: (input: {
+    ref: string;
+    userId: string;
+    orgId: string;
+    access?: { actor: unknown; roles?: unknown };
+  }) => Promise<ScheduleCardRead>;
+  /**
+   * The skills hold's own ref codec. A PORT rather than a static import for the
+   * measured reason below: the module that owns the codec is a hub, and this one
+   * sits on four locked route graphs.
+   */
+  readonly decodeHoldRef: (ref: string) => Promise<{ runId: string; holdId: string } | null>;
   /** The settled card's own resolve — where `canSave` comes from, unmodified. */
   readonly readArmedSchedule: ResolveProposalForRun;
   /** The write guard's own sentence for a schedule that cannot be changed. */
@@ -252,6 +355,29 @@ export type BoundReferencePorts = {
     arming: boolean;
   }) => Promise<string>;
 };
+
+// LAZY, AND THAT IS A MEASUREMENT (the same one `lent-action-mcp.ts` records).
+// This module sits on the first-party graph of `/api/mcp`, `/api/a2a`,
+// `/api/llm-bridge` and `/chat`, all four of which carry LOCKED route-graph
+// budgets. The hold core and the schedule card each pull a large subtree for
+// code that runs only when a person's message is bound to that kind of card, so
+// both are deferred to the call. The specifiers are LITERAL — nothing here is a
+// variable-URL import — and both are READ paths: neither writes, so the
+// org-write perimeter is untouched either way.
+async function loadHoldRefCodec() {
+  const mod = await import("@cinatra-ai/agents/recommendation-hold");
+  return mod.decodeRecommendationHoldRef;
+}
+
+async function loadHoldReader() {
+  const mod = await import("@cinatra-ai/agents/run-recommendation-core");
+  return mod.resolveRecommendationHoldStateForActor;
+}
+
+async function loadScheduleCardReader() {
+  const mod = await import("@/lib/lifecycle/trigger-schedule-proposal-card");
+  return mod.resolveTriggerScheduleProposalCard;
+}
 
 const DEFAULT_PORTS: BoundReferencePorts = {
   enforceRunRead: async (runId, actorCtx) => {
@@ -266,6 +392,11 @@ const DEFAULT_PORTS: BoundReferencePorts = {
   readPinnedTargets: readGatePinnedTargets,
   readParkedScreen: readLatestDurableHitlGateArtifact,
   readRunTrigger: readRunTriggerByRunId,
+  readRecommendationHold: async (input) =>
+    (await loadHoldReader())(input as never) as unknown as HoldStateRead,
+  readScheduleProposal: async (input) =>
+    (await loadScheduleCardReader())(input as never) as unknown as ScheduleCardRead,
+  decodeHoldRef: async (ref) => (await loadHoldRefCodec())(ref),
   readArmedSchedule: async (...args) => (await loadArmedScheduleResolve())(...args),
   armedScheduleRefusal: async (input) => {
     const { refusalFor, noTrigger } = await loadArmedScheduleRefusal();
@@ -321,6 +452,60 @@ export async function resolveBoundReference(input: {
       runId: scheduleForm.runId,
       xRenderer: SCHEDULE_FORM_X_RENDERER,
       form: { schema: scheduleFormSchema(), values: scheduleFormValues(trigger) },
+    };
+  }
+
+  // THE SKILLS HOLD'S OWN REF (cinatra#2853) — another DISJOINT family, so the
+  // order is free here too and this is a decode with no read behind it.
+  const heldAt = await ports.decodeHoldRef(input.ref).catch(() => null);
+  if (heldAt) {
+    let held: HoldStateRead;
+    try {
+      // NO SEPARATE ACCESS CALL, deliberately: this reader IS the access door —
+      // it loads the run through `readAgentRunById(runId, actor, roleHints)` and
+      // answers `none` for a run the reader may not see, before any park row is
+      // touched. Adding a second check in front of it would be a second rule to
+      // keep in step with the card's own.
+      held = await ports.readRecommendationHold({
+        runId: heldAt.runId,
+        who: { actor: input.actorCtx.actor, roleHints: input.actorCtx.roleHints ?? {} },
+      });
+    } catch {
+      return ABSENT;
+    }
+    // ONLY A LIVE HOLD IS A CARD. A settled one draws a read-only summary with
+    // no controls, and "a card that offers no decision lends none".
+    if (held.state !== "held") return ABSENT;
+    // AND ONLY FOR A READER THE CARD ITSELF SAYS MAY DECIDE — required to be
+    // TRUE, never merely "not false" (convergence round 1, finding 5). A reader
+    // whose standing the card could not answer for is not a reader who may
+    // decide; every other arm of this module fails closed the same way.
+    if (held.canDecide !== true) return ABSENT;
+    // THE REF NAMES A HOLD INSTANCE, AND IT MUST BE THIS ONE (convergence round
+    // 1, finding 5). The reader answers the run's CURRENT hold, so a stale ref
+    // for a hold the run has moved past would otherwise resolve the hold that
+    // replaced it — and the grant, fingerprinted to the stale ref, would carry
+    // an authority over a card the person never saw. The two identities are
+    // compared here, and a mismatch is `absent` like everything else.
+    if (typeof held.holdRef !== "string" || held.holdRef.length === 0) return ABSENT;
+    const current = await ports.decodeHoldRef(held.holdRef).catch(() => null);
+    if (!current || current.holdId !== heldAt.holdId || current.runId !== heldAt.runId) {
+      return ABSENT;
+    }
+    // AND THE CARD MUST BE ABLE TO SAY WHAT IT IS OFFERING. A hold with no
+    // package and no offered set is not a card a typed keep/drop can address, so
+    // it lends nothing rather than lending a decision over an unknown set.
+    const offered = (held.recommendations ?? []).map((r) => ({
+      skillId: r.skillId,
+      name: r.name ?? r.skillId,
+    }));
+    if (!held.agentPackageName || offered.length === 0) return ABSENT;
+    return {
+      kind: "recommendation_hold",
+      runId: heldAt.runId,
+      holdRef: held.holdRef,
+      agentPackageName: held.agentPackageName,
+      offered,
     };
   }
 
@@ -404,7 +589,15 @@ export async function resolveBoundReference(input: {
   }
 
   const payload = decodeLifecycleGateRef(input.ref);
-  if (!payload) return ABSENT;
+  if (!payload) {
+    // THE SCHEDULE CARD IS LAST, and it is the only arm with no local decode:
+    // a conversation addresses that card by the PROPOSAL TOKEN, which only the
+    // service can open. So it runs once everything with a decodable family has
+    // been tried, and it discloses nothing — the reader-bound resolve answers
+    // `absent` for a token minted for anybody else, on the byte-identical path a
+    // forged one takes.
+    return await resolveScheduleProposal(input.ref, input.actorCtx, ports);
+  }
 
   // RUN READ FIRST — before any gate or screen row is touched. Reversing this
   // would let a ref-holder distinguish "no such gate" from "not yours".
@@ -466,6 +659,55 @@ export async function resolveBoundReference(input: {
 }
 
 /**
+ * The schedule card, for one reader (cinatra#2853).
+ *
+ * ONE READ, THE CARD'S OWN. `resolveTriggerScheduleProposalCard` is what every
+ * host's schedule card resolves through, and it takes both ref families — the
+ * proposal token a conversation holds and the run-scoped ref the run and review
+ * pages hold — so this arm covers the card wherever it is drawn.
+ *
+ * ONLY A LIVE FLOOR IS A CARD. `pending` is the state that draws Adjust and
+ * Confirm; `settled`, `restricted`, `advisory`, `loading` and `absent` draw no
+ * floor, and a card with no floor lends nothing.
+ */
+async function resolveScheduleProposal(
+  ref: string,
+  actorCtx: ReviewActorContext,
+  ports: BoundReferencePorts,
+): Promise<BoundReferenceResolution> {
+  const userId = actorCtx.actor?.userId ?? null;
+  const orgId = actorCtx.orgId ?? null;
+  if (!userId || !orgId) return ABSENT;
+  let card: ScheduleCardRead;
+  try {
+    card = await ports.readScheduleProposal({
+      ref,
+      userId,
+      orgId,
+      access: { actor: actorCtx.actor, roles: actorCtx.roleHints },
+    });
+  } catch {
+    return ABSENT;
+  }
+  if (card.state?.state !== "pending" || card.state.canDecide !== true) return ABSENT;
+  const view = card.view as {
+    runId?: string | null;
+    summary?: string;
+    phase?: string;
+  } | null;
+  return {
+    kind: "schedule_proposal",
+    ref,
+    runId: view?.runId ?? null,
+    summary: typeof view?.summary === "string" ? view.summary : "",
+    // The card's own word for it. Anything this reader cannot read as the live
+    // proposal phase is treated as expired, so an unreadable view narrows the
+    // lending rather than widening it.
+    expired: view?.phase !== "proposal",
+  };
+}
+
+/**
  * Which controls a resolved binding LENDS.
  *
  * "A card that offers no decision lends none" (plan §4) is this function. It is
@@ -482,6 +724,17 @@ export async function resolveBoundReference(input: {
  *     front of the person and presses nothing, so it consumes no grant; SUBMIT
  *     is the button under the form and takes the single-use grant, exactly as a
  *     review's Comment does;
+ *   · a SKILLS-RECOMMENDATION card lends its own two buttons — Confirm and Skip
+ *     (cinatra#2853). Keep and drop are not third and fourth buttons: they are
+ *     the kept set a Confirm carries, which is why the card lends two controls
+ *     and not four, and why "no card gains an action its controls do not already
+ *     have" survives this slice;
+ *   · a SCHEDULE CARD lends Adjust and Confirm (cinatra#2853). Adjust
+ *     RE-PROPOSES — it writes nothing and arms nothing — so it is this card's
+ *     own fill; Confirm is the act that creates the run. An EXPIRED card lends
+ *     ADJUST ALONE (convergence round 2, finding 5): its token cannot be spent,
+ *     so the card's own Confirm on one re-proposes and confirms the replacement,
+ *     which is two acts and not one — see `BoundScheduleProposal.expired`;
  *   · anything ABSENT lends nothing at all.
  */
 export function controlsLentBy(
@@ -490,6 +743,9 @@ export function controlsLentBy(
   if (resolution.kind === "review") return ["comment", "approve", "reject"];
   if (resolution.kind === "hitl_screen") return ["fill", "submit"];
   if (resolution.kind === "schedule_form") return ["fill"];
+  if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
+  if (resolution.kind === "schedule_proposal")
+    return resolution.expired ? ["adjust"] : ["adjust", "confirm"];
   // THE ARMED FORM LENDS BOTH, AND THE STATE IS ASKED AT THE ACT, NOT HERE
   // (cinatra#2934, the armed-trigger tab). What an armed scheduler form OFFERS
   // is a fill and the Save changes beside it; whether THIS one will accept a
@@ -509,11 +765,19 @@ export function controlsLentBy(
  * the screen lends but no grant ever names, because filling presses nothing.
  * Keeping the two vocabularies distinct is what stops a fill from ever being
  * spendable as a press.
+ *
+ * `confirm`, `skip` and `adjust` are the skills card's and the schedule card's
+ * OWN buttons (cinatra#2853). Each was added with the card that draws it, so
+ * this union stays what it says it is — the buttons the product's lifecycle
+ * cards actually have — and a control no card draws still cannot be named.
  */
 export type LentCardControl =
   | "comment"
   | "approve"
   | "reject"
   | "submit"
-  | "save"
-  | "fill";
+  | "fill"
+  | "confirm"
+  | "skip"
+  | "adjust"
+  | "save";

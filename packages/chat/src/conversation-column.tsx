@@ -78,8 +78,10 @@ import type {
 } from "@cinatra-ai/sdk-ui/widget";
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 import {
+  LifecycleCardSettleProvider,
   LifecycleComposerFocusProvider,
   type ComposerFocusStore,
+  type LifecycleCardSettleBus,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import type { ThemeName } from "./syntax-highlight";
 import {
@@ -172,6 +174,16 @@ export type ConversationHostAdapter = {
    * past it. Enabling it there is that slice's, not this one's.
    */
   composerFocus?: ComposerFocusStore;
+  /**
+   * The bus a decided card is announced on (cinatra#2853, the picture leg).
+   *
+   * Declared by the same hosts that declare a composer binding, and for the same
+   * reason: a typed decision is taken on the pair, so the card that was decided
+   * and the box the sentence was typed into must be under one provider. A host
+   * that declares none keeps the mount-and-focus resolve cadence its cards have
+   * always had.
+   */
+  cardSettle?: LifecycleCardSettleBus;
 };
 
 /**
@@ -471,12 +483,18 @@ export function ConversationColumn({
   // the pair. A host that declares no store gets the column verbatim, so its
   // cards see no provider, register nothing, and draw no focus affordance: the
   // same fail-closed shape as the lifecycle host declaration itself.
-  return host.composerFocus ? (
+  // THE SETTLE BUS WRAPS THE SAME PAIR, for the same reason (cinatra#2853).
+  const bound = host.composerFocus ? (
     <LifecycleComposerFocusProvider store={host.composerFocus}>
       {column}
     </LifecycleComposerFocusProvider>
   ) : (
     column
+  );
+  return host.cardSettle ? (
+    <LifecycleCardSettleProvider bus={host.cardSettle}>{bound}</LifecycleCardSettleProvider>
+  ) : (
+    bound
   );
 }
 

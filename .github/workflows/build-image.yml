@@ -3544,6 +3544,20 @@ jobs:
         shell: bash
         run: pnpm test:widget-schedule-grant
 
+      # cinatra#2853 — the typed schedule adjust's own real-DB tier, wired in the
+      # SAME change that adds it, for the reason the block above records: a root
+      # config that no workflow invokes runs NOWHERE, and
+      # `scripts/audit/ci-pinned-tests-exist.mjs` direction 4 holds exactly that.
+      # This tier drives the whole chain a typed schedule change travels — the
+      # send's one ledger row, the press that spends it, the re-proposal that
+      # mints a replacement ref, and the answer that carries that ref back to the
+      # page as an announcement rather than as a second card — so leaving it
+      # unrun would leave the defect it closes free to come back silently.
+      - name: Typed schedule adjust — real-DB tier (cinatra#2853)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:typed-schedule-adjust
+
       # cinatra#2936 (epic #2926 W6). Plan (B) section 6, Conformance, verbatim:
       # "The lifecycle-screens epic's own gates — the one-card gate, the
       # host-parity ratchet, the held-turn card contract — stay green through
