@@ -229,11 +229,28 @@ describe.each(["chat_thread", "site_widget"] as const)(
         container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
       ).toBeNull();
       expect(container.querySelector("[data-action]")).toBeNull();
-      // The pickers are gone; the values stay legible.
-      for (const control of Array.from(
-        container.querySelectorAll<HTMLInputElement>("input, select"),
-      )) {
-        expect(control.disabled || control.readOnly).toBe(true);
+      // THE PICKERS ARE GONE, and the assertion says GONE rather than
+      // "present but disabled" (a convergence finding). The loop this replaces
+      // accepted a drawn-and-disabled picker, and on this reading it iterated an
+      // empty set, so it asserted nothing at all. The drawing is literal — "the
+      // values still legible, the pickers gone" — so the reading is asserted as
+      // the absence of every picker element, which is what would break if the
+      // frozen card ever drew one.
+      const rows = container.querySelector(
+        '[data-conformance-id="schedule-option-rows"]',
+      );
+      expect(rows).not.toBeNull();
+      expect(rows!.querySelectorAll("input, select, textarea").length).toBe(0);
+      expect(rows!.querySelectorAll('[role="combobox"]').length).toBe(0);
+      // The rows themselves stay drawn and stay unpressable: the reading keeps
+      // all three, and not one of them takes a change.
+      expect(rows!.querySelectorAll("[data-schedule-option]").length).toBe(3);
+      const rowControls = Array.from(
+        rows!.querySelectorAll<HTMLButtonElement>("button"),
+      );
+      expect(rowControls.length).toBeGreaterThan(0);
+      for (const control of rowControls) {
+        expect(control.disabled).toBe(true);
       }
     });
   },
