@@ -124,8 +124,19 @@ export function reviewSettledCopy(
 }
 
 // ---------------------------------------------------------------------------
-// Renderer provenance (§III) — the surface shows HOW each target was rendered.
+// Renderer provenance (§V) — HOST-DERIVED, AND NOT PUT ON SCREEN.
 // The conformance anchor is derived from the OPAQUE mount kind, never a type id.
+//
+// §V verbatim: "The resolution is host-derived, never a claim the client or the
+// model can forge. It is not put on screen: a display shows the work and nothing
+// about itself — no renderer name, no package identity, no provenance line —
+// because the reader is deciding on the work, not on what drew it ... The one
+// that does speak on a surface is the floor, and only because a reader must be
+// told a render failed."
+//
+// So what follows names the READING a target is drawn as — which of §V's three
+// example readings the surface is showing — and NOT a strip of chrome. Two of
+// the three readings draw the work alone; only the floor draws a row.
 // ---------------------------------------------------------------------------
 
 export type ReviewProvenanceConformanceId =
@@ -133,15 +144,19 @@ export type ReviewProvenanceConformanceId =
   | "review-provenance-marketplace"
   | "review-target-floor";
 
-/** The design conformance id for a target's provenance region, from its host
- * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
- * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). `null` means the target has NO provenance region — the strip is
- * not rendered at all.
+/** The design conformance id for the READING a target is drawn as, from its host
+ * mount kind: a build-time renderer → the native reading, a runtime (marketplace-
+ * installed) renderer → the marketplace reading, and any floor → the generic-floor
+ * reading (§V). `null` means the target is drawn as none of §V's three readings.
  *
- * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
- * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
- * the work, or that nothing did. The host's own rendering of a declared text
+ * NEITHER TIER READING IS A CHIP. §V draws the build-time and the runtime
+ * readings as the target's own card with the work inside it and nothing above
+ * it; the surface anchors them on the slot that holds that work. Only the floor
+ * reading draws a row, and only to say a render failed.
+ *
+ * THE FORM RUNG IS NONE OF THE THREE READINGS (cinatra#2931 W4, the answer of
+ * 2026-08-23). The three readings §V draws are the ones where a PACKAGE's
+ * renderer drew the work, or where nothing did. The host's own rendering of a declared text
  * form is neither: there is no package to name, and the work did render. Rather
  * than reuse a package tier that would name an extension that never ran, or
  * invent a fourth strip the drawing does not carry, the reviewer is shown the

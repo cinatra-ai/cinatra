@@ -154,4 +154,22 @@ describe("the artifact page — the second consumer of the same channel", () => 
     expect(body).toMatch(/buildArtifactContentProjection/);
     expect(body).toMatch(/createArtifactContentChannelServerPorts/);
   });
+
+  // THE FORM IS THE SUBSTRATE'S, NEVER THE PAGE'S CLAIM (lifecycle-c W9
+  // convergence). The serve resolver admits a row on `resource.kind = 'blob'`
+  // and does not constrain `representation.form`, so a page that hard-coded
+  // "file" on a successful resolution was inferring the form rather than
+  // reading it — and the channel's own rule is that it is told the substrate's
+  // form and never a caller claim. A blob-backed non-file representation would
+  // otherwise have been classified as text.
+  it("tells the channel the SUBSTRATE's recorded form, never a hard-coded file claim", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const page = readFileSync(path.resolve(__dirname, "..", "page.tsx"), "utf8");
+    const body = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(body).not.toMatch(/form:\s*resolved\s*\?\s*"file"/);
+    expect(body).toMatch(/form:\s*toRepresentationForm\(/);
+    // And the narrowing refuses anything outside the channel's closed set.
+    expect(body).toMatch(/form === "file" \|\| form === "connectorRef" \|\| form === "dashboard"/);
+  });
 });

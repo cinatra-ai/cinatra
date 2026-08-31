@@ -113,10 +113,16 @@ export function ReviewTargetPanel({
           The host-derived provenance itself is UNCHANGED and still recorded with
           the decision (`provenanceFromResolvedMount`); what changed is that the
           reviewer is no longer shown it. Only the floor still speaks, and only
-          to say a render failed. */}
+          to say a render failed.
+
+          The branch below has already narrowed to the floor reading, so its
+          anchor is written out rather than read back off the model's map: an id
+          that reaches the screen only through a mapping literal is one the
+          conformance suite cannot tell apart from an id that never reaches it
+          at all. */}
       {provenance !== null && provenance.kind === "floor" && provenanceConformanceId !== null ? (
         <div
-          data-conformance-id={provenanceConformanceId}
+          data-conformance-id="review-target-floor"
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
         >
           <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
@@ -129,8 +135,29 @@ export function ReviewTargetPanel({
       ) : null}
 
       {/* The representation slot — the type renderer mounts here, or the floor.
-          S6: the PINNED before/after pair follows as non-decisional visual context. */}
-      <div className="p-4" data-review-representation-slot="">
+          S6: the PINNED before/after pair follows as non-decisional visual context.
+
+          WHERE THE TWO RENDERER-TIER READINGS ARE ANCHORED. §V's three example
+          readings put their conformance id on the WHOLE TARGET, not on a strip:
+          "Example — build-time renderer" and "Example — runtime renderer
+          (marketplace-installed)" each draw the target's own bordered card with
+          the work inside it and NOTHING above it, and only "Example — the
+          generic floor (never blank)" draws a chip row. So the tier anchors
+          belong on the slot that holds the drawn work, and the floor anchor
+          stays on the row that speaks. Anchoring both tiers on the removed strip
+          would have left them unrendered while the conformance suite still read
+          them off the model's mapping literal and called them drawn. */}
+      <div
+        className="p-4"
+        data-review-representation-slot=""
+        data-conformance-id={
+          provenanceConformanceId === "review-provenance-marketplace"
+            ? "review-provenance-marketplace"
+            : provenanceConformanceId === "review-provenance-native"
+              ? "review-provenance-native"
+              : undefined
+        }
+      >
         <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>

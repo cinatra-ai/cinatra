@@ -36,14 +36,23 @@ import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store"
  * The READ CEILING for a text form's bytes.
  *
  * The channel's own text cap is 256 KiB, and everything above it is truncated
- * rather than refused — so this ceiling exists only to keep an accidental
- * multi-megabyte "text" revision from being pulled into memory whole just to
- * throw almost all of it away. It is deliberately far above any document a
- * person reads on a review card, and a revision over it reports the channel's
- * ordinary absence rather than a half-read prefix that would misreport its own
- * byte length.
+ * rather than refused — so this ceiling exists only to keep a "text" revision
+ * that is somehow larger than the platform ever admits from being pulled into
+ * memory whole just to throw almost all of it away. A revision over it reports
+ * the channel's ordinary absence rather than a half-read prefix that would
+ * misreport its own byte length.
+ *
+ * IT IS THE AUTHORING CEILING, NOT A SMALLER NUMBER, AND THAT IS THE WHOLE
+ * POINT. Authoring accepts content up to `MAX_AUTHORED_CONTENT_BYTES` (10 MiB,
+ * matching the upload route), so any ceiling BELOW that would take a post the
+ * platform itself accepted and answer "absent" for it — the exact wrong display
+ * this wiring exists to remove, reappearing on the largest documents instead of
+ * on all of them. A reader whose 9 MiB draft is on disk must be shown its
+ * truncated first 256 KiB, never told there is nothing there. The constant is
+ * restated rather than imported because the authoring module is not on this
+ * read's import road; a test pins the two to each other so they cannot drift.
  */
-export const MAX_TEXT_READ_BYTES = 8 * 1024 * 1024;
+export const MAX_TEXT_READ_BYTES = 10 * 1024 * 1024;
 
 /** Where one pinned FILE revision's bytes actually live, as the caller's own
  *  member resolution already established. */

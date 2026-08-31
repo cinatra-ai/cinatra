@@ -43,7 +43,10 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
-import { buildArtifactContentProjection } from "@/lib/artifacts/artifact-content-channel";
+import {
+  buildArtifactContentProjection,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
 import { createArtifactContentChannelServerPorts } from "@/lib/artifacts/artifact-content-channel-server";
 import {
   buildArtifactRendererProps,
@@ -77,6 +80,13 @@ type PageProps = {
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
+
+/** Narrow the substrate's recorded form to the closed set the content channel
+ *  admits. An unrecognised value is NOT coerced to a form: it reaches the
+ *  channel as `null`, which is the channel's own named absence. */
+function toRepresentationForm(form: string | null): ArtifactRepresentationForm | null {
+  return form === "file" || form === "connectorRef" || form === "dashboard" ? form : null;
+}
 
 export default async function ArtifactDetailPage({ params, searchParams }: PageProps) {
   const { id } = await params;
@@ -146,15 +156,20 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // "The post's display shows the post — its rendered markdown".
   //
   // The read is the resolver's own result, never a second resolution: `resolved`
-  // above is what this page already authorized for its byte links, and a `file`
-  // form is what that resolver resolves. A revision it could not resolve carries
-  // no form, and the channel answers with its named absence, unchanged.
+  // above is what this page already authorized for its byte links. THE FORM IS
+  // THE SUBSTRATE'S OWN, not this page's inference: the serve resolver admits a
+  // row on `resource.kind = 'blob'` without constraining `representation.form`,
+  // so claiming "file" here would have let a non-file representation that
+  // happens to be blob-backed be classified as text — a caller claim, which is
+  // exactly what the channel says it must never be told. A revision it could not
+  // resolve, or one the substrate recorded no form for, carries no form, and the
+  // channel answers with its named absence, unchanged.
   const content = await buildArtifactContentProjection(
     {
       orgId,
       artifactId: id,
       representationRevisionId: revisionId ?? null,
-      form: resolved ? "file" : null,
+      form: toRepresentationForm(resolved?.form ?? null),
       mime: resolved ? mime : null,
     },
     createArtifactContentChannelServerPorts({

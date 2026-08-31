@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { MAX_AUTHORED_CONTENT_BYTES } from "@/lib/artifacts/artifact-authoring";
 import { buildArtifactContentProjection } from "@/lib/artifacts/artifact-content-channel";
 import {
   createArtifactContentChannelServerPorts,
@@ -156,6 +157,57 @@ describe("the content channel's server read — a file-form text/markdown revisi
         contentClass: "configuration",
       }),
     ).resolves.toBeNull();
+  });
+
+  // THE CEILING MAY NOT BE SMALLER THAN WHAT THE PLATFORM ACCEPTS (lifecycle-c
+  // W9 convergence). A read ceiling below the authoring ceiling would take a
+  // post the platform itself admitted and answer "absent" for it — the very
+  // wrong display this wiring exists to remove, reappearing on the largest
+  // drafts instead of on all of them. §I.3 verbatim: "what that display renders
+  // is the post itself: its title and its body text" — with no size clause.
+  it("never refuses a post the platform itself accepts: the read ceiling covers the authoring ceiling", () => {
+    expect(MAX_TEXT_READ_BYTES).toBeGreaterThanOrEqual(MAX_AUTHORED_CONTENT_BYTES);
+  });
+
+  it("admits a revision recorded just under the authoring ceiling, and projects its text", async () => {
+    // The RECORDED size is what the ceiling gate reads, so this proves the gate
+    // admits a 9 MiB draft without the test having to allocate one.
+    const bytes = Buffer.from(POST, "utf8");
+    const projection = await project(
+      createArtifactContentChannelServerPorts({
+        orgId: ORG,
+        locateFile: () => ({ storageKey: "k", sizeBytes: 9 * 1024 * 1024 }),
+        openBlob: opener(bytes),
+      }),
+    );
+    expect(projection.kind).toBe("text");
+  });
+
+  // A CALLER MAY NOT TALK A NON-FILE REVISION INTO THE TEXT PROJECTION. The
+  // channel is told the SUBSTRATE's form, and a dashboard revision resolves to
+  // the configuration class whatever its mime says — this port does not serve
+  // that class, so the answer is the named absence it already was, never text.
+  it("refuses to read bytes for a NON-file substrate form carrying a text mime", async () => {
+    let opened = false;
+    const projection = await buildArtifactContentProjection(
+      {
+        orgId: ORG,
+        artifactId: ARTIFACT,
+        representationRevisionId: REVISION,
+        form: "dashboard",
+        mime: "text/markdown",
+      },
+      createArtifactContentChannelServerPorts({
+        orgId: ORG,
+        locateFile: () => ({ storageKey: "k", sizeBytes: 10 }),
+        openBlob: async () => {
+          opened = true;
+          throw new Error("must not be opened");
+        },
+      }),
+    );
+    expect(opened).toBe(false);
+    expect(projection.kind).not.toBe("text");
   });
 
   it("still reports a NON-text file form as unsupported, not as text", async () => {

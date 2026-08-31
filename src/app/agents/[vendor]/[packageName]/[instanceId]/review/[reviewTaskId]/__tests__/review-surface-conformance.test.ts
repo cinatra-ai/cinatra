@@ -217,6 +217,27 @@ describe(`§I–VI — spec→render: every ${SPEC_COMMIT} conformance anchor is
       expect(anchorCorpus.some((s) => s.includes(id))).toBe(true);
     });
   }
+
+  // THE MAPPING LITERAL IS NOT A RENDERING (lifecycle-c W9, cinatra#3033).
+  // The check above accepts an anchor that appears only in the model's mapping
+  // literal, and §V's two renderer-tier readings were reachable ONLY that way
+  // once the provenance strip they used to hang on stopped being drawn: the
+  // model still named them, the surface never emitted them, and the suite
+  // called them rendered. §V's own readings are targets, not strips — "Example
+  // — build-time renderer" and "Example — runtime renderer
+  // (marketplace-installed)" each draw the work alone — so the surface itself
+  // must carry all three, and this pins that it does.
+  for (const id of [
+    "review-provenance-native",
+    "review-provenance-marketplace",
+    "review-target-floor",
+  ]) {
+    it(`emits the "${id}" reading from the SURFACE, not only from the model's map`, () => {
+      expect(SPEC_IDS).toContain(id);
+      const panel = stripComments(TARGET_PANEL);
+      expect(panel).toContain(`"${id}"`);
+    });
+  }
 });
 
 describe("§I–VI — render→spec: the route invents no anchor outside the closed spec set", () => {
