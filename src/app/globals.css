@@ -825,11 +825,19 @@ body {
    FOUR ATTRIBUTE SELECTORS AGAINST THE LIBRARY'S THREE. Both stylesheets are
    unlayered, and the library injects its own at run time, so this rule wins on
    specificity rather than on which of the two the browser happens to see first.
-   GEOMETRY ONLY. Every colour stays the library's, so the close control keeps
-   the status colour the rest of the toast is drawn in. The toast is a flex row
-   whose action carries the automatic margin that pushes the pair right; ordering
-   the close control after it is what puts the two together at the end of the
-   row, in the reading direction, with no physical left or right named here. */
+   GEOMETRY ONLY. Not one colour is written here: the close control keeps
+   whatever the library paints it, in every theme and in every status, so this
+   rule cannot make a toast look wrong in a theme it was never measured in.
+   AND EVERY TOAST, NOT ONLY THE ONE WITH AN ACTION. The toast is a flex row.
+   Where there IS an action the library gives it an automatic margin that pushes
+   it to the end of the row, and ordering the close control after it puts the
+   two together there. Where there is NO action — most toasts in the
+   application — that margin does not exist, and a close control taken out of
+   the corner would have come to rest against the text. So the toast's own text
+   is what takes up the slack instead: it grows to fill the row, and the
+   controls sit at the end of it whether there are two of them or one. Flow
+   order and a growing box carry no physical left or right, so the pair follows
+   the reading direction on its own. */
 [data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] {
   position: static;
   transform: none;
@@ -838,6 +846,11 @@ body {
   width: 24px;
   border-radius: 0.25rem;
   flex-shrink: 0;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-content] {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 ::selection {
