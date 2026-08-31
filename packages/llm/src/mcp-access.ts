@@ -712,9 +712,15 @@ export async function buildLlmMcpServerToolForAgentRun(
  */
 export async function buildA2aBearerToken(provider: LlmProvider = "openai"): Promise<string | null> {
   // When A2A_DEV_BYPASS is set, skip the OAuth exchange entirely.
-  // The receiving endpoints (verifyA2AAccessToken, verifyLangGraphBridgeToken) bypass
-  // JWT validation for localhost/host.docker.internal requests when this flag is active,
-  // so any non-empty sentinel value is accepted.
+  //
+  // WHAT THE RECEIVER NOW ASKS FOR. The receiving endpoints
+  // (verifyA2AAccessToken, verifyLangGraphBridgeToken) no longer decide "local"
+  // from the Host header. They ask src/lib/local-caller-gate.ts: a loopback
+  // SOCKET peer, no forwarded header from the caller, and this boot's local
+  // credential. A sentinel value is accepted only for a caller that clears
+  // those fences, so a dispatch that leaves this machine — a container talking
+  // to the host, which the old host.docker.internal spelling admitted — must
+  // use a real client_credentials grant instead of this flag.
   if (process.env.A2A_DEV_BYPASS === "true") {
     return "dev-bypass";
   }
