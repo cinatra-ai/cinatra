@@ -43,10 +43,12 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
+import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import { buildArtifactContentProjection } from "@/lib/artifacts/artifact-content-channel";
 import {
-  absentArtifactContent,
-  buildArtifactRendererProps,
-} from "@/lib/artifacts/artifact-renderer-props";
+  createArtifactContentChannelServerPorts,
+  type PinnedFileBytesLocation,
+} from "@/lib/artifacts/artifact-content-channel-server";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -121,6 +123,16 @@ export function bindArtifactReviewPorts(ctx: {
    * The file arm is tried first and stays byte-identical: nothing about a
    * file-backed review moved.
    */
+  // WHERE THE AUTHORIZED BYTES ARE (lifecycle-c W9, cinatra#3033). The member
+  // resolution above is the ONLY place this binder decides which pinned
+  // revision's bytes a reader may see — live for the ordinary reading, tombstone
+  // tolerant only for the gate-authorized settled one. So the storage location
+  // it resolved is recorded HERE and read back by `buildProps`, rather than
+  // re-resolved there: a second resolver call would have to guess the
+  // live/historical arm all over again, and guessing wrong is precisely how a
+  // read surface widens without anyone noticing.
+  const authorizedFileBytes = new Map<string, PinnedFileBytesLocation>();
+
   const memberFor = (
     artifactId: string,
     representationRevisionId: string,
@@ -132,7 +144,13 @@ export function bindArtifactReviewPorts(ctx: {
       representationRevisionId,
       liveOnly,
     });
-    if (file) return { mime: file.mime, form: "file" };
+    if (file) {
+      authorizedFileBytes.set(representationRevisionId, {
+        storageKey: file.storageKey,
+        sizeBytes: file.sizeBytes,
+      });
+      return { mime: file.mime, form: "file" };
+    }
     const nonFile = resolveNonFileArtifactRevision({
       orgId,
       artifactId,
@@ -261,7 +279,7 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
-  const buildProps = (input: {
+  const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
@@ -292,11 +310,32 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
-      // wired to it yet — "each a contract defined here and wired for its
-      // consumers in the sibling plan" — so it says so, by name, instead of
-      // letting an absent projection read as a wired one that found nothing.
-      content: absentArtifactContent(representationRevisionId),
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), NOW WIRED (lifecycle-c
+      // W9, cinatra#3033). The ratified drawing, §I.3 verbatim: "what that
+      // display renders is the post itself: its title and its body text." This
+      // consumer passed `absentArtifactContent(...)` by construction, so a
+      // run-produced post whose markdown was on disk reached its display as a
+      // named absence and drew a content-absent floor over the work the reviewer
+      // was deciding on. The class resolution, the read and the cap all stay
+      // where they already were: the channel decides what is a text form, the
+      // server port reads only the bytes the member resolution above authorized,
+      // and the channel alone applies the cap.
+      content: await buildArtifactContentProjection(
+        {
+          orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId,
+          // "An absent form reads as file" — the core's own rule, applied here
+          // rather than re-decided: the channel must be told the substrate's
+          // form, never a caller claim.
+          form: input.member.form ?? "file",
+          mime,
+        },
+        createArtifactContentChannelServerPorts({
+          orgId,
+          locateFile: (revisionId) => authorizedFileBytes.get(revisionId) ?? null,
+        }),
+      ),
     });
   };
 

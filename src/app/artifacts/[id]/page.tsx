@@ -43,8 +43,9 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { buildArtifactContentProjection } from "@/lib/artifacts/artifact-content-channel";
+import { createArtifactContentChannelServerPorts } from "@/lib/artifacts/artifact-content-channel-server";
 import {
-  absentArtifactContent,
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 
@@ -136,6 +137,32 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     : null;
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
+
+  // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), NOW WIRED ON THIS CONSUMER
+  // TOO (lifecycle-c W9, cinatra#3033). This page passed
+  // `absentArtifactContent(...)` by construction, so the post's OWN page drew
+  // the content-absent floor over a stored draft exactly as the review card did
+  // — the same defect, on the surface the issue's second acceptance item names:
+  // "The post's display shows the post — its rendered markdown".
+  //
+  // The read is the resolver's own result, never a second resolution: `resolved`
+  // above is what this page already authorized for its byte links, and a `file`
+  // form is what that resolver resolves. A revision it could not resolve carries
+  // no form, and the channel answers with its named absence, unchanged.
+  const content = await buildArtifactContentProjection(
+    {
+      orgId,
+      artifactId: id,
+      representationRevisionId: revisionId ?? null,
+      form: resolved ? "file" : null,
+      mime: resolved ? mime : null,
+    },
+    createArtifactContentChannelServerPorts({
+      orgId,
+      locateFile: () =>
+        resolved ? { storageKey: resolved.storageKey, sizeBytes: resolved.sizeBytes } : null,
+    }),
+  );
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
@@ -192,7 +219,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     // wired to it yet — "each a contract defined here and wired for its
     // consumers in the sibling plan" — so it says so, by name, instead of
     // letting an absent projection read as a wired one that found nothing.
-    content: absentArtifactContent(revisionId ?? null),
+    content,
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.

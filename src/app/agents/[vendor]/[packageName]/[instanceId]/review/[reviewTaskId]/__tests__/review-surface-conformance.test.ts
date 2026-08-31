@@ -288,9 +288,38 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
-  it("a runtime provenance additionally shows its package identity (§III)", () => {
-    expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
-    expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
+  // THE DRAWING MOVED, AND THIS ASSERTION FOLLOWS IT (lifecycle-c W9,
+  // cinatra#3033). Pinned at design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f the
+  // section read, verbatim: "Each target says how it was rendered ... a
+  // build-time renderer (one the defining extension ships in the build) carries
+  // the extension's indigo chip; a runtime renderer (one loaded from a
+  // marketplace-installed extension) carries the same chip plus its package
+  // identity". At the CURRENT ratified drawing the same section reads, verbatim:
+  // "It is not put on screen: a display shows the work and nothing about itself
+  // - no renderer name, no package identity, no provenance line - because the
+  // reader is deciding on the work, not on what drew it", and: "a build-time
+  // renderer and a runtime one are drawn the same way, because nothing on either
+  // target says which resolved it - only the caption, written for the reader of
+  // this page, names the tier. The one that does speak on a surface is the
+  // floor, and only because a reader must be told a render failed." The markdown
+  // display's own section repeats it: "no renderer chip and no provenance line,
+  // here or on any other surface this display is drawn".
+  //
+  // So the two renderer tiers draw NO region at all, and only the floor speaks.
+  // The conformance MAP is untouched - the tier a target resolved through is
+  // still host-derived and still named - what changes is that the resolution is
+  // no longer put on screen.
+  it("NEITHER renderer tier puts its provenance on screen - no chip, no package identity", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+    expect(panel).not.toMatch(/build-time · |runtime · /);
+  });
+
+  it("only the FLOOR speaks on the surface, because a reader must be told a render failed", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/provenance\.kind === "floor"/);
+    expect(panel).toMatch(/Floor/);
+    expect(panel).toMatch(/structured data/);
   });
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {

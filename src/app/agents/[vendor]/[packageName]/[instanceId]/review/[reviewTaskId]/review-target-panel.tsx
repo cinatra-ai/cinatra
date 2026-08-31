@@ -19,7 +19,7 @@ import {
  * ONE review target panel (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
- * the RENDERER-PROVENANCE chip, over the REPRESENTATION SLOT into which the
+ * the REPRESENTATION SLOT into which the
  * artifact's type renderer mounts (fed host display-only props). Every target is
  * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
  *
@@ -93,34 +93,37 @@ export function ReviewTargetPanel({
         </p>
       </div>
 
-      {/* §III — renderer provenance chip. NOTHING is drawn above the reviewed
-          work when the host itself rendered a declared text form: that target
-          has no provenance region at all (cinatra#2931 W4). */}
-      {provenanceConformanceId !== null && provenance !== null ? (
+      {/* §V of the ratified drawing — THE RESOLUTION IS NOT PUT ON SCREEN.
+          Verbatim: "It is not put on screen: a display shows the work and
+          nothing about itself — no renderer name, no package identity, no
+          provenance line — because the reader is deciding on the work, not on
+          what drew it", and: "a build-time renderer and a runtime one are drawn
+          the same way, because nothing on either target says which resolved it
+          ... The one that does speak on a surface is the floor, and only because
+          a reader must be told a render failed."
+
+          An earlier ratified reading of this same section said the opposite —
+          "a build-time renderer ... carries the extension's indigo chip; a
+          runtime renderer ... carries the same chip plus its package identity"
+          — and this panel was built to it. The drawing has since replaced that
+          paragraph, and the markdown display's own section repeats the current
+          rule for every surface it is drawn on: "no renderer chip and no
+          provenance line, here or on any other surface this display is drawn".
+
+          The host-derived provenance itself is UNCHANGED and still recorded with
+          the decision (`provenanceFromResolvedMount`); what changed is that the
+          reviewer is no longer shown it. Only the floor still speaks, and only
+          to say a render failed. */}
+      {provenance !== null && provenance.kind === "floor" && provenanceConformanceId !== null ? (
         <div
           data-conformance-id={provenanceConformanceId}
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
         >
-          {provenance.kind === "floor" ? (
-            <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
-              Floor
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
-              {typeLabel}
-            </span>
-          )}
-          {provenance.kind === "runtime" && provenance.packageName ? (
-            <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
-              {provenance.packageName}
-            </span>
-          ) : null}
+          <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
+            Floor
+          </span>
           <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
-            {provenance.kind === "build-time"
-              ? `build-time · ${provenance.slot}`
-              : provenance.kind === "runtime"
-                ? `runtime · ${provenance.slot}`
-                : "structured data"}
+            structured data
           </span>
         </div>
       ) : null}
