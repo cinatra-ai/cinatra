@@ -103,3 +103,39 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     expect(resolveUiClosure(VENDOR_MANIFEST[0].uiItems)).toEqual(["button"]);
   });
 });
+
+// Every vendored file is copied byte-for-byte into ~20 extension repositories,
+// so the vendoring SOURCES are a shared, cross-repository surface: an addition
+// to src/lib/utils.ts is an addition to every one of those repositories, and
+// until each has re-vendored, the provenance gate is red for all of them.
+// src/lib/utils.ts is the registry `utils` item — `cn` and the small pure
+// string/number helpers around it. Browser-shell geometry (the app header band,
+// the impersonation banner custom property) is NOT that: it belongs to a module
+// the vendoring channel never copies. This case pins the boundary so such a
+// helper cannot be parked in the vendored lib again.
+describe("the vendored lib source stays free of app-shell geometry", () => {
+  const VENDORED_LIB = "src/lib/utils.ts";
+
+  it("src/lib/utils.ts reads no document and no shell custom property", () => {
+    const source = readFileSync(join(REPO_ROOT, VENDORED_LIB), "utf8");
+    expect(source, `${VENDORED_LIB} must not touch the DOM`).not.toMatch(
+      /\bdocument\b|getComputedStyle/,
+    );
+    expect(source, `${VENDORED_LIB} must not read a shell custom property`).not.toContain(
+      "--banner-height",
+    );
+  });
+
+  it("the overlay collision bound lives outside the vendored lib", () => {
+    const source = readFileSync(join(REPO_ROOT, VENDORED_LIB), "utf8");
+    expect(source).not.toContain("overlayCollisionPadding");
+    const bound = readFileSync(join(REPO_ROOT, "src/lib/overlay-collision.ts"), "utf8");
+    expect(bound).toContain("export function overlayCollisionPadding");
+  });
+
+  it("no planned vendored file is the overlay-collision module", () => {
+    for (const file of plannedFiles()) {
+      expect(file.source).not.toContain("overlay-collision");
+    }
+  });
+});

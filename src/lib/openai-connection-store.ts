@@ -71,6 +71,28 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/** The route entries that render this row. */
+const CONNECTION_ROUTES = [
+  "/agents",
+  "/configuration/llm",
+  "/configuration/llm/initial-setup",
+  "/configuration/apps",
+  "/configuration/apps/openai",
+];
+
+/**
+ * Drop the router-cache entries that mirror the row this write just changed.
+ *
+ * `revalidatePath` REQUIRES a request/work store and throws without one, so a
+ * caller that runs OUTSIDE a request (the boot-time provider bootstrap) passes
+ * `revalidateRoutes: false` rather than having this module guess. The request
+ * path keeps its ERROR SEMANTICS EXACTLY: a revalidation failure inside a
+ * request still propagates, because it is a real failure there.
+ */
+function revalidateConnectionRoutes(routes: string[]): void {
+  for (const route of routes) revalidatePath(route);
+}
+
 /**
  * Invalidate any in-process caches that mirror the `openai_connection` row.
  *
@@ -211,6 +233,15 @@ export async function updateOpenAIConnection(input: {
   loggingEnabled?: boolean;
   promptCachingEnabled?: boolean;
   availableModels?: string[];
+}, options?: {
+  /**
+   * Drop the router-cache entries for the routes that render this row.
+   * Defaults to TRUE — every request-time caller, the wizard included, is
+   * byte-unchanged. Only a caller with NO request (the boot-time bootstrap)
+   * passes false: there is no rendered route cache before the first request,
+   * and `revalidatePath` throws rather than no-opping outside one.
+   */
+  revalidateRoutes?: boolean;
 }): Promise<void> {
   mutateOpenAIConnection((current) => ({
     ...current,
@@ -229,11 +260,7 @@ export async function updateOpenAIConnection(input: {
     availableModels: input.availableModels ?? current.availableModels ?? [],
     lastValidatedAt: nowIso(),
   }));
-  revalidatePath("/agents");
-  revalidatePath("/configuration/llm");
-  revalidatePath("/configuration/llm/initial-setup");
-  revalidatePath("/configuration/apps");
-  revalidatePath("/configuration/apps/openai");
+  if (options?.revalidateRoutes !== false) revalidateConnectionRoutes(CONNECTION_ROUTES);
 }
 
 export async function clearOpenAIConnection(): Promise<void> {
@@ -249,11 +276,7 @@ export async function clearOpenAIConnection(): Promise<void> {
     }),
     { clearSecret: true },
   );
-  revalidatePath("/agents");
-  revalidatePath("/configuration/llm");
-  revalidatePath("/configuration/llm/initial-setup");
-  revalidatePath("/configuration/apps");
-  revalidatePath("/configuration/apps/openai");
+  revalidateConnectionRoutes(CONNECTION_ROUTES);
 }
 
 /**
@@ -282,8 +305,7 @@ export async function updateOpenAILoggingEnabled(loggingEnabled: boolean): Promi
     availableModels: current.availableModels ?? [],
     lastValidatedAt: current.lastValidatedAt,
   }));
-  revalidatePath("/configuration");
-  revalidatePath("/configuration/development");
+  revalidateConnectionRoutes(["/configuration", "/configuration/development"]);
 }
 
 export async function updateOpenAIPromptCaching(enabled: boolean): Promise<void> {
@@ -298,5 +320,5 @@ export async function updateOpenAIPromptCaching(enabled: boolean): Promise<void>
     availableModels: current.availableModels ?? [],
     lastValidatedAt: current.lastValidatedAt,
   }));
-  revalidatePath("/configuration/llm");
+  revalidateConnectionRoutes(["/configuration/llm"]);
 }

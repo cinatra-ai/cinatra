@@ -163,11 +163,20 @@ describe("selectRequiredArtifactUploadCandidates", () => {
 
 // ---------------------------------------------------------------------------
 // Full required-base roster after the MIME-base expansion (epic #1883 A1): the
-// existing five (image/pdf/audio/video/chart) + the four new bases (zip / text /
-// document / json). This matrix proves the roster is MUTUALLY DISJOINT under the
-// core matcher (exactly-one-or-refuse) — every declared MIME resolves to exactly
-// its own base, and the two known container/suffix traps (docx-as-zip, json vs
-// the chart `+json` type) do NOT collide.
+// existing five (image/pdf/audio/video/chart) + the four bases of that expansion
+// (zip / text / document / json) + THE TWO BASES OF ITEM 0.19 (markdown and
+// binary). This matrix proves the roster is MUTUALLY DISJOINT under the core
+// matcher (exactly-one-or-refuse) — every declared MIME resolves to exactly its
+// own base, and the two known container/suffix traps (docx-as-zip, json vs the
+// chart `+json` type) do NOT collide.
+//
+// Item 0.19 moved two forms in this fixture: `text/markdown` left the text base
+// for the markdown base ("the text base gives markdown up in the same re-pin"),
+// and `application/octet-stream` stopped being an unmapped form — it is the
+// binary base's declared form, whose display is the download card. The live-tree
+// suite (markdown-base-resolution.test.ts) proves the same two facts against the
+// PINNED extensions; this fixture keeps the roster's disjointness property
+// honest about the same contract.
 // ---------------------------------------------------------------------------
 const FULL_ROSTER: UploadArtifactTypeCandidate[] = [
   { objectTypeId: "@cinatra-ai/image-artifact:artifact", acceptMimes: ["image/*"] },
@@ -176,7 +185,9 @@ const FULL_ROSTER: UploadArtifactTypeCandidate[] = [
   { objectTypeId: "@cinatra-ai/video-artifact:artifact", acceptMimes: ["video/*"] },
   { objectTypeId: "@cinatra-ai/chart-artifact:artifact", acceptMimes: ["application/vnd.cinatra.chart+json"] },
   { objectTypeId: "@cinatra-ai/zip-artifact:artifact", acceptMimes: ["application/zip", "application/x-zip-compressed"] },
-  { objectTypeId: "@cinatra-ai/text-artifact:artifact", acceptMimes: ["text/plain", "text/markdown", "text/csv"] },
+  { objectTypeId: "@cinatra-ai/text-artifact:artifact", acceptMimes: ["text/plain", "text/csv"] },
+  { objectTypeId: "@cinatra-ai/markdown-artifact:artifact", acceptMimes: ["text/markdown"] },
+  { objectTypeId: "@cinatra-ai/binary-artifact:artifact", acceptMimes: ["application/octet-stream"] },
   {
     objectTypeId: "@cinatra-ai/document-artifact:artifact",
     acceptMimes: [
@@ -199,7 +210,8 @@ describe("required-base roster — exactly-one-or-refuse over the expanded set (
     ["application/zip", "@cinatra-ai/zip-artifact:artifact"],
     ["application/x-zip-compressed", "@cinatra-ai/zip-artifact:artifact"],
     ["text/plain", "@cinatra-ai/text-artifact:artifact"],
-    ["text/markdown", "@cinatra-ai/text-artifact:artifact"],
+    ["text/markdown", "@cinatra-ai/markdown-artifact:artifact"],
+    ["application/octet-stream", "@cinatra-ai/binary-artifact:artifact"],
     ["text/csv", "@cinatra-ai/text-artifact:artifact"],
     [
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -254,7 +266,10 @@ describe("required-base roster — exactly-one-or-refuse over the expanded set (
   });
 
   it("still REFUSES an unmapped MIME after the expansion (no floor)", () => {
-    for (const miss of ["application/octet-stream", "font/woff2", "text/html", "application/x-tar"]) {
+    // `application/octet-stream` is NO LONGER a miss: it is the binary base's
+    // declared form (item 0.19). The refusal property is proved on the forms
+    // that still belong to no base.
+    for (const miss of ["font/woff2", "text/html", "application/x-tar"]) {
       const r = resolveUploadArtifactTypeFromCandidates(miss, FULL_ROSTER);
       expect(r.ok, miss).toBe(false);
     }

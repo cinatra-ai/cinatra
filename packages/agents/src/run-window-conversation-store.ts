@@ -138,7 +138,37 @@ export type RunWindowMessage = {
    * is not a fill.
    */
   placedBy: string | null;
+  /**
+   * THIS ROW RECORDS A SAVE CONSUMING PLACEMENTS (cinatra#2934, the FOURTH
+   * graded capture). It is not a message, not a fill and not a bubble — it is
+   * the receipt that says which placed rows a save has already committed.
+   *
+   * WHY IT EXISTS. "Not already saved" used to be a comparison of two
+   * timestamps: the fill row's `created_at`, stamped by the DATABASE, against
+   * the trigger row's `updated_at`, stamped by the NODE process that wrote it.
+   * Those are two different clocks, and where they disagree in the wrong
+   * direction a placement the save has just committed reads as newer than the
+   * write that committed it — so the next bare ask applies it a second time,
+   * over rows that have moved on. The third fix leg recorded that as a
+   * residual; this closes it.
+   *
+   * IT IS AN IDENTITY, NOT A MOMENT. A save names the rows it consumed, and a
+   * consumed row is never carried again whatever any clock says. The timestamp
+   * boundary stays beside it as what it always honestly was — an abandonment
+   * cut-off, so a placement walked away from weeks ago is not resurrected.
+   *
+   * APPEND-ONLY, like every other row here: nothing in this module updates or
+   * deletes a row that already exists, and this receipt is a new row rather
+   * than a flag written back onto the placement.
+   */
+  savedPlacement: RunWindowSavedPlacement | null;
   createdAt: Date;
+};
+
+/** One save's receipt: the form it saved, and the placement rows it consumed. */
+export type RunWindowSavedPlacement = {
+  ref: string;
+  sequences: number[];
 };
 
 /**
@@ -170,6 +200,7 @@ type RunWindowMessageBody = {
   attachments?: readonly RunWindowAttachment[] | null;
   messageId?: string | null;
   placedBy?: string | null;
+  savedPlacement?: RunWindowSavedPlacement | null;
 };
 
 /**
@@ -208,6 +239,8 @@ export async function appendRunWindowMessage(input: {
   messageId?: string | null;
   /** Who placed the fill, when this row is one (cinatra#2934). */
   placedBy?: string | null;
+  /** The placements a save consumed, when this row is that receipt (cinatra#2934). */
+  savedPlacement?: RunWindowSavedPlacement | null;
 }): Promise<RunWindowMessage> {
   // The SURFACE is checked here rather than trusted from the type: a server
   // action's payload is whatever reached the process, and TypeScript checks
@@ -230,6 +263,7 @@ export async function appendRunWindowMessage(input: {
       : {}),
     ...(input.messageId ? { messageId: input.messageId } : {}),
     ...(input.placedBy ? { placedBy: input.placedBy } : {}),
+    ...(input.savedPlacement ? { savedPlacement: input.savedPlacement } : {}),
   };
 
   let lastErr: unknown = null;
@@ -272,6 +306,7 @@ export async function appendRunWindowMessage(input: {
       attachments: body.attachments ?? null,
       messageId: body.messageId ?? null,
       placedBy: body.placedBy ?? null,
+      savedPlacement: body.savedPlacement ?? null,
       createdAt: new Date(),
     };
   }
@@ -331,6 +366,7 @@ export async function readRunWindowMessages(
       placedBy: typeof body.placedBy === "string" && body.placedBy.length > 0
         ? body.placedBy
         : null,
+      savedPlacement: readSavedPlacementBody(body.savedPlacement),
       createdAt: row.createdAt,
     });
   }
@@ -348,6 +384,16 @@ function readFillBody(value: unknown): RunWindowFill | null {
   if (typeof ref !== "string" || ref.length === 0) return null;
   if (!values || typeof values !== "object" || Array.isArray(values)) return null;
   return { ref, values: values as Record<string, unknown> };
+}
+
+/** A stored save receipt, read back defensively for the same reason as a fill. */
+function readSavedPlacementBody(value: unknown): RunWindowSavedPlacement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { ref, sequences } = value as { ref?: unknown; sequences?: unknown };
+  if (typeof ref !== "string" || ref.length === 0) return null;
+  if (!Array.isArray(sequences)) return null;
+  const clean = sequences.filter((n): n is number => typeof n === "number");
+  return clean.length > 0 ? { ref, sequences: clean } : null;
 }
 
 /** Stored attachment refs, read back defensively for the same reason. */
@@ -467,24 +513,33 @@ export async function readRunWindowPlacedFills(
      */
     readonly refMatches?: (rowRef: string) => boolean;
   },
-): Promise<RunWindowFill[]> {
+): Promise<RunWindowPlacedFill[]> {
   const sameForm = opts.refMatches ?? ((rowRef: string) => rowRef === ref);
-  // ONE READ of the run's window, for both halves of the answer.
+  // ONE READ of the run's window, for every half of the answer.
   const rows = await readRunWindowMessages(runId);
   const onForm: RunWindowMessage[] = [];
+  // WHAT A SAVE HAS ALREADY COMMITTED, by row identity rather than by clock
+  // (cinatra#2934, the fourth graded capture). Read from the same pass.
+  const consumed = new Set<number>();
   for (const row of rows) {
     if (row.fill && sameForm(row.fill.ref)) onForm.push(row);
+    if (row.savedPlacement && sameForm(row.savedPlacement.ref)) {
+      for (const sequence of row.savedPlacement.sequences) consumed.add(sequence);
+    }
   }
 
-  const own: RunWindowFill[] = [];
+  const own: RunWindowPlacedFill[] = [];
   for (const row of onForm) {
-    if (opts.messageId && row.messageId === opts.messageId) own.push(row.fill!);
+    if (consumed.has(row.sequence)) continue;
+    if (opts.messageId && row.messageId === opts.messageId) {
+      own.push({ ...row.fill!, sequence: row.sequence });
+    }
   }
 
   // WHAT THE EARLIER TURNS LEFT ON THE SAME SCREEN, oldest first, and only
   // then this message's own — so a field placed twice ends on its newest value,
   // which is what the person is looking at.
-  const carried: RunWindowFill[] = [];
+  const carried: RunWindowPlacedFill[] = [];
   if (opts.placedBy) {
     let since = opts.since ?? null;
     if (!since && opts.resolveSince) {
@@ -493,6 +548,8 @@ export async function readRunWindowPlacedFills(
     if (since) {
       const floor = since.getTime();
       for (const row of onForm) {
+        // ALREADY COMMITTED IS ALREADY COMMITTED, whatever the stamps say.
+        if (consumed.has(row.sequence)) continue;
         if (opts.messageId && row.messageId === opts.messageId) continue;
         if (row.placedBy !== opts.placedBy) continue;
         // STRICTLY NEWER THAN THE WRITE. A row stamped at the same instant as
@@ -500,11 +557,94 @@ export async function readRunWindowPlacedFills(
         // the same clock, and of the two ways to be wrong, re-applying a change
         // the person already saved is the one they did not ask for.
         if (row.createdAt.getTime() <= floor) continue;
-        carried.push(row.fill!);
+        carried.push({ ...row.fill!, sequence: row.sequence });
       }
     }
   }
   return [...carried, ...own];
+}
+
+/** A placement, with the row identity a save needs to record consuming it. */
+export type RunWindowPlacedFill = RunWindowFill & { sequence: number };
+
+/**
+ * THE PLACEMENTS STILL STANDING ON ONE FORM, by row identity.
+ *
+ * WHY THE FORM'S OWN BUTTON NEEDS THIS (cinatra#2934, the convergence round of
+ * the fourth fix leg). The receipt closed the re-apply on the road that asks
+ * the assistant to save — and left the road the person takes most: pressing
+ * **Save changes** on the card itself. That press commits exactly what the
+ * rows are showing, which IS the placements the window put there, but it wrote
+ * no receipt, so a later bare ask could carry those same placements again and
+ * re-apply them over rows that had moved on. The identity boundary has to be
+ * written by every save, not by one of them.
+ *
+ * NO MESSAGE, NO LOOK-BACK WINDOW: the press has no turn of its own, and every
+ * unconsumed placement this person made on this form is by definition what the
+ * rows in front of them are showing. The `refMatches` argument is the caller's
+ * for the same reason it is above — a screen's ref is not a stable string.
+ */
+export async function readRunWindowPendingPlacementSequences(
+  runId: string,
+  opts: {
+    readonly placedBy?: string | null;
+    readonly refMatches: (rowRef: string) => boolean;
+  },
+): Promise<number[]> {
+  const rows = await readRunWindowMessages(runId);
+  const consumed = new Set<number>();
+  const pending: number[] = [];
+  for (const row of rows) {
+    if (row.savedPlacement && opts.refMatches(row.savedPlacement.ref)) {
+      for (const sequence of row.savedPlacement.sequences) consumed.add(sequence);
+    }
+  }
+  for (const row of rows) {
+    if (!row.fill || !opts.refMatches(row.fill.ref)) continue;
+    if (consumed.has(row.sequence)) continue;
+    if (opts.placedBy && row.placedBy !== opts.placedBy) continue;
+    pending.push(row.sequence);
+  }
+  return pending;
+}
+
+/**
+ * RECORD THAT A SAVE COMMITTED THESE PLACEMENTS (cinatra#2934, the FOURTH
+ * graded capture).
+ *
+ * The receipt the boundary above reads. It is written AFTER the write it
+ * describes has landed, so a save that failed leaves the placements exactly
+ * where they were and the person's next ask still finds their own full form —
+ * a receipt written first would silently discard a change nobody saved.
+ *
+ * IT NEVER FAILS THE TURN. A receipt that could not be appended costs the road
+ * its identity boundary for that one save and leaves the timestamp boundary
+ * standing, which is where it stood before this existed. The caller is expected
+ * to swallow the failure for that reason.
+ */
+export async function recordRunWindowPlacementsSaved(input: {
+  runId: string;
+  surface: RunWindowSurface;
+  ref: string;
+  /** The turn that asked for the save — its own durable identity. */
+  messageId?: string | null;
+  savedBy?: string | null;
+  sequences: readonly number[];
+}): Promise<void> {
+  const sequences = [...new Set(input.sequences)].filter((n) => Number.isFinite(n));
+  if (sequences.length === 0) return;
+  await appendRunWindowMessage({
+    runId: input.runId,
+    role: "assistant",
+    surface: input.surface,
+    // NOT A BUBBLE, for the same reason a fill row is not one: the assistant's
+    // own answer is what the person reads, and the window's own reader skips
+    // this row.
+    text: "",
+    messageId: input.messageId ?? null,
+    placedBy: input.savedBy ?? null,
+    savedPlacement: { ref: input.ref, sequences },
+  });
 }
 
 /**

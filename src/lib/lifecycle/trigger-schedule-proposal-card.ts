@@ -341,6 +341,10 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // the resolver's — the same predicate the endpoint refuses on — so the
       // card never offers a control the server is already going to refuse.
       canSave: resolved.canSave,
+      // OMITTED UNLESS THERE IS ONE, for the reason `stopped` is. A state
+      // refusal never travels here at all: that card carries no floor for the
+      // sentence to sit on, and its window answers instead (plan (A) §7.2).
+      ...(resolved.saveRefusal ? { saveRefusal: resolved.saveRefusal } : {}),
       // CANCEL SCHEDULE IS THE RECURRING SCHEDULE'S CONTROL, AFTER ITS FIRST
       // FIRE, AND NOTHING ELSE'S (cinatra#2972). Plan (A) §7.2 as amended
       // 2026-08-25: "its one control is **Cancel schedule**, shown only for a
@@ -366,11 +370,21 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // there is no control, no confirm strip and no `release` op left to read
       // it. Removable once no bundle predating this change can still be live.
       canRelease: false,
+      // AND IT IS THE OWNER'S CONTROL OR AN ADMINISTRATOR'S, like Save changes
+      // beside it (plan (A) §7.1). Read from the resolver's ONE answer, found
+      // by the convergence round of this leg: gating Save alone still drew a
+      // second person a LIVE Cancel schedule on a fired recurring run, and the
+      // write behind it refuses — a control the card offers and the server will
+      // not honour is the very thing this leg is closing.
       canCancel:
         resolved.triggerType === "recurring" &&
         resolved.firedOnce &&
         !resolved.stopped &&
-        !resolved.arming,
+        !resolved.arming &&
+        // FAIL-CLOSED AND ALWAYS A BOOLEAN: a resolution that does not say
+        // whether this reader may act draws no control, and the wire's own
+        // schema demands a boolean rather than an absent key.
+        resolved.mayAct === true,
     };
     return { state: { state: "settled" }, view };
   } catch {
@@ -584,7 +598,38 @@ export async function decideTriggerScheduleProposal(params: {
         { userId, role, source: "ui" },
         { runId: settled, schedule: parsed.data },
       );
-      if (result.ok) return { kind: "saved", runId: result.runId };
+      if (result.ok) {
+        // AND THE PRESS RECORDS WHAT IT COMMITTED, exactly as the window's own
+        // save does (cinatra#2934, the convergence round of the fourth fix
+        // leg). The rows this button just saved ARE the placements the window
+        // put into them, so those placements are spent; without the receipt a
+        // later bare ask carries them again and re-applies them over rows that
+        // have moved on. Never allowed to fail the press: a receipt that will
+        // not append leaves the timestamp boundary standing, which is where the
+        // road was before receipts existed.
+        try {
+          const { readRunWindowPendingPlacementSequences, recordRunWindowPlacementsSaved } =
+            await import("@cinatra-ai/agents/run-window-conversation-store");
+          const sameForm = (rowRef: string) =>
+            rowRef === ref || decodeScheduleRunRef(rowRef)?.runId === settled;
+          const sequences = await readRunWindowPendingPlacementSequences(settled, {
+            placedBy: userId,
+            refMatches: sameForm,
+          });
+          if (sequences.length > 0) {
+            await recordRunWindowPlacementsSaved({
+              runId: settled,
+              surface: "armed-trigger",
+              ref,
+              savedBy: userId,
+              sequences,
+            });
+          }
+        } catch {
+          // See above: the boundary degrades, the press does not.
+        }
+        return { kind: "saved", runId: result.runId };
+      }
       return result.error === "forbidden" || result.error === "unauthorized"
         ? NOT_PERMITTED
         : { kind: "error", message: result.error };

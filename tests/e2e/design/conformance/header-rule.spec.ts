@@ -94,3 +94,52 @@ test.describe("page-header section rule — app.html conformance", () => {
     });
   }
 });
+
+/**
+ * POSITION (cinatra#3106). The assertions above pin the rule's colour and its
+ * paired-line shape, and pinned nothing about WHERE it sits — which is how the
+ * tab row's trailing rule came to float eleven pixels above the row baseline,
+ * reading as a second horizontal mark over the active tab's underline instead
+ * of continuing it. `TabsListRow` drops the plain list's own `border-b`, which
+ * paints on the list's bottom edge, so its replacement rule has to close the
+ * row on that same edge.
+ */
+test.describe("tab-row rule position — the rule closes the row on its baseline", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`the trailing rule sits on the tab row's baseline (${theme} theme)`, async ({
+      page,
+    }) => {
+      await page.goto(FIXTURE);
+      await page.evaluate((t) => {
+        document.documentElement.classList.toggle("dark", t === "dark");
+      }, theme);
+
+      const row = page.getByTestId("fixture-tabs-row");
+      const rule = row.locator('[data-slot="separator"][data-major]');
+      const list = row.locator('[data-slot="tabs-list"]');
+      const activeTab = row.locator('[data-slot="tabs-trigger"][data-state="active"]');
+
+      await expect(rule).toBeVisible();
+      const ruleBox = await rule.boundingBox();
+      const listBox = await list.boundingBox();
+      const tabBox = await activeTab.boundingBox();
+      expect(ruleBox && listBox && tabBox, "the tab row must be laid out").toBeTruthy();
+
+      const ruleBaseline = ruleBox!.y + ruleBox!.height;
+      const rowBaseline = listBox!.y + listBox!.height;
+      const tabBaseline = tabBox!.y + tabBox!.height;
+
+      expect(
+        Math.abs(ruleBaseline - rowBaseline),
+        `the trailing rule ends at y=${ruleBaseline} while the tab row ends at ` +
+          `y=${rowBaseline} — a visible step where the tabs end and the rule begins`,
+      ).toBeLessThanOrEqual(1);
+
+      expect(
+        Math.abs(ruleBaseline - tabBaseline),
+        `the trailing rule ends at y=${ruleBaseline} while the active tab's underline ` +
+          `sits on y=${tabBaseline} — the two must read as one continuous line`,
+      ).toBeLessThanOrEqual(1);
+    });
+  }
+});

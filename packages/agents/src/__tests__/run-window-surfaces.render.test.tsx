@@ -317,7 +317,8 @@ const SURFACES: Surface[] = [
     // hosts now mount, so this render is the window both of them draw.
     name: "the armed schedule's window",
     surface: "armed-trigger",
-    sentence: "Ask Cinatra to change this schedule, or ask about it…",
+    // Plan (A) §7.4 step 8's own copy (cinatra#2934, the fourth graded capture).
+    sentence: "Ask Cinatra to suggest edits to the fields above…",
     mount: async (canRespond) => {
       const { SchedulePromptWindow } = await import("../schedule-prompt-window");
       return (
@@ -439,10 +440,11 @@ describe("§X — the sentence in the empty field names what the window does whe
         if (other.surface === s.surface) continue;
         expect(screen.queryByText(other.sentence)).toBeNull();
       }
-      // …nor the one string all five used to show.
-      expect(
-        screen.queryByText(/Ask Cinatra to suggest edits to the fields above/),
-      ).toBeNull();
+      // The five sentences above are the whole closed set, and the loop over
+      // them is the property: no window shows any reading but its own. The
+      // armed schedule's is plan (A) §7.4 step 8's own copy again
+      // (cinatra#2934, the fourth graded capture), so it is one OF the five
+      // rather than a sixth string to be excluded.
     });
   }
 });

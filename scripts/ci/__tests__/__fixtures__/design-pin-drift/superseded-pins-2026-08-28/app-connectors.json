@@ -1,0 +1,180 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-connectors.html",
+  "contentHash": "sha256:9f28d508390afd63dc51c69bc80192e9a33d739726c93bb3ceaeff60b9cf93af",
+  "surfaces": [
+    {
+      "id": "connector-connection-filter",
+      "fields": [],
+      "actions": [
+        {
+          "action": "filter-connection",
+          "outcome": "filtered"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "connector-grid",
+      "fields": [
+        {
+          "field": "name",
+          "source": "connector.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-install-cta",
+      "fields": [],
+      "actions": [
+        {
+          "action": "install-more",
+          "outcome": "marketplace-connector-tab"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "connector-empty-panel",
+      "fields": [],
+      "actions": [
+        {
+          "action": "install-more",
+          "outcome": "marketplace-connector-tab"
+        }
+      ],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "connector-setup",
+      "fields": [
+        {
+          "field": "api-key",
+          "source": "config.apiKey"
+        },
+        {
+          "field": "project-id",
+          "source": "config.projectId"
+        },
+        {
+          "field": "organization-id",
+          "source": "config.organizationId"
+        },
+        {
+          "field": "service-tier",
+          "source": "config.serviceTier"
+        },
+        {
+          "field": "default-model",
+          "source": "config.defaultModel"
+        }
+      ],
+      "actions": [
+        {
+          "action": "connect",
+          "outcome": "connected"
+        },
+        {
+          "action": "disconnect",
+          "outcome": "confirming"
+        },
+        {
+          "action": "check-connection",
+          "outcome": "checked"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-multi-setup",
+      "fields": [
+        {
+          "field": "server-base-url",
+          "source": "config.baseUrl"
+        },
+        {
+          "field": "bearer-token",
+          "source": "config.bearerToken"
+        }
+      ],
+      "actions": [
+        {
+          "action": "connect",
+          "outcome": "connected"
+        },
+        {
+          "action": "view-connections",
+          "outcome": "connections"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-connections",
+      "fields": [],
+      "actions": [
+        {
+          "action": "disconnect",
+          "outcome": "confirming"
+        },
+        {
+          "action": "connect",
+          "outcome": "connected"
+        }
+      ],
+      "states": [
+        "empty",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-config-tab",
+      "fields": [
+        {
+          "field": "sandbox-enabled",
+          "source": "config.shell.enabled"
+        },
+        {
+          "field": "container-image",
+          "source": "config.shell.containerImage"
+        },
+        {
+          "field": "max-execution-seconds",
+          "source": "config.shell.maxSeconds"
+        },
+        {
+          "field": "readable-roots",
+          "source": "config.shell.readRoots"
+        },
+        {
+          "field": "allowed-command-prefixes",
+          "source": "config.shell.allowedPrefixes"
+        }
+      ],
+      "actions": [
+        {
+          "action": "save-config",
+          "outcome": "saved"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    }
+  ]
+}

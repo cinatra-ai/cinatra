@@ -57,6 +57,50 @@ export const BOUND_SCREEN_FILL_PRIMITIVE = "lifecycle_bound_screen_fill";
 export const BOUND_SCREEN_FILL_UNAVAILABLE =
   "There is no form bound to this message that you can fill. Nothing was changed.";
 
+/**
+ * THE SENTENCE FAMILY, IN ONE PLACE (cinatra#2934, the fourth graded capture).
+ *
+ * Every reply this road can give a person looking at a form they may fill is
+ * declared here, together, so a reason can never be worded by the branch that
+ * happens to reach it and no two of them can drift apart. Each is TRUE of the
+ * outcome it belongs to and of no other, which is the whole point: the capture
+ * caught one sentence standing in for four situations, and the reader could
+ * disprove it by looking at their own screen.
+ *
+ * The fifth reply on this road is the platform's own sentence for a form that
+ * can no longer be changed. It is relayed word for word rather than declared
+ * here, because it is the WRITE's sentence and the card draws the same one.
+ */
+export const BOUND_SCREEN_FILL_PLACED =
+  "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.";
+
+/** The rows already show what was asked for. A truthful fill reply, not a refusal. */
+export const BOUND_SCREEN_FILL_ALREADY_HOLDING =
+  "Those fields already show what you asked for. Nothing was submitted — press the button when you are ready.";
+
+/** Nothing asked for names a control this screen draws. The ONLY case this sentence is true of. */
+export const BOUND_SCREEN_FILL_NO_FIELDS =
+  "None of those are fields on this screen. Its own fields are listed here — tell me which of them you want set.";
+
+/**
+ * THE ASK WAS TOO BIG FOR THE ROAD TO CARRY (cinatra#2934, convergence round of
+ * the fourth fix leg). The fourth of the four situations: real controls, usable
+ * values, and a serialized bound that refused the whole placement. It answered
+ * with the fields-do-not-exist sentence until this round — the same false
+ * reason the capture caught, reached by a different door.
+ */
+export const BOUND_SCREEN_FILL_TOO_LARGE =
+  "That is more than this screen's fields can take in one go, so nothing was placed. Ask for a few fields at a time and I will put them in.";
+
+/** A drawn row could not hold the value it was given — named, so the reason is checkable. */
+export function boundScreenFillUnusableValue(rows: readonly string[]): string {
+  const named = rows.join(", ");
+  return (
+    `That value is not one ${named} can hold on this screen, so nothing was placed. ` +
+    "Say it the way that field is written and I will put it in."
+  );
+}
+
 type McpToolResult = {
   content: { type: "text"; text: string }[];
   structuredContent: Record<string, unknown>;
@@ -169,6 +213,41 @@ export async function handleBoundScreenFill(
     // their schedule did not move — not a line that could mean anything.
     return say({ ok: false, placed: [], message: outcome.message });
   }
+  if (outcome.kind === "unusable-values") {
+    // NOT A REFUSAL EITHER, and the most specific thing that can be said: the
+    // control is on the screen, the person may fill it, and the value handed to
+    // it is not one it could show. Naming the row is what makes the sentence
+    // checkable against what they are looking at.
+    return say({
+      ok: false,
+      placed: [],
+      rows: outcome.rows,
+      fields: outcome.fields,
+      message: boundScreenFillUnusableValue(outcome.rows),
+    });
+  }
+  if (outcome.kind === "too-large") {
+    // NOT A REFUSAL EITHER, and its own true reason: every key named a control
+    // this screen draws and every row could have held what it was given. What
+    // stopped it is the size of the ask, so that is what is said.
+    return say({
+      ok: false,
+      placed: [],
+      fields: outcome.fields,
+      message: BOUND_SCREEN_FILL_TOO_LARGE,
+    });
+  }
+  if (outcome.kind === "already-holding") {
+    // A FILL REPLY, because the fields DO show what was asked for. Nothing was
+    // recorded, so no press is unlocked by it — the bound that rule exists for
+    // is in the road, not in the sentence.
+    return say({
+      ok: true,
+      placed: [],
+      fields: outcome.fields,
+      message: BOUND_SCREEN_FILL_ALREADY_HOLDING,
+    });
+  }
   if (outcome.kind === "no-fields") {
     // NOT a refusal: the screen is there and the person may fill it — nothing
     // asked for was one of its fields. Saying which fields it HAS is what lets
@@ -182,15 +261,13 @@ export async function handleBoundScreenFill(
       ok: false,
       placed: [],
       fields: outcome.fields,
-      message:
-        "None of those are fields on this screen. Its own fields are listed here — tell me which of them you want set.",
+      message: BOUND_SCREEN_FILL_NO_FIELDS,
     });
   }
   return say({
     ok: true,
     placed: outcome.applied,
-    message:
-      "Placed in the fields on your screen. Nothing was submitted — press the button when you are ready.",
+    message: BOUND_SCREEN_FILL_PLACED,
   });
 }
 

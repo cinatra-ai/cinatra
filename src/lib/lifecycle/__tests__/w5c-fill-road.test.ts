@@ -259,6 +259,24 @@ describe("the fill places values in the screen's own fields and submits nothing"
     expect(appended).toHaveLength(0);
   });
 
+  it("an ask too big to place says THAT, not that the fields do not exist", async () => {
+    // THE FOURTH SITUATION (cinatra#2934, the convergence round of the fourth
+    // fix leg). Real controls, values the rows could hold, and a serialized
+    // bound that refuses the whole placement. It answered with the
+    // fields-do-not-exist sentence — the same false reason the capture caught,
+    // reached by another door.
+    const outcome = await recordBoundScreenFill({
+      ref: REF,
+      values: { subject: "x".repeat(200_000) },
+      actorCtx: ACTOR,
+      messageId: "msg_1",
+      claimGrant: async () => true,
+      deps: { resolve: resolveScreen as never, surface: "run-page" },
+    });
+    expect(outcome).toEqual({ kind: "too-large", fields: ["subject", "body"] });
+    expect(appended).toHaveLength(0);
+  });
+
   it("a screen lends BOTH roads; a review lends its own three buttons", () => {
     expect(controlsLentBy(screenResolution as never)).toEqual(["fill", "submit"]);
     expect(controlsLentBy(reviewResolution as never)).toEqual(["comment", "approve", "reject"]);
@@ -740,7 +758,12 @@ describe("what the second convergence round found", () => {
       claimGrant: async () => true,
       deps: { resolve: resolveWithValues as never, surface: "run-page" },
     });
-    expect(outcome.kind).toBe("no-fields");
+    // THE PROPERTY IS UNCHANGED AND IS THE POINT: nothing is recorded, so no
+    // press is unlocked by it. What changed is the NAME of the outcome and the
+    // sentence it carries (cinatra#2934, the fourth graded capture): this is a
+    // row already showing what was asked for, which is a different fact from
+    // "none of those are fields on this screen" and is now said as one.
+    expect(outcome.kind).toBe("already-holding");
     expect(appended).toHaveLength(0);
     // A real change still lands.
     expect(

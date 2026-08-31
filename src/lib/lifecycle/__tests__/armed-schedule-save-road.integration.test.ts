@@ -374,6 +374,70 @@ maybe("the armed-schedule change road, on a real database", () => {
     );
   });
 
+  it("a saved placement is not re-applied even when the form's own stamp cannot exclude it", async () => {
+    // THE BOUNDARY WAS A RACE BETWEEN TWO CLOCKS (cinatra#2934, the fourth
+    // graded capture; the residual the third fix leg recorded and did not
+    // close). "Not already saved" compared the fill row's `created_at` — the
+    // DATABASE's clock — against the trigger row's `updated_at`, which the
+    // upsert stamps from the NODE process's clock. Wherever those two clocks
+    // disagree by even a millisecond in the wrong direction, a placement the
+    // save just committed is newer than the write that committed it, and the
+    // next bare ask applies it a second time over rows that have moved on.
+    //
+    // Skew is not something a suite can wait for, so it is INJECTED: the form's
+    // own row is read back stamped a second BEFORE the placement, which is
+    // exactly what a node clock running behind the database produces. The
+    // boundary that survives it is an identity one — the save records WHICH
+    // placements it consumed — not a comparison of two stamps.
+    const resolve = vi.fn(async () => armedResolution("2026-09-01T09:00") as never);
+    await recordBoundScreenFill({
+      ref: REF,
+      values: { scheduledAt: "2026-09-06T10:30" },
+      actorCtx: ACTOR,
+      messageId: "turn_1",
+      deps: { resolve: resolve as never, surface: "armed-trigger" },
+    });
+    // TURN 2 — the save lands, for real, against the real trigger row.
+    sendAs("turn_2");
+    const first = await handleLentAction(
+      { ref: REF },
+      {
+        resolve: resolve as never,
+        resolveActor: (async () => ACTOR) as never,
+        decideSchedule: decideAgainstTheStore() as never,
+      },
+    );
+    expect((first.structuredContent as { ok: boolean }).ok).toBe(true);
+    expect((await readRunTriggerByRunId(RUN))!.scheduledAt!.toISOString()).toBe(
+      "2026-09-06T10:30:00.000Z",
+    );
+
+    // TURN 3 — a bare ask, with the form's own stamp skewed a second behind the
+    // placement it already committed.
+    sendAs("turn_3");
+    const decide = decideAgainstTheStore();
+    const skewed = await readRunTriggerByRunId(RUN);
+    const res = await handleLentAction(
+      { ref: REF },
+      {
+        resolve: resolve as never,
+        resolveActor: (async () => ACTOR) as never,
+        decideSchedule: decide as never,
+        readTrigger: (async () => ({
+          ...skewed!,
+          updatedAt: new Date(skewed!.updatedAt.getTime() - 1_000),
+        })) as never,
+      },
+    );
+    expect(decide).not.toHaveBeenCalled();
+    expect((res.structuredContent as { message: string }).message).toBe(
+      LENT_ACTION_NOTHING_PLACED_TO_SAVE,
+    );
+    expect((await readRunTriggerByRunId(RUN))!.scheduledAt!.toISOString()).toBe(
+      "2026-09-06T10:30:00.000Z",
+    );
+  });
+
   it("another person's placement never travels under this person's ask", async () => {
     const resolve = vi.fn(async () => armedResolution("2026-09-01T09:00") as never);
     const otherActor = {

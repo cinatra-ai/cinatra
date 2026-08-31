@@ -636,12 +636,59 @@ export const SAVE_SCHEDULE_REFUSALS = {
    *  — the schedule the reader is looking at is still the live one. */
   cancelFailed:
     "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
+  /**
+   * THE CARD IS NOT THIS PERSON'S TO CHANGE (cinatra#2934, the fourth graded
+   * capture). Plan (A) §7.1: "Who may do what: Cancel is the run's owner or an
+   * administrator." Plan (A) §1.2: a card a person "may see but not act on" is
+   * "drawn in full with its buttons disabled and the reason on the card" — so
+   * this is a REASON, drawn beside a dead control, never an absence.
+   *
+   * It says whose it is in the only terms that are true and disclose nothing:
+   * the run belongs to somebody else. The fourth capture caught a second person
+   * on somebody else's card being answered with the OWNER's sentences instead —
+   * the fields-do-not-exist one, the nothing-placed one, and once "Saved." on a
+   * record that never moved.
+   */
+  notYours:
+    "This run belongs to someone else, so you can't change its schedule here. Ask the person who started the run, or an administrator.",
   /** cinatra#2981 — another writer (a **Cancel schedule**, or another save)
    *  held the trigger claim for longer than this call would wait. Nothing was
    *  written, so the reader's schedule is exactly as they left it. */
   busy:
     "Something else is changing this schedule right now. Nothing was changed — please try again in a moment.",
 } as const;
+
+/**
+ * MAY THIS PERSON CHANGE THIS RUN'S SCHEDULE? (cinatra#2934, the fourth graded
+ * capture.)
+ *
+ * ONE PREDICATE, READ BY EVERY SIDE. Plan (A) §7.1 gives the schedule its own
+ * answer — "Cancel is the run's owner or an administrator" — and the write has
+ * always enforced exactly that. Nothing ELSE did: `canSaveInstalled` asks about
+ * the SCHEDULE (arming, stopped, released, still in the future) and nothing
+ * about the person, so the card drew a live **Save changes** for a second
+ * person, the window placed their described change into the owner's rows, and
+ * the only thing that refused was the write at the very end.
+ *
+ * So the rule lives here, beside the sentences, in the one module both the card
+ * and the service already import and which imports nothing itself. The write's
+ * own guard now reads it too, so the surface and the write cannot disagree
+ * about who may act.
+ *
+ * FAIL-CLOSED ON AN UNOWNED RUN, exactly as the write has always been: a run
+ * with no owner needs an administrator, because a trigger has permanent
+ * effects and "nobody owns it" is not "everybody may change it".
+ */
+export function mayChangeRunSchedule(input: {
+  readonly actorUserId: string | null | undefined;
+  readonly isAdmin: boolean;
+  readonly runOwnerId: string | null | undefined;
+}): boolean {
+  if (input.isAdmin) return true;
+  if (!input.actorUserId) return false;
+  if (!input.runOwnerId) return false;
+  return input.runOwnerId === input.actorUserId;
+}
 
 /**
  * WHICH OF THOSE SENTENCES A CARD THAT IS OVER DRAWS (cinatra#2934; plan (A)

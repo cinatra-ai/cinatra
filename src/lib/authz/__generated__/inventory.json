@@ -540,7 +540,7 @@
     {
       "primitiveName": "connector_inventory_list",
       "file": "src/lib/connector-inventory-mcp.ts",
-      "line": 68
+      "line": 75
     },
     {
       "primitiveName": "context_list_eligible_assertions",
@@ -680,42 +680,42 @@
     {
       "primitiveName": "drupal_content_editor_run",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 53
+      "line": 112
     },
     {
       "primitiveName": "drupal_instances_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 23
+      "line": 82
     },
     {
       "primitiveName": "drupal_node_create_draft_revision",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 38
+      "line": 97
     },
     {
       "primitiveName": "drupal_node_get",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 28
+      "line": 87
     },
     {
       "primitiveName": "drupal_node_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 43
+      "line": 102
     },
     {
       "primitiveName": "drupal_node_publish",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 48
+      "line": 107
     },
     {
       "primitiveName": "drupal_node_update",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 33
+      "line": 92
     },
     {
       "primitiveName": "drupal_status",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 17
+      "line": 76
     },
     {
       "primitiveName": "email_outreach_initial_drafts_update",
@@ -830,12 +830,12 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 1089
+      "line": 1135
     },
     {
       "primitiveName": "lifecycle_bound_screen_fill",
       "file": "src/lib/lifecycle/bound-screen-fill-mcp.ts",
-      "line": 202
+      "line": 279
     },
     {
       "primitiveName": "linkedin_accounts_list",
