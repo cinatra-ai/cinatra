@@ -41,11 +41,7 @@ import {
   type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
-import {
-  VENDOR_BY_CONNECTIVE,
-  VENDOR_MISSING_LABEL,
-  resolveVendorPresentation,
-} from "@/lib/vendor-presentation";
+import { VENDOR_BY_CONNECTIVE, resolveVendorPresentation } from "@/lib/vendor-presentation";
 
 // ---------------------------------------------------------------------------
 // RunRecommendationChipRow — the SHARED run-start recommendation chip-row
@@ -532,11 +528,31 @@ function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): Re
  *     picker resolve a skill package's vendor with;
  *   · the LABEL is minted by `resolveVendorPresentation`, the app's single
  *     vendor-presentation resolver, and the connective is its own
- *     `VENDOR_BY_CONNECTIVE`. A package whose vendor cannot be named resolves to
- *     the `missing` STATE and prints that resolver's own `VENDOR_MISSING_LABEL`,
- *     never a slug, never a package scope and never a silent omission.
+ *     `VENDOR_BY_CONNECTIVE` — never a slug and never a package scope.
  *
  * It is drawn in the muted secondary text style beside the name, on one line.
+ *
+ * AND A PACKAGE WHOSE VENDOR CANNOT BE NAMED IS DRAWN AS THE NAME ALONE
+ * (cinatra#3062). The ratified drawing gives this pill "the skill's name and
+ * then BY its vendor ... so two skills of the same name are told apart in the
+ * pill itself", and it lets the pill carry "a checkbox, the skill's name and its
+ * vendor, and nothing else". It draws no pill without a vendor, so it prescribes
+ * no stand-in for one: with no vendor to introduce there is no vendor and no
+ * "by" to introduce it with, and the pill is the skill's name alone — which is
+ * the reading this row's own contract has documented all along, at `vendorName`
+ * here, at `buildSkillIdVendorNames` and at the candidate builder.
+ *
+ * That is a LAYOUT decision as much as a wording one: a stand-in tells no two
+ * same-named skills apart, and it more than doubles the pill's drawn width,
+ * which is what pushed the row onto a second line instead of the one line the
+ * drawing draws it on.
+ *
+ * The missing STATE is not lost — it moves to the pill root as
+ * `data-skills-step-vendor-state`, so a graded picture still reads what was
+ * resolved.
+ * The marketplace byline surfaces, whose reader is choosing whose code to
+ * install, keep printing the resolver's `missing` LABEL; this pill names a skill
+ * already assigned to the agent, and the drawing governs what it draws.
  *
  * THE ACCESSIBLE NAME STAYS THE SKILL'S NAME. `aria-labelledby` points at the
  * NAME span alone, not at the pill and not at the name-plus-vendor wrapper, so
@@ -598,13 +614,16 @@ function SkillsStepPill({
     { name: vendorName },
     { surface: "run-skills-step-pill", ref: skillId },
   );
-  const vendorLabel = vendor.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL;
+  const vendorKnown = vendor.kind === "known";
   return (
     <span
       data-recommendation-chip=""
       data-skills-step-pill=""
       data-skill-id={skillId}
       data-skill-applied={checked ? "true" : "false"}
+      // The resolved vendor STATE, on the root, so it is readable whether or not
+      // a byline is drawn.
+      data-skills-step-vendor-state={vendor.kind}
       data-skills-step-pill-editable={editable ? "true" : "false"}
       data-forced={forced ? "true" : undefined}
       className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${
@@ -631,13 +650,15 @@ function SkillsStepPill({
         <span id={labelId} className="font-medium">
           {name}
         </span>
-        <span
-          data-skills-step-vendor=""
-          data-vendor-state={vendor.kind}
-          className="text-muted-foreground"
-        >
-          {`${VENDOR_BY_CONNECTIVE} ${vendorLabel}`}
-        </span>
+        {vendorKnown ? (
+          <span
+            data-skills-step-vendor=""
+            data-vendor-state={vendor.kind}
+            className="text-muted-foreground"
+          >
+            {`${VENDOR_BY_CONNECTIVE} ${vendor.displayName}`}
+          </span>
+        ) : null}
       </span>
     </span>
   );

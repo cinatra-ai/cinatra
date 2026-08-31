@@ -17,8 +17,9 @@
 //      ONE line with the vendor in the muted style;
 //   2. the checkbox's accessible name is the skill's NAME alone — not the name
 //      plus the byline;
-//   3. a package that declares no vendor gets the resolver's OWN missing-state
-//      label, never its npm scope;
+//   3. a package that declares no vendor is drawn as the skill's NAME ALONE —
+//      the drawing gives the pill a vendor, never a placeholder standing in for
+//      one — and never its npm scope;
 //   4. the same byline is on the settled pill, in both its readings;
 //   5. and the vendor a real package id resolves to comes from the shared skill
 //      scan, through the same resolver the Installed page uses.
@@ -55,6 +56,7 @@ const REAL_SKILL_NAME = "Blog Content Skill";
 const VENDOR = "Northstar";
 
 const UNVENDORED_SKILL_ID = "@cinatra-ai/chat:company-research";
+const UNVENDORED_SKILL_NAME = "Company Research Skill";
 
 const CANDIDATES = [
   {
@@ -66,7 +68,7 @@ const CANDIDATES = [
   },
   {
     skillId: UNVENDORED_SKILL_ID,
-    name: "Company Research Skill",
+    name: UNVENDORED_SKILL_NAME,
     vendorName: null,
     skillRevisionId: "company-research@2",
     recommended: false,
@@ -80,7 +82,7 @@ const SETTLED: RunRecommendationDecision = {
   runStarted: true,
   decided: [
     { skillId: REAL_SKILL_ID, name: REAL_SKILL_NAME, mark: "confirmed" },
-    { skillId: UNVENDORED_SKILL_ID, name: "Company Research Skill", mark: "skipped" },
+    { skillId: UNVENDORED_SKILL_ID, name: UNVENDORED_SKILL_NAME, mark: "skipped" },
   ],
   candidates: CANDIDATES,
 };
@@ -157,15 +159,46 @@ describe("the live pill's label", () => {
     expect(label.textContent).not.toContain(VENDOR);
   });
 
-  it("uses the resolver's own missing-state label where no vendor is declared — never the scope", () => {
+  it("prints the skill's name ALONE where no vendor is declared — no by-clause, never the scope", () => {
+    // WHAT THE RATIFIED DRAWING GIVES THE PILL. §V: "The label reads the
+    // skill's name and then BY its vendor, on one line, the vendor in the muted
+    // secondary colour — so two skills of the same name are told apart in the
+    // pill itself." And its closing line: "A pill carries a checkbox, the
+    // skill's name and its vendor, AND NOTHING ELSE."
+    //
+    // The drawing draws no pill without a vendor, so it prescribes no
+    // placeholder for one. A package that declares no vendor identity and no
+    // npm author has NO vendor to draw, and the by-clause is what introduces a
+    // vendor — with nothing to introduce, neither half is drawn. A placeholder
+    // reading "by <the missing-vendor label>" is a visible element the drawing
+    // never gives, it tells no two same-named skills apart (which is the
+    // drawing's OWN stated reason for the vendor half), and it more than
+    // doubles the pill's drawn width — which is what pushed the row off the
+    // single line the drawing draws it on.
+    //
+    // This is also the reading this row's own contract has documented all
+    // along, in three places: the `vendorName` prop ("the pill then prints the
+    // name alone"), `buildSkillIdVendorNames` ("the pill then prints the
+    // skill's name alone") and the candidate builder ("the pill then prints the
+    // skill's name with no 'by'"). The code alone said otherwise.
     const { container } = mount(HELD);
     const pill = pillFor(container, UNVENDORED_SKILL_ID);
-    const vendor = pill.querySelector<HTMLElement>("[data-skills-step-vendor]")!;
-    expect(vendor.getAttribute("data-vendor-state")).toBe("missing");
-    expect(vendor.textContent).toBe(`${VENDOR_BY_CONNECTIVE} ${VENDOR_MISSING_LABEL}`);
+    expect(pill.querySelector("[data-skills-step-vendor]")).toBeNull();
+    // The STATE stays machine-readable on the pill, for grading.
+    expect(pill.getAttribute("data-skills-step-vendor-state")).toBe("missing");
+    expect(pill.textContent).toBe(UNVENDORED_SKILL_NAME);
+    expect(pill.textContent).not.toContain(VENDOR_BY_CONNECTIVE);
+    expect(pill.textContent).not.toContain(VENDOR_MISSING_LABEL);
     // The npm scope of a real package id is never the byline.
-    expect(vendor.textContent).not.toContain("cinatra-ai");
-    expect(vendor.textContent).not.toContain("@");
+    expect(pill.textContent).not.toContain("cinatra-ai");
+    expect(pill.textContent).not.toContain("@");
+  });
+
+  it("keeps the vendor STATE on a pill that does name its vendor", () => {
+    const { container } = mount(HELD);
+    expect(pillFor(container, REAL_SKILL_ID).getAttribute("data-skills-step-vendor-state")).toBe(
+      "known",
+    );
   });
 });
 

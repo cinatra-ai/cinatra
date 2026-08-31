@@ -315,8 +315,15 @@ describe("the §V card is mounted in the conversation transcript", () => {
     // 2. the checklist pills, in their list.
     expect(wrapper?.querySelector("[data-skills-step-pill]")).not.toBeNull();
     expect(wrapper?.querySelector("[data-skills-step-list]")).not.toBeNull();
-    // 3. every pill names its vendor, through the app's own byline resolver.
-    expect(wrapper?.querySelector("[data-skills-step-vendor]")).not.toBeNull();
+    // 3. every pill went through the app's own byline resolver, which states
+    //    what it resolved on the pill root. This fixture's candidates declare no
+    //    vendor, so the resolved state is `missing` and — per the ratified
+    //    drawing, which gives the pill a vendor and no stand-in for one — the
+    //    pill draws the skill's name alone, with no byline element.
+    expect(wrapper?.querySelector("[data-skills-step-pill]")?.getAttribute(
+      "data-skills-step-vendor-state",
+    )).toBe("missing");
+    expect(wrapper?.querySelector("[data-skills-step-vendor]")).toBeNull();
     // 4. and the card root is still the row itself, declaring what it is.
     expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(wrapper?.getAttribute("data-lifecycle-card-state")).toBe("held");

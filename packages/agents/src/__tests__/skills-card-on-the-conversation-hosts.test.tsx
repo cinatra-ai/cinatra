@@ -274,7 +274,19 @@ describe("the chat host draws the checkbox row and one Continue", () => {
         .querySelector(`[data-skill-id="${skillId}"] [data-skills-step-vendor]`)!
         .textContent;
     expect(byline("skill-blog")).toBe(`${VENDOR_BY_CONNECTIVE} Northstar`);
-    expect(byline("skill-crm")).toBe(`${VENDOR_BY_CONNECTIVE} ${VENDOR_MISSING_LABEL}`);
+    // A skill whose package declares no vendor is drawn as its NAME ALONE: the
+    // drawing gives the pill "the skill's name and then by its vendor", and
+    // with no vendor there is no by-clause to draw and no placeholder to
+    // invent. The state stays readable on the pill.
+    expect(
+      container.querySelector(`[data-skill-id="skill-crm"] [data-skills-step-vendor]`),
+    ).toBeNull();
+    expect(
+      container
+        .querySelector(`[data-skills-step-pill][data-skill-id="skill-crm"]`)!
+        .getAttribute("data-skills-step-vendor-state"),
+    ).toBe("missing");
+    expect(container.textContent).not.toContain(VENDOR_MISSING_LABEL);
     // ONE Continue, beneath the list, and it is the only button that is not a box.
     expect(container.querySelectorAll("[data-skills-step-continue]")).toHaveLength(1);
     expect(continueButton(container)!.textContent).toContain("Continue");
