@@ -54,8 +54,10 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
       {/* The field's own submit, exposed so the exchange can be driven: typing a
           change request IS the affordance under test, and the real field pulls
           browser-only deps jsdom cannot load. */}
-      <button
-        type="button"
+      {/* A <span> marker, not a raw <button> - the ui-design-system gate bans
+          raw buttons; this jsdom stub only needs a clickable node carrying the
+          testid, not a button role. */}
+      <span
         data-testid="review-prompt-send"
         onClick={() => void onSubmit?.(TYPED_REQUEST)}
       />
