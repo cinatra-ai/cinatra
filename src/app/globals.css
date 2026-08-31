@@ -813,6 +813,33 @@ body {
   margin-inline-end: -0.08em;
 }
 
+/* THE TOAST'S CLOSE SITS BESIDE COPY, INSIDE THE TOAST.
+   The ratified drawing describes a toast as the popover surface, a
+   status-coloured border and matching text, the type's icon leading, and Copy
+   and Close on the right — one row, both controls in it. The toast library pins
+   its close control OUTSIDE a corner of the toast with position: absolute and a
+   transform, and the only choice its custom properties offer is WHICH corner;
+   on a real surface that badge measured overlapping the application header's own
+   notification badge. So the placement is a rule rather than a variable, and it
+   is written once here for every toast the application draws.
+   FOUR ATTRIBUTE SELECTORS AGAINST THE LIBRARY'S THREE. Both stylesheets are
+   unlayered, and the library injects its own at run time, so this rule wins on
+   specificity rather than on which of the two the browser happens to see first.
+   GEOMETRY ONLY. Every colour stays the library's, so the close control keeps
+   the status colour the rest of the toast is drawn in. The toast is a flex row
+   whose action carries the automatic margin that pushes the pair right; ordering
+   the close control after it is what puts the two together at the end of the
+   row, in the reading direction, with no physical left or right named here. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] {
+  position: static;
+  transform: none;
+  order: 1;
+  height: 24px;
+  width: 24px;
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+}
+
 ::selection {
   background: rgba(15, 23, 42, 0.14);
 }

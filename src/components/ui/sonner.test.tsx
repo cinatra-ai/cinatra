@@ -84,64 +84,104 @@ describe("Sonner Toaster wrapper — opacity contract", () => {
 });
 
 /**
- * THE CLOSE CONTROL SITS ON THE RIGHT, beside the toast's own action.
+ * COPY AND CLOSE SIT TOGETHER ON THE RIGHT, INSIDE THE TOAST.
  *
- * The wrapper's contract has always said so in its own words — "every toast
- * carries a Copy action and a Close (X) on the right" — but it never said so in
- * CSS. Sonner's own left-to-right defaults place the close control at
- * `--toast-close-button-start: 0` with `--toast-close-button-end: unset`, which
- * draws it outside the top-LEFT corner of the toast, away from the action it
- * belongs beside. The chrome is this primitive's to own (the wrapper injects the
- * controls; this component owns the CSS), so the placement is set here, once,
- * for every toast in the application.
+ * The ratified drawing describes a toast as "the popover surface, a
+ * status-coloured border and matching text, the type's icon leading, Copy and
+ * Close on the right" — one row, both controls in it.
  *
- * Sonner exposes the placement as three custom properties, so this is a token
- * override rather than a rule fighting the library's own stylesheet.
+ * AN EARLIER READING OF THIS FILE CLAIMED THAT PLACEMENT AND DID NOT SHIP IT.
+ * It moved three of the toast library's own custom properties, which only
+ * choose WHICH CORNER the library's corner badge is pinned outside of: the
+ * close control went from outside the top-LEFT corner to outside the top-RIGHT
+ * one. It was still a circular badge hanging off the toast's border rather than
+ * a control beside Copy, and on a real surface it measured overlapping the
+ * application header's own notification badge. The corner is not the placement
+ * the drawing asks for, and this suite now says so in the terms that can be
+ * checked: the control is IN the row, not pinned outside a corner.
+ *
+ * THE GEOMETRY IS A RULE, NOT A VARIABLE, so it lives in the application's own
+ * stylesheet: the library pins the badge with `position: absolute` and a
+ * transform, and no custom property it exposes can undo either. The rule
+ * out-specifies the library's own (four attribute selectors against three), so
+ * it does not depend on which stylesheet the browser sees first. It takes the
+ * GEOMETRY only and leaves every colour to the library's status rules, which is
+ * what keeps the close control's border and text status-coloured with the rest
+ * of the toast.
  */
-describe("Sonner Toaster wrapper — the Close control's placement", () => {
+describe("the toast's Close sits beside Copy, in the toast's own row", () => {
   const src = readFileSync(path.join(__dirname, "sonner.tsx"), "utf8");
+  const css = readFileSync(
+    path.join(__dirname, "..", "..", "app", "globals.css"),
+    "utf8",
+  );
+  const SELECTOR =
+    '[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]';
+  const rule = () => {
+    const at = css.indexOf(SELECTOR + " {");
+    expect(at, "no close-control placement rule in the application stylesheet").toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("\n}", at));
+  };
 
-  it("anchors the close control to the RIGHT edge, not the left", () => {
-    expect(src).toMatch(/'--toast-close-button-start':\s*'unset'/);
-    expect(src).toMatch(/'--toast-close-button-end':\s*'0'/);
+  it("takes the control OUT of the corner — it is in the toast's flow, not pinned to it", () => {
+    expect(rule()).toMatch(/position:\s*static/);
+    expect(rule()).toMatch(/transform:\s*none/);
   });
 
-  it("mirrors the offset transform so it sits outside the right corner", () => {
-    expect(src).toMatch(/'--toast-close-button-transform':\s*'translate\(35%, ?-35%\)'/);
+  it("puts it AFTER the Copy action in the row, so the two read as a pair", () => {
+    // The toast is a flex row and Copy carries the auto margin that pushes the
+    // pair to the right; ordering Close after it is what puts Close outermost.
+    expect(rule()).toMatch(/order:\s*[1-9]/);
   });
 
-  /**
-   * THE OVERRIDE IS LEFT-TO-RIGHT ONLY, AND THAT IS PINNED HERE.
-   *
-   * The three properties above are read by the toast library as PHYSICAL left
-   * and right, and the library sets them from its own direction blocks; an
-   * inline value outrules both, so this placement would survive into a
-   * right-to-left reading and put the close control opposite the action instead
-   * of beside it. That is unreachable today — the application renders no
-   * direction attribute at all and declares English — and this test is what
-   * says so: the day a direction attribute is added to the document, this goes
-   * red and the placement has to become direction-keyed with the values
-   * mirrored, rather than silently drawing on the wrong side.
-   */
-  it("is unreachable by a right-to-left reading — the document declares none", () => {
+  it("gives it the shape of a control rather than of a badge", () => {
+    // A 50% radius is a badge. A control in a row is not round.
+    const radius = rule().match(/border-radius:\s*([^;]+);/)?.[1]?.trim();
+    expect(radius, "no border-radius — the library's 50% badge radius would stand").toBeTruthy();
+    expect(radius).not.toMatch(/50%|9999px/);
+  });
+
+  it("out-specifies the library's own rule — both are unlayered", () => {
+    // The library writes [data-sonner-toast][data-styled='true'] [data-close-button]:
+    // three attribute selectors. This rule carries four, so source order between
+    // the two stylesheets cannot decide it.
+    expect((SELECTOR.match(/\[[^\]]+\]/g) ?? []).length).toBeGreaterThan(3);
+    expect(css).toContain(SELECTOR);
+  });
+
+  it("leaves every COLOUR to the library's status rules", () => {
+    // The drawing asks for "a status-coloured border and matching text"; the
+    // close control is part of that reading, so this rule must not paint it.
+    expect(rule()).not.toMatch(/(^|;)\s*(background|color|border-color)\s*:/);
+  });
+
+  it("no longer pins the control outside a corner", () => {
+    for (const property of [
+      "--toast-close-button-start",
+      "--toast-close-button-end",
+      "--toast-close-button-transform",
+    ]) {
+      expect(src, `${property} still chooses a corner for a badge`).not.toContain(property);
+    }
+  });
+
+  it("states, where the chrome is wired, where the control is drawn", () => {
+    // A reader who changes the wrapper must find the placement note beside it,
+    // not in a review thread.
+    expect(src).toMatch(/close/i);
+    expect(src).toMatch(/globals\.css/);
+  });
+
+  it("is direction-neutral — nothing here reads as physical left or right", () => {
+    // The corner properties this replaces were read by the library as PHYSICAL
+    // left and right, which is why they carried a right-to-left caveat. Flow
+    // order and a logical margin carry none: the pair follows the reading
+    // direction on its own.
+    expect(rule()).not.toMatch(/(^|;)\s*(left|right)\s*:/);
     const layout = readFileSync(
       path.join(__dirname, "..", "..", "app", "layout.tsx"),
       "utf8",
     );
     expect(layout).toMatch(/<html\s+lang="en"/);
-    expect(layout).not.toMatch(/<html[^>]*\sdir=/);
-  });
-
-  it("records the limitation where the override is written", () => {
-    // A reader who changes these three lines must find the direction note
-    // beside them, not in a review thread.
-    expect(src).toMatch(/LEFT-TO-RIGHT ONLY/);
-  });
-
-  it("states the placement in the component that owns the toast chrome", () => {
-    // The wrapper (packages/sdk-ui/src/toast.ts) injects Copy and turns the
-    // close control on; where that control is drawn belongs here, so the two
-    // cannot disagree about a toast's anatomy.
-    expect(src).toMatch(/close/i);
   });
 });

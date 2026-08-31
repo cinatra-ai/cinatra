@@ -170,6 +170,15 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     : null;
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
+  // THE HEADER DESCRIBES THE REVISION UNDER IT, both halves of the sentence.
+  // `artifact.size` is cached on the object row when the artifact is created,
+  // and the append-with-expected-base save road deliberately does not touch that
+  // row (see `resolveEditorRevisionId`'s note in representation-store) — so a
+  // header served from it kept reporting the FIRST revision's size while the
+  // editor above it saved a fifth. The resolved head revision carries its own
+  // size beside the form already read from it; the row stays the floor for an
+  // artifact with no materialized representation to resolve.
+  const sizeBytes = resolved?.sizeBytes ?? artifact.size;
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
@@ -293,7 +302,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     <Main className="min-h-screen">
       <PageHeader
         title={title}
-        description={`${mime || "unknown"} · ${artifact.size} bytes`}
+        description={`${mime || "unknown"} · ${sizeBytes} bytes`}
         divider={false}
         actions={
           downloadHref || artifact.sourceUrl ? (
