@@ -338,6 +338,11 @@
       "resolvedSha": "42ca4f3bd9e50f7082cee2eb66070d86fb378383"
     },
     {
+      "packageName": "@cinatra-ai/podcast-artifacts",
+      "repo": "cinatra-ai/podcast-artifacts",
+      "resolvedSha": "1af543ceb5c714b537d5249b9416a713b5508ba2"
+    },
+    {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
       "repo": "cinatra-ai/product-portfolio-artifact",
       "resolvedSha": "228115ec9630851f1a6203c5879d01c5482a6305"

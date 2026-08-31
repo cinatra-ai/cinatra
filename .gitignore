@@ -34,11 +34,13 @@ docker/wayflow/.wayflow.env
 # from .env.local by scripts/gen-nango-env.mjs on every `npm run services`.
 docker/nango/.nango.env
 
-# Same pattern for the Graphiti knowledge-graph indexer (cinatra#2582): the
-# OpenAI key it runs with, resolved from the app's STORED provider configuration
-# by scripts/gen-graphiti-env.mjs on every `npm run services`. The glob also
-# covers the writer's `.tmp-<pid>` sibling, so an interrupted atomic replace can
-# never leave a committable plaintext credential behind.
+# The Graphiti knowledge-graph indexer has NO env file (cinatra#2582): its
+# provider key reaches the container through the environment of the `docker
+# compose` command that creates it, and scripts/gen-graphiti-env.mjs writes
+# nothing. This entry is kept as a BACKSTOP, not as a description of something
+# that exists: it names an artifact that must never be committed, and the
+# generator deletes any leftover of it on every run. Removing the entry would
+# make a re-introduced plaintext file committable.
 docker/graphiti/.graphiti.env*
 
 # Same pattern for the Plane MCP bridge (cinatra#1238): the minted dev/demo Plane
@@ -151,3 +153,8 @@ evidence/2824-s9k/.run/
 /verification/
 proofs/
 proof/
+
+# Instance-local runtime state written at boot, never tracked. Both 0600
+# per-boot local credentials live here: the development admin bypass token
+# and the local-caller gate credential.
+/.cinatra/

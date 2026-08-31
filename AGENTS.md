@@ -189,6 +189,15 @@ Open <http://localhost:3000>. Other useful `make` targets: `make down` (stop
 services, keep data), `make reset` (soft reset of app/auth data), `make logs`,
 and `make clean` (wipe Docker volumes).
 
+**Nothing to clean up after a dev session or a lane.** No provider credential is
+ever written to this checkout: the knowledge-graph indexer receives its key
+through the environment of the `docker compose` command that creates it
+(`npm run kg:up`, which `make dev` and `npm run services` end with), so
+`docker/graphiti/.graphiti.env` is **never present** and no file under `docker/`
+may contain a key-shaped value. A leftover from the old road is deleted on every
+generator run and announced. See
+[`docs/internals/contracts/no-provider-key-at-rest.md`](docs/internals/contracts/no-provider-key-at-rest.md).
+
 ### Validation
 
 Run these before opening a pull request:
