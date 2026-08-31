@@ -1,0 +1,564 @@
+// -----------------------------------------------------------------------------
+// The development fixture account's secret.
+//
+// The development boot seeds one fixture account so the end-to-end harnesses
+// have a real person to sign in as. Its password used to be assembled from
+// literals in this repository: anyone who read the source knew the credential of
+// every instance that had ever booted it, and the account was seeded even when
+// the instance was served to the whole internet.
+//
+// This module holds the four rules that replace that, as environment, crypto and
+// one file — no server-only APIs — so the boot, the harnesses and the tests all
+// read exactly the same rules:
+//
+//   1. the password is minted fresh on every boot, from a crypto source, past a
+//      length floor. It is NEVER PRINTED: a boot log is read by whoever can read
+//      the log, and on a continuous-integration runner that is the public. The
+//      boot writes the value to ONE file instead — under the local runtime data
+//      directory, at file mode 0600 — and says where it put it. The database
+//      only ever holds a hash;
+//   2. seeding is REFUSED, with a sentence the operator can read, whenever any
+//      origin the instance is configured to be served on is not a loopback, a
+//      private-network or an otherwise local-only origin;
+//   3. an account an earlier boot left behind is rotated onto this boot's
+//      secret, so a password from an earlier boot stops working;
+//   4. a harness that needs the password reads the value the instance was
+//      started with — from the environment, or from the 0600 file the boot
+//      names; never from a literal in this repository.
+// -----------------------------------------------------------------------------
+
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
+import path from "node:path";
+
+import { isPrivateUrl } from "@/lib/url-policy";
+
+const TAG = "[dev-fixture-account]";
+
+/**
+ * The setting that carries the fixture account's password INTO an instance and
+ * OUT to a harness. An operator who needs to know the password ahead of time
+ * sets it; otherwise the boot mints one and prints it.
+ */
+export const DEV_FIXTURE_PASSWORD_ENV = "CINATRA_DEV_FIXTURE_PASSWORD";
+
+/** No fixture password, minted or supplied, is ever shorter than this. */
+export const MIN_DEV_FIXTURE_PASSWORD_LENGTH = 24;
+
+/**
+ * Where this boot writes the fixture account's password, relative to the
+ * instance's working directory.
+ *
+ * `data/` is the local runtime data directory — generated, gitignored, and
+ * already the home of everything an instance writes about itself. The file
+ * holds the value and nothing else, so a reader needs no parser, and it is
+ * written at mode 0600 so only the account that started the instance can read
+ * it. It replaces PRINTING the value: a log line is read by whoever can read
+ * the log, and on a continuous-integration runner that is the public.
+ */
+export const DEV_FIXTURE_PASSWORD_FILE_RELATIVE = path.join(
+  "data",
+  "dev-fixture-account",
+  "password",
+);
+
+/** The absolute path of that file for a given instance working directory. */
+export function devFixturePasswordFilePath(cwd: string = process.cwd()): string {
+  return path.join(cwd, DEV_FIXTURE_PASSWORD_FILE_RELATIVE);
+}
+
+/**
+ * Write this boot's password where the operator, a harness or the command line
+ * can read it. Returns the path written, or null when the instance could not
+ * write it — a boot that cannot write the file still boots, and says so.
+ *
+ * THE VALUE IS NEVER WIDELY READABLE, not even for an instant, and it never
+ * follows a link:
+ *   - the file is opened with `O_NOFOLLOW`, so a symbolic link an earlier run
+ *     (or anybody else with write access to the directory) left in its place is
+ *     refused rather than followed and overwritten;
+ *   - the descriptor is narrowed to 0600 BEFORE a byte is written, so a file an
+ *     earlier boot left behind at a wider mode cannot expose this boot's value
+ *     in the window between the write and a later `chmod`;
+ *   - the directory is narrowed to 0700 on every boot, because the `mode` of
+ *     `mkdirSync` applies only when the directory is CREATED.
+ */
+export function writeDevFixturePasswordFile(
+  password: string,
+  cwd: string = process.cwd(),
+): string | null {
+  const file = devFixturePasswordFilePath(cwd);
+  let fd: number | null = null;
+  try {
+    const dir = path.dirname(file);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    fd = openSync(
+      file,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_TRUNC |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `${password}\n`);
+    return file;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
+/**
+ * The password the running instance wrote, for a harness or the command line
+ * beside it. Null when there is no file, or when it is empty — a caller then
+ * says which setting to supply rather than guessing a value.
+ */
+export function readDevFixturePasswordFile(cwd: string = process.cwd()): string | null {
+  try {
+    const value = readFileSync(devFixturePasswordFilePath(cwd), "utf8").trim();
+    return value === "" ? null : value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Take the file away. Called wherever the fixture account itself is being taken
+ * away, so a password an earlier boot wrote cannot outlive the account it
+ * belonged to. Best-effort and silent on absence.
+ */
+export function removeDevFixturePasswordFile(cwd: string = process.cwd()): void {
+  try {
+    rmSync(devFixturePasswordFilePath(cwd), { force: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Every setting that can name the origin this instance is served on. The
+ * refusal below reads ALL of them: an instance is public if ANY of them is.
+ */
+const SERVED_ORIGIN_SETTINGS = [
+  "NEXT_PUBLIC_APP_URL",
+  "BETTER_AUTH_URL",
+  "NEXT_PUBLIC_BETTER_AUTH_URL",
+] as const;
+
+/**
+ * A fresh password for this boot. 33 random bytes render as 44 characters that
+ * survive a shell, a URL and a sign-in form unharmed — comfortably past the
+ * floor, and drawn from the platform's cryptographic source.
+ */
+export function generateDevFixturePassword(): string {
+  return randomBytes(33).toString("base64url");
+}
+
+/**
+ * The names a process inside a container calls the machine that runs it. A
+ * container reaching the app on its own host has to spell the host gateway,
+ * because the container's own loopback address is the container. Such a name
+ * resolves only from inside that machine, so an instance served at one is
+ * exactly as private as an instance served at the loopback address.
+ */
+const CONTAINER_HOST_GATEWAY_NAMES: readonly string[] = [
+  "host.docker.internal",
+  "gateway.docker.internal",
+];
+
+/**
+ * The name endings reserved for one machine or one network. None of them is
+ * delegated in the public domain name system — `.localhost`, `.local` and
+ * `.home.arpa` are reserved by standard, and `.internal` and `.lan` are the
+ * private-network endings in ordinary use — so a name ending in one of them
+ * cannot be an origin somebody outside this network reaches the instance at.
+ */
+const LOCAL_ONLY_NAME_ENDINGS: readonly string[] = [
+  ".localhost",
+  ".local",
+  ".internal",
+  ".lan",
+  ".home.arpa",
+];
+
+/**
+ * True when the given origin is one only this machine or its own network can
+ * reach — which is what this rule means by private, and what it must call an
+ * origin that IS private. Three families are local, read in this one place so
+ * the boot and its tests read them the same way:
+ *   - ADDRESSES: loopback in all its spellings, the IPv4 private ranges (via
+ *     the shared classifier, so there is one reading of them), IPv4 link-local,
+ *     and the IPv6 unique-local and link-local ranges;
+ *   - CONTAINER HOST NAMES: the host-gateway alias a container uses to reach
+ *     the app on the machine running it;
+ *   - LOCAL-ONLY NAMES: a name ending in a reserved local ending, and a
+ *     single-label name, neither of which the public name system resolves.
+ *
+ * FAIL CLOSED. Everything this function cannot positively recognise as local is
+ * NOT local, because the caller refuses on a false answer:
+ *   - a value with no scheme (`app.example.org:8443`) parses as a URL whose
+ *     hostname is empty — it is a public host name, never a local one;
+ *   - a wildcard bind address (`0.0.0.0`, `[::]`) is the address a server
+ *     listens on for EVERY interface, so an instance configured to be served
+ *     there is reachable from outside and is treated as public;
+ *   - a resolvable public name or a public address (`https://app.example.com`,
+ *     `http://203.0.113.10:3000`) is public under every scheme.
+ */
+export function isLoopbackOrPrivateOrigin(value: string | null | undefined): boolean {
+  if (typeof value !== "string" || value.trim() === "") return false;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return false;
+  }
+  // A value with no scheme parses with an opaque protocol and an EMPTY host —
+  // `new URL("app.example.org:8443").hostname` is "". Only a real web origin is
+  // classified at all; anything else fails closed.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === "") return false;
+  // `new URL("http://[::1]:3000").hostname` keeps the brackets.
+  const bracketed = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  // A trailing dot spells the root of the name out (`build-box.`); it is not a
+  // label of its own, and it is removed so one name is classified one way.
+  const host = bracketed.endsWith(".") ? bracketed.slice(0, -1) : bracketed;
+  if (host === "") return false;
+  if (host.includes(":")) return isPrivateIpv6(host);
+  if (host === "localhost") return true;
+  if (CONTAINER_HOST_GATEWAY_NAMES.includes(host)) return true;
+  if (LOCAL_ONLY_NAME_ENDINGS.some((ending) => host.endsWith(ending))) return true;
+  if (/^127\./.test(host)) return true;
+  if (/^169\.254\./.test(host)) return true;
+  // `0.0.0.0` is the every-interface bind address, not a local address.
+  if (host === "0.0.0.0") return false;
+  // A single-label name is a machine on this network. The public name system
+  // resolves nothing without a delegated ending, so no name somebody outside
+  // reaches this instance at can arrive here. An address is never single-label:
+  // a dotted quad carries its dots, and every other spelling of an IPv4 address
+  // is normalised into one before this line reads it.
+  if (!host.includes(".")) return true;
+  return isPrivateUrl(`http://${host}`);
+}
+
+/**
+ * True for an IPv6 address only this machine or its own network can reach:
+ * the loopback address, the unique-local range (fc00::/7 — an address that
+ * starts `fc` or `fd`) and the link-local range (fe80::/10). The unspecified
+ * address `::` is the every-interface bind address, so it is NOT local.
+ */
+function isPrivateIpv6(host: string): boolean {
+  if (host === "::1") return true;
+  if (host === "::" || host === "") return false;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true;
+  if (/^fe[89ab][0-9a-f]?:/.test(host)) return true;
+  return false;
+}
+
+/**
+ * The two signals that say an instance is reachable from outside its own
+ * network without naming an environment setting at all.
+ *
+ * The authentication base URL is the origin the sign-in stack is built on. The
+ * public base URL is the one the operator configured for the instance and the
+ * instance stored about itself; it also enters the set of origins the sign-in
+ * stack trusts, which is exactly what makes it an exposure signal and not a
+ * cosmetic setting. An instance can be served to the whole internet through the
+ * second while the first is still the loopback address it always is in
+ * development, so a rule that reads one and not the other seeds the fixture
+ * account on precisely the instance it exists to protect.
+ */
+const AUTH_BASE_URL_SIGNAL = "the authentication base URL";
+const PUBLIC_BASE_URL_SIGNAL = "the public base URL configured for this instance";
+
+/** One origin the instance is configured to be reachable at, and what names it. */
+type NamedOrigin = { setting: string; value: string | null | undefined };
+
+/**
+ * The first configured origin that is not loopback, private-network or
+ * otherwise local-only, as a sentence the operator can read — or null when
+ * every one of them is local.
+ * This is the ONE reading of the exposure rule; everything below calls it.
+ */
+function firstPublicOriginRefusal(origins: readonly NamedOrigin[]): string | null {
+  for (const { setting, value } of origins) {
+    if (typeof value !== "string" || value.trim() === "") continue;
+    if (!isLoopbackOrPrivateOrigin(value)) {
+      return (
+        `refusing to seed the development fixture account: this instance is configured to be served at ` +
+        `${value.trim()} (${setting}), which is not a loopback, a private-network or an ` +
+        `otherwise local-only origin. ` +
+        `The fixture account exists only on an instance nobody else can reach.`
+      );
+    }
+  }
+  return null;
+}
+
+/** Everything the seeding decision is allowed to depend on. */
+export type DevFixtureSeedingInputs = {
+  /** `CINATRA_RUNTIME_MODE` — the fixture account exists only in development. */
+  runtimeMode?: string | null;
+  /** `NODE_ENV` — a production build is never a development runtime. */
+  nodeEnv?: string | null;
+  /** The origin the sign-in stack is built on. */
+  authBaseUrl?: string | null;
+  /** The public base URL the instance stores about itself. */
+  publicBaseUrl?: string | null;
+  /**
+   * True when that public base URL could not be read at all. A signal this rule
+   * cannot read is NOT a signal it may ignore: an instance whose stored
+   * configuration is unreadable may well be a publicly served one, so the rule
+   * fails CLOSED on it rather than treating it as "nothing configured".
+   */
+  publicBaseUrlUnreadable?: boolean;
+  /** The settings that can name the origin the instance is served on. */
+  env?: Record<string, string | undefined>;
+};
+
+/**
+ * Whether the fixture account may be seeded, and — when it may not — the
+ * sentence to print instead, and which arm of the rule refused. `runtime` is a
+ * silent no: an instance that is not a development runtime has no fixture
+ * account to speak of. `exposure` is a refusal the operator is told about,
+ * because an instance that used to be private may still be carrying an account
+ * from an earlier boot.
+ */
+export type DevFixtureSeedingDecision =
+  | { allowed: true; reason: null; refusal: null }
+  | { allowed: false; reason: "runtime" | "exposure"; refusal: string };
+
+/**
+ * THE rule. The development boot decides with this function and so do its
+ * tests, so there is one reading of "may this instance carry the fixture
+ * account" and no second copy of it to drift.
+ *
+ * FAIL CLOSED on both arms: a runtime this function cannot positively recognise
+ * as development refuses, and so does any configured origin it cannot
+ * positively recognise as local. An origin that is simply not configured is
+ * not a signal — an instance with no public base URL, or one whose database
+ * cannot be asked for it yet, is not thereby public.
+ */
+export function devFixtureSeedingAllowed(
+  inputs: DevFixtureSeedingInputs = {},
+): DevFixtureSeedingDecision {
+  const { runtimeMode, nodeEnv, authBaseUrl, publicBaseUrl, publicBaseUrlUnreadable, env } = inputs;
+  if (runtimeMode !== "development" || nodeEnv === "production") {
+    return {
+      allowed: false,
+      reason: "runtime",
+      refusal:
+        `refusing to seed the development fixture account: this instance is not a development runtime. ` +
+        `The fixture account exists only where it is the development boot that made it.`,
+    };
+  }
+  // A signal that cannot be read is not a signal that may be ignored.
+  if (publicBaseUrlUnreadable) {
+    return {
+      allowed: false,
+      reason: "exposure",
+      refusal:
+        `refusing to seed the development fixture account: ${PUBLIC_BASE_URL_SIGNAL} could not be read, ` +
+        `so this instance cannot be shown to be private. The fixture account is seeded only where every ` +
+        `origin this instance is served on is known to be local.`,
+    };
+  }
+  const origins: NamedOrigin[] = [
+    { setting: AUTH_BASE_URL_SIGNAL, value: authBaseUrl },
+    { setting: PUBLIC_BASE_URL_SIGNAL, value: publicBaseUrl },
+  ];
+  for (const setting of SERVED_ORIGIN_SETTINGS) {
+    origins.push({ setting, value: env?.[setting] });
+  }
+  const refusal = firstPublicOriginRefusal(origins);
+  if (refusal) return { allowed: false, reason: "exposure", refusal };
+  return { allowed: true, reason: null, refusal: null };
+}
+
+/**
+ * The exposure arm of the rule above, read off the environment alone, for a
+ * caller that holds nothing but the settings — the sentence to print instead of
+ * seeding, or null when seeding may go ahead. An instance that is reachable
+ * from outside its own network never carries the fixture account, so a password
+ * on one operator's screen can never be typed at somebody else's sign-in page.
+ */
+export function devFixtureSeedRefusal(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  return firstPublicOriginRefusal(
+    SERVED_ORIGIN_SETTINGS.map((setting) => ({ setting, value: env[setting] })),
+  );
+}
+
+/** Where this boot's password came from. */
+export type DevFixtureSecret = { password: string; source: "injected" | "generated" };
+
+let bootSecret: DevFixtureSecret | null = null;
+
+/**
+ * This boot's fixture password. Resolved once and held for the life of the
+ * process, so every part of a boot agrees on one value; the next boot starts a
+ * new process and therefore gets a new one. An operator who needs to know the
+ * value in advance supplies it; a supplied value below the floor is ignored
+ * (with a printed sentence) rather than weakening the account.
+ */
+export function resolveDevFixturePassword(
+  env: Record<string, string | undefined> = process.env,
+): DevFixtureSecret {
+  if (bootSecret) return bootSecret;
+  const supplied = env[DEV_FIXTURE_PASSWORD_ENV];
+  if (typeof supplied === "string" && supplied.length >= MIN_DEV_FIXTURE_PASSWORD_LENGTH) {
+    bootSecret = { password: supplied, source: "injected" };
+    return bootSecret;
+  }
+  if (typeof supplied === "string" && supplied.trim() !== "") {
+    console.log(
+      `${TAG} ignoring the supplied ${DEV_FIXTURE_PASSWORD_ENV}: it is shorter than ` +
+        `${MIN_DEV_FIXTURE_PASSWORD_LENGTH} characters. Minting one for this boot instead.`,
+    );
+  }
+  bootSecret = { password: generateDevFixturePassword(), source: "generated" };
+  return bootSecret;
+}
+
+let alreadyPrinted = false;
+
+/**
+ * Tell the operator where the fixture account's password is — once for the whole
+ * boot — and put it there.
+ *
+ * THE VALUE IS NEVER PRINTED. A boot log is read by whoever can read the log,
+ * and this boot runs on continuous-integration runners whose logs are public, so
+ * printing it published the credential of every instance that job booted. What
+ * is printed is the FILE the value was written to and the setting that chooses
+ * it; whoever may read the file may have the password, and nobody else.
+ */
+export function printDevFixtureSecretOnce(
+  email: string,
+  password: string,
+  source: DevFixtureSecret["source"],
+  cwd: string = process.cwd(),
+): void {
+  if (alreadyPrinted) return;
+  alreadyPrinted = true;
+  const origin = source === "injected" ? "the password you supplied" : "a password minted for this boot";
+  const file = writeDevFixturePasswordFile(password, cwd);
+  const whereItIs = file
+    ? `The value is never printed: it is in ${file}, readable only by the account that started this ` +
+      `instance (mode 0600). A harness or the command line reads it from there.`
+    : `The value is never printed, and it could NOT be written to ${devFixturePasswordFilePath(cwd)} on ` +
+      `this boot, so nothing on this machine holds it. Restart with ${DEV_FIXTURE_PASSWORD_ENV} set to ` +
+      `a value of your own if you need to know it.`;
+  console.log(
+    `${TAG} the development fixture account ${email} uses ${origin}. ${whereItIs}\n` +
+      `${TAG} set ${DEV_FIXTURE_PASSWORD_ENV} before starting the instance to choose it yourself.`,
+  );
+}
+
+/**
+ * The fixture password, for a harness running beside an instance. The harness
+ * is given the value the instance was started with; there is nothing to fall
+ * back to, and a missing value says so plainly rather than guessing.
+ */
+export function requireInjectedDevFixturePassword(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const value = env[DEV_FIXTURE_PASSWORD_ENV];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(
+      `The development fixture account's password is not available. Set ${DEV_FIXTURE_PASSWORD_ENV} to the ` +
+        `value the instance was started with, or read it from the file the boot names at startup ` +
+        `(${DEV_FIXTURE_PASSWORD_FILE_RELATIVE}, mode 0600). Setting this before the instance starts ` +
+        `chooses the password instead of letting the boot mint one. It is never printed.`,
+    );
+  }
+  // The SAME floor the boot applies. A shorter value is ignored by the boot,
+  // which mints its own instead — so a harness that accepted it here would type
+  // a password the instance never had and report an authentication failure that
+  // says nothing about the thing under test.
+  if (value.length < MIN_DEV_FIXTURE_PASSWORD_LENGTH) {
+    throw new Error(
+      `${DEV_FIXTURE_PASSWORD_ENV} is shorter than ${MIN_DEV_FIXTURE_PASSWORD_LENGTH} characters, so the ` +
+        `instance ignored it and minted its own password for this boot. Supply a value at least ` +
+        `${MIN_DEV_FIXTURE_PASSWORD_LENGTH} characters long to both the instance and this harness.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The small piece of the sign-in store a rotation needs. Keeping it to three
+ * named operations lets the rule below be exercised for what it does — hash,
+ * then store the hash — without a database.
+ */
+export type DevFixtureCredentialStore = {
+  hasCredentialAccount: (userId: string) => Promise<boolean>;
+  hashPassword: (plain: string) => Promise<string>;
+  updateCredentialPassword: (userId: string, passwordHash: string) => Promise<void>;
+};
+
+/**
+ * Put this boot's secret on an account an earlier boot created, so the password
+ * that account carried before stops working. Returns false when the
+ * account has no password to rotate; the caller treats that as a refusal rather
+ * than leaving an account behind whose password it does not know.
+ */
+export async function rotateDevFixturePassword(
+  userId: string,
+  password: string,
+  store: DevFixtureCredentialStore,
+): Promise<boolean> {
+  if (typeof password !== "string" || password.length < MIN_DEV_FIXTURE_PASSWORD_LENGTH) {
+    throw new Error(
+      `refusing to rotate the development fixture account onto a password shorter than ` +
+        `${MIN_DEV_FIXTURE_PASSWORD_LENGTH} characters`,
+    );
+  }
+  if (!(await store.hasCredentialAccount(userId))) return false;
+  const passwordHash = await store.hashPassword(password);
+  await store.updateCredentialPassword(userId, passwordHash);
+  return true;
+}
+
+/**
+ * Take the fixture account's password away from whoever knows it, without
+ * handing it to anybody new. Used where the account must NOT be used at all:
+ * on an instance the public can reach, and where this boot cannot put its own
+ * secret on the account. A fresh secret is minted, stored as a hash and then
+ * dropped unread, so the account survives as a row that nothing can sign in as
+ * — an earlier boot's password stops working even on a boot that refuses to
+ * seed. Returns false when there was no password to take away, and never
+ * throws: this runs on paths that are already refusing.
+ */
+export async function retireDevFixturePassword(
+  userId: string,
+  store: DevFixtureCredentialStore,
+): Promise<boolean> {
+  // Whatever happens to the row, the file goes: a password an earlier boot
+  // wrote must not outlive the account it belonged to.
+  removeDevFixturePasswordFile();
+  try {
+    return await rotateDevFixturePassword(userId, generateDevFixturePassword(), store);
+  } catch {
+    return false;
+  }
+}

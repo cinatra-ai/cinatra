@@ -115,6 +115,22 @@ describe("a STALE snapshot (the #2544 loop)", () => {
     await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("complete"));
     // A second refresh here is a request loop traded for a redirect loop.
     expect(refresh).toHaveBeenCalledTimes(1);
+
+    // ...and now the arm that actually has TEETH against the once-only latch.
+    // The acting effect's deps are the snapshot flag and the verdict, not the
+    // transport, so a fresh `confirm` identity alone never re-runs it — the
+    // rerenders above cannot tell a latched refresh from an unlatched one. A
+    // genuine SECOND episode can: leave the redirect-wanting state and come
+    // back to it, which resets the verdict to "pending", re-asks, and lands on
+    // "complete" a second time with the hook still mounted. Without the
+    // `snapshotRepaired` latch this is refresh number two — the request loop
+    // #2503 refused.
+    rerender(<Probe snapshotSaysIncomplete={false} confirm={() => confirm()} />);
+    await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("pending"));
+    rerender(<Probe snapshotSaysIncomplete confirm={() => confirm()} />);
+    await waitFor(() => expect(getByTestId("confirmation").textContent).toBe("complete"));
+    await act(async () => {});
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(replaceToSetup).not.toHaveBeenCalled();
   });
 
@@ -205,6 +221,18 @@ describe("the confirmation must not itself go stale", () => {
     // Still exactly the one redirect from before setup was done. A cached
     // "incomplete" here is the loop, rebuilt.
     expect(replaceToSetup).toHaveBeenCalledTimes(1);
+    // The repair rides a passive EFFECT of the very commit that painted
+    // "complete", and React runs those AFTER the DOM mutation the waitFor
+    // above watches for. Reading the mock the instant the text settles is
+    // therefore a bet on flush ordering that a loaded runner loses; the
+    // refresh is awaited on its own terms instead, exactly as the sibling arm
+    // further up already does.
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    // ...and it is still one once the queue is fully drained. This is a
+    // settling check on THIS arm only; the once-only latch itself is fenced by
+    // the second-episode arm in "repairs the lying snapshot with exactly one
+    // refresh" above, which is the one that goes red if the latch is deleted.
+    await act(async () => {});
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

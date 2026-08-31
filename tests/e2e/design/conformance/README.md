@@ -61,6 +61,22 @@ locally "local"). The endpoint refuses to exist in production unless the
 documented `CINATRA_E2E_SETUP_BYPASS` e2e switch is set (the same
 reachability contract as the fixture routes, `src/lib/auth-route-guard.ts`).
 
+**The seed endpoint needs a presented capability.** Its writes are real
+lifecycle writes and it is exempt from the sign-in redirect, so reachability
+is not authorization: the endpoint answers 404 to every caller unless
+`CINATRA_CONFORMANCE_SEED_TOKEN` (at least 32 characters) is armed on the
+server AND presented by the caller as `Authorization: Bearer ...`, from a
+request whose forwarded chain names no hop from off the machine. CI mints one
+per run; to run this suite locally, arm the same value in the server's
+environment and in the shell running Playwright:
+
+```sh
+export CINATRA_CONFORMANCE_SEED_TOKEN="$(openssl rand -hex 32)"
+```
+
+The fence and the reasons for each of its three refusals live in
+`src/lib/test-support/conformance-seed-fence.ts`.
+
 ## Spec pinning (`conformance-pins.json`)
 
 Each manifest is pinned twice: `manifestSha256` (sha256 of the committed

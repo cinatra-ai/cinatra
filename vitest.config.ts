@@ -496,8 +496,15 @@ export default defineConfig({
       // database, `server-only` or Playwright import so these arms run in the
       // ordinary node unit tier, and so a reader can re-run the coverage this
       // suite claims. Everything under tests/e2e/ stays out of the tier except
-      // this one glob.
+      // this glob and the one below it.
       "tests/e2e/chat-hitl-held-turn/__tests__/**/*.test.ts",
+      // `tests/e2e/open-registration.ts` is the shared step every harness runs
+      // before it mints a second account, now that a fresh instance keeps
+      // registration closed. It is a read-modify-write against one settings
+      // row, and getting it wrong would silently reconfigure the instance a
+      // suite runs on, so its arms run here in the ordinary node unit tier
+      // (`pg` is mocked; no live database is involved).
+      "tests/e2e/__tests__/**/*.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
