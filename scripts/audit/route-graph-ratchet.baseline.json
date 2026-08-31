@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 223,
     "/api/mcp": 1748,
-    "/chat": 1849,
+    "/chat": 1850,
     "/api/a2a": 1756,
     "/api/llm-bridge": 1766
   },
@@ -27,10 +27,10 @@
       "pr": 3111
     },
     "/chat": {
-      "from": 1847,
-      "to": 1849,
-      "reason": "The overlay-collision bound of cinatra#3105 moves OUT of the design registry's `utils` item into its own module, in the host tree (src/lib/overlay-collision.ts) and in the portable tree (packages/sdk-ui/src/lib/overlay-collision.ts). src/lib/utils.ts is the published `utils` registry item: it is emitted into public/r/utils.json for outside consumers and copied byte-for-byte into every extension that vendors a design primitive, so a helper that reads `document` and the app shell's `--banner-height` had no business living there. The two panel families that take the bound (the popover and the dropdown menu, plus the select list on the host side) now import the new module, which is the whole +2: two files where there was none. ATTRIBUTED BY MEASUREMENT, not argued: in ONE environment, with the companion extension fleet cloned PINNED (114/114, missingCount 0), the same scanner on this same tree with the two modules removed and the imports folded back into `utils` measures 1751 (/api/a2a), 1761 (/api/llm-bridge), 1746 (/api/mcp) and 1847 (/chat) — each route's committed ceiling EXACTLY — and with them present measures each ceiling + 2. Narrowing is not available: the bound is one expression shared by all three panel families, and folding it back into the vendored lib is the defect this change removes.",
-      "pr": 3111
+      "from": 1849,
+      "to": 1850,
+      "reason": "Pull request #3053 carries this record. cinatra#3044 makes the turn that introduces the schedule card stop contradicting the card. `from` (1849) is origin/main's OWN committed ceiling at 1f907ec73901d5bb071395837ff340db6fa16f59, which this merge brings forward into the branch and which already carries the overlay-collision raise of cinatra#3105 (the pr:3111 record, 1847 -> 1849, kept byte-identical on the other three tracked routes below).\n\nWHAT THE RAISE IS, measured as a module set and not only as a number: exactly ONE module enters this route's graph and none leaves -- packages/chat/src/run-seed-request.ts, this branch's own net-new module (absent from origin/main -- confirmed via `git show origin/main:packages/chat/src/run-seed-request.ts`, which fails), imported directly by chat-messages-view.tsx and inline-agent-run-card.tsx -- both already on this route's graph -- so the message list and the run card ask for a run's seed through ONE function instead of two independent fetches that could disagree about what a run was asked to do.\n\nHOW IT WAS MEASURED, the way CI measures: in ONE environment, with the companion extension fleet cloned PINNED at this merge's lock SHAs (114/114, missingCount 0) and the merge commit's own unmodified scripts/route-graph.mjs, origin/main checked out ALONE measures 1849 on this route -- its committed ceiling EXACTLY -- and the merged tree measures 1850. Every other tracked route lands EXACTLY at origin/main's ceiling on BOTH trees (1748 /api/mcp, 1753 /api/a2a, 1763 /api/llm-bridge, all headroom 0; /sign-in 161 under its 223 ceiling on both), and the analyzer's own per-owner breakdown attributes the whole +1 to @cinatra-ai/chat (61 -> 62) and to no other owner -- confirming the +1 is this route alone and this module alone.\n\nThe record this raise replaces for this route is origin/main's own pr:3111 overlay-collision record (1847 -> 1849), RETIRED BY THIS RAISE -- the one lifecycle the gate allows for an annotation whose ceiling moves; nothing that record absorbed is re-absorbed here, its modules are already inside 1849.",
+      "pr": 3053
     },
     "/sign-in": {
       "from": 222,
