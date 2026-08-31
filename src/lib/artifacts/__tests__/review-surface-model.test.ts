@@ -361,7 +361,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
   });
 
   it("keeps BOTH facts, in the order the drawing draws them", () => {
-    // design@fe2182547d4a specs/app-artifact-review.html §IV — "the read-only row
+    // design@c73c68f5e39e specs/app-artifact-review.html §IV — "the read-only row
     // facts the host authorized — owner level / visibility, MIME, and updated
     // time" — and §II's example line "… · Team · Private · text/html · updated 8
     // min ago". Neither fact is dropped; both are labelled.

@@ -51,6 +51,10 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { AuthzError } from "@/lib/authz";
+// The standard not-authorized panel every run surface refuses with
+// (cinatra#2934, the fifth graded proof set) — see `runScreenAccessAnswer`
+// below for which refusal reaches it and which one does not.
+import { RunNotAuthorizedPanel } from "./run-not-authorized-panel";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
 // Type re-exports (AvailableScopes, CoOwnerView) originate from their
@@ -697,7 +701,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       run = await readAgentRunById(instanceId, setupActor, setupRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
   }
@@ -1543,7 +1552,12 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
     run = await readAgentRunById(instanceId, permActor, permRoles);
     if (!run) notFound();
   } catch (err) {
-    if (err instanceof AuthzError) notFound();
+    const answer = runScreenAccessAnswer(err);
+    if (answer === "not-found") notFound();
+    if (answer === "not-authorized")
+      return (
+        <RunNotAuthorizedPanel surface="Permissions" conformanceId="run-not-authorized" />
+      );
     throw err;
   }
 
@@ -1769,6 +1783,41 @@ export async function DataScreen({ agentId, instanceId }: ScreenProps) {
   redirect(`/agents/${agentPath}/${encodeURIComponent(instanceId)}`);
 }
 
+/**
+ * WHICH REFUSAL A RUN SURFACE DRAWS, AND WHY IT IS NOT ONE ANSWER FOR ALL OF
+ * THEM (cinatra#2934, the fifth graded proof set).
+ *
+ * The ratified drawing: "A viewer with no access to the run at all never
+ * reaches the surface: it opens to the standard not-authorized panel, never to
+ * the target." Every one of these screens used to answer a flat not-found
+ * instead, for every refusal alike — so a plain member of the run's own
+ * organization was told the page did not exist while the trail above it went on
+ * naming the run and the tab it had just denied. One of those two sentences was
+ * false, and the person could not tell which.
+ *
+ * The authorization layer already draws the distinction; this reads it back
+ * rather than deciding it a second time:
+ *
+ *   404 / hidden     the refusal HID the run's existence. A denied `*.read` is
+ *                    downgraded to 404 on purpose, so a caller outside the run's
+ *                    organization cannot learn which run ids exist by telling
+ *                    403 from 404. That defence is not weakened here — this
+ *                    answer stays the flat not-found, and should.
+ *   403 / forbidden  the refusal LEFT the run's existence intact: the kernel
+ *                    granted the read, and the run's OWN configured policy is
+ *                    what refused. The page is there and this person may not act
+ *                    on it — precisely what the drawing has the surface say.
+ *
+ * Anything that is not an authorization refusal is handed back to be rethrown: a
+ * store that fell over is not a permission answer and must not be drawn as one.
+ */
+export function runScreenAccessAnswer(
+  err: unknown,
+): "not-found" | "not-authorized" | "rethrow" {
+  if (!(err instanceof AuthzError)) return "rethrow";
+  return err.statusCode === 404 ? "not-found" : "not-authorized";
+}
+
 export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -1805,7 +1854,12 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       run = await readAgentRunById(instanceId, triggerActor, triggerRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Schedule" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
   }
@@ -2041,7 +2095,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       ) : null}
       {/*
         THE SAME FORM, AS A READING (cinatra#2980).
-        design@fe2182547d4a `specs/app-components.html` § "Standard
+        design@c73c68f5e39e `specs/app-components.html` § "Standard
         scheduling step", the "Configured schedule step" reading: "Once a
         *Run right after setup* or *Schedule for later* schedule has fired it
         cannot be changed any more: the form stays as a **read-only** reading

@@ -1202,11 +1202,18 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       expect(view.container.textContent, host).not.toContain(
         SAVE_SCHEDULE_REFUSALS.firedOneOff,
       );
-      // The rows stand — read-only, showing the schedule that fired.
+      // The rows stand — read-only, showing the schedule that fired. Since the
+      // fifth graded proof set (cinatra#2934) that is read the way the drawing
+      // draws it: "the values still legible, the pickers gone", so there is no
+      // picker here to be disabled and the moment is legible as text.
       expect(
-        isDisabled(view.container.querySelector('[data-field="schedule-run-at"]')),
+        view.container.querySelector('[data-field="schedule-run-at"]'),
         host,
-      ).toBe(true);
+      ).toBeNull();
+      expect(
+        view.container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
+        host,
+      ).toBe("2020-03-04T09:00");
       view.unmount();
       cleanup();
     }
@@ -1342,9 +1349,12 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     ).toBeNull();
     // AND THE UNSAVED EDIT IS GONE WITH IT. The rows now stand read-only, so
     // whatever they show is a claim about what is armed — it must be the
-    // server's schedule, never the draft nobody saved.
+    // server's schedule, never the draft nobody saved. Read off the read-only
+    // value the drawing puts there since the fifth graded proof set
+    // (cinatra#2934); the picker itself is gone.
+    expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
     expect(
-      (container.querySelector('[data-field="recurring-timezone"]') as HTMLInputElement).value,
+      container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
     ).toBe("Europe/Berlin");
   });
 

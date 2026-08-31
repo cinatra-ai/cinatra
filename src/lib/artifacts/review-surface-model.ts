@@ -209,7 +209,7 @@ export function reviewTypeLabel(objectType: string): string {
  * The read-only row facts the header's meta line carries (§II) — the ones the
  * drawing names: "the read-only row facts the host authorized — owner level /
  * visibility, MIME, and updated time"
- * (design@fe2182547d4a specs/app-artifact-review.html §IV).
+ * (design@c73c68f5e39e specs/app-artifact-review.html §IV).
  *
  * THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line printed the
  * two scope facts BARE, one after the other, so the ordinary case read

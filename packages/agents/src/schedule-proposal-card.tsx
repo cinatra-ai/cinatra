@@ -158,6 +158,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { CalendarClock, Check, Repeat, Zap } from "lucide-react";
 
@@ -867,6 +868,15 @@ function SettledPhase({
       <ScheduleOptionRows
         schedule={frozen ? body.schedule : draft}
         editable={body.canSave}
+        // A SCHEDULE THAT IS OVER IS NOT A REFUSED READER (cinatra#2934, the
+        // fifth graded proof set). Both states arrive here with `canSave: false`,
+        // and until now both drew the same DOM — every control present and
+        // greyed. The drawing gives them two different readings: the frozen
+        // card is "read-only, with no controls at all" while the refused reader
+        // keeps "its buttons disabled and the reason on the card". `frozen` is
+        // already the predicate that separates them, so it is what decides
+        // whether the rows carry controls.
+        readOnly={frozen}
         onChange={(next) => {
           setSaved(false);
           setDraft(next);
@@ -1056,11 +1066,25 @@ function browserTimezone(): string {
 function ScheduleOptionRows({
   schedule,
   editable,
+  readOnly = false,
   onChange,
   durationCopy,
 }: {
   schedule: ProposedSchedule;
   editable: boolean;
+  /**
+   * THE SCHEDULE IS OVER (cinatra#2934, the fifth graded proof set) — a spent
+   * one-off, or a recurring schedule that was stopped.
+   *
+   * `editable` and `readOnly` are two different answers and the drawing draws
+   * them differently. `editable: false` alone is the reader who "may see but
+   * not act on" the card: every control stays on screen, disabled, with the
+   * reason beside it. `readOnly` is the schedule that is over: "the rows go
+   * read-only — the values still legible, the pickers gone — and the card
+   * carries no floor at all". So this flag removes the CONTROLS, not the
+   * values, and it is set only where the card is frozen.
+   */
+  readOnly?: boolean;
   onChange: (next: ProposedSchedule) => void;
   durationCopy: string | null;
 }): ReactElement {
@@ -1082,6 +1106,7 @@ function ScheduleOptionRows({
         rowKind="immediate"
         chosen={kind === "immediate"}
         editable={editable}
+        readOnly={readOnly}
         label="Run right after setup"
         icon={<Zap aria-hidden="true" className="size-3.5" />}
         onChoose={() => pick({ kind: "immediate" })}
@@ -1091,6 +1116,7 @@ function ScheduleOptionRows({
         rowKind="scheduled"
         chosen={kind === "scheduled"}
         editable={editable}
+        readOnly={readOnly}
         label="Schedule for later"
         icon={<CalendarClock aria-hidden="true" className="size-3.5" />}
         onChoose={() =>
@@ -1103,32 +1129,42 @@ function ScheduleOptionRows({
       >
         <div className="ml-7 flex flex-wrap gap-4">
           <Field label="Run at">
-            <Input
-              type="datetime-local"
-              data-field="schedule-run-at"
-              className="w-56"
-              disabled={!editable}
-              value={schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
-              onChange={(e) =>
-                pick({ kind: "scheduled", runAt: e.target.value, timezone })
-              }
-            />
+            {readOnly ? (
+              <ReadOnlyValue field="schedule-run-at">
+                {schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
+              </ReadOnlyValue>
+            ) : (
+              <Input
+                type="datetime-local"
+                data-field="schedule-run-at"
+                className="w-56"
+                disabled={!editable}
+                value={schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
+                onChange={(e) =>
+                  pick({ kind: "scheduled", runAt: e.target.value, timezone })
+                }
+              />
+            )}
           </Field>
           <Field label="Timezone">
-            <Input
-              type="text"
-              data-field="schedule-timezone"
-              className="w-56"
-              disabled={!editable}
-              value={timezone}
-              onChange={(e) =>
-                pick({
-                  kind: "scheduled",
-                  runAt: schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt(),
-                  timezone: e.target.value,
-                })
-              }
-            />
+            {readOnly ? (
+              <ReadOnlyValue field="schedule-timezone">{timezone}</ReadOnlyValue>
+            ) : (
+              <Input
+                type="text"
+                data-field="schedule-timezone"
+                className="w-56"
+                disabled={!editable}
+                value={timezone}
+                onChange={(e) =>
+                  pick({
+                    kind: "scheduled",
+                    runAt: schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt(),
+                    timezone: e.target.value,
+                  })
+                }
+              />
+            )}
           </Field>
         </div>
       </OptionRow>
@@ -1137,6 +1173,7 @@ function ScheduleOptionRows({
         rowKind="recurring"
         chosen={kind === "recurring"}
         editable={editable}
+        readOnly={readOnly}
         label="Recurring"
         icon={<Repeat aria-hidden="true" className="size-3.5" />}
         onChoose={() => pick({ kind: "recurring", selection: recurring, timezone })}
@@ -1144,6 +1181,17 @@ function ScheduleOptionRows({
         <div className="ml-7 flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">Repeat every</span>
+            {readOnly ? (
+              <>
+                <ReadOnlyValue field="recurring-interval" width="w-20">
+                  {String(recurring.interval)}
+                </ReadOnlyValue>
+                <ReadOnlyValue field="recurring-frequency" width="w-32">
+                  {FREQUENCY_LABELS[recurring.frequency]}
+                </ReadOnlyValue>
+              </>
+            ) : (
+              <>
             <Select
               disabled={!editable}
               value={String(recurring.interval)}
@@ -1178,6 +1226,8 @@ function ScheduleOptionRows({
                 <SelectItem value="yearly">year</SelectItem>
               </SelectContent>
             </Select>
+              </>
+            )}
           </div>
 
           {recurring.frequency === "weekly" ? (
@@ -1187,7 +1237,16 @@ function ScheduleOptionRows({
                   a fixed row clipped the last weekday chip off the right edge
                   there — a control the reader could see but not press. */}
               <div className="flex flex-wrap gap-1">
-                {WEEKDAY_LABELS.map((label, i) => (
+                {readOnly
+                  ? WEEKDAY_LABELS.map((label, i) => (
+                      <ReadOnlyWeekday
+                        key={label}
+                        label={label}
+                        weekday={i}
+                        selected={recurring.weekdays.includes(i)}
+                      />
+                    ))
+                  : WEEKDAY_LABELS.map((label, i) => (
                   <Button
                     key={label}
                     type="button"
@@ -1233,6 +1292,18 @@ function ScheduleOptionRows({
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">At</span>
+            {readOnly ? (
+              <>
+                <ReadOnlyValue field="recurring-hour" width="w-20">
+                  {String(recurring.hour).padStart(2, "0")}
+                </ReadOnlyValue>
+                <span className="text-muted-foreground">:</span>
+                <ReadOnlyValue field="recurring-minute" width="w-20">
+                  {String(recurring.minute).padStart(2, "0")}
+                </ReadOnlyValue>
+              </>
+            ) : (
+              <>
             <Select
               disabled={!editable}
               value={String(recurring.hour)}
@@ -1266,23 +1337,29 @@ function ScheduleOptionRows({
                 ))}
               </SelectContent>
             </Select>
+              </>
+            )}
           </div>
 
           <Field label="Timezone">
-            <Input
-              type="text"
-              data-field="recurring-timezone"
-              className="w-56"
-              disabled={!editable}
-              value={timezone}
-              onChange={(e) =>
-                pick({
-                  kind: "recurring",
-                  selection: recurring,
-                  timezone: e.target.value,
-                })
-              }
-            />
+            {readOnly ? (
+              <ReadOnlyValue field="recurring-timezone">{timezone}</ReadOnlyValue>
+            ) : (
+              <Input
+                type="text"
+                data-field="recurring-timezone"
+                className="w-56"
+                disabled={!editable}
+                value={timezone}
+                onChange={(e) =>
+                  pick({
+                    kind: "recurring",
+                    selection: recurring,
+                    timezone: e.target.value,
+                  })
+                }
+              />
+            )}
           </Field>
         </div>
       </OptionRow>
@@ -1317,6 +1394,75 @@ function Field({ label, children }: { label: string; children: ReactElement }): 
   );
 }
 
+/** The words the frequency picker itself draws, so a spent schedule reads back
+ *  in exactly the vocabulary the live row offered. Kept beside the picker it
+ *  mirrors — one list, two readings. */
+const FREQUENCY_LABELS: Readonly<Record<RecurringSelection["frequency"], string>> = {
+  daily: "day(s)",
+  weekly: "week(s)",
+  monthly: "month(s)",
+  quarterly: "quarter",
+  yearly: "year",
+};
+
+/**
+ * A FIELD OF A SPENT SCHEDULE — "the values still legible, the pickers gone"
+ * (cinatra#2934, the fifth graded proof set).
+ *
+ * The ratified drawing draws a schedule that is over with its value in a plain
+ * box of the field's own size and NOTHING to press: same edge, same ground,
+ * the value in the muted secondary colour. It is deliberately NOT a disabled
+ * input — a disabled input is the drawing's OTHER reading, the one a reader who
+ * "may see but not act on" the card is owed, and drawing both the same way
+ * would erase the difference between a schedule that is over and a reader who
+ * is refused. See `readOnly` on `ScheduleOptionRows`.
+ */
+function ReadOnlyValue({
+  field,
+  width,
+  children,
+}: {
+  field: string;
+  width?: string;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <div
+      data-readonly-field={field}
+      className={`flex h-9 items-center rounded-control border border-input bg-background px-3 text-sm text-muted-foreground ${width ?? "w-56"}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A weekday of a spent recurring schedule. The chip KEEPS its fill — in this
+ *  state it is the schedule being shown, not a control being offered — so the
+ *  same two paints are used, on a span rather than a button. */
+function ReadOnlyWeekday({
+  label,
+  selected,
+  weekday,
+}: {
+  label: string;
+  selected: boolean;
+  weekday: number;
+}): ReactElement {
+  return (
+    <span
+      data-readonly-field="recurring-weekday"
+      data-weekday={weekday}
+      className={`inline-flex h-8 w-10 items-center justify-center rounded-control border text-xs font-medium ${
+        selected
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-input bg-background text-muted-foreground"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /**
  * One option row. The CHOSEN one takes the indigo edge and tint and owns its
  * fields (§VI) — the same `border-primary bg-primary/5` pair the shipped
@@ -1326,6 +1472,7 @@ function OptionRow({
   rowKind,
   chosen,
   editable,
+  readOnly = false,
   label,
   icon,
   onChoose,
@@ -1334,37 +1481,58 @@ function OptionRow({
   rowKind: ProposedSchedule["kind"];
   chosen: boolean;
   editable: boolean;
+  readOnly?: boolean;
   label: string;
   icon: ReactElement;
   onChoose: () => void;
   children?: ReactElement;
 }): ReactElement {
+  // THE EDGE AND THE TINT DO NOT CHANGE WHEN THE SCHEDULE IS OVER. The drawing's
+  // spent card carries the same border, the same ground and the same radio as
+  // the live one — measured row for row against the armed card, the ONLY
+  // difference is that the row does not take a press. So nothing here is
+  // dimmed; the control itself is what goes away.
+  const marker = (
+    <>
+      <span
+        className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
+          chosen ? "border-primary" : "border-muted-foreground"
+        }`}
+      >
+        {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
+      </span>
+      {icon}
+      <span className="text-sm font-medium text-foreground">{label}</span>
+    </>
+  );
   return (
     <div
       data-schedule-option={rowKind}
       data-chosen={chosen ? "true" : "false"}
+      data-readonly={readOnly ? "true" : "false"}
       className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors ${
         chosen ? "border-primary bg-primary/5" : "border-input"
       }`}
     >
-      <Button
-        type="button"
-        variant="ghost"
-        disabled={!editable}
-        aria-pressed={chosen}
-        onClick={onChoose}
-        className="h-auto justify-start gap-3 p-0 text-left hover:bg-transparent disabled:cursor-default disabled:opacity-100"
-      >
-        <span
-          className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-            chosen ? "border-primary" : "border-muted-foreground"
-          }`}
+      {readOnly ? (
+        /* "read-only, with no controls at all" — a spent schedule's row is a
+           plain row. NOT a disabled button: a disabled button is still a
+           control, is still announced as one, and is the drawing's reading for
+           the reader who may not act rather than for the schedule that is
+           over. */
+        <div className="flex items-center gap-3 text-left">{marker}</div>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={!editable}
+          aria-pressed={chosen}
+          onClick={onChoose}
+          className="h-auto justify-start gap-3 p-0 text-left hover:bg-transparent disabled:cursor-default disabled:opacity-100"
         >
-          {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
-        </span>
-        {icon}
-        <span className="text-sm font-medium text-foreground">{label}</span>
-      </Button>
+          {marker}
+        </Button>
+      )}
       {/* The chosen row OWNS ITS FIELDS (§VI): the other rows' fields are not
           drawn at all, so there is never more than one live set of inputs. */}
       {chosen ? children ?? null : null}

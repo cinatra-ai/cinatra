@@ -227,11 +227,18 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
   }
 
   it("the rows of a fired one-off are read-only, showing the schedule that fired", async () => {
+    // AMENDED BY THE FIFTH GRADED CAPTURE (cinatra#2934). This assertion used
+    // to look for a DISABLED picker holding the armed moment, and a disabled
+    // picker is not what the drawing draws here: "the rows go read-only — the
+    // values still legible, the PICKERS GONE". A dead picker is the reading for
+    // a reader who may not act on a live schedule; this schedule is over. So
+    // the same fact is now read where the drawing puts it — the value as text,
+    // with no control holding it.
     const { container } = mount(BODIES.oneOffFired, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
-    expect(disabled(container.querySelector('[data-field="schedule-run-at"]'))).toBe(true);
+    expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
     expect(
-      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+      container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
     ).toBe("2020-03-04T09:00");
   });
 });
@@ -363,8 +370,13 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     expect(save(container)).toBeNull();
     expect(cancel(container)).toBeNull();
     expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
-    // The schedule is still DRAWN — stopping it is not deleting it.
-    expect(disabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
+    // The schedule is still DRAWN — stopping it is not deleting it. Read as
+    // the drawing draws it since the fifth graded proof set (cinatra#2934): the
+    // value legible, the picker gone, rather than a picker standing there dead.
+    expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(
+      container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
+    ).toBe("Europe/Berlin");
   });
 });
 

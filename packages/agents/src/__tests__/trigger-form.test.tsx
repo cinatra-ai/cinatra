@@ -271,7 +271,7 @@ describe("TriggerScreenClient — duration estimate banner", () => {
 // ---------------------------------------------------------------------------
 // THE READ-ONLY READING (cinatra#2980).
 //
-// design@fe2182547d4a `specs/app-components.html` § "Standard scheduling step",
+// design@c73c68f5e39e `specs/app-components.html` § "Standard scheduling step",
 // the "Configured schedule step" reading: "Once a *Run right after setup* or
 // *Schedule for later* schedule has fired it cannot be changed any more: the
 // form stays as a **read-only** reading with no controls at all."

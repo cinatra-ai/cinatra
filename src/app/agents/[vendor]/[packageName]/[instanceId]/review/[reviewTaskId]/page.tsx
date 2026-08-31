@@ -28,7 +28,6 @@
  */
 import "server-only";
 import { redirect } from "next/navigation";
-import { Lock } from "lucide-react";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
@@ -69,6 +68,7 @@ import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
+import { RunNotAuthorizedPanel } from "@cinatra-ai/agents/run-not-authorized-panel";
 import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
 
@@ -407,28 +407,15 @@ function ReviewShell({ children }: { children: React.ReactNode }) {
 }
 
 /** The standard not-authorized panel (§V) — a viewer with no run access never
- * reaches the targets. */
+ * reaches the targets.
+ *
+ * ONE PANEL FOR EVERY RUN SURFACE (cinatra#2934, the fifth graded proof set).
+ * This surface had the drawing's answer already and the run page and the
+ * schedule surface did not; rather than copy it a third time, the panel moved
+ * beside the screens that share it and this reading is now the same component,
+ * carrying this surface's own word and its own pinned anchor. Two panels would
+ * drift, and a difference between them would read to the person as a difference
+ * in what happened. */
 function ReviewNotAuthorizedPanel() {
-  return (
-    <Main className="min-h-screen">
-      <PageHeader label="Agent run" title="Review" description="Not authorized" divider />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        <div
-          className="flex flex-col items-center gap-3 rounded-lg border border-line bg-surface-strong px-5 py-14 text-center"
-          data-conformance-id="review-not-authorized"
-          data-state="error"
-        >
-          <div className="grid size-10 place-items-center rounded-lg bg-surface-muted text-muted-foreground">
-            <Lock aria-hidden="true" className="size-5" />
-          </div>
-          <p className="text-sm font-semibold text-foreground">
-            You don&apos;t have access to this review
-          </p>
-          <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-            This review belongs to an agent run you&apos;re not authorized to see.
-          </p>
-        </div>
-      </PageContent>
-    </Main>
-  );
+  return <RunNotAuthorizedPanel surface="Review" conformanceId="review-not-authorized" />;
 }

@@ -59,6 +59,7 @@
     "./agent-hitl-screen-card": "./src/agent-hitl-screen-card.tsx",
     "./verification-summary-card": "./src/verification-summary-card.tsx",
     "./schedule-proposal-card": "./src/schedule-proposal-card.tsx",
+    "./run-not-authorized-panel": "./src/run-not-authorized-panel.tsx",
     "./schedule-rail-step": "./src/schedule-rail-step.tsx",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
