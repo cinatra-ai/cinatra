@@ -582,6 +582,9 @@ function main(argv) {
         specCommit: manifest.specCommit,
         domExpectations: anchorContract.domExpectations,
         captureAnchors: captureAnchorExpectations(),
+        // The fourth input once it is recorded (cinatra#3144). Absent today,
+        // and absent from the digest while it is.
+        anchorsUnresolvedAtPin: anchorContract.anchorsUnresolvedAtPin,
       }),
     );
     console.log(`[${LABEL}] design pin  : ${manifest.specCommit}`);
