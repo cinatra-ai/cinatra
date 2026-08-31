@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 223,
     "/api/mcp": 1753,
-    "/chat": 1854,
+    "/chat": 1856,
     "/api/a2a": 1761,
     "/api/llm-bridge": 1771
   },
@@ -27,10 +27,10 @@
       "pr": 0
     },
     "/chat": {
-      "from": 1849,
-      "to": 1854,
-      "reason": "The episode display joins the generated artifact-renderer map. `@cinatra-ai/podcast-artifacts` (cinatra#3093, epic #3087 wave 5) is registered as a development extension, and its two renderer slots — detail and preview — are emitted into src/lib/generated/artifact-renderers.ts behind the optional-import guard, exactly as the one other guardedOptional display already is. The five modules are that display's own value leaves and nothing else: the two renderer entries, the episode card they share, the episode view model behind it, and the content-channel leaf the view model reads (the renderer-props leaf is a type-only import and costs nothing). Every tracked route reaches the generated map through the artifact renderer dispatch spine, so all four grow by the same five. ATTRIBUTED BY MEASUREMENT, not computed and not hand-merged: in ONE environment, with the companion extension fleet cloned PINNED (115/115, missingCount 0) and an identical scripts/route-graph.mjs, the SAME tree was measured TWICE — with the two generated renderer entries removed it measures 1748 (/api/mcp), 1849 (/chat), 1756 (/api/a2a) and 1766 (/api/llm-bridge), i.e. each route's committed ceiling EXACTLY, and with them present it measures each ceiling + 5, this route (/chat) included. Narrowing is not available and would defeat the change: a display is reachable only through the generated map, and a guardedOptional package takes no workspace dependency edge that could resolve it another way — the growth IS the display this wave ships. This raise RETIRES the previous record for this route, whose ceiling it moves.",
-      "pr": 0
+      "from": 1854,
+      "to": 1856,
+      "reason": "Pull request #3053 carries this record. The fix leg of cinatra#3044 keeps a fired one-off's card in the conversation and stops an arriving card being read through the composer. `from` (1854) is origin/main's OWN committed ceiling at cad2f2e7193d84356c4dcf6aabab82f571534a09, which this merge brings forward into the branch, and which already carries main's own generated-renderer raise for this route (the pr:0 record, 1849 to 1854). That record is RETIRED BY THIS RAISE, which is the one lifecycle the gate allows for an annotation whose ceiling moves; nothing it absorbed is re-absorbed here, its modules are already inside 1854.\n\nWHAT THE RAISE IS, measured as a module set and not only as a number: exactly TWO modules enter this route's graph and none leaves. Both are this branch's own net-new files and neither exists on origin/main (confirmed with `git show origin/main:PATH` for each, which fails for both):\n  1. packages/chat/src/run-seed-request.ts, imported by chat-messages-view.tsx and inline-agent-run-card.tsx, both already on this route's graph, so the message list and the run card ask for a run's seed through ONE function instead of two independent fetches that could disagree about what a run was asked to do.\n  2. packages/chat/src/composer-reserved-space.ts, imported by conversation-column.tsx, also already on this route. It is the ONE statement of how much room the stream reserves for the composer standing over it, and it replaces a constant: the stream reserved a fixed height for a composer whose real height is whatever the notice row above it and a wrapped prompt make it, which is why a card arriving in the conversation was drawn under it.\n\nHOW IT WAS MEASURED, the way CI measures: in ONE environment, with the companion extension fleet cloned PINNED at this merge's lock SHAs (115/115, missingCount 0) and the merge commit's own unmodified scripts/route-graph.mjs, the merged tree measures 1856 on this route. The SAME tree with BOTH modules removed and their contents folded back into their importers measures 1854 on this route, its committed ceiling EXACTLY; with only the composer module folded back it measures 1855, so each module is +1 and neither is +2. Every other tracked route lands EXACTLY at its committed ceiling on the merged tree, untouched by this branch: 1753 /api/mcp, 1761 /api/a2a, 1771 /api/llm-bridge, all headroom 0, and /sign-in 161 under its 223 ceiling, with missingCount 0 on every route in every measurement. Narrowing is not available for either module: both are ONE definition shared by importers that are already on this route, and folding either back into its importers is exactly the duplication these two changes remove.",
+      "pr": 3053
     },
     "/sign-in": {
       "from": 222,

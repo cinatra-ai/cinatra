@@ -101,8 +101,16 @@ export async function resolveTriggerScheduleProposalCard(params: {
     // ref is tried FIRST because it is a cheap local decode that either
     // succeeds outright or leaves the token path exactly as it was.
     const runRef = decodeScheduleRunRef(ref);
+    // AND WHAT THE REFERENCE RECORDS TRAVELS WITH IT (cinatra#3044). The
+    // schedule step the run answered in a conversation is stamped on the sealed
+    // reference the moment was opened with, and the service needs it to keep
+    // drawing a spent one-off rather than withdrawing the card. Passed
+    // explicitly on BOTH roads so the read cannot silently answer one thing here
+    // and another on the press.
     const resolved = runRef
-      ? await resolveProposalForRun(runRef.runId, { userId, orgId }, access)
+      ? await resolveProposalForRun(runRef.runId, { userId, orgId }, access, {
+          fromScheduleStep: runRef.fromScheduleStep === true,
+        })
       : await resolveProposalForReader(ref, { userId, orgId });
 
     if (resolved.phase === "absent") return ABSENT_PROPOSAL_CARD;
@@ -455,6 +463,7 @@ export async function decideTriggerScheduleProposal(params: {
           orgId,
           role,
           access,
+          fromScheduleStep: runRef.fromScheduleStep === true,
         });
       }
       // The token IS the subject and it is re-verified against this actor
@@ -623,12 +632,16 @@ async function confirmScheduleForWaitingRun(params: {
   orgId: string;
   role: string | null;
   access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints };
+  /** What the reference this press came from records — see the read above. */
+  fromScheduleStep?: boolean;
 }): Promise<ScheduleDecisionOutcome> {
   const { runId, userId, orgId, role, access } = params;
   const { resolveProposalForRun, PROPOSAL_REFUSALS } = await import(
     "@cinatra-ai/agents/trigger-schedule-proposal-service"
   );
-  const resolved = await resolveProposalForRun(runId, { userId, orgId }, access);
+  const resolved = await resolveProposalForRun(runId, { userId, orgId }, access, {
+    fromScheduleStep: params.fromScheduleStep === true,
+  });
   if (resolved.phase === "settled") {
     return { kind: "confirmed", runId: resolved.runId, alreadyConfirmed: true };
   }
@@ -696,7 +709,9 @@ async function resolveSettledRunForReader(
   );
   const runRef = decodeScheduleRunRef(ref);
   const resolved = runRef
-    ? await resolveProposalForRun(runRef.runId, actor, access)
+    ? await resolveProposalForRun(runRef.runId, actor, access, {
+        fromScheduleStep: runRef.fromScheduleStep === true,
+      })
     : await resolveProposalForReader(ref, actor);
   return resolved.phase === "settled" ? resolved.runId : null;
 }

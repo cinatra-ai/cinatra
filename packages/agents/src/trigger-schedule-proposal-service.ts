@@ -1002,12 +1002,25 @@ const SCHEDULE_MOMENT = "schedule";
  *   · the run's own access control refuses the reader.
  *   · the organization does not match the reader's active one.
  *   · the run or its template has vanished.
- *   · an `immediate` row on a run with no proposal — **Run right after setup**
- *     names no moment to open a schedule step onto, and that run's surface is
- *     the first-step form, which draws its own read-only reading once the row
- *     has fired (cinatra#2980). Written as an allow-list of the two scheduled
- *     kinds, so a kind added later is absent by default rather than drawn
- *     unnamed.
+ *   · an `immediate` row on a run with no proposal AND no schedule step of its
+ *     own — **Run right after setup** named no moment to open a schedule step
+ *     onto, and that run's surface is the first-step form, which draws its own
+ *     read-only reading once the row has fired (cinatra#2980). Written as an
+ *     allow-list of the two scheduled kinds, so a kind added later is absent by
+ *     default rather than drawn unnamed.
+ *
+ *     AND THE RUN THAT ANSWERED ITS OWN SCHEDULE STEP IS NOT THAT RUN
+ *     (cinatra#3044). The refusal was written while the only road to an
+ *     `immediate` row was a dispatch that never parked at a schedule step. The
+ *     run road opened a second: the run parks at its schedule moment, the card
+ *     in the conversation IS where **Run right after setup** is chosen, and that
+ *     row is the card's own stated default — so the refusal withdrew the card
+ *     from the conversation the moment the ordinary press landed, and the slot
+ *     fell back to the bare working placeholder. The drawing requires the
+ *     opposite of that: once it has fired, the card is a reading, the rows go
+ *     read-only and it carries no floor at all. `fromScheduleStep` is that one
+ *     fact, carried on the sealed reference the moment was opened with, and it
+ *     widens NOTHING else: every refusal above is asked first and unchanged.
  *
  * THE PROPOSAL'S OWN PHASES ARE NOT ON THIS PATH, and that much is structural:
  * a proposal is a token, `Confirm` CREATES the run from it, and the pre-confirm
@@ -1044,6 +1057,17 @@ export async function resolveProposalForRun(
    * owner, which is the narrowest true answer rather than a wider guess.
    */
   access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints },
+  /**
+   * What the REFERENCE this call was reached through records (cinatra#3044).
+   *
+   * `fromScheduleStep` says the run's own schedule step opened in a
+   * conversation, which is the one fact that tells a spent **Run right after
+   * setup** the reader answered on a card apart from a run that never had a
+   * schedule step at all. It is read off a sealed, server-minted reference; a
+   * caller that holds no such reference passes nothing and the refusals below
+   * are exactly what they have always been.
+   */
+  options?: { fromScheduleStep?: boolean },
 ): Promise<ProposalResolution> {
   const consumed = await readProposalConsumeByRunId(runId);
   // THE RUN IS THE BINDING (cinatra#3004), and the run's OWN access control is
@@ -1127,11 +1151,19 @@ export async function resolveProposalForRun(
     }
     return { phase: "absent" };
   }
-  // A run that came from no proposal draws the card only for the two SCHEDULED
-  // kinds — see the header. A confirmed proposal keeps drawing whatever it
-  // settled into, `immediate` included: that card is the answer to a schedule
-  // the reader stated in a conversation, and it has always been drawn.
-  if (!consumed && triggerType !== "scheduled" && triggerType !== "recurring") {
+  // A run that came from no proposal and had no schedule step of its own draws
+  // the card only for the two SCHEDULED kinds — see the header. A confirmed
+  // proposal keeps drawing whatever it settled into, `immediate` included: that
+  // card is the answer to a schedule the reader stated in a conversation, and it
+  // has always been drawn. A run that ANSWERED ITS OWN SCHEDULE STEP is the same
+  // answer to the same question, asked of a run that already existed, so it
+  // keeps drawing whatever it settled into too (cinatra#3044).
+  if (
+    !consumed &&
+    options?.fromScheduleStep !== true &&
+    triggerType !== "scheduled" &&
+    triggerType !== "recurring"
+  ) {
     return { phase: "absent" };
   }
 

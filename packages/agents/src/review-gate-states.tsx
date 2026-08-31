@@ -174,6 +174,18 @@ export function ReviewGateLoading() {
  * — the same component the orchestrator stepper's executing card spins — not a
  * second spinner drawn here.
  *
+ * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
+ * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
+ * so the arc is whatever colour this wrapper sets. It set `text-mustard-ink`,
+ * and no `--color-mustard-ink` is registered in the theme block — so the utility
+ * emitted no rule at all and the arc silently took the INHERITED foreground,
+ * measured as rgb(21,33,58) in light and rgb(248,250,252) in dark. `text-primary`
+ * is the registered indigo the drawing names, and it is the same token the
+ * chosen row's edge takes, so the arc and the edge can never drift apart. In the
+ * dark theme that token resolves to the application's near-white dark primary —
+ * the dark-token deviation this branch already records for the row and the
+ * floor, which now covers the arc with them rather than as a second item.
+ *
  * Conformance anchor: `review-gate-placeholder`.
  */
 export function ReviewGatePlaceholder() {
@@ -189,7 +201,7 @@ export function ReviewGatePlaceholder() {
       className="flex w-full flex-col gap-3"
     >
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-primary">
           <LoadingSpinner className="size-4" />
         </span>
       </div>
