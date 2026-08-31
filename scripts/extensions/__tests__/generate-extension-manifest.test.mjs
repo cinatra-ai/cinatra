@@ -1481,6 +1481,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/linkedin-artifacts/src/renderers/detail",
       "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
+      "@cinatra-ai/podcast-artifacts/src/renderers/detail",
+      "@cinatra-ai/podcast-artifacts/src/renderers/preview",
     ]);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
   });
