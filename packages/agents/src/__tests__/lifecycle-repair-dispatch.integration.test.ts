@@ -138,7 +138,8 @@ async function produce(
 
 async function repairRow(repairId: string) {
   const r = await pool(
-    `SELECT route, status, successor_gate_id, successor_artifact_id, change_summary
+    `SELECT route, status, successor_gate_id, successor_artifact_id,
+            successor_representation_revision_id, change_summary
      FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
     [repairId],
   );
@@ -148,6 +149,7 @@ async function repairRow(repairId: string) {
         status: string;
         successor_gate_id: string | null;
         successor_artifact_id: string | null;
+        successor_representation_revision_id: string | null;
         change_summary: string | null;
       }
     | undefined;
@@ -1056,5 +1058,171 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
     expect((await repairRow(repairId))!.status).toBe("dispatched");
     expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
     expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE PAGE: a repair run is a run — the run page opens it exactly as it opens any other run, and the link to it is a URL", async () => {
+    // The last reading of the running application could not open the repair
+    // run's own page, so the person could not see where the work had stopped. Two things have to
+    // hold for "a repair run is a run": the page's OWN resolver must resolve
+    // it for the person whose repair it is, exactly as it resolves the run
+    // that produced it — no filter, no narrower policy, nothing keyed on how
+    // the run was made — and the link the product draws for it must be a
+    // valid address. The second half is what a repair run breaks and an
+    // ordinary run cannot: its id is derived from its repair rather than
+    // minted as a uuid, so it carries a character a path segment must escape.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "The page", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+    const repairRunId = dispatchStore.repairRunId(repairId);
+
+    const store = await import("../store");
+    const actor = { actorType: "human" as const, source: "ui" as const, userId: MEMBER_USER };
+    const roles = { platformRole: "member" as const, actorOrganizationId: ORG };
+
+    // The URL the page is reached by names the agent, and the agent resolves.
+    const packageName = (
+      (
+        await pool(
+          `SELECT package_name FROM "${q(TEST_SCHEMA)}"."agent_templates" WHERE id=$1`,
+          [templateId],
+        )
+      ).rows[0] as { package_name: string }
+    ).package_name;
+    const agentId = packageName.slice(1);
+    expect(
+      await store.readAgentTemplateBySlug(agentId, {
+        actorUserId: MEMBER_USER,
+        includeNonPublished: true,
+      }),
+    ).not.toBeNull();
+
+    // The run the page opens: the producing run is the control, the repair run
+    // is the case, and the page reads them through the SAME call.
+    const producerSeen = await store.readAgentRunById(producerRunId, actor, roles);
+    expect(producerSeen?.id).toBe(producerRunId);
+    const repairSeen = await store.readAgentRunById(repairRunId, actor, roles);
+    expect(repairSeen?.id).toBe(repairRunId);
+    expect(repairSeen?.sourceType).toBe("lifecycle_repair");
+
+    // And the address of that page is a single path segment for this run and
+    // decodes back to it — the reading that was false for a repair run.
+    const { buildAgentInstancePath } = await import("@/lib/agent-url");
+    const href = buildAgentInstancePath(packageName, repairRunId);
+    const segments = href.split("/");
+    expect(segments).toHaveLength(5);
+    expect(decodeURIComponent(segments[4]!)).toBe(repairRunId);
+    expect(segments[4]).not.toContain(":");
+    // An ordinary run's link is unchanged, character for character.
+    expect(buildAgentInstancePath(packageName, producerRunId)).toBe(
+      `/agents/${agentId}/${producerRunId}`,
+    );
+  });
+
+  it("THE WHOLE ROAD: Regenerate settles its gate superseded and raises exactly ONE successor over the new revision, with nothing parked and no wedge said", async () => {
+    // The drawing, end to end: "Regenerate sends the work back to be made again
+    // from the words in the note field, settles this gate as superseded, and
+    // raises its successor over the new revision". This drives that whole road
+    // once, in the store, and reads every step of it — including the reading
+    // the last reading of the running application could not get: that the
+    // repair run never parks waiting for a person, so the completer never has
+    // a wedge to report.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "The whole road", summary: "s", outline: [] },
+    });
+
+    // The gate is pending, and it is the only one.
+    const ev = await produce({ producerRunId }, coreRepairableObjectType);
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const opened = await gatesForRun(producerRunId);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.status).toBe("pending");
+
+    // Regenerate, with the reviewer's words in the note field.
+    const note = "Open the second section with a plainer sentence and keep the harbour example.";
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: autoReviewTaskId(ev.eventId),
+      baseTarget: {
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: note,
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) throw new Error("the change road refused the press");
+    const repairId = cr.repairId;
+
+    // ONE repair, delivered on a run that carries the producing step's own
+    // inputs and the reviewer's words — nothing to ask a person.
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+    const repairRunId = dispatchStore.repairRunId(repairId);
+    const delivered = JSON.parse((await runRow(repairRunId))!.input_params ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(pendingSetupFields(["idea"], delivered)).toEqual([]);
+    const request = delivered.lifecycleRepairRequest as { findings?: Array<{ message?: string }> };
+    expect((request.findings ?? []).some((f) => (f.message ?? "").includes("harbour"))).toBe(true);
+
+    // The repair run does its producing work and finishes, like any other run.
+    const successorRev = `rev-regenerated-${randomUUID()}`;
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: successorRev,
+        producerRunId: repairRunId,
+      },
+      coreRepairableObjectType,
+    );
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='completed' WHERE id=$1`, [
+      repairRunId,
+    ]);
+
+    // The completion drain, watched: the wedge line is what a parked repair run
+    // makes the completer say, and there is nothing parked on this road.
+    const said: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      said.push(args.map((a) => String(a)).join(" "));
+      realError(...(args as []));
+    };
+    let completion: Awaited<ReturnType<typeof completionStore.completeDispatchedProducerRepairs>>;
+    try {
+      completion = await completionStore.completeDispatchedProducerRepairs();
+    } finally {
+      console.error = realError;
+    }
+    expect(completion.completed).toBe(1);
+    expect(
+      said.filter((line) => line.includes(`repair ${repairId}`) && line.includes("waiting for a person")),
+    ).toEqual([]);
+
+    // The gate it was pressed on is settled, and it keeps the revision it froze.
+    const after = await gatesForRun(producerRunId);
+    expect(after).toHaveLength(2);
+    const superseded = after.find((g) => g.id === opened[0]!.id)!;
+    expect(superseded.status).toBe("resolved");
+    expect(superseded.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+    ]);
+
+    // EXACTLY ONE successor, beneath it, over the NEW revision — and the
+    // review target the repair records is that new revision, not the old one.
+    const settled = await repairRow(repairId);
+    expect(settled!.status).toBe("repaired");
+    expect(settled!.successor_artifact_id).toBe(ev.artifactId);
+    expect(settled!.successor_representation_revision_id).toBe(successorRev);
+    const successor = after.find((g) => g.id === settled!.successor_gate_id)!;
+    expect(successor).toBeDefined();
+    expect(successor.status).toBe("pending");
+    expect(successor.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: successorRev },
+    ]);
+    expect(after.filter((g) => g.status === "pending")).toHaveLength(1);
   });
 });
