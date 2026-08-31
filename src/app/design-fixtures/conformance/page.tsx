@@ -20,6 +20,8 @@ import {
 } from "./connector-multi-connection-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
+import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
+import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
@@ -198,8 +200,16 @@ export default function ConformanceHarnessPage() {
 
         {/* Approvals + Scheduling surfaces added at spec 4d7b3505 (cinatra#1043):
             approvals-inbox, approvals-your-requests, approvals-marketplace-states,
-            scheduling-step, scheduling-trigger-tab. */}
+            scheduling-step, and — since the cinatra#3057 pin reconciliation —
+            scheduling-step-configured in place of the retired
+            scheduling-trigger-tab. */}
         <ApprovalsSchedulingConformanceFixtures />
+
+        {/* App-shell surfaces adopted with the cinatra#3057 pin reconciliation:
+            sidebar-assistants-entry (conformance/app.json) and
+            breadcrumb-entity-resolution (conformance/app-components.json). */}
+        <SidebarAssistantsConformanceFixture />
+        <BreadcrumbEntityResolutionFixture />
 
         {/* /notifications unified-surface surfaces (conformance/app-notifications.json,
             design@2bcc2c7e; cinatra#1549 E11-AC2): notifications-list,

@@ -96,6 +96,7 @@ marker) and writes their IDs to `.uat/seed.json` (gitignored).
 | `UAT_WP_ADMIN_USER` / `_PASS` | `admin` / `admin` | WP admin login (matches compose `WP_DEV_ADMIN_PASS`) |
 | `UAT_DRUPAL_ADMIN_USER` / `_PASS` | `admin` / `cinatra` | Drupal admin login |
 | `UAT_CEREMONY_BUDGET_MS` | `60000` | Bound on the protocol-2 sign-in ceremony (~20s measured) |
+| `CINATRA_DEV_FIXTURE_PASSWORD` | *(none)* | The dev UAT account's password — set it on the dev server AND on this run. Leave it unset beside a local instance and this suite reads the 0600 file the boot writes and names (`data/dev-fixture-account/password`); the value is never printed. At least 24 characters: a shorter value is ignored by the boot, which mints its own, and this suite refuses it rather than signing in with a password the instance never had |
 
 If the widget DOM selectors drift, refine them in `helpers.ts` (`SEL`). The
 CMS-origin shell contract is `#cinatra-root` + the `.cw-*` launcher/panel chrome
@@ -104,5 +105,15 @@ live INSIDE the iframe (`[data-embed-state="signin"]`, `[data-embed-signin]`,
 `[data-embed-assistant]`, `[data-embed-content]`) — drive them via
 `page.frameLocator(SEL.frame)`. The sign-in popup is a separate top-level page on
 the Cinatra origin; it is driven with the seeded actor from `.uat/dev-actor.json`
-(typed key-by-key — `fill()` does not register with the popup's controlled inputs
-under Firefox).
+and that boot's password from `CINATRA_DEV_FIXTURE_PASSWORD`, or from the 0600
+file the boot writes it to — the handoff file carries the account's identity
+only — typed key-by-key (`fill()` does not
+register with the popup's controlled inputs under Firefox).
+
+One honest limit of that typing: Playwright records the typed value in the
+trace it keeps for a FAILED test (`trace: "retain-on-failure"`), so a local run
+that fails leaves the password in `test-results/` until that directory is
+cleared. Nothing publishes it — the UAT workflow uploads only the resource
+snapshot and the compose logs, both of which run through the artifact scrubber
+and its fail-closed scan, and the value there is a throwaway minted for that one
+run. On a workstation the value is likewise this boot's and dies with it.

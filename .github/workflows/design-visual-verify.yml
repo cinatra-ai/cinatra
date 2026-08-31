@@ -26,6 +26,13 @@
 # core-migrations + ensurePostgresSchema create the app schema on the fresh
 # service DB.
 #
+# The seed endpoint drives REAL lifecycle writes and is exempt from the
+# sign-in redirect, so it is fenced by a PRESENTED CAPABILITY rather than by
+# the build shape (which this job deliberately makes permissive with the e2e
+# switch below). This job MINTS that capability per run and hands it to both
+# the server and the suite — see the mint step; the fence itself is
+# src/lib/test-support/conformance-seed-fence.ts.
+#
 # Pixel threshold: maxDiffPixelRatio 0.005 + maxDiffPixels 800 (configured
 # in tests/e2e/config/design.config.ts). axe-core gate: zero serious/critical
 # violations on `/design-fixtures` only, not site-wide.
@@ -64,6 +71,12 @@ on:
       - "src/lib/extension-compat-badge.ts"
       # Route-guard allowlist carrying the fixture routes' CI reachability.
       - "src/lib/auth-route-guard.ts"
+      # The seed endpoint's AUTHORIZATION contract (the presented capability)
+      # and the primitives it is built on. Reachability and authorization are
+      # different gates, and this job is the only place the second one is
+      # exercised end to end — a change to either must run it.
+      - "src/lib/test-support/conformance-seed-fence.ts"
+      - "src/lib/test-support/seed-capability.ts"
       - "src/components/extension-card-icon-image.tsx"
       - "src/components/extension-kind-emblem.tsx"
       # Seeded data-contract surfaces (cinatra#986): the §VI installed card +
@@ -326,6 +339,28 @@ jobs:
         # then boots instantly — vs `pnpm dev` cold-compiling on first request,
         # which exceeded any practical webServer timeout post-cutover.
         run: pnpm build
+
+      - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
+        # The presented capability the seed endpoint requires
+        # (src/lib/test-support/conformance-seed-fence.ts): unset means the
+        # endpoint answers 404 to everyone, which is the default of every stack
+        # that did not deliberately arm it.
+        #
+        # MINTED PER RUN rather than stored as a repository secret: nothing
+        # outside this job ever needs the value, a per-run value cannot outlive
+        # the run or be read by a fork, and there is no rotation to forget. Same
+        # pattern (and the same ::add-mask:: hygiene) as the throwaway
+        # BETTER_AUTH_SECRET in wp-drupal-uat / dashboard-live-verify.
+        #
+        # Written to $GITHUB_ENV BEFORE the server boots, so the standalone
+        # server below and the Playwright step that presents it inherit one and
+        # the same value; the length is echoed, never the value.
+        run: |
+          set -euo pipefail
+          minted="$(openssl rand -hex 32)"
+          echo "::add-mask::$minted"
+          printf 'CINATRA_CONFORMANCE_SEED_TOKEN=%s\n' "$minted" >> "$GITHUB_ENV"
+          echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
 
       - name: Start standalone server
         # Run server.js directly (instant boot from the prebuilt bundle).
