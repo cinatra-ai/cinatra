@@ -67,6 +67,22 @@ import { resolveOrgRoleForUser } from "@/lib/auth-session";
  * host's blob-store-backed capture writer into its graph for one string. */
 const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture";
 
+/** How many candidate rows are read per unit of pass budget — the window that
+ * keeps the other completer's rows from starving this one's. See the scan. */
+const CANDIDATE_WINDOW_FACTOR = 8;
+/** The hard ceiling on that window, so a pass is always bounded. */
+const MAX_CANDIDATE_WINDOW = 500;
+
+/**
+ * The non-terminal run statuses that mean WAITING FOR A PERSON rather than
+ * working. A run here does not move again by itself, so a repair behind it is
+ * wedged, not in flight — see the reading at the scan.
+ */
+const WEDGED_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_approval",
+  "pending_input",
+]);
+
 /** A minimal read-only projection of `objects` — liveness only, the identical
  * pattern the CMS bridge and the orchestration store already use. */
 const appSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
@@ -91,6 +107,14 @@ export interface ProducerRepairCompletionSummary {
   unresolved: number;
   /** A repair this drain does not own — its base target is a CMS snapshot. */
   skipped: number;
+  /**
+   * A repair whose OWNERSHIP could not be read, so it was left to the completer
+   * that can answer. Counted apart from `skipped` because the two are different
+   * facts: `skipped` is "this is the CMS completer's row", this one is "nobody
+   * here could tell whose row it is", and a drain that folded the second into
+   * the first would report a read outage as ordinary, correct routing.
+   */
+  skippedUnknownOwner: number;
   failed: number;
 }
 
@@ -110,7 +134,10 @@ interface ClaimedProduction {
  * successor gate would ask a reviewer to decide on a draft the producer had
  * already moved past.
  */
-async function claimProduction(producerRunId: string): Promise<ClaimedProduction | null> {
+async function claimProduction(
+  orgId: string,
+  producerRunId: string,
+): Promise<ClaimedProduction | null> {
   const [row] = await db
     .select({
       artifactId: artifactProducedOutbox.artifactId,
@@ -119,6 +146,12 @@ async function claimProduction(producerRunId: string): Promise<ClaimedProduction
     .from(artifactProducedOutbox)
     .where(
       and(
+        // ORG-SCOPED (cinatra#3080). The run id alone already
+        // narrows this to one run, so the org equality can never be what finds
+        // the row — it is here so that a row which somehow does not belong to
+        // the repair's org can never BE the row, and the successor gate can
+        // never be pinned across an org boundary by a single bad write.
+        eq(artifactProducedOutbox.orgId, orgId),
         eq(artifactProducedOutbox.producerRunId, producerRunId),
         ne(artifactProducedOutbox.emitter, CMS_SNAPSHOT_EMITTER),
       ),
@@ -153,19 +186,44 @@ async function resolveCurrentBaseRevisionId(
   return baseRepresentationRevisionId;
 }
 
-/** Is this repair the CMS completer's to finish? */
-async function ownedByTheCmsCompleter(baseArtifactId: string): Promise<boolean> {
+/**
+ * Whose repair is this — the CMS completer's, this one's, or unknown?
+ *
+ * THREE ANSWERS, NOT TWO (cinatra#3080). A read that cannot answer
+ * must not be read as "not a CMS repair" — claiming a row this drain may not own
+ * is the one mistake that pins a wrong successor — so it still yields the row.
+ * But it is not the same fact as "this is the CMS completer's", and reporting it
+ * as one made a read outage look like ordinary routing: every non-CMS repair
+ * would be handed away, silently, for as long as the outage lasted. It is
+ * counted and logged on its own.
+ *
+ * THE REPAIR'S REAL BASE TARGET IS WHAT IS ASKED ABOUT. The call used to hand
+ * `resolveCmsRepairBaseTarget` an EMPTY STRING where its declared operand names
+ * a representation revision. It is ignored today — that resolver keys on the
+ * artifact id alone — but a fabricated operand is a trap the day the resolver
+ * starts reading the field it declares, and it costs nothing to pass the
+ * repair's own base revision, which is the thing the question is about.
+ */
+type RepairOwnership = "cms" | "mine" | "unknown";
+
+async function repairOwnership(
+  baseArtifactId: string,
+  baseRevisionId: string,
+): Promise<RepairOwnership> {
   try {
     const { resolveCmsRepairBaseTarget } = await import("./lifecycle-repair-cms-production-bridge");
     const target = await resolveCmsRepairBaseTarget({
-      baseTarget: { artifactId: baseArtifactId, representationRevisionId: "" },
+      baseTarget: { artifactId: baseArtifactId, representationRevisionId: baseRevisionId },
     });
-    return target !== null;
-  } catch {
-    // A read that cannot answer must not be read as "not a CMS repair": claiming
-    // a row this drain may not own is the one mistake that pins a wrong
-    // successor. Leave it to the completer that can answer.
-    return true;
+    return target !== null ? "cms" : "mine";
+  } catch (err) {
+    console.error(
+      `[lifecycle-repair-producer-completion-store] the CMS-ownership read for base artifact ` +
+        `${baseArtifactId} could not answer, so the repair is left to the completer that can: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+    );
+    return "unknown";
   }
 }
 
@@ -186,17 +244,39 @@ export async function completeDispatchedProducerRepairs(opts?: {
     pending: 0,
     unresolved: 0,
     skipped: 0,
+    skippedUnknownOwner: 0,
     failed: 0,
   };
 
-  const dispatched = await db
+  // A WINDOW OF CANDIDATES, AND A BUDGET ONLY THIS DRAIN'S OWN ROWS SPEND
+  // (cinatra#3080).
+  //
+  // The scan used to be `oldest `limit` dispatched rows`, and the two completers
+  // would then starve each other. Both read the SAME `dispatched` +
+  // `producer_repair` set oldest-first; each hands the other's rows back
+  // untouched — and a handed-back row is still `dispatched`, so it sorts first
+  // again on the next pass, forever. Twenty-five old CMS repairs at the head of
+  // the queue and no blog repair behind them is ever reached, which is the very
+  // defect this drain exists to close, arrived at a second way. The same holds
+  // for a row this drain leaves OPEN by design (a terminal run with nothing to
+  // claim): it stays `dispatched` and keeps its place at the head.
+  //
+  // So the LIMIT now bounds the work this pass DOES, not the rows it looks at: a
+  // wider window is read, a row that is not this drain's costs a cheap ownership
+  // read and no budget, and the pass stops when it has spent its budget on rows
+  // it owns. The window is still bounded (never a full-table scan), and the
+  // ordering is unchanged — oldest first, so nothing this drain owns is
+  // reordered around anything else it owns.
+  const candidates = await db
     .select({ id: lifecycleRepair.id })
     .from(lifecycleRepair)
     .where(and(eq(lifecycleRepair.status, "dispatched"), eq(lifecycleRepair.route, "producer_repair")))
     .orderBy(asc(lifecycleRepair.createdAt))
-    .limit(limit);
+    .limit(Math.min(limit * CANDIDATE_WINDOW_FACTOR, MAX_CANDIDATE_WINDOW));
 
-  for (const { id } of dispatched) {
+  let budget = limit;
+  for (const { id } of candidates) {
+    if (budget <= 0) break;
     summary.scanned += 1;
     try {
       const repair = await readRepair(id);
@@ -204,26 +284,69 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // pass reconciles; never treat a race as a failure.
       if (!repair || repair.status !== "dispatched") continue;
 
-      if (await ownedByTheCmsCompleter(repair.baseArtifactId)) {
-        summary.skipped += 1;
+      const ownership = await repairOwnership(
+        repair.baseArtifactId,
+        repair.baseRepresentationRevisionId,
+      );
+      if (ownership !== "mine") {
+        // Not this drain's row, or nobody could say whose it is. Either way it
+        // is handed back untouched, and it spends no budget — that is what stops
+        // a queue of the other completer's rows from starving this one's.
+        if (ownership === "cms") summary.skipped += 1;
+        else summary.skippedUnknownOwner += 1;
         continue;
       }
+      budget -= 1;
 
       const runId = repairRunId(repair.id);
-      const production = await claimProduction(runId);
-      if (!production) {
-        const [run] = await db
-          .select({ status: agentRuns.status })
-          .from(agentRuns)
-          .where(eq(agentRuns.id, runId))
-          .limit(1);
-        // A missing repair run can never land a production, so treating it as
-        // "still running" would leave the repair pending forever.
-        if (!run || TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) {
+
+      // THE RUN MUST HAVE FINISHED BEFORE ANYTHING IT WROTE IS AN ANSWER
+      // (cinatra#3080). The status read used to happen only after
+      // nothing was found, which made the claim "the latest thing this run has
+      // written SO FAR" — so a producing step that writes more than once (an
+      // outline before the draft, a picture beside the post) would have its
+      // FIRST write pinned into the successor gate by whichever maintenance pass
+      // ran in between, and the finished work that followed would arrive at a
+      // repair already `repaired` and be dropped on the floor. A reviewer would
+      // then be asked to decide on a fragment the producer had already moved
+      // past, with no way back. A run that is still going has not answered yet:
+      // it is `pending`, and the next pass asks again.
+      const [run] = await db
+        .select({ status: agentRuns.status })
+        .from(agentRuns)
+        .where(eq(agentRuns.id, runId))
+        .limit(1);
+      // A missing repair run can never land a production, so treating it as
+      // "still running" would leave the repair pending forever.
+      if (!run) {
+        summary.unresolved += 1;
+        continue;
+      }
+      if (!TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) {
+        if (WEDGED_RUN_STATUSES.has(run.status)) {
+          // A repair run WAITING FOR A PERSON is not working (cinatra#3080).
+          // This is the exact shape the first capture
+          // photographed — a repair run parked on a setup screen — and the
+          // delivery fix keeps a NEW repair off it. A row stranded there BEFORE
+          // that fix (or by any future park) never leaves this status on its
+          // own, so counting it `pending` would report a permanent wedge as
+          // ordinary progress, pass after pass, and nothing would ever say so.
+          // It is unresolved, and it is said out loud.
           summary.unresolved += 1;
+          console.error(
+            `[lifecycle-repair-producer-completion-store] the repair run for repair ${repair.id} ` +
+              `is parked at \`${run.status}\` waiting for a person — its review has no successor ` +
+              `and cannot get one until the run is released or the repair is retired.`,
+          );
         } else {
           summary.pending += 1;
         }
+        continue;
+      }
+
+      const production = await claimProduction(repair.orgId, runId);
+      if (!production) {
+        summary.unresolved += 1;
         continue;
       }
 

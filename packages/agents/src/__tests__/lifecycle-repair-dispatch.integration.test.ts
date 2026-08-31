@@ -779,6 +779,30 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
     return required.filter((f) => !Object.prototype.hasOwnProperty.call(inputParams, f));
   }
 
+  /**
+   * Hold a dispatched repair run at a chosen status, DETERMINISTICALLY.
+   *
+   * A minted repair run is picked up and driven by the runtime inside this same
+   * process, and with no real producing graph behind it that ends in `failed` a
+   * moment later — asynchronously, which makes "the run is still queued" a race
+   * rather than a fact. So the run is first allowed to REACH a terminal status
+   * (nothing touches it after that), and only then held at the status the case
+   * is about. Every reading below is taken after this returns.
+   */
+  async function holdRunAt(runId: string, status: string): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const row = await runRow(runId);
+      if (row && ["completed", "failed", "stopped"].includes(row.status)) break;
+      if (Date.now() > deadline) throw new Error(`the repair run never settled: ${runId}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status=$2 WHERE id=$1`, [
+      runId,
+      status,
+    ]);
+  }
+
   /** Drive a run to a pending review and press Regenerate on it. */
   async function regenerateOn(templateId: string, producerRunId: string) {
     const ev = await produce({ producerRunId }, coreRepairableObjectType);
@@ -934,6 +958,81 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
     expect(completion.pending).toBeGreaterThanOrEqual(1);
     expect((await repairRow(repairId))!.status).toBe("dispatched");
     expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE SUCCESSOR: a repair run that has written something but is STILL RUNNING is not claimed on its first write", async () => {
+    // A producing step is allowed to write more than once — an outline before
+    // the draft, a picture beside the post. The completer claims the LATEST
+    // thing the repair run wrote, and "latest" is only an ANSWER once the run
+    // has stopped writing. Claiming mid-flight pins the first fragment into the
+    // successor gate, and the finished work that follows arrives at a repair
+    // already `repaired` and is dropped: the reviewer is then asked to decide on
+    // something the producer had already moved past, with no way back.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Still writing", summary: "s", outline: [] },
+    });
+    const { ev, repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const runId = dispatchStore.repairRunId(repairId);
+    // The run writes an INTERMEDIATE artifact and is still going.
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: `rev-intermediate-${randomUUID()}`,
+        producerRunId: runId,
+      },
+      coreRepairableObjectType,
+    );
+    await holdRunAt(runId, "running");
+    // Named here rather than imported: the point of the case is that the run has
+    // NOT reached any of the three terminal statuses, so the three are written
+    // out where the assertion is read.
+    expect(["completed", "failed", "stopped"]).not.toContain((await runRow(runId))!.status);
+
+    const completion = await completionStore.completeDispatchedProducerRepairs();
+    expect(completion.completed).toBe(0);
+
+    // Untouched and still open: no successor was pinned on a fragment.
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
+    expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE SUCCESSOR: a repair run PARKED waiting for a person is unresolved, never reported as still working", async () => {
+    // The exact shape the first capture photographed. A run parked on a human
+    // gate does not move again by itself, so the repair behind it is WEDGED, not
+    // in flight — and counting it `pending` reports a permanent wedge as
+    // ordinary progress, pass after pass, with nothing ever saying so.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Parked", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    // The counters are the whole drain's and this tier shares one schema, so the
+    // reading is a DELTA across the ONE thing that changes between two passes:
+    // this repair run's status. Everything else in the scan has already settled
+    // terminal by now and no longer moves.
+    const runId = dispatchStore.repairRunId(repairId);
+    await holdRunAt(runId, "running");
+    const working = await completionStore.completeDispatchedProducerRepairs();
+    expect(working.pending).toBeGreaterThanOrEqual(1);
+
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval' WHERE id=$1`,
+      [runId],
+    );
+    const parked = await completionStore.completeDispatchedProducerRepairs();
+
+    // The same repair, the same everything else: WORKING became WEDGED.
+    expect(parked.pending).toBe(working.pending - 1);
+    expect(parked.unresolved).toBe(working.unresolved + 1);
+    // And still open, never finalized on a run that has not produced.
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
     expect(await gatesForRun(producerRunId)).toHaveLength(1);
   });
 
