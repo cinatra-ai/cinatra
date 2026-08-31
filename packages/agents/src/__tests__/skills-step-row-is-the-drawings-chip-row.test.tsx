@@ -23,6 +23,15 @@
 // card at, four pills reading name-alone sit on ONE line, and the same four
 // pills carrying a placeholder byline wrap onto two.
 //
+// WHAT THIS FILE CANNOT PROVE, said plainly. jsdom computes no layout, so these
+// arms pin the layout the row DECLARES — the utilities it carries and the ones
+// it must not — and not the pixels a browser lays out from them. A stylesheet
+// that overrode those utilities, or an equivalent row authored in plain CSS
+// instead, would read differently here. The one-line geometry itself is proved
+// where geometry can be measured: the graded picture on this pull request. This
+// file's job is that no host quietly re-declares the row as a grid or a column,
+// and that no pill regains the placeholder width that pushed it off the line.
+//
 // Run:
 //   cd packages/agents && npx vitest run \
 //     src/__tests__/skills-step-row-is-the-drawings-chip-row.test.tsx
@@ -66,8 +75,10 @@ const CANDIDATES = [
 
 const HELD: RunRecommendationDecision = { kind: "pending" };
 
-// The hosts §V's row is drawn on. The drawing reproduces ONE row for all of them.
-const HOSTS = ["run_card", "chat_thread", "site_widget"] as const;
+// EVERY host the row is drawn on — the four `SKILLS_CHECKLIST_HOSTS` the card
+// itself declares, not a sample of them, so a host cannot keep a layout of its
+// own by never being covered here. The drawing reproduces ONE row for all four.
+const HOSTS = ["run_card", "page_gate_region", "chat_thread", "site_widget"] as const;
 
 // The widget is not a cookie-session host: it MUST declare a broker credential
 // with `credentials: "omit"`, or the provider fails closed and declares no host

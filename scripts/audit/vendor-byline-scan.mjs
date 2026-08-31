@@ -79,10 +79,14 @@ export const GUARDED_FILES = Object.freeze([
     forbid: [FORBID_SCOPE_HELPER, FORBID_VENDOR_SLUG],
   },
   {
-    // THE RUN PAGE'S SKILLS STEP (cinatra#3047). Every pill reads
-    // "<Skill name> by <vendor>", which makes it a byline surface — so it
+    // THE RUN PAGE'S SKILLS STEP (cinatra#3047). A pill whose vendor resolves
+    // reads "<Skill name> by <vendor>", which makes it a byline surface — so it
     // consumes the one resolver and is guarded here rather than being a second
-    // place where a machine identifier could become a vendor label.
+    // place where a machine identifier could become a vendor label. A pill whose
+    // vendor does NOT resolve draws the skill's name alone, per the ratified
+    // drawing (cinatra#3062) and the resolver's missing-data contract; what this
+    // gate guards is unchanged by that — the LABEL, when one is drawn, still
+    // comes only from the one resolver, never from a scope or a slug.
     file: "packages/agents/src/run-recommendation-chip-row.tsx",
     requireAny: [RESOLVER],
     forbid: [FORBID_SCOPE_HELPER, FORBID_VENDOR_SLUG],
