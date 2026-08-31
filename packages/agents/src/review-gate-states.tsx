@@ -227,7 +227,19 @@ export function ReviewGatePlaceholder({
       // name of a region that is deliberately wordless.
       role="status"
       aria-busy={settled ? "false" : "true"}
-      aria-label={settled ? "Waiting finished" : "Working"}
+      // AND THE NAME CARRIES THE RUN (convergence). An explicit accessible name
+      // REPLACES the text inside the region, so a box that draws its run beside
+      // the arc and names itself only "Working" hands a reader who cannot see it
+      // strictly less than the box shows.
+      aria-label={
+        runRef
+          ? settled
+            ? `Waiting finished for run ${runRef}`
+            : `Working on run ${runRef}`
+          : settled
+            ? "Waiting finished"
+            : "Working"
+      }
       className="flex w-full flex-col gap-3"
     >
       <div className="flex flex-wrap items-center gap-2.5">

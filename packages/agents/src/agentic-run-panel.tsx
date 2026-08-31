@@ -2039,8 +2039,20 @@ export function AgenticRunPanel({
               // spinner reporting on a run that had finished. The frame stays,
               // because the box is still the box the review screen fills; the
               // claim that something is still coming does not.
+              // AND THE WAIT IS THE REVIEW WAIT, NOT THE RUN (convergence). This
+              // box is drawn on a COMPLETED run too - the settle window, where
+              // the run has finished and its gate row has not landed yet - and
+              // in that window the run terminal reading alone said the wait was
+              // over while this panel own reader was still looking for the
+              // card. So the two readings are taken together: the run has left
+              // every state this box waits in, AND nothing here may still bring
+              // a card into it.
               settled={
-                status !== "queued" && status !== "running" && !isPendingApproval
+                status !== "queued" &&
+                status !== "running" &&
+                !isPendingApproval &&
+                !reviewMayStillOpen &&
+                !pausePlaceholder
               }
             />
           )}

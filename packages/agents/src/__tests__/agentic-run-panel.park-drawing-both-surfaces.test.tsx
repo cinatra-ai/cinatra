@@ -422,6 +422,7 @@ describe("the wordless box itself", () => {
       .querySelector('[data-conformance-id="review-gate-placeholder-run-ref"]')
       ?.textContent?.trim();
     expect(reference && RUN_ID.startsWith(reference)).toBe(true);
+    const spinningLabel = spinning.getAttribute("aria-label") ?? "";
     cleanup();
 
     const settled = render(
@@ -440,7 +441,75 @@ describe("the wordless box itself", () => {
     ).not.toBeNull();
     // Still nothing to press, in either reading.
     expect(still.querySelectorAll("button, a").length).toBe(0);
+    // AND THE NAME IS AVAILABLE TO A READER WHO CANNOT SEE IT (convergence).
+    // The region carries an explicit accessible name, and an explicit name
+    // REPLACES the text inside it — so a box that draws its run beside the arc
+    // and names itself only "Working" hands a screen reader the one thing the
+    // sighted reader gets and the blind reader does not.
+    const shortRef = shortRunReference(RUN_ID) ?? "";
+    expect(spinningLabel, "the waiting box names the run to the eye only").toContain(
+      shortRef,
+    );
+    expect(
+      still.getAttribute("aria-label") ?? "",
+      "the finished box names the run to the eye only",
+    ).toContain(shortRef);
   });
+
+  it("keeps spinning while the panel's own reader may still bring a card", async () => {
+    // THE SETTLED READING IS ABOUT THE WAIT, NOT ABOUT THE RUN (convergence).
+    // The panel draws this box on a COMPLETED run too: the run finished, the
+    // gate row has not landed yet, and `reviewMayStillOpen` is the whole reason
+    // the working slot is on the screen at all. Reading "settled" off the run's
+    // terminal status alone therefore stopped the spin and announced the wait
+    // finished at the exact moment the reader was still looking for the card —
+    // the opposite error to the one the sixth graded reading found, on the same box.
+    streamState.status = "completed";
+    a2aSnapshot.value = {
+      taskId: "task-3007",
+      state: "completed",
+      cinatraStatus: "completed",
+      runId: RUN_ID,
+      messages: [],
+      hitlContext: null,
+      error: null,
+    };
+    const body = seedBody({
+      status: "completed",
+      hitlContext: null,
+      // The settle window: the run is done and the row says a review is awaited,
+      // but no gate ref has been written yet.
+      reviewGate: { ref: null, awaiting: true, producedReviewPark: false },
+    });
+    stubFetch(() => body);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        {...panelProps({
+          initialStatus: "completed",
+          // The mount is handed the row own reading: a review is awaited and no
+          // gate ref exists yet. That is what puts the working slot on the
+          // screen for a finished run, and it is the reading the box is for.
+          initialReviewGate: { ref: null, awaiting: true, producedReviewPark: false },
+        })}
+      />,
+    );
+
+    const placeholder = await waitFor(
+      () => {
+        const el = document.querySelector(PLACEHOLDER);
+        if (!el) throw new Error("no placeholder");
+        return el as HTMLElement;
+      },
+      { timeout: 25_000 },
+    );
+    expect(
+      placeholder.querySelectorAll("svg.animate-spin").length,
+      "the box stopped claiming a card was coming while its reader was still looking for one",
+    ).toBe(1);
+    expect(placeholder.getAttribute("aria-busy")).toBe("true");
+    expect(placeholder.hasAttribute("data-review-gate-placeholder-settled")).toBe(false);
+  }, 45_000);
 
   it("draws exactly what it drew before when it is given no run and no verdict", async () => {
     // The callers that have nothing to name — the instance screen's generic

@@ -111,9 +111,22 @@ describe("useRunReviewSlot: the park a mount waited a long time for", () => {
     expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
   }, 60_000);
 
-  it("re-arms the ceiling on the caller's own liveness evidence", async () => {
-    // A caller that IS hearing from the run — the panel's own tick — keeps its
-    // reader, without spending a look for the privilege.
+  it("does not let a caller's own tick extend the ceiling on the DRAWING", async () => {
+    // THE CEILING HAS TO STAY REACHABLE ON THE SURFACE THAT MOUNTS THIS READER
+    // (cinatra#3007, fix leg 7, convergence). The panel hands this hook its own
+    // tick as `liveSignal` and bumps it on EVERY successful tick — every five
+    // seconds while a run is parked (`agentic-run-panel.tsx`, the poll effect and
+    // both transports of `refetchDerivedContext`). The slot's own cadence widens
+    // to ten seconds, so a bump lands between every pair of looks. Clearing the
+    // ceiling's count on a bump would therefore have meant the ceiling was never
+    // once reached on the real surface: a row that repeats itself for ever would
+    // hold a wordless spinner for the life of the tab, which is the exact
+    // condition the ceiling exists to end.
+    //
+    // So liveness re-arms the FAILURE belt and only that belt — the way back
+    // from a dead transport, pinned in `run-review-slot-park-rearm.test.tsx`.
+    // What re-arms the CEILING is the row saying something new, which is the
+    // one piece of evidence that the wait is actually moving.
     let answer: RunReviewSlot = NOT_PARKED;
     let looks = 0;
     const read = async () => {
@@ -132,19 +145,46 @@ describe("useRunReviewSlot: the park a mount waited a long time for", () => {
       { initialProps: { liveSignal: signal } },
     );
 
-    await letItLook(PAST_THE_CEILING_MS);
-    signal += 1;
-    rerender({ liveSignal: signal });
-    const looksAtTheBump = looks;
+    // The panel's tick, walked at its real five-second period for the whole of
+    // the ceiling's window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    for (let elapsed = 0; elapsed < PAST_THE_CEILING_MS; elapsed += 1000) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      if (elapsed % 5000 === 0) {
+        signal += 1;
+        rerender({ liveSignal: signal });
+      }
+    }
 
+    const spent = looks;
+    expect(spent, "the reader should have been looking throughout").toBeGreaterThan(300);
+    expect(
+      result.current.stillReading,
+      "a caller ticking every five seconds held a wordless spinner past the ceiling",
+    ).toBe(false);
+    expect(
+      result.current.mayStillOpen,
+      "the drawing's ceiling was defeated by the caller's own tick",
+    ).toBe(false);
+    // And the reader is still there behind that drawing — the bumps changed
+    // nothing about the looking, which never stops while the row is parked.
+    await letItLook(60_000);
+    expect(looks, "the reader must keep looking past the drawing's bound").toBeGreaterThan(
+      spent,
+    );
+
+    // AND THE ROW ITSELF STILL RE-ARMS IT. The moment the answer moves, the wait
+    // has evidence behind it again and both readings come back, in place.
     answer = PARKED_WITH_GATE;
     await letItLook(60_000);
-    expect(looks).toBeGreaterThan(looksAtTheBump);
     expect(result.current.slot.producedReviewPark).toBe(true);
-    // The bump also puts the wordless placeholder back: the wait has somebody
-    // behind it again, and the surface is entitled to say so.
     expect(result.current.stillReading).toBe(true);
-  }, 60_000);
+    expect(result.current.mayStillOpen).toBe(true);
+  }, 120_000);
 
   it("still ends a row that repeats itself while nothing is feeding the surface", async () => {
     // The ceiling's own case, unchanged: the same answer, look after look, no

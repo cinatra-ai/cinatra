@@ -1162,20 +1162,24 @@ export function useRunReviewSlot({
   // and is now contradicted by the surface around it.
   if (seenLiveSignal !== liveSignal) {
     setSeenLiveSignal(liveSignal);
-    // AND IT CLEARS THE CEILING'S COUNT AS WELL AS THE BELT'S (fix leg 7). Leg 6
-    // withdrew only the conclusion drawn from a dead transport and left the
-    // ceiling terminal on purpose, on the reading that the ceiling answers a
-    // different question. It does — but the count it was answering it with was
-    // the mount's, not the wait's, and a bump is evidence about exactly the
-    // thing the ceiling is a proxy for: that there is still somebody here, and
-    // the run is still being read. Neither reset spends a look, marks this
-    // reader answered, or touches the cadence.
-    if (probe.failures > 0 || probe.parkLooks > 0) {
-      setProbe((prev) =>
-        prev.failures > 0 || prev.parkLooks > 0
-          ? { ...prev, failures: 0, parkLooks: 0 }
-          : prev,
-      );
+    // AND IT CLEARS THE BELT, AND ONLY THE BELT (fix leg 7, convergence). Leg 7
+    // first cleared the ceiling's count here too, on the reading that a bump is
+    // evidence somebody is still here. Measured against the caller, that reading
+    // does not hold: the panel bumps this signal on EVERY successful tick, which
+    // is every five seconds while a run is parked, and the slot's own cadence
+    // widens to ten — so a bump would land between every pair of looks and the
+    // ceiling would never once be reached on the surface that mounts this hook.
+    // A row that repeats itself for ever would then hold a wordless spinner for
+    // the life of the tab, which is the one condition the ceiling exists to end.
+    //
+    // So liveness answers the FAILURE belt's question — is there still a
+    // transport — and the CEILING's question is answered by the row: a look
+    // whose answer moved re-arms it, in the effect below. That is the evidence
+    // that the wait itself is going somewhere, which is what the ceiling is a
+    // proxy for. Neither reset spends a look, marks this reader answered, or
+    // touches the cadence.
+    if (probe.failures > 0) {
+      setProbe((prev) => (prev.failures > 0 ? { ...prev, failures: 0 } : prev));
     }
   }
   const answered = probe.answered;
