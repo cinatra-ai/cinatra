@@ -1815,7 +1815,19 @@ export function runScreenAccessAnswer(
   err: unknown,
 ): "not-found" | "not-authorized" | "rethrow" {
   if (!(err instanceof AuthzError)) return "rethrow";
-  return err.statusCode === 404 ? "not-found" : "not-authorized";
+  if (err.statusCode === 404) return "not-found";
+  if (err.statusCode === 403) return "not-authorized";
+  // THE TWO OTHER CODES ARE NOT FOLDED INTO THE PANEL (convergence round). An
+  // `AuthzError` may also carry 400 or 401, and neither is reachable from this
+  // read today: the run enforcer and the resource gate answer only 403 or 404
+  // here, and a visitor with no session arrives as an actor with no authority
+  // and is answered 404, existence hidden. They are rethrown rather than
+  // matched by an else-branch so that a later caller of this mapping cannot
+  // silently turn "no session" or "malformed request" into "the run is there
+  // and you may not act on it" — untrue in both cases, and for 401 it would
+  // confirm to a signed-out visitor that the run id exists, which is exactly
+  // the disclosure the 404 answer above is here to prevent.
+  return "rethrow";
 }
 
 export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {

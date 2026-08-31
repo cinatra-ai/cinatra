@@ -181,6 +181,67 @@ describe("the rows read-only, no floor — a spent schedule carries no controls 
   });
 });
 
+describe("the values still legible FOR A READER WHO CANNOT SEE THE PAINT", () => {
+  // The drawing's promise is "the values still legible", and a reading whose
+  // only statement of its own state is a border colour and a fill is not
+  // legible to everyone. Taking the controls away took `aria-pressed` with
+  // them; these pin that the state survived the control.
+  it("a spent Run-right-after-setup row says WHICH option the schedule stood on", async () => {
+    const { container } = mount(FROZEN["Run right after setup, fired"]);
+    await waitFor(() => expect(rows(container)).not.toBeNull());
+    const options = Array.from(
+      rows(container)!.querySelectorAll("[data-schedule-option]"),
+    ) as HTMLElement[];
+    expect(options.length).toBe(3);
+    for (const option of options) {
+      const chosen = option.getAttribute("data-chosen") === "true";
+      const said = (option.textContent ?? "").includes("Not selected")
+        ? "not-selected"
+        : (option.textContent ?? "").includes("Selected")
+          ? "selected"
+          : "silent";
+      expect(
+        said,
+        `${option.getAttribute("data-schedule-option")} says nothing about its state`,
+      ).toBe(chosen ? "selected" : "not-selected");
+    }
+    // And it is said WITHOUT bringing a control back.
+    expect(rows(container)!.querySelectorAll(CONTROLS).length).toBe(0);
+  });
+
+  it("a stopped recurring schedule says which weekdays it ran on", async () => {
+    const { container } = mount(FROZEN["Recurring, stopped"]);
+    await waitFor(() => expect(rows(container)).not.toBeNull());
+    const chips = Array.from(
+      rows(container)!.querySelectorAll('[data-readonly-field="recurring-weekday"]'),
+    ) as HTMLElement[];
+    expect(chips.length).toBe(7);
+    for (const chip of chips) {
+      const day = Number(chip.getAttribute("data-weekday"));
+      const text = chip.textContent ?? "";
+      expect(
+        /not selected$/.test(text.trim()) ? "off" : /selected$/.test(text.trim()) ? "on" : "silent",
+        `weekday ${day} says nothing about its state`,
+      ).toBe(RECURRING.kind === "recurring" && RECURRING.selection.weekdays.includes(day) ? "on" : "off");
+    }
+  });
+
+  it("the four boxes that replaced an unlabelled picker keep the picker's name", async () => {
+    const { container } = mount(FROZEN["Recurring, stopped"]);
+    await waitFor(() => expect(rows(container)).not.toBeNull());
+    for (const [field, name] of [
+      ["recurring-interval", "Repeat every"],
+      ["recurring-frequency", "Frequency"],
+      ["recurring-hour", "Hour"],
+      ["recurring-minute", "Minute"],
+    ] as const) {
+      const box = rows(container)!.querySelector(`[data-readonly-field="${field}"]`);
+      expect(box, `${field} is not drawn`).not.toBeNull();
+      expect(box!.textContent ?? "", `${field} lost the name its picker carried`).toContain(name);
+    }
+  });
+});
+
 describe("the OTHER reading is not collapsed into it — a restricted reader keeps the dead controls", () => {
   it("draws the card in full with its controls present and disabled", async () => {
     const { container } = mount(RESTRICTED);

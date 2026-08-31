@@ -1183,10 +1183,10 @@ function ScheduleOptionRows({
             <span className="text-sm text-muted-foreground">Repeat every</span>
             {readOnly ? (
               <>
-                <ReadOnlyValue field="recurring-interval" width="w-20">
+                <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
                   {String(recurring.interval)}
                 </ReadOnlyValue>
-                <ReadOnlyValue field="recurring-frequency" width="w-32">
+                <ReadOnlyValue field="recurring-frequency" width="w-32" label="Frequency">
                   {FREQUENCY_LABELS[recurring.frequency]}
                 </ReadOnlyValue>
               </>
@@ -1294,11 +1294,11 @@ function ScheduleOptionRows({
             <span className="text-sm text-muted-foreground">At</span>
             {readOnly ? (
               <>
-                <ReadOnlyValue field="recurring-hour" width="w-20">
+                <ReadOnlyValue field="recurring-hour" width="w-20" label="Hour">
                   {String(recurring.hour).padStart(2, "0")}
                 </ReadOnlyValue>
                 <span className="text-muted-foreground">:</span>
-                <ReadOnlyValue field="recurring-minute" width="w-20">
+                <ReadOnlyValue field="recurring-minute" width="w-20" label="Minute">
                   {String(recurring.minute).padStart(2, "0")}
                 </ReadOnlyValue>
               </>
@@ -1420,10 +1420,19 @@ const FREQUENCY_LABELS: Readonly<Record<RecurringSelection["frequency"], string>
 function ReadOnlyValue({
   field,
   width,
+  label,
   children,
 }: {
   field: string;
   width?: string;
+  /**
+   * The name the LIVE control carried (convergence round). Four of these boxes
+   * replace a picker whose only name was its `aria-label` — *Repeat every*,
+   * *Frequency*, *Hour*, *Minute* — and a bare box of digits says nothing about
+   * which of them it is. The two that sit in a `Field` carry its visible label
+   * already and pass none.
+   */
+  label?: string;
   children: ReactNode;
 }): ReactElement {
   return (
@@ -1431,6 +1440,7 @@ function ReadOnlyValue({
       data-readonly-field={field}
       className={`flex h-9 items-center rounded-control border border-input bg-background px-3 text-sm text-muted-foreground ${width ?? "w-56"}`}
     >
+      {label ? <span className="sr-only">{label}: </span> : null}
       {children}
     </div>
   );
@@ -1459,6 +1469,11 @@ function ReadOnlyWeekday({
       }`}
     >
       {label}
+      {/* THE SAME REASON AS THE OPTION ROW (convergence round): the live chip is
+          a button carrying `aria-pressed`, and losing the button must not lose
+          the day. Seven abbreviations with nothing but a fill to tell them apart
+          is not a legible reading of which days the schedule ran on. */}
+      <span className="sr-only">{selected ? " selected" : " not selected"}</span>
     </span>
   );
 }
@@ -1503,6 +1518,19 @@ function OptionRow({
       </span>
       {icon}
       <span className="text-sm font-medium text-foreground">{label}</span>
+      {/* THE CHOICE IS STILL A CHOICE WHEN THE FORM IS A READING (convergence
+          round). The live row is a button carrying `aria-pressed`, so which of
+          the three options the schedule stands on is announced. Drawing the
+          spent row as a plain row took the control away and took that SEMANTIC
+          with it: a reader who cannot see the indigo edge and tint met three
+          schedule options with nothing saying which one had been armed — and a
+          spent *Run right after setup* row has no fields beneath it to give the
+          answer away. "The values still legible" has to hold for that reader
+          too, so the state is said in words where the paint says it in colour.
+          Only in the reading: the live row's `aria-pressed` already says it. */}
+      {readOnly ? (
+        <span className="sr-only">{chosen ? "Selected" : "Not selected"}</span>
+      ) : null}
     </>
   );
   return (

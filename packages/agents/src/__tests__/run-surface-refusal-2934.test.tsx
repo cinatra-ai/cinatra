@@ -119,6 +119,24 @@ describe("the screen answers with the reason it was given, not with one answer f
   it("anything that is not an authorization refusal is not swallowed", () => {
     expect(runScreenAccessAnswer(new Error("the database fell over"))).toBe("rethrow");
   });
+
+  // THE MAPPING NAMES THE TWO CODES IT KNOWS AND RETHROWS THE REST (convergence
+  // round). `AuthzError` can also carry 400 and 401, and neither is reachable
+  // from this read today — but an else-branch would have MEANT them, and what it
+  // would have meant is untrue in both cases. "No session" is not "the run is
+  // there and you may not act on it"; answering a signed-out visitor that way
+  // would confirm a run id exists, which is exactly what the 404 answer above
+  // exists to prevent. So they are handed back, not drawn.
+  for (const [statusCode, reason] of [
+    [401, "no_session"],
+    [400, "owner_implicit"],
+  ] as const) {
+    it(`a ${statusCode} refusal is handed back rather than drawn as "you may not act on it"`, () => {
+      expect(
+        runScreenAccessAnswer(new AuthzError({ statusCode, reason, message: "no." })),
+      ).toBe("rethrow");
+    });
+  }
 });
 
 describe("the panel itself leaks nothing of the run it refuses", () => {
