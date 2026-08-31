@@ -311,3 +311,82 @@ jobs:
           fi
           export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
           node scripts/ci/design-pin-drift.mjs --github-annotations
+
+  # Design pin FRESHNESS (cinatra#3144 G1): the sibling to design-pin-drift
+  # above, reusing its exact shape and trigger rule. Where design-pin-drift
+  # asks "does the pinned manifest still match what is published", this job
+  # asks "has the design source moved past the pin since it was set" — a
+  # revision landing on a governed drawing path after the pin was recorded.
+  # See scripts/ci/design-pin-freshness.mjs and
+  # docs/internals/contracts/design-conformance-pin-drift.md.
+  design-pin-freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the trigger rule diffs the touched paths against
+          # the PR base, same as design-pin-drift.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # The design source is not publicly readable, so this gate needs a
+      # read credential to answer honestly. Minted here, scoped to ONLY the
+      # design repo via `repositories:`, read-only (contents: read) — the
+      # narrowest grant that can list its commit history. continue-on-error
+      # is deliberate: a missing or refused App credential (installation not
+      # covering the design source, secrets absent on a fork PR, ...) must
+      # not abort the job silently. It falls through to the checker below,
+      # which fails CLOSED (exit 2, "the gate could not run honestly") on an
+      # absent token rather than certifying an uninspected pin — the same
+      # convention design-pin-drift itself established.
+      - name: Mint the design-source read token
+        id: design-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CINATRA_AGENT_APP_ID }}
+          private-key: ${{ secrets.CINATRA_AGENT_APP_PRIVATE_KEY }}
+          owner: cinatra-ai
+          repositories: design
+          permission-contents: read
+
+      # Same trigger rule as design-pin-drift (pull_request / merge_group /
+      # push-to-other-branch: red only for pins whose mapped paths this diff
+      # touched, everything else a warning; push to main / dispatch: red on
+      # any behind pin) — reused rather than reinvented, see the checker's
+      # own header comment.
+      - name: Design Pin Freshness
+        env:
+          DESIGN_SOURCE_TOKEN: ${{ steps.design-token.outputs.token }}
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # Validate the base resolves to a commit. When it points at a commit
+          # not present in the fetched history, the three-dot diff has no shared
+          # anchor and the touched-path set is meaningless. The sibling ratchet
+          # gates fall back to HEAD there, which self-compares to an EMPTY diff
+          # — the fail-OPEN direction for this check, because an empty diff
+          # adopts no pin and every drift degrades to a warning. So this one
+          # goes the other way: the base is cleared, and the checker treats an
+          # absent base as EVERY pin touched. A fetch-depth misconfiguration
+          # therefore over-reports rather than hiding an adopting PR.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            echo "::notice::diff base '${base}' did not resolve — treating every pin as touched (fail-closed)"
+            base=""
+          fi
+          export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
+          node scripts/ci/design-pin-freshness.mjs --github-annotations
