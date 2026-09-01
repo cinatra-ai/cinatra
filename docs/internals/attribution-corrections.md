@@ -1178,3 +1178,41 @@ Correction-for: 4a8fb0ef99f0352fc953cada1277848107088cc7
 The correction commit states no verification line of its own: the verification arm is composed at
 the correction's merge, by the merge tooling, from the live gate suite, and a later mirror commit
 appends the merge record's composed arm lines to this entry.
+
+---
+
+## Correction for `15958ddd12ef6d06af1b7980d5e3ae624786f80d`
+
+per-scope-assignment S1: stores + authorization substrate + run-scope snapshot (PR #3167).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval stood on pull
+request #3167 at that exact head at merge time — @groganz approved at
+04ac9cefb56ded77dc5d5ae1e787c3e3ae3ef408 on 2026-09-01T07:10:42Z, the latest non-dismissed review
+by that login, APPROVED at the pull request's head sha, non-self (the author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required
+contexts concluded success at that reviewed head: `truthful-attribution-gate` at
+2026-09-01T07:19:11Z and `source-leak-gate` at 2026-09-01T07:19:21Z. The merge was nonetheless
+executed by the forwarding tooling's machine arm, whose message composes the gate line and the
+accountable line and no maintainer verification line, so the record of a high-risk change carried
+no maintainer arm and the post-merge gate red-flagged it (high-risk-without-maintainer). The change
+is untouched — this repairs the RECORD only.
+
+An earlier repair landed as `4a8fb0ef99f0352fc953cada1277848107088cc7`, and the entry it appended
+above is superseded by this one: that commit's own record is invalid, because a blank line
+separates its `Assisted-by` line from its terminal trailer paragraph, and a correction whose own
+record is invalid does not govern. This entry's correction names 15958ddd1 directly, so the
+latest-valid-direct-correction rule resolves to it.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 15958ddd12ef6d06af1b7980d5e3ae624786f80d
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the maintainer's approval standing on the
+correction pull request, and a later mirror commit appends the merge record's composed arm lines to
+this entry.
