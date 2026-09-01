@@ -41,6 +41,19 @@ export function RunInputStepAnsweredReading({
   label: string;
   answers: readonly RunInputStepAnswer[];
 }) {
+  // THE FIELD'S LABEL IS GIVEN ONCE (cinatra#3068 fix leg 3). A form that asks
+  // ONE field is named by that field, so the step's own heading and the field's
+  // own label are the same word -- and the card drew it twice, heading and
+  // label, over a single value. The drawing gives the label once.
+  //
+  // A DEFINITION LIST NEEDS A TERM. Where every label restates the heading there
+  // is no term left to define, so the values are drawn as values under the
+  // heading that already names them; where a label says something the heading
+  // does not -- a grouped form, or a field with no declared title of its own --
+  // the pairs are drawn exactly as before. Each value keeps its own per-field
+  // anchor in both readings, so one conformance walk reads either the same way.
+  const labelsRestateHeading =
+    answers.length > 0 && answers.every((answer) => answer.label === label);
   return (
     <section
       className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
@@ -48,22 +61,36 @@ export function RunInputStepAnsweredReading({
       data-run-input-step-reading="answered"
     >
       <h2 className="text-sm font-semibold text-foreground">{label}</h2>
-      <dl className="flex flex-col gap-3">
-        {answers.map((answer) => (
-          <div
-            key={answer.field}
-            className="flex flex-col gap-1"
-            data-run-input-answer={answer.field}
-          >
-            <dt className="text-xs font-medium text-muted-foreground">
-              {answer.label}
-            </dt>
-            <dd className="text-sm text-foreground whitespace-pre-wrap break-words">
+      {labelsRestateHeading ? (
+        <div className="flex flex-col gap-3">
+          {answers.map((answer) => (
+            <p
+              key={answer.field}
+              className="text-sm text-foreground whitespace-pre-wrap break-words"
+              data-run-input-answer={answer.field}
+            >
               {answer.value}
-            </dd>
-          </div>
-        ))}
-      </dl>
+            </p>
+          ))}
+        </div>
+      ) : (
+        <dl className="flex flex-col gap-3">
+          {answers.map((answer) => (
+            <div
+              key={answer.field}
+              className="flex flex-col gap-1"
+              data-run-input-answer={answer.field}
+            >
+              <dt className="text-xs font-medium text-muted-foreground">
+                {answer.label}
+              </dt>
+              <dd className="text-sm text-foreground whitespace-pre-wrap break-words">
+                {answer.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }

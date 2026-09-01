@@ -509,6 +509,84 @@ export function runHasExecutionRecord(params: {
 }
 
 /**
+ * DO THE RUN'S STILL-TO-COME ROWS RIDE ON THE RAIL? (cinatra#3068 fix leg 3)
+ *
+ * The ratified drawing: "A resolved gate stays on the rail as read-only history
+ * -- its entry keeps its place", "steps already passed sit above it, steps still
+ * to come below", "so the rail is the run's whole lifecycle at a glance, not
+ * just its live tip."
+ *
+ * Fix leg 2 drew those rows only while the form was still OPEN. So the moment a
+ * person answered the run's first step, four rows became one: the settled entry
+ * stood alone and the rail was the live tip again -- the one reading the drawing
+ * forbids, measured on the third graded reading of this branch.
+ *
+ * THE ROWS RIDE FOR AS LONG AS THE RAIL CARRIES THE RUN'S INPUT STEPS, which is
+ * exactly the span that includes the answered form the drawing keeps.
+ *
+ * AND THEY STOP WHERE THE RUN'S OWN HISTORY STARTS. Once the run has produced an
+ * execution record its later rows are its REAL ones, drawn by their own steps;
+ * appending "not reached yet" placeholders beside them would draw a run steps it
+ * has already taken another way, or will never take at all.
+ */
+export function railDrawsUpcomingRunSteps(params: {
+  inputStepIsOpen: boolean;
+  inputStepsInRail: boolean;
+  hasExecution: boolean;
+}): boolean {
+  if (params.inputStepIsOpen) return true;
+  return params.inputStepsInRail && !params.hasExecution;
+}
+
+/**
+ * The setup flow's own three steps, in the order the rail draws them -- the same
+ * three the schedule screen's rail names.
+ */
+export const UPCOMING_RUN_RAIL_STEP_KEYS = [
+  "schedule",
+  "recommendation",
+  "review",
+] as const;
+
+export type UpcomingRunRailStepKey = (typeof UPCOMING_RUN_RAIL_STEP_KEYS)[number];
+
+/**
+ * WHICH of those three the rail still owes, given what it has already drawn.
+ *
+ * NEVER TWICE: a key the rail already drew -- a live recommendation hold, an
+ * armed schedule -- keeps the row it has, so the de-duplication is part of this
+ * answer rather than a guard at the call site that a later caller could forget.
+ */
+export function upcomingRunRailStepKeys(params: {
+  drawUpcoming: boolean;
+  drawnKeys: readonly string[];
+}): UpcomingRunRailStepKey[] {
+  if (!params.drawUpcoming) return [];
+  const drawn = new Set(params.drawnKeys);
+  return UPCOMING_RUN_RAIL_STEP_KEYS.filter((key) => !drawn.has(key));
+}
+
+/**
+ * WHICH TAB THE RUN PAGE LIGHTS (cinatra#3068 fix leg 3).
+ *
+ * The ratified drawing, on a step drawn inside this frame: "A step shown inside
+ * the frame selects nothing ... no tab is drawn selected." The run's first step
+ * -- the agent's own input form -- is drawn inside the frame on the run's own
+ * path, and this page lit Setup under it, so the strip told the reader they were
+ * in the body of a tab while what stood there was a step.
+ *
+ * `"none"` names no trigger the strip carries, so nothing is drawn selected and
+ * the strip itself is unchanged: the same tabs on every route, which is the
+ * constant frame cinatra#2487 bought. Every other moment on this path keeps the
+ * Setup tab it has always lit.
+ */
+export function runPageActiveTab(params: {
+  inputStepIsOpen: boolean;
+}): "setup" | "none" {
+  return params.inputStepIsOpen ? "none" : "setup";
+}
+
+/**
  * WHICH STEP THE RUN DETAIL OPENS ON (cinatra#2788, S9d).
  *
  * The ratified drawing: "the run detail on the right shows the selected step",
@@ -1175,17 +1253,22 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
   // show, and plan (A) §7.2 step 5 forbids showing one with the schedule.
+  // READ ONCE, ASKED TWICE (cinatra#3068 fix leg 3): the step the run detail
+  // opens on, and whether the rail still owes the run's later steps, are two
+  // questions about the same fact -- so the fact is read here and handed to
+  // both, rather than derived twice and able to disagree.
+  const runHasExecution = runHasExecutionRecord({
+    runStatus: run?.status ?? null,
+    stepResultCount: run?.stepResults?.length ?? 0,
+    runMessageCount: completedRunMessages.length,
+    streamedTextLength: (run?.streamedText ?? "").length,
+  });
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
     recommendationHeld,
     hasScheduleStep: scheduleRailRef !== null,
-    hasExecution: runHasExecutionRecord({
-      runStatus: run?.status ?? null,
-      stepResultCount: run?.stepResults?.length ?? 0,
-      runMessageCount: completedRunMessages.length,
-      streamedTextLength: (run?.streamedText ?? "").length,
-    }),
+    hasExecution: runHasExecution,
   });
 
   // The scheduling step's duration banner, computed ONLY on the branch that
@@ -1207,7 +1290,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab="setup"
+        activeTab={runPageActiveTab({ inputStepIsOpen })}
         // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
         // schedule step is named in the page header because it answers at its
         // own sub-route; the run's first step answers on the run's own path, so
@@ -1517,20 +1600,23 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // reached: muted, opening nothing, because the plan draws no "not
               // reached yet" screen and none is invented for them.
               //
-              // ONLY WHILE THE RUN STANDS AT ITS INPUT -- afterwards the rows
-              // above are the run's real ones -- and never twice: a key the
-              // rail already drew (a live recommendation hold, an armed
-              // schedule) keeps the row it has.
-              const UPCOMING_RUN_RAIL_STEPS = [
-                "schedule",
-                "recommendation",
-                "review",
-              ] as const;
-              if (inputStepIsOpen) {
-                const drawnRailStepKeys = new Set(railSteps.map((step) => step.key));
-                const upcomingRailStepKeys = UPCOMING_RUN_RAIL_STEPS.filter(
-                  (key) => !drawnRailStepKeys.has(key),
-                );
+              // FOR AS LONG AS THE RAIL CARRIES THE RUN'S INPUT STEPS (fix
+              // leg 3), which includes the ANSWERED form the drawing keeps --
+              // "its entry keeps its place ... steps already passed sit above
+              // it, steps still to come below". Leg 2 drew them only while the
+              // form was open, so answering it collapsed four rows to one. They
+              // stop where the run's own history starts, and never draw twice:
+              // both answers are `railDrawsUpcomingRunSteps` and
+              // `upcomingRunRailStepKeys` above.
+              const upcomingRailStepKeys = upcomingRunRailStepKeys({
+                drawUpcoming: railDrawsUpcomingRunSteps({
+                  inputStepIsOpen,
+                  inputStepsInRail,
+                  hasExecution: runHasExecution,
+                }),
+                drawnKeys: railSteps.map((step) => step.key),
+              });
+              if (upcomingRailStepKeys.length > 0) {
                 railSteps.push(
                   ...buildSetupRailSteps(
                     upcomingRailStepKeys.map((key) => ({

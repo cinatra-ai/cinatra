@@ -45,18 +45,26 @@ const TRIGGER_SCREEN = SCREEN_SRC.slice(
 describe("the rail draws the steps still to come below the highlighted step", () => {
   it("names Schedule, Recommendation and Review as the steps the run has not reached", () => {
     expect(SETUP_SCREEN).toContain("upcomingRailStepKeys");
-    expect(SETUP_SCREEN).toMatch(
-      /const UPCOMING_RUN_RAIL_STEPS[\s\S]{0,120}"schedule"[\s\S]{0,40}"recommendation"[\s\S]{0,40}"review"/,
+    // THE THREE WORDS MOVED, AND ONLY MOVED (cinatra#3068 fix leg 3): they are a
+    // named answer of the screen's own now, so the settled first step keeps them
+    // too. `instance-screens-settled-input-keeps-the-rail.test.tsx` reads the
+    // rows that come out of it.
+    expect(SCREEN_SRC).toMatch(
+      /const UPCOMING_RUN_RAIL_STEP_KEYS[\s\S]{0,120}"schedule"[\s\S]{0,40}"recommendation"[\s\S]{0,40}"review"/,
     );
   });
 
-  it("draws them only for a step the run is standing at, and never twice", () => {
+  it("draws them while the rail carries the run's input step, and never twice", () => {
     // A key the rail already drew — a live recommendation hold, an armed
-    // schedule — is not drawn a second time as something still to come.
-    expect(SETUP_SCREEN).toContain(
-      "const drawnRailStepKeys = new Set(railSteps.map((step) => step.key));",
-    );
-    expect(SETUP_SCREEN).toContain("if (inputStepIsOpen)");
+    // schedule — is not drawn a second time as something still to come. The
+    // de-duplication is INSIDE that answer now, so no call site can forget it.
+    expect(SCREEN_SRC).toContain("const drawn = new Set(params.drawnKeys);");
+    expect(SETUP_SCREEN).toContain("drawnKeys: railSteps.map((step) => step.key),");
+    // AND NOT ONLY WHILE THE FORM IS OPEN (fix leg 3). Leg 2's gate took the
+    // three rows away the moment the step was answered, so the rail collapsed
+    // to the settled row alone — the live tip the drawing forbids.
+    expect(SETUP_SCREEN).toContain("drawUpcoming: railDrawsUpcomingRunSteps({");
+    expect(SETUP_SCREEN).not.toContain("if (inputStepIsOpen)");
   });
 
   it("numbers the upcoming rows from the rows already above them", () => {
