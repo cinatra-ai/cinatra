@@ -136,6 +136,7 @@ let runtimeMod: typeof import("../lifecycle-card-runtime");
 let policyMod: typeof import("@/lib/lifecycle/lifecycle-policy");
 let continuationMod: typeof import("@/lib/lifecycle/lifecycle-continuation");
 let statusMod: typeof import("../run-status");
+let transitionMod: typeof import("../run-transition");
 
 const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: USER_ID },
@@ -183,6 +184,7 @@ beforeAll(async () => {
   policyMod = await import("@/lib/lifecycle/lifecycle-policy");
   continuationMod = await import("@/lib/lifecycle/lifecycle-continuation");
   statusMod = await import("../run-status");
+  transitionMod = await import("../run-transition");
 
   resolveForTestActor = (runId: string) =>
     core.resolveRecommendationHoldStateForActor({ runId, who: WHO }) as Promise<unknown>;
@@ -535,3 +537,159 @@ describe.skipIf(!HAS_DB)("cinatra#3062 fix leg 3 — the freeze follows the run,
     expect(continues(third.container)).toHaveLength(0);
   }, 180_000);
 });
+
+
+/**
+ * THE REAL DISPATCH CAS, not a hand-written UPDATE (cinatra#3062, convergence).
+ *
+ * `stampTheStart` above stands in for the dispatch with its own SQL, which is
+ * fine for asking the CARD a question but proves nothing about the row a real
+ * dispatch leaves behind. This drives the production statement itself —
+ * `updateAgentRunStatusConditional`, the deepest layer of `transitionRunStatus`
+ * and the only place a run's status may legally flip — on the real database, so
+ * the stamp the reading is derived from is the stamp the dispatch actually
+ * writes. The guarded transaction the production entry wraps this in is an org
+ * lock and permit around the SAME statement; the statement is the seam here.
+ */
+async function casTransition(
+  runId: string,
+  from: string,
+  to: string,
+  attemptId?: string,
+): Promise<boolean> {
+  return (dbMod.db as unknown as {
+    transaction: (fn: (tx: unknown) => Promise<boolean>) => Promise<boolean>;
+  }).transaction(async (tx) =>
+    transitionMod.updateAgentRunStatusConditional(
+      runId,
+      from,
+      to,
+      attemptId ? { attemptId } : undefined,
+      ORG_ID,
+      tx as never,
+    ),
+  );
+}
+
+/** Parked, offered, decided — the same fixture, at whatever status the run holds. */
+async function decideOn(runId: string): Promise<void> {
+  await parkRecommendation(runId);
+  const park = await hold.readRecommendationParkForRun(runId);
+  await selectionStore.writeRunRecommendationOfferedSet({
+    runId,
+    holdId: park!.id,
+    offered: [
+      { skillId: "skill-kept", skillRevisionId: "skill-kept@1", recommended: true, rank: 1 },
+      { skillId: "skill-cleared", skillRevisionId: "skill-cleared@1", recommended: true, rank: 2 },
+    ],
+  });
+  selectionStore.writeRunSelectedSkillRevisions({
+    runId,
+    selections: [
+      {
+        skillId: "skill-kept",
+        skillRevisionId: "skill-kept@1",
+        selectionSource: "recommended_confirmed",
+      },
+    ],
+  });
+  selectionStore.writeRunRejectedRecommendations({
+    runId,
+    rejected: [
+      {
+        skillId: "skill-cleared",
+        skillRevisionId: "skill-cleared@1",
+        recommendationSource: "user_skipped",
+        recommendedRank: 2,
+      },
+    ],
+  });
+  await hold.releaseRecommendationParkForRun(runId);
+}
+
+describe.skipIf(!HAS_DB)(
+  "cinatra#3062 convergence — the stamp the reading rests on is the one the DISPATCH writes",
+  () => {
+    it("the production dispatch CAS stamps started_at", async () => {
+      // The whole reading rests on the claim that `started_at` is written by the
+      // `queued->running` dispatch. Ask the statement, not a fixture.
+      const runId = await insertRun("queued", null);
+      expect((await readRunRow(runId)).started_at).toBeNull();
+
+      expect(await casTransition(runId, "queued", "running", randomUUID())).toBe(true);
+
+      const running = await readRunRow(runId);
+      expect(running.status).toBe("running");
+      expect(running.started_at).not.toBeNull();
+      expect(
+        statusMod.recommendationRunHasStartedForRow({
+          status: running.status,
+          startedAt: running.started_at,
+        }),
+      ).toBe(true);
+    }, 120_000);
+
+    it("a re-dispatch keeps the run's FIRST start", async () => {
+      const runId = await insertRun("queued", null);
+      await casTransition(runId, "queued", "running", randomUUID());
+      const first = (await readRunRow(runId)).started_at;
+      expect(first).not.toBeNull();
+      // running -> pending_input -> queued -> running, the retry road.
+      await casTransition(runId, "running", "pending_input");
+      await casTransition(runId, "pending_input", "queued");
+      await casTransition(runId, "queued", "running", randomUUID());
+      expect((await readRunRow(runId)).started_at).toEqual(first);
+    }, 120_000);
+
+    for (const host of ["chat_thread", "run_card"] as const) {
+      it(`${host}: a run interrupted MID-FLIGHT into pending_approval stays FROZEN`, async () => {
+        // The other producer of `pending_approval`: an interrupt raised while the
+        // run was executing. Its status is byte-identical to the hold's own park,
+        // so if the stamp is missing the card hands a started run a live Continue
+        // and the store lets its ledger be rewritten. §V: "Once the run has
+        // started the same pills are drawn with the state their boxes were left
+        // in, read-only, and with no Continue."
+        const runId = await insertRun("queued", null);
+        await decideOn(runId);
+        expect(await casTransition(runId, "queued", "running", randomUUID())).toBe(true);
+        expect(await casTransition(runId, "running", "pending_approval")).toBe(true);
+
+        const row = await readRunRow(runId);
+        expect(row.status).toBe("pending_approval");
+        expect(row.started_at).not.toBeNull();
+
+        const state = (await resolveForTestActor!(runId)) as { runStarted?: boolean };
+        expect(state.runStarted).toBe(true);
+
+        const { container } = reload(runId, host);
+        await drawn(container);
+        expect(step(container)?.getAttribute("data-skills-step-editable")).toBe("false");
+        expect(continues(container)).toHaveLength(0);
+        for (const b of boxes(container)) expect(b.hasAttribute("disabled")).toBe(true);
+      }, 180_000);
+    }
+
+    it("a run interrupted MID-FLIGHT into pending_approval keeps its ledger SHUT", async () => {
+      const runId = await insertRun("queued", null);
+      await decideOn(runId);
+      await casTransition(runId, "queued", "running", randomUUID());
+      await casTransition(runId, "running", "pending_approval");
+
+      const applied = selectionStore.replaceRunSelectedSkillRevisionsBeforeStart({
+        runId,
+        scopeSkillIds: ["skill-kept", "skill-cleared"],
+        selections: [
+          {
+            skillId: "skill-cleared",
+            skillRevisionId: "skill-cleared@1",
+            selectionSource: "recommended_confirmed",
+          },
+        ],
+      });
+      expect(applied).toBe(false);
+      expect(
+        selectionStore.readRunSelectedSkillRevisions(runId).map((r) => r.skillId).sort(),
+      ).toEqual(["skill-kept"]);
+    }, 120_000);
+  },
+);
