@@ -309,6 +309,7 @@
     { "alias": "@cinatra-ai/mcp-server/auth-plugins", "target": "./packages/mcp-server/src/auth-plugins.ts" },
     { "alias": "@cinatra-ai/mcp-server/obo-ceiling", "target": "./packages/mcp-server/src/obo-ceiling.ts" },
     { "alias": "@cinatra-ai/mcp-server/credentials", "target": "./packages/mcp-server/src/llm-credentials.ts" },
+    { "alias": "@cinatra-ai/mcp-server/mcp-public-base-url-shape", "target": "./packages/mcp-server/src/mcp-public-base-url-shape.mjs" },
     { "alias": "@cinatra-ai/mcp-server/dev-admin-bypass", "target": "./packages/mcp-server/src/dev-admin-bypass.ts" },
     { "alias": "@cinatra-ai/mcp-server/delegated-chat-tool-policy", "target": "./packages/mcp-server/src/delegated-chat-tool-policy.ts" },
     { "alias": "@cinatra-ai/mcp-server/request-context", "target": "./packages/mcp-server/src/request-context.ts" },
