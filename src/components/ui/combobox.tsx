@@ -120,8 +120,18 @@ function Combobox({
             Seeding cmdk with the bound value opens the list where the drawing's
             own picture opens it: on the current value's row, highlighted and
             checked at once. The popover unmounts when it closes, so each open
-            re-seeds from the value bound at that moment. */}
-        <Command defaultValue={value}>
+            re-seeds from the value bound at that moment.
+
+            cmdk reads that seed ONCE, when the list mounts, so a value that
+            changes from OUTSIDE while the list is open would leave the check on
+            the new row and the highlight on the old one — and the keyboard
+            commit then takes the row the reader is no longer looking at. Keying
+            the list on the bound value re-seeds it on exactly that transition,
+            which is also the moment an in-progress search has stopped being
+            about the value in the field. Typing, arrow navigation and the
+            filter are untouched: the key only moves when the bound value
+            does. */}
+        <Command key={value ?? ""} defaultValue={value}>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
