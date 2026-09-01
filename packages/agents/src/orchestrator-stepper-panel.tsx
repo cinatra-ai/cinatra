@@ -543,9 +543,12 @@ function HitlApprovalCard({
     );
   };
 
-  // The AI-assist prompt lives at the BOTTOM
-  // of the page via createPortal into <main>, NOT inside renderers. portalTarget
-  // is set in an effect because document.querySelector is browser-only.
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses.
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // Stable suggestion payload threaded into the renderer so it can sync local
   // state via useEffect([aiSuggestions]). Only changes when the user submits
@@ -576,10 +579,6 @@ function HitlApprovalCard({
   // take the fill away before its replacement exists.
   const runWindow = useRunWindowConversation({ runId, surface: "step-by-step" });
   const convIdRef = useRef(0);
-
-  useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
-  }, []);
 
   // Parent-side apply handler merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
@@ -1003,10 +1002,12 @@ function HitlApprovalCard({
     <Card data-hitl-output={isOutputHitl ? "true" : undefined}>
       <CardContent className="flex flex-col gap-4 p-6">{cardBody}</CardContent>
     </Card>
-    {/* Sticky bottom-of-page AI-assist
-        conversation panel. Delegates to the shared HitlConversationPanel.
-        resetSignal is intentionally omitted — orchestrator-stepper-panel never
-        had a renderer-change reset (no equivalent of agentic-run-panel.tsx:329). */}
+    {/* The AI-assist conversation panel, drawn into its own mount below the
+        step's work rather than across the foot of the frame. Delegates to the
+        shared HitlConversationPanel. resetSignal is intentionally omitted —
+        orchestrator-stepper-panel never had a renderer-change reset (no
+        equivalent of agentic-run-panel.tsx:329). */}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
     <HitlConversationPanel
       portalTarget={portalTarget}
       // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
@@ -1028,6 +1029,7 @@ function HitlApprovalCard({
       // the setup-loop server omits userResponse.
       enableAttachments={!isSetupGateTaskId(interruptContext.reviewTaskId)}
     />
+    </div>
     </>
   );
 }

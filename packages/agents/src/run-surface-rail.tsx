@@ -125,11 +125,23 @@ export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
  * `StepperIndicator` gives an active or completed step, and the ones
  * `RunStepRailPanel` gives an inactive row — so a gate row reads as one of the
  * rail's rows and no second vocabulary is invented for it.
+ *
+ * A SETTLED ENTRY IS NEVER FILLED (cinatra#3188 item 1). The ratified drawing
+ * names the settled entry and the upcoming entry in ONE rule — ".rail
+ * .step.upcoming .glyph, .rail .step.settled .glyph { background:
+ * rgba(92,103,121,0.4); color: var(--paper); }" — so the two circles take the
+ * same muted ground, and the indigo fill is reserved for the entry the reader
+ * is standing on. The rule is HELD HERE rather than at each row, because the
+ * rail has three rows in three modules and a rule each of them had to
+ * remember is a rule one of them would forget: pass the settled answer and the
+ * circle cannot come out filled.
  */
-export function runSurfaceRailIndicatorClass(filled: boolean) {
+export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
   return cn(
     "relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs",
-    filled ? "bg-primary text-primary-foreground" : "bg-muted-foreground/40 text-background",
+    filled && !settled
+      ? "bg-primary text-primary-foreground"
+      : "bg-muted-foreground/40 text-background",
   );
 }
 
@@ -234,10 +246,12 @@ export function RunSurfaceRailRow({
     >
       <span
         data-conformance-id={indicatorConformanceId}
-        // A settled circle is FILLED whether or not its step is the open one:
-        // it is what the rail already gives a completed step, and it is what
-        // makes the row read as history rather than as something still ahead.
-        className={runSurfaceRailIndicatorClass(emphasised || settled)}
+        // A settled circle takes the drawing's MUTED ground whether or not its
+        // step is the open one (cinatra#3188 item 1) — the same ground the
+        // entry still ahead takes, which is what makes the row read as history
+        // rather than as the entry the reader is standing on. The check inside
+        // it is what records that it was answered.
+        className={runSurfaceRailIndicatorClass(emphasised, settled)}
       >
         {settled ? <Check className="h-3 w-3" /> : displayStep}
       </span>
@@ -247,6 +261,29 @@ export function RunSurfaceRailRow({
           none. */}
       <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
     </Button>
+  );
+}
+
+/**
+ * THE MARK BETWEEN TWO ENTRIES (cinatra#3188 item 2).
+ *
+ * The ratified drawing's rail draws one of these between every pair of adjacent
+ * entries, at its own measurements: ".rail .sep { width: 2px; height: 8px;
+ * margin: 4px 0 4px 11px; border-radius: 1px; background: var(--line); }" —
+ * 11px being the centre of the 24px circle the entries carry, so the marks and
+ * the circles read as one line down the rail.
+ *
+ * It is a MARK, not an entry: nothing to read out and nothing to press, so it
+ * is hidden from the accessibility tree.
+ */
+export function RunSurfaceRailSeparator(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      data-run-surface-rail-separator=""
+      data-conformance-id="run-step-rail-separator"
+      className="my-1 ml-[11px] h-2 w-0.5 shrink-0 rounded-[1px] bg-line"
+    />
   );
 }
 
@@ -300,15 +337,30 @@ export function RunSurfaceRail({
 
   return (
     <RunStepSelectionContext.Provider value={{ selected, select }}>
-      {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows. */}
+      {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows,
+          with the drawing's separator standing between adjacent entries.
+
+          THE COLUMN ITSELF NO LONGER SPACES THE ROWS (cinatra#3188 item 2). The
+          drawing puts the whole gap between two entries INSIDE the mark — 4px
+          above it and 4px below — so a column gap on top of that would space
+          the rail at three times the drawing's rhythm. The rows keep their own
+          2px of padding, exactly as the drawing's `.rail .step` does. */}
       <div
         data-conformance-id="run-step-rail-column"
         data-run-step-rail-column=""
-        className="flex shrink-0 flex-col gap-2 pt-1"
+        className="flex shrink-0 flex-col pt-1"
       >
-        {steps.map((step) => (
-          <Fragment key={step.key}>{step.row}</Fragment>
+        {steps.map((step, index) => (
+          <Fragment key={step.key}>
+            {index > 0 ? <RunSurfaceRailSeparator /> : null}
+            {step.row}
+          </Fragment>
         ))}
+        {/* The page's own rows are one more entry after the gate rows, so the
+            mark stands before them too. They carry their own separators
+            inside (`RunStepRailPanel`), which is why only the join is drawn
+            here. */}
+        {runSurfaceNodeExists(rail) && steps.length > 0 ? <RunSurfaceRailSeparator /> : null}
         {rail}
       </div>
 
