@@ -97,7 +97,6 @@ import {
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
-import { recallThreadTranscript, rememberThreadTranscript } from "./thread-transcript-memory";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
@@ -138,6 +137,78 @@ import { ConversationColumn, CHAT_THREAD_HOST } from "./conversation-column";
 // above.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// THE TRANSCRIPT A REBUILT CHAT PAGE ALREADY HAD (cinatra#3007, fix leg 10).
+// ---------------------------------------------------------------------------
+// This page holds the open thread's messages in component state and fills that
+// state from `GET /api/assistants/threads/<id>` after it mounts. That is right
+// for a page opened cold. It is wrong for a page that is TORN DOWN AND REBUILT
+// while the reader is looking at it: the rebuilt instance starts from an empty
+// list, so the whole conversation — every turn, and every lifecycle card drawn
+// at a turn's own slot — is GONE from the document for as long as that read
+// takes, and then comes back. Nothing failed; the transcript simply was not
+// there for a while.
+//
+// The held-turn gate photographed exactly that. Its recorder reads the DOM
+// without waiting, on purpose, because a record is a photograph: it found the
+// conversation list attached with NOTHING painted inside it, moments after the
+// same run's settled row had been asserted on its own root. The trace shows the
+// rebuild between the two instants — the page's in-flight reads aborted and a
+// fresh mount re-issuing them — with the thread read still on the wire when the
+// shutter opened. Under load that read is not fast.
+//
+// So the transcript survives the rebuild. What follows is the whole mechanism: a
+// per-document, per-thread record of the messages this page last had for a
+// thread, written whenever that thread's list is the one on screen and read once,
+// to seed the first render of a page opening on the SAME thread. The read the
+// page issues anyway still lands and still replaces what is drawn, so nothing
+// here becomes an authority — it only decides what is drawn in the gap.
+//
+// IT IS NOT A CACHE, and the difference matters: nothing is served FROM it, it is
+// never consulted for a thread the page is not already opening, it never
+// suppresses a read, and it is bounded to the most recent `REMEMBERED_THREADS`
+// threads in insertion order so a long session cannot grow it without limit. It
+// lives in the document and dies with the tab.
+//
+// IT LIVES HERE, in this module, rather than in one of its own. The `/chat` route
+// graph is ratcheted, this page is the only reader and the only writer, and a
+// second module would cost that route a permanent +1 for three functions.
+const REMEMBERED_TRANSCRIPTS = new Map<string, Message[]>();
+const REMEMBERED_THREADS = 8;
+
+/** Record the list this page currently has for `threadId`. */
+function rememberThreadTranscript(threadId: string, messages: Message[]): void {
+  if (!threadId) return;
+  // An EMPTY list is not remembered. A page mid-rebuild legitimately holds one,
+  // and recording it would replace the transcript this exists to keep.
+  if (messages.length === 0) return;
+  // Re-insert so the eviction below is genuinely least-recently-seen.
+  REMEMBERED_TRANSCRIPTS.delete(threadId);
+  REMEMBERED_TRANSCRIPTS.set(threadId, messages);
+  while (REMEMBERED_TRANSCRIPTS.size > REMEMBERED_THREADS) {
+    const oldest = REMEMBERED_TRANSCRIPTS.keys().next();
+    if (oldest.done) break;
+    REMEMBERED_TRANSCRIPTS.delete(oldest.value);
+  }
+}
+
+/** The list this page last had for `threadId`, or `null` if it has never had one. */
+function recallThreadTranscript(threadId: string | null | undefined): Message[] | null {
+  if (!threadId) return null;
+  return REMEMBERED_TRANSCRIPTS.get(threadId) ?? null;
+}
+
+/**
+ * FORGET EVERY THREAD'S TRANSCRIPT.
+ *
+ * A browser drops this by closing the tab. A test file that mounts this page many
+ * times on the SAME thread id has no such boundary, so it is given one: a suite
+ * that means "this page has never seen this thread" says so here.
+ */
+export function forgetRememberedTranscripts(): void {
+  REMEMBERED_TRANSCRIPTS.clear();
+}
+
 export function ChatPage({ initialThreadId, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
@@ -161,7 +232,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // used to seed both the list and the load fingerprint below, so the persist
   // effect reads a seeded page as a passive open rather than as new activity.
   const rememberedTranscript = useRef<Message[]>(
-    (recallThreadTranscript(initialThreadId) as Message[] | null) ?? [],
+    recallThreadTranscript(initialThreadId) ?? [],
   );
   const [messages, setMessages] = useState<Message[]>(() => rememberedTranscript.current);
   // Streaming registry: one AbortController per in-flight streamResponse call.

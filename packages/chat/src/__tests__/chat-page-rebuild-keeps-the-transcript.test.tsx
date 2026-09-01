@@ -217,7 +217,7 @@ async function flush() {
 }
 
 beforeEach(async () => {
-  const { forgetRememberedTranscripts } = await import("../thread-transcript-memory");
+  const { forgetRememberedTranscripts } = await import("../chat-page");
   const { forgetAuthorizedRecommendationAnswers } = await import(
     "@cinatra-ai/agents/run-recommendation-card"
   );
@@ -233,7 +233,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   cleanup();
-  const { forgetRememberedTranscripts } = await import("../thread-transcript-memory");
+  const { forgetRememberedTranscripts } = await import("../chat-page");
   const { forgetAuthorizedRecommendationAnswers } = await import(
     "@cinatra-ai/agents/run-recommendation-card"
   );
