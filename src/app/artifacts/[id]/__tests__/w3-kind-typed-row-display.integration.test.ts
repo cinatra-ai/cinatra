@@ -90,6 +90,9 @@ async function* bytesOf(b: Uint8Array): AsyncIterable<Uint8Array> {
 }
 
 let creationMod: typeof import("@/lib/artifacts/artifact-creation");
+let serviceMod: typeof import("@/lib/artifacts/artifact-service");
+let readMod: typeof import("@/lib/artifacts/artifact-read");
+let registrarMod: typeof import("@/lib/artifacts/system-artifact-renderer-registrar");
 let runPostgresQueriesSync: typeof import("@/lib/postgres-sync").runPostgresQueriesSync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
 
@@ -138,9 +141,47 @@ async function mint(objectType: string, declaredMime: string, bytes: Uint8Array)
   });
 }
 
-/** What the artifact page's resolver returns for a row, given the row's own
- *  persisted type and media type — identity resolved the way the page does it,
- *  from the type alone. */
+/** THE PAGE'S OWN READ, not a re-derivation of it (Codex convergence, this leg).
+ *  `page.tsx` does not compute the identity from the type and does not take "the
+ *  numerically latest representation": it calls `readArtifactForDetail`, presents
+ *  the assertion-aware PRESENTATION identity (which diverges from the effective
+ *  identity BY DESIGN — a row filed as something else renders as that), and reads
+ *  the representation its `latestRepresentationRevisionId` pointer names. Driving
+ *  the seam with `resolveEffectiveIdentity(type)` and a `revision DESC` pick would
+ *  have measured a road next to the page's, and would have gone on agreeing with
+ *  itself if the page's identity ever moved. This helper calls the same functions
+ *  page.tsx calls, in the same order, including the activation reconcile. */
+async function pageDispatchForArtifact(artifactId: string) {
+  const access = serviceMod.readArtifactForDetail({ artifactId, orgId: ORG });
+  if (access.kind !== "ok") throw new Error("the detail read refused the row: " + access.kind);
+  const artifact = access.artifact;
+  const revisionId = artifact.latestRepresentationRevisionId;
+  const resolved = revisionId
+    ? readMod.resolveArtifactVersionForServe({
+        orgId: ORG,
+        artifactId,
+        representationRevisionId: revisionId,
+      })
+    : null;
+  const mime = resolved?.mime ?? artifact.mime ?? "";
+  await registrarMod.ensureActivatedRepresentationProviders(ORG);
+  return {
+    objectType: artifact.objectType,
+    mime,
+    identity: artifact.presentationIdentity,
+    dispatch: pickArtifactRenderer(
+      resolveArtifactDispatchInputs({
+        orgId: ORG,
+        baseType: artifact.objectType,
+        identity: artifact.presentationIdentity,
+        mime,
+      }),
+    ),
+  };
+}
+
+/** The same seam for a row that is NOT in the store — the floor rung, where the
+ *  point is the type alone and there is nothing to read back. */
 function dispatchForRow(row: { objectType: string; mime: string }) {
   return pickArtifactRenderer(
     resolveArtifactDispatchInputs({
@@ -179,6 +220,9 @@ beforeAll(async () => {
   ({ runPostgresQueriesSync } = await import("@/lib/postgres-sync"));
   ({ getPostgresConnectionString } = await import("@/lib/postgres-config"));
   creationMod = await import("@/lib/artifacts/artifact-creation");
+  serviceMod = await import("@/lib/artifacts/artifact-service");
+  readMod = await import("@/lib/artifacts/artifact-read");
+  registrarMod = await import("@/lib/artifacts/system-artifact-renderer-registrar");
 
   // The REAL pinned packs, read off disk exactly as the boot registrar reads
   // them — never a hand-written stand-in, so what is measured is what ships.
@@ -210,10 +254,19 @@ describe.skipIf(!HAS_REAL_DB)(
   () => {
     it("the screenshot kind: the store accepts the row and the page reaches the pack's own detail entry", async () => {
       const created = await mint("@cinatra-ai/screenshot-artifact:screenshot", "image/png", PNG);
+      // What Postgres actually kept, read straight out of the tables.
       const row = readBackRow(created.artifactId);
       expect(row.objectType).toBe("@cinatra-ai/screenshot-artifact:screenshot");
       expect(row.mime).toBe("image/png");
-      expect(dispatchForRow(row)).toEqual({
+      // What the PAGE then makes of that row, through the page's own read.
+      const page = await pageDispatchForArtifact(created.artifactId);
+      expect(page.objectType).toBe("@cinatra-ai/screenshot-artifact:screenshot");
+      expect(page.mime).toBe("image/png");
+      expect(page.identity).toMatchObject({
+        kind: "extension",
+        extension: "@cinatra-ai/screenshot-artifact",
+      });
+      expect(page.dispatch).toEqual({
         kind: "semantic",
         packageName: "@cinatra-ai/screenshot-artifact",
         generatedKey: "@cinatra-ai/screenshot-artifact::detail",
@@ -224,8 +277,19 @@ describe.skipIf(!HAS_REAL_DB)(
     });
 
     it("the deck kind: the store REFUSES the row, and the refusal is the type declaration, not the display", async () => {
-      await expect(mint("@cinatra-ai/slide-deck:deck", "application/pdf", PDF)).rejects.toThrow(
-        /slide-deck:deck/,
+      // The refusal is asserted by its CLOSED reason token, never by its sentence
+      // (Codex convergence, this leg). `ObjectsTypeNotRegisteredError` carries
+      // `reason` precisely so a caller branches on it, and its own comment says
+      // the mid-write refusals — a MIME the type does not accept, a payload the
+      // schema rejects — deliberately carry NO ownership reason. A message match
+      // would have accepted one of those and called it an ownership answer.
+      const refusal = await mint("@cinatra-ai/slide-deck:deck", "application/pdf", PDF).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(refusal).toBeInstanceOf(creationMod.ObjectsTypeNotRegisteredError);
+      expect((refusal as InstanceType<typeof creationMod.ObjectsTypeNotRegisteredError>).reason).toBe(
+        "no-installed-definer",
       );
       // Nothing owns the namespace the pack declares its type under, so no row of
       // that kind can exist anywhere — while the pack's display sits in the
@@ -241,7 +305,9 @@ describe.skipIf(!HAS_REAL_DB)(
       const created = await mint("@cinatra-ai/pdf-artifact:document", "application/pdf", PDF);
       const row = readBackRow(created.artifactId);
       expect(row.objectType).toBe("@cinatra-ai/pdf-artifact:document");
-      expect(dispatchForRow(row)).toEqual({
+      const page = await pageDispatchForArtifact(created.artifactId);
+      expect(page.mime).toBe("application/pdf");
+      expect(page.dispatch).toEqual({
         kind: "semantic",
         packageName: "@cinatra-ai/pdf-artifact",
         generatedKey: "@cinatra-ai/pdf-artifact::detail",
