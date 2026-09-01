@@ -13,6 +13,9 @@ import {
   isAutoReviewTaskId,
   isBatchAutoReviewTaskId,
   batchPartitionReviewTaskId,
+  VERIFICATION_REOPEN_TASK_PREFIX,
+  verificationReopenReviewTaskId,
+  isVerificationReopenTaskId,
   planReviewForEvent,
   evaluateEffectHold,
   type ProducedEventAxes,
@@ -267,5 +270,30 @@ describe("evaluateEffectHold", () => {
     });
     expect(v.held).toBe(false);
     expect(v.policyUnresolved).toBeUndefined();
+  });
+});
+
+describe("cinatra#3080 — the verification-reopen task id spells its prefix once", () => {
+  // MEASURED on the running application, twice, once per Regenerate press: the
+  // second (unwanted) gate carried the review task
+  // `lifecycle-review:verify:verify:{gateId}`. The builder was handed the
+  // verification RECORD id, which is itself `verify:{gateId}` — one verification
+  // per gate — and the prefix it prepends already ends in `verify:`.
+  it("derives from the GATE id, never doubling the word", () => {
+    const gateId = "265670fe-973c-42dc-b375-ca885cc2bb6e";
+    const taskId = verificationReopenReviewTaskId(gateId);
+    expect(taskId).toBe(`${VERIFICATION_REOPEN_TASK_PREFIX}${gateId}`);
+    expect(taskId).toBe(`lifecycle-review:verify:${gateId}`);
+    expect(taskId).not.toContain("verify:verify");
+    // It is still recognised as an S4 reopen, and still an auto-review task.
+    expect(isVerificationReopenTaskId(taskId)).toBe(true);
+    expect(isAutoReviewTaskId(taskId)).toBe(true);
+  });
+
+  it("stays injective on the gate id, so one gate reopens exactly one bounded gate", () => {
+    const a = verificationReopenReviewTaskId("gate-a");
+    const b = verificationReopenReviewTaskId("gate-b");
+    expect(a).not.toBe(b);
+    expect(verificationReopenReviewTaskId("gate-a")).toBe(a);
   });
 });

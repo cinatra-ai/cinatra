@@ -208,7 +208,12 @@ async function writeVerificationRecordAndMaybeReopen(
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: true };
   }
 
-  const reopenTaskId = verificationReopenReviewTaskId(id);
+  // The reopen task id is derived from the GATE, not from `id` (the
+  // verification RECORD id). `id` is itself `verify:${gateId}`, and the
+  // builder's prefix already ends in `verify:` — handing it `id` spelled the
+  // word twice and minted `lifecycle-review:verify:verify:{gateId}` on the
+  // running application (cinatra#3080, the fourth reproduction).
+  const reopenTaskId = verificationReopenReviewTaskId(input.gateId);
   try {
     const emitted = await emitArtifactReviewGate({
       runId: input.runId,
@@ -357,6 +362,35 @@ export async function recordVerificationForExternalChange(input: {
  * this default is what the best-effort auto-trigger uses so a landed repair ALWAYS
  * writes a real verification record the run rail can open.
  */
+/**
+ * THE DEFAULT PROJECTOR'S OWN AUTHORIZED SCOPE (cinatra#3080, the fourth
+ * reproduction of the real road).
+ *
+ * `defaultRepresentationFieldProjector` projects REPRESENTATION IDENTITY —
+ * revision, content pointer, form — and a landed repair advances all three BY
+ * CONSTRUCTION: that is what landing a repair IS. The scope manifest the verdict
+ * is otherwise judged against is derived from the accepted findings' field
+ * `path`s, which name CONTENT fields and can never name a `representation.*`
+ * one. So on the default projector the two axes never intersect: every landed
+ * repair reported its own expected revision advance as `outOfScopePaths`, the
+ * outcome came back `drifted`, and the best-effort auto-trigger reopened a
+ * bounded gate on EVERY Regenerate. That is the measured defect — one press,
+ * two pending gates on the same run, reproduced on both presses.
+ *
+ * Pairing the projector with the axis it actually projects is the fix at the
+ * cause: a repair that advances its own representation identity is doing exactly
+ * what the review asked for, and is never drift. A caller that wants a real
+ * drift verdict supplies a type-aware projector AND its own manifest to
+ * `recordVerificationForRepair`; the external-change path is untouched.
+ *
+ * A verdict over this projection can still come back non-`verified` on a
+ * caller-supplied validator failure or a representation mismatch — the bounded
+ * reopen is intact, it is no longer fired by the projection's own axis.
+ */
+export const DEFAULT_REPRESENTATION_SCOPE: VerificationScopeManifest = {
+  paths: ["representation.form", "representation.resource", "representation.revision"],
+};
+
 export function defaultRepresentationFieldProjector(orgId: string): VerificationFieldProjector {
   return async (target: VerificationTargetRef): Promise<Record<string, string>> => {
     const mod = await import("@/lib/artifacts/representation-store");
@@ -385,6 +419,10 @@ export async function triggerVerificationForLandedRepair(input: {
     return await recordVerificationForRepair({
       repairId: input.repairId,
       projectFields: defaultRepresentationFieldProjector(input.orgId),
+      // The projector's OWN axis is the authorized scope — see
+      // DEFAULT_REPRESENTATION_SCOPE. Without it every landed repair read as
+      // out-of-scope drift and reopened a second gate on every Regenerate.
+      scopeManifest: DEFAULT_REPRESENTATION_SCOPE,
     });
   } catch (err) {
     return { ok: false, code: "skipped", error: err instanceof Error ? err.message : String(err) };

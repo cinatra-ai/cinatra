@@ -26,7 +26,11 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId, isVerificationReopenTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  autoReviewTaskId,
+  isVerificationReopenTaskId,
+  verificationReopenReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
@@ -275,6 +279,14 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     const row = reopen.rows[0] as { run_id: string; review_task_id: string; pinned_targets: Array<{ representationRevisionId: string }> };
     expect(row.run_id).toBe(runId);
     expect(isVerificationReopenTaskId(row.review_task_id)).toBe(true);
+    // AND IT SPELLS ITS PREFIX ONCE (cinatra#3080, the fourth reproduction of
+    // the real road). `isVerificationReopenTaskId` is a prefix test, so it said
+    // `true` about the id the running application actually minted —
+    // `lifecycle-review:verify:verify:{gateId}` — and this suite passed over the
+    // doubled word for as long as it existed. The reopen task id is the gate's,
+    // built by the one builder, and nothing else.
+    expect(row.review_task_id).toBe(verificationReopenReviewTaskId(gateId));
+    expect(row.review_task_id).not.toContain("verify:verify");
     expect(row.pinned_targets[0].representationRevisionId).toBe(repairedRev);
 
     // A re-drive is idempotent: the SAME record, the SAME one reopen gate.

@@ -38,7 +38,10 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  autoReviewTaskId,
+  repairSuccessorReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2047_d1";
@@ -134,6 +137,35 @@ async function produce(
   await insertObject(ev.artifactId, objectType, ev.orgId);
   await outboxStore.emitArtifactProduced(ev, dbMod.db);
   return ev;
+}
+
+/**
+ * Seed the artifact's own REPRESENTATION row (cinatra#3080, the fourth
+ * reproduction of the real road).
+ *
+ * `produce()` writes the produced-event outbox row and the object, and NOT a
+ * `representation` row — which is exactly why this suite could not see the
+ * doubled gate. The S4 auto-trigger projects both the reviewed and the repaired
+ * revision through `defaultRepresentationFieldProjector`, which reads that table;
+ * with no rows it projected `{}` on both sides, the diff was empty, the verdict
+ * came back `verified` and nothing was reopened. On the running application the
+ * rows are there, both sides project three fields, the revision advance reads as
+ * out-of-scope drift and a SECOND pending gate opens on every Regenerate.
+ *
+ * Seeding the row is what puts this fixture on the real road.
+ */
+async function seedRepresentation(
+  artifactId: string,
+  representationRevisionId: string,
+  revision: number,
+): Promise<void> {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."representation"
+       (id, org_id, artifact_id, resource_id, revision, form)
+     VALUES ($1, $2, $3, $4, $5, 'file')
+     ON CONFLICT (id) DO NOTHING`,
+    [representationRevisionId, ORG, artifactId, `res-${randomUUID()}`, revision],
+  );
 }
 
 async function repairRow(repairId: string) {
@@ -1136,6 +1168,7 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
 
     // The gate is pending, and it is the only one.
     const ev = await produce({ producerRunId }, coreRepairableObjectType);
+    await seedRepresentation(ev.artifactId, ev.representationRevisionId, 1);
     await orch.sweepReviewOrchestration({ limit: 50 });
     const opened = await gatesForRun(producerRunId);
     expect(opened).toHaveLength(1);
@@ -1179,6 +1212,7 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
       },
       coreRepairableObjectType,
     );
+    await seedRepresentation(ev.artifactId, successorRev, 2);
     await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='completed' WHERE id=$1`, [
       repairRunId,
     ]);
@@ -1224,5 +1258,31 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
       { artifactId: ev.artifactId, representationRevisionId: successorRev },
     ]);
     expect(after.filter((g) => g.status === "pending")).toHaveLength(1);
+
+    // ONE PRESS, ONE PENDING GATE — and it is the successor, by name.
+    //
+    // The drawing: "Regenerate settles the gate it was pressed on as superseded
+    // and mints a successor gate for that same artifact — a fresh review entry
+    // beneath the settled one"; "a new review gate entry on the rail, beneath
+    // the one just resolved". One. The running application opened TWO, 0.3 s
+    // apart, on both presses: the repair successor
+    // (`lifecycle-review:repair:{repairId}:1`) and a second gate whose review
+    // task read `lifecycle-review:verify:verify:{gateId}` — the S4 auto-trigger
+    // firing on a projection whose own axis it was judging as drift, under an
+    // identifier that spelled its prefix twice.
+    const pending = after.filter((g) => g.status === "pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.review_task_id).toBe(
+      repairSuccessorReviewTaskId(repairId, 1),
+    );
+    // No gate anywhere on this run carries the doubled word.
+    expect(after.filter((g) => g.review_task_id.includes("verify:verify"))).toEqual([]);
+    // The verification RECORD still lands — the audit reading the run rail
+    // opens is not what was wrong; reopening a gate over it was.
+    const verification = await verifStore.readVerificationRecordForGate(
+      settled!.successor_gate_id!,
+    );
+    expect(verification).not.toBeNull();
+    expect(verification!.outcome).toBe("verified");
   });
 });

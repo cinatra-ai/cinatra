@@ -121,12 +121,23 @@ export function isRepairSuccessorTaskId(reviewTaskId: string): boolean {
  * prefixes. It re-derives the repaired target's requiredness from the PINNED set. */
 export const VERIFICATION_REOPEN_TASK_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}verify:`;
 
-/** Derive the verification-reopen gate's `reviewTaskId` from the verification
- * record id. Deterministic + injective, so a re-driven verification of the SAME
+/** Derive the verification-reopen gate's `reviewTaskId` from the GATE the
+ * verification binds to.
+ *
+ * IT TAKES THE GATE ID, NOT THE VERIFICATION RECORD ID (cinatra#3080, the
+ * fourth reproduction of the real road). It used to be handed the verification
+ * record id, and that id is itself built as `verify:${gateId}` — one
+ * verification per gate — so prefixing it here with a constant that ALREADY
+ * ends in `verify:` spelled the word twice, and the running application minted
+ * `lifecycle-review:verify:verify:{gateId}`. The record id is injective on the
+ * gate id, so deriving from the gate id directly is exactly as deterministic
+ * and exactly as injective, and it spells the prefix once.
+ *
+ * Deterministic + injective, so a re-driven verification of the SAME
  * repair re-derives the identical reopen gate (idempotent on `(run, task)`) — a
  * failed verification reopens EXACTLY ONE bounded gate, never a fresh one per drive. */
-export function verificationReopenReviewTaskId(verificationId: string): string {
-  return `${VERIFICATION_REOPEN_TASK_PREFIX}${verificationId}`;
+export function verificationReopenReviewTaskId(gateId: string): string {
+  return `${VERIFICATION_REOPEN_TASK_PREFIX}${gateId}`;
 }
 
 /** Whether a `reviewTaskId` names an S4 verification-reopen gate. */
