@@ -1,8 +1,16 @@
 import type { Metadata } from "next";
 import type React from "react";
 import { notFound } from "next/navigation";
+import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
 
-export const metadata: Metadata = { title: "Agent" };
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). The static title this
+// route used to export was re-applied over the mirrored one on every live-poll
+// re-render, so the derivation moved to the server, behind one helper every
+// id-bearing route under the run shares.
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { vendor, packageName, instanceId } = await params;
+  return resolveAgentInstanceMetadata({ vendor, packageName, instanceId, subRoute: "permissions" });
+}
 
 type Props = {
   params: Promise<{ vendor: string; packageName: string; instanceId: string }>;

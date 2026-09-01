@@ -33,6 +33,7 @@ import {
   isIdLikeSegment,
   type BreadcrumbCrumb,
   documentTitleLabelForAgentInstance,
+  documentTitleLabelFromTrail,
 } from "@/lib/breadcrumb-trail";
 import {
   selectCrumbContributions,
@@ -683,10 +684,21 @@ export function AppShell({
       // identifier is still an identifier. The helper guards BOTH inputs and
       // answers null when neither can be said without an id, in which case
       // nothing is written and the server title stands.
-      const label = documentTitleLabelForAgentInstance(
-        agentLabel,
-        breadcrumbSegments,
-      );
+      // WHICH CRUMB THE TAB MIRRORS IS THE TRAIL'S LAST ONE, NOT THE RUN'S
+      // NAME (convergence round of fix leg 9). The published instance label may
+      // decide the tab only where the instance crumb IS the leaf - the run's
+      // own page, four segments. On a sub-route the leaf is the sub-route's own
+      // word ("Schedule" above the schedule surface), which is what the route's
+      // own server metadata already answers; preferring the published label
+      // here re-ran on the layout's publish and replaced that word with the
+      // run's name, so the tab read "Blog Pipeline Agent (1)" above a trail
+      // whose leaf read "Schedule" - the drawing's divergence, one route family
+      // over. The trail-only helper carries the same id guard, so nothing about
+      // the refused reading changes.
+      const label =
+        segments.length >= 5
+          ? documentTitleLabelFromTrail(breadcrumbSegments)
+          : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
       if (label) document.title = `${label} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`

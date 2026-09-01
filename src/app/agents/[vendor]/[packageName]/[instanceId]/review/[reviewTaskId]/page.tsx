@@ -27,6 +27,7 @@
  * renderer, no edit affordance, no client-supplied renderer id.
  */
 import "server-only";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
@@ -41,6 +42,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
 
 import {
   loadPinnedCapturePair,
@@ -73,6 +75,20 @@ import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
+
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). This route exported no
+// metadata at all, so the tab fell back to the product name alone while the
+// trail above the page read "Agents > <the run> > Review". It now derives its
+// title from the same trail every id-bearing route under the run derives from.
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { vendor, packageName, instanceId } = await params;
+  return resolveAgentInstanceMetadata({
+    vendor,
+    packageName,
+    instanceId,
+    subRoute: "review",
+  });
+}
 
 type PageProps = {
   params: Promise<{
