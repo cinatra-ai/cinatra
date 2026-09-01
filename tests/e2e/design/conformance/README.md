@@ -146,6 +146,44 @@ ships AND the floor action it declares ships; until then it is
 surface-readiness work rather than driver work, however complete the drawing
 around it is.
 
+### The readiness list is data, and it is checked
+
+A readiness list is a claim about the PRODUCT — "no control carries this action
+today" — so it goes stale the moment the product moves, and a stale one quietly
+tells the next wave to skip a surface that is now real. So the list lives in
+[`surface-readiness.json`](surface-readiness.json), one entry per aspect a wave
+grounded and could not drive, and
+`scripts/design/__tests__/surface-readiness.test.mjs` re-proves every entry
+against the tree on every root run:
+
+- a listed surface is a real surface of the manifest its wave names;
+- a listed surface is not ALSO covered — a readiness entry and a driver are
+  mutually exclusive readings of the same surface;
+- a listed surface is not driven either: the suite's driver map does not name
+  it;
+- a listed action is genuinely unshipped: no first-party product module spells
+  out the action-and-outcome attribute the manifest declares, in the same
+  literal form the testid contract requires everywhere else. The moment one
+  does, the test goes RED and the wave that landed it has to drive the surface
+  or restate the entry;
+- a listed non-action aspect names a reason from a closed set, so "not yet" can
+  never be free text — and the two reasons the tree can decide are DECIDED, not
+  taken on trust: a kind said to register no display is re-proved against the
+  generated artifact-renderer registry, and a surface said to be drawn nowhere
+  is re-proved against the conformance anchors in first-party source;
+- a wave that names its surfaces accounts for every field, action and state
+  those surfaces declare, and records nothing the manifest does not declare, so
+  an aspect can be dropped neither by omission nor by invention — outcomes and
+  field sources are compared, not just names.
+
+The list therefore retires itself rather than being forgotten.
+
+What it does NOT prove, so that no reader credits it with more: the source scan
+is textual and reads the conformance attribute exactly as the testid contract
+spells it, so a control written against a different convention is caught by the
+testid-contract check rather than here; and `island-rendered` is an
+architectural reading no text scan can decide, left as prose on purpose.
+
 ## Stable data-testid contract (`testid-contract.json`)
 
 Each covered surface maps to the real component file(s) that implement it and

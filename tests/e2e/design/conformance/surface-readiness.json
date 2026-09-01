@@ -1,0 +1,249 @@
+{
+  "$comment": "THE SURFACE-READINESS LIST (epic cinatra#3155). A wave of the lifecycle-drawing driver program may drive only what the DEFAULT BRANCH ships. Every aspect a wave grounded and could NOT drive is recorded here, with the reason and, where there is one, the pull request that lands it — never stubbed, never approximated through a different control. scripts/design/__tests__/surface-readiness.test.mjs re-proves every entry against the tree on every run, so an entry that has become false (the control shipped) is a RED rather than a stale note: the list retires itself.",
+  "waves": [
+    {
+      "wave": "W1",
+      "issue": 3157,
+      "manifest": "app-lifecycle-cards.json",
+      "summary": "The eight in-conversation review cards for an individual artifact kind. Grounded one aspect at a time against the default branch: no first-party control carries either floor action the drawing declares, no per-kind card is drawn anywhere, and the per-kind readings that do exist are drawn inside the review card's credentialed island frame. The wave therefore adds no driver and records what each aspect is waiting for.",
+      "surfaces": [
+        "review-card-email-body",
+        "review-card-mixed-kind",
+        "review-card-screenshot",
+        "review-card-slide-deck",
+        "review-card-dashboard",
+        "review-card-portlet",
+        "review-card-cms-page",
+        "drupal-pointer-never-a-review-target"
+      ],
+      "entries": [
+        {
+          "surface": "review-card-email-body",
+          "aspect": "field",
+          "field": "body",
+          "source": "representation.body-markdown",
+          "reason": "display-not-registered",
+          "package": "@cinatra-ai/email-artifacts",
+          "awaits": null,
+          "why": "The email body kind registers no artifact display on the default branch: its package declares field renderers for the mid-run form and no display block at all, so nothing draws this binding for a reviewer to read."
+        },
+        {
+          "surface": "review-card-email-body",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-email-body",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-mixed-kind",
+          "aspect": "field",
+          "field": "form",
+          "source": "representation.content-form",
+          "reason": "island-rendered",
+          "awaits": null,
+          "why": "Every per-kind reading of a review target is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
+        },
+        {
+          "surface": "review-card-mixed-kind",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-mixed-kind",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-screenshot",
+          "aspect": "field",
+          "field": "source",
+          "source": "representation.captured-url",
+          "reason": "display-not-registered",
+          "package": "@cinatra-ai/screenshot-artifact",
+          "awaits": 3143,
+          "why": "The screenshot kind ships no artifact display block on the default branch. Pull request 3143 registers its display for the first time, and says so in its own words."
+        },
+        {
+          "surface": "review-card-screenshot",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-screenshot",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-slide-deck",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-slide-deck",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-dashboard",
+          "aspect": "field",
+          "field": "layout",
+          "source": "representation.pinned-configuration",
+          "reason": "island-rendered",
+          "awaits": null,
+          "why": "Every per-kind reading of a review target is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
+        },
+        {
+          "surface": "review-card-dashboard",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-dashboard",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-portlet",
+          "aspect": "field",
+          "field": "entry",
+          "source": "representation.portlet-instance-id",
+          "reason": "island-rendered",
+          "awaits": null,
+          "why": "Every per-kind reading of a review target is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
+        },
+        {
+          "surface": "review-card-portlet",
+          "aspect": "action",
+          "action": "continue-review",
+          "outcome": "resolved",
+          "awaits": 3100,
+          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+        },
+        {
+          "surface": "review-card-portlet",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "review-card-cms-page",
+          "aspect": "field",
+          "field": "excerpts",
+          "source": "representation.changed-excerpts",
+          "reason": "island-rendered",
+          "awaits": null,
+          "why": "The CMS snapshot kind DOES register a display on the default branch, and that is the only one of these kinds that does. Every per-kind reading of a review target is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
+        },
+        {
+          "surface": "review-card-cms-page",
+          "aspect": "action",
+          "action": "open-in-cms",
+          "outcome": "cms-opened",
+          "awaits": null,
+          "why": "No first-party module carries a control for this action, and none of the open pull requests read while grounding this wave adds one. It is not awaiting a landing; it is awaiting the work."
+        },
+        {
+          "surface": "review-card-cms-page",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        },
+        {
+          "surface": "drupal-pointer-never-a-review-target",
+          "aspect": "field",
+          "field": "target",
+          "source": "representation.node-id",
+          "reason": "display-not-registered",
+          "package": "@cinatra-ai/drupal-artifacts",
+          "awaits": null,
+          "why": "The pointer kind registers no artifact display on the default branch. The surface's own claim — that a pointer is never what a decision binds — IS shipped and is pinned elsewhere: the pointer type declares itself unpinnable with external mutability, the platform refuses any other disposition for an external pointer, and a decision binds the immutable snapshot record instead. What the drawing adds and the product does not have is a card that SAYS so where a reader can see it."
+        },
+        {
+          "surface": "drupal-pointer-never-a-review-target",
+          "aspect": "action",
+          "action": "open-in-cms",
+          "outcome": "cms-opened",
+          "awaits": null,
+          "why": "No first-party module carries a control for this action, and none of the open pull requests read while grounding this wave adds one. It is not awaiting a landing; it is awaiting the work."
+        },
+        {
+          "surface": "drupal-pointer-never-a-review-target",
+          "aspect": "state",
+          "states": [
+            "error",
+            "kind:artifact",
+            "loading"
+          ],
+          "reason": "surface-not-drawn",
+          "awaits": null,
+          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+        }
+      ]
+    }
+  ]
+}

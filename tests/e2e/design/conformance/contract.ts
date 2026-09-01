@@ -354,9 +354,10 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
 // THE ARTIFACT-KIND REVIEW CARDS ARE NOT ROWS OF THIS FAMILY YET (cinatra#3157,
 // epic #3155 W1). The in-conversation card for an individual artifact kind —
 // the email body, the mixed kind, the picture, the slide deck, the dashboard,
-// the portlet, the CMS page and the Drupal pointer — declares one field
-// binding, one floor action and the three generic card states apiece, and none
-// of them is addressable from a props-only mount on the default branch today:
+// the portlet, the CMS page and the Drupal pointer — declares one floor action
+// and the three generic card states apiece, and a field binding each except the
+// slide deck, which declares none. None of them is addressable from a
+// props-only mount on the default branch today:
 // the card draws no DOM before an authorised server resolve, each per-kind
 // reading of the target is drawn by a SERVER component inside the card's own
 // credentialed island frame, and no first-party control carries the
@@ -364,6 +365,12 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
 // row for one of them is therefore not a fixture-data edit yet — it waits on
 // that display and that floor landing. See README.md, "Committed but not yet
 // pinned".
+//
+// Each of those aspects is recorded, with its reason and the pull request that
+// lands it where there is one, in surface-readiness.json — and re-proved
+// against the tree on every root run by
+// scripts/design/__tests__/surface-readiness.test.mjs, so an entry that has
+// become false is a RED here rather than a stale note.
 
 /** The chip row of one mounted fixture row. */
 function chipRow(root: Locator): Locator {
