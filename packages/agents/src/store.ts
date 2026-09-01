@@ -25,7 +25,10 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
-import { buildAssignmentScopeSnapshot } from "./assignment-scope-snapshot";
+import {
+  assertAssignmentScopeSnapshotNotMutated,
+  buildAssignmentScopeSnapshot,
+} from "./assignment-scope-snapshot";
 // cinatra#2933 (lifecycle-b W5b) — `agent_run_messages` now carries a SECOND
 // use: the per-run conversation of the prompt windows outside the chat. This
 // reader is the RUN'S OWN replay thread and must keep returning exactly that,
@@ -1865,6 +1868,11 @@ export async function updateAgentRunMeta(
     stepResults?: unknown[];
   },
 ): Promise<void> {
+  // The run-scope snapshot is decided at creation and never updated
+  // (cinatra#2813 S1). This is the generic patch path, so the guard lives here:
+  // a future writer that adds the field to this payload fails loudly instead of
+  // quietly re-pointing a live run at another set of assignments.
+  assertAssignmentScopeSnapshotNotMutated(patch as Record<string, unknown>);
   const updates: Partial<typeof agentRuns.$inferInsert> = {};
   if (patch.stepResults !== undefined) {
     updates.stepResults = JSON.stringify(patch.stepResults);

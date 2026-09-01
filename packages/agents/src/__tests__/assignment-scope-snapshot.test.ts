@@ -8,8 +8,13 @@
 // falls back to the NARROWEST possible answer rather than guessing.
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   ASSIGNMENT_SCOPE_SNAPSHOT_VERSION,
+  assertAssignmentScopeSnapshotNotMutated,
   AssignmentScopeSnapshotError,
   assignmentScopeFallback,
   buildAssignmentScopeSnapshot,
@@ -158,5 +163,35 @@ describe("assignment-scope snapshot — malformed optional layers", () => {
       originatingHumanUserId: null,
     });
     expect(parsed).toEqual({ v: 1, orgId: "org_1", teamIds: [] });
+  });
+});
+
+// The immutability guard is only an invariant if an update path actually calls
+// it. Its own doc says "every update path calls this before it builds its SET
+// list" — this suite holds that sentence to the source.
+describe("assignment-scope snapshot — the immutability guard", () => {
+  it("throws for either spelling of the field and passes an ordinary patch", () => {
+    expect(() => assertAssignmentScopeSnapshotNotMutated({ error: "boom" })).not.toThrow();
+    expect(() =>
+      assertAssignmentScopeSnapshotNotMutated({ assignmentScopeSnapshot: "{}" }),
+    ).toThrow(/IMMUTABLE/);
+    expect(() =>
+      assertAssignmentScopeSnapshotNotMutated({ assignment_scope_snapshot: "{}" }),
+    ).toThrow(/IMMUTABLE/);
+    // hasOwnProperty, not truthiness: an explicit undefined is still a writer
+    // naming the column.
+    expect(() =>
+      assertAssignmentScopeSnapshotNotMutated({ assignmentScopeSnapshot: undefined }),
+    ).toThrow(/IMMUTABLE/);
+  });
+
+  it("is called by the generic run-meta patch path", () => {
+    const storeSource = readFileSync(
+      resolve(fileURLToPath(import.meta.url), "../../store.ts"),
+      "utf8",
+    );
+    const body = storeSource.slice(storeSource.indexOf("export async function updateAgentRunMeta"));
+    const end = body.indexOf("\nexport ", 1);
+    expect(body.slice(0, end)).toContain("assertAssignmentScopeSnapshotNotMutated(");
   });
 });
