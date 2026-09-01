@@ -1253,3 +1253,49 @@ The correction commit states no verification line of its own: the verification a
 the correction's merge, by the merge tooling, from the maintainer's approval standing on the
 correction pull request, and a later mirror commit appends the merge record's composed arm lines to
 this entry.
+
+---
+
+## Correction for `afd10ed984dea46d8ed2e4491c56e7228f68b805`
+
+ci: wire the design-pin-freshness gate beside design-pin-drift (PR #3148).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval stood on pull
+request #3148 at that exact head at merge time — @groganz approved at
+`54535813af5af355226e4f65aa7ed16ae46022ff` on 2026-08-31T19:42:32Z, the latest non-dismissed review
+by that login, APPROVED at the pull request's head sha, non-self (the author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required contexts
+concluded success at that reviewed head: `truthful-attribution-gate` at 2026-08-31T19:55:38Z and
+`source-leak-gate` at 2026-08-31T18:56:56Z. The merge was nonetheless executed through a raw API
+call whose default squash message carried neither the verification line nor the gate lines, so the
+record carried one `Assisted-by` line and no verification arm at all and the post-merge gate
+red-flagged it (no-record). The change is untouched — this repairs the RECORD only. The change
+itself edits a workflow file and is therefore high-risk under the gate's own classifier, which is
+why a maintainer arm is the arm it needs; this correction, by contrast, touches only this
+documentation file.
+
+Two earlier repairs of this target have now failed in turn, and both entries appended above are
+superseded by this one. `79e5daf7191e8df4f25cca0308c394a964d498d7` is invalid because a blank line
+separates its `Assisted-by` line from its terminal trailer paragraph. Its successor
+`757ab2a91be681cea128dd7058fe469217c94417` is invalid because its message carries two
+`Correction-for` lines in one record block, the second copied in from a stacked sibling by the merge
+tooling; the grammar admits exactly one. A correction whose own record is invalid does not govern,
+so neither of them repairs afd10ed98. This entry's correction names afd10ed98 directly and carries
+exactly one `Correction-for` line, so the latest-valid-direct-correction rule resolves to it.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: afd10ed984dea46d8ed2e4491c56e7228f68b805
+```
+
+That union is the assistant the corrected record itself named, plus the agents that authored the
+superseded repair, plus the agent that produced this correction; nothing is dropped and nothing is
+invented.
+
+The correction commit states no verification line of its own: the verification arm of this
+correction is composed at its merge, by the merge tooling, from the maintainer's approval standing
+on the correction pull request, and a later mirror commit appends the merge record's composed arm
+lines to this entry.
