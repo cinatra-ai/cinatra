@@ -39,6 +39,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -299,6 +300,83 @@ export function runCardOwnsLifecycleCopy(
   ambientHost: LifecycleCardHost | null,
 ): boolean {
   return ambientHost !== "chat_thread" && ambientHost !== "site_widget";
+}
+
+// ---------------------------------------------------------------------------
+// THE TURN'S SETTLED SCHEDULE REGISTER (cinatra#3174)
+// ---------------------------------------------------------------------------
+//
+// The schedule card's own section says what may share its turn: "The card is
+// the scheduling step, in the turn - and it is the only thing drawn", and "One
+// card, five readings, and never a second card". A turn that also carried a
+// run-progress panel and a second decidable card was drawing three things where
+// the section draws one.
+//
+// WHY THE TURN CANNOT ANSWER THIS BY ITSELF. The card's payload on the wire is
+// a REF and nothing else - deliberately, so a transcript states nothing about a
+// gate - and which of the five readings it is in comes back from the
+// authoritative resolve, inside the card. A container that wanted to know
+// whether it is carrying a settled schedule card would have to resolve the ref
+// a second time, on a surface that is not the card's host, which is exactly the
+// second dispatch path the lifecycle wire exists to prevent.
+//
+// SO THE CARD REPORTS, AND THE CONTAINER LISTENS. The same shape the recommendation
+// card already uses to tell its turn whether the run panel must wait, moved into
+// a context because this card is mounted through the view REGISTRY - a dispatch
+// that is identity-agnostic by contract and must not gain a per-kind callback
+// prop.
+//
+// FAIL-CLOSED, LIKE EVERY OTHER DECLARATION HERE. A surface with NO provider -
+// the run page, the review page, and any turn that carries no run - has no
+// register, the report is a no-op, and nothing about those surfaces changes.
+// ---------------------------------------------------------------------------
+
+/** Told by a card: this card, in this container, is (or is no longer) settled. */
+export type SettledScheduleRegister = (cardId: string, settled: boolean) => void;
+
+const SettledScheduleRegisterContext = createContext<SettledScheduleRegister | null>(null);
+
+/** Declares that this subtree's container wants to hear about settled schedule
+ *  cards drawn inside it. */
+export function SettledScheduleRegisterProvider({
+  register,
+  children,
+}: {
+  register: SettledScheduleRegister;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <SettledScheduleRegisterContext.Provider value={register}>
+      {children}
+    </SettledScheduleRegisterContext.Provider>
+  );
+}
+
+/**
+ * Report this card's reading to whatever container declared a register.
+ *
+ * REPORTED PER MOUNT, NOT PER REF (convergence). The first version keyed the
+ * report on the card's own wire ref, which is wrong in the one case that
+ * matters: two mounts carrying the SAME ref - a view appended twice into one
+ * turn - collapsed into one entry, so the first of them to unmount answered
+ * `false` for the other and gave the container back a turn that still draws a
+ * settled card. The key is therefore the ref AND this mount's own id, so every
+ * mount is counted once and answers only for itself. The ref stays in the key
+ * because it is what makes a report readable in a proof.
+ *
+ * The cleanup reports `false` rather than deleting silently: a card that
+ * unmounts, and one that leaves the settled reading, both have to give the
+ * container its turn back.
+ */
+export function useReportSettledSchedule(cardId: string, settled: boolean): void {
+  const register = useContext(SettledScheduleRegisterContext);
+  const mountId = useId();
+  const key = `${cardId}#${mountId}`;
+  useEffect(() => {
+    if (register === null) return;
+    register(key, settled);
+    return () => register(key, false);
+  }, [register, key, settled]);
 }
 
 // ---------------------------------------------------------------------------

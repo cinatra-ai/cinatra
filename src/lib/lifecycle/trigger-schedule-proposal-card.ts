@@ -245,6 +245,13 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // wrong: S2 mounts the shared step tree, which reads it authoritatively.
       gatedSteps: [],
       released: resolved.released,
+      // THE DURABLE FIRED SIGNAL, ON THE WIRE (cinatra#3174). The resolver
+      // already reads it off the trigger row's own stamps for the floor; the
+      // card needs it too, because "Fired, recurring" is a reading of its own
+      // and nothing else on this body can tell it from "Configured" once the
+      // schedule has been stopped. OMITTED UNLESS TRUE, for the reason
+      // `superseded` and `stopped` are.
+      ...(resolved.firedOnce ? { firedOnce: true as const } : {}),
       // OMITTED UNLESS TRUE, for the reason `superseded` is (cinatra#2972).
       ...(resolved.stopped ? { stopped: true as const } : {}),
       arming: resolved.arming,

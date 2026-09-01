@@ -243,6 +243,25 @@ export const triggerScheduleProposalSettledViewSchema = z
      *  instead (cinatra#2972). */
     released: z.boolean(),
     /**
+     * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)?
+     *
+     * The durable answer, off the trigger row's own stamps — `lastFiredAt` for
+     * a recurring schedule, `releasedAt` for a one-off — and already resolved
+     * server-side for the floor's own reading. What it adds here is the ONE
+     * distinction the card could not draw before: the section names "Fired,
+     * recurring — runs still to come" as a reading of its own, and the only
+     * other signal that could have carried it, `canCancel`, goes false the
+     * moment the schedule is stopped, so a stopped-after-firing card and a
+     * never-fired one answered identically.
+     *
+     * OPTIONAL AND OMITTED unless true, exactly like `superseded` and
+     * `stopped` above and for the same reason: this schema is `.strict()`, so a
+     * client still running an older bundle would reject EVERY settled payload
+     * if the key were always sent. Omission confines that to a card that has
+     * actually fired.
+     */
+    firedOnce: z.boolean().optional(),
+    /**
      * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
      * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: it "stops the
      * recurring schedule and then makes the scheduler non-editable". The card

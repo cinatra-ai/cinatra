@@ -70,6 +70,9 @@ import {
 // same reason the §V renderer is: the barrel drags the whole agents client
 // graph into every consumer, and this leaf is all the transcript needs.
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
+// The turn's own register for the settled schedule card (cinatra#3174), reached
+// by the same subpath the host declaration is.
+import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -282,6 +285,33 @@ function AgentRunTurnSlot({
   // that and hands the card a CHANGE SIGNAL built from the gate's identity, so
   // the card re-reads its authority exactly when the answer can have changed —
   // no timer, no second poller, and nothing read out of the signal itself.
+  // WHAT THIS TURN IS CARRYING (cinatra#3174, criteria 1 and 2).
+  //
+  // The schedule card's own section draws its turn with the card and the
+  // assistant line and nothing else - "The card is the scheduling step, in the
+  // turn - and it is the only thing drawn" - while this container drew the run
+  // panel, the agent's own next screen and the produced views as siblings. The
+  // reading that decides it is the CARD's (the payload here is a ref), so the
+  // card reports into this register and the container reads the count.
+  //
+  // A SET, NOT A BOOLEAN: two schedule cards in one turn each report for
+  // themselves, and one leaving the settled reading must not answer for the
+  // other. The identity check keeps the state object stable when nothing
+  // changed, so a report cannot loop a render.
+  const [settledScheduleCards, setSettledScheduleCards] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const registerSettledSchedule = useCallback((cardId: string, settled: boolean) => {
+    setSettledScheduleCards((current) => {
+      if (current.has(cardId) === settled) return current;
+      const next = new Set(current);
+      if (settled) next.add(cardId);
+      else next.delete(cardId);
+      return next;
+    });
+  }, []);
+  const turnCarriesSettledSchedule = settledScheduleCards.size > 0;
+
   const [gateSignal, setGateSignal] = useState<string | null>(null);
   const onGateChange = useCallback(
     (changedRunId: string, gate: ChatGateDescriptor | null, instanceId: string) => {
@@ -311,7 +341,31 @@ function AgentRunTurnSlot({
     [runId, onActiveGateChange],
   );
 
-  return (
+  // THE AGENT'S OWN NEXT SCREEN, written once and placed in one of two marked
+  // containers (cinatra#3174, criterion 2), because the schedule card's turn may
+  // not carry a second decidable card beside it.
+  //
+  // THE LIMIT, STATED RATHER THAN LEFT TO BE FOUND (convergence). The two
+  // placements have different parents, so this is not one component moving: the
+  // shape flipping unmounts one instance and mounts another, and the screen's
+  // own buffered answer does not survive that. It can only flip while a screen
+  // is open if a schedule card in the SAME turn settles after the screen was
+  // drawn, which is why the flip is pinned by a test rather than designed
+  // around: the criterion asks for the two roots to be in different containers,
+  // and there is no placement that is both a different container and the same
+  // parent.
+  const hitlScreen = <AgentHitlScreenCard runId={runId} wireRef={gateSignal} />;
+
+  // THE RUN-PROGRESS PANEL, written once for the same reason.
+  const runPanel = (
+    <InlineAgentRunCard
+      runId={runId}
+      onActiveGateChange={onGateChange}
+      recommendationDecided={decided}
+    />
+  );
+
+  const turn = (
     // `data-agent-run-slot` names WHICH run this marked slot belongs to. The
     // slot index alone says "some marked container" — this view marks three —
     // and the run panel's own link used to be what told them apart, which stops
@@ -390,18 +444,64 @@ function AgentRunTurnSlot({
           result's status: the card self-gates — a run that states no HITL
           moment renders nothing — which is also what makes it survive a
           transcript reload. */}
-      <AgentHitlScreenCard runId={runId} wireRef={gateSignal} />
-      {runCardWaits ? null : (
-        <InlineAgentRunCard
-          runId={runId}
-          onActiveGateChange={onGateChange}
-          recommendationDecided={decided}
-        />
+      {turnCarriesSettledSchedule ? null : hitlScreen}
+      {/* THE RUN-PROGRESS PANEL IS NOT DRAWN FOR A SETTLED SCHEDULE CARD - AND
+          IS NOT UNMOUNTED EITHER (cinatra#3174, criterion 1, as converged).
+
+          NOT DRAWN. Its heading, its status pill and its "No messages yet."
+          line are three of the things the section's turn does not draw, and
+          this panel is where all three come from. For a settled schedule card
+          it is taken out of the picture and out of the accessibility tree, so
+          nothing of it reaches the reader and nothing stands between them and
+          the form.
+
+          STILL LISTENING. It is also this conversation's ONLY publisher of the
+          run's gate changes: `onActiveGateChange` above is what builds the
+          change signal the agent's own next screen re-reads on, and what lifts
+          an open gate into the composer. A schedule parks the run BEFORE it
+          starts and the card stays settled for the whole of the run that
+          follows, so unmounting the panel here would leave a gate that opens
+          mid-run with nothing at all to announce it until the reader refocused
+          the window or reloaded the thread - which is the exact failure this
+          repository already states in `hitl-screen-gate-signal.test.ts`: "the
+          agent parks MID-RUN, long after the turn was drawn, so a card that
+          read once would answer 'no screen' and never ask again while the
+          person sat in front of a run that was waiting on them."
+
+          The run page's own panel is untouched - what the section governs is
+          this turn. */}
+      {runCardWaits ? null : turnCarriesSettledSchedule ? (
+        <div hidden aria-hidden data-inline-run-panel-stood-down={runId}>
+          {runPanel}
+        </div>
+      ) : (
+        runPanel
       )}
       {/* Inline undo for a recent restorable change-set produced by this run. */}
       <UndoActionChip runId={runId} />
-      {children}
+      {/* THE VIEWS THIS STEP PRODUCED, under the register the schedule card
+          reports its reading into (cinatra#3174). The provider wraps ONLY the
+          produced views: it is the container asking what it is carrying, not a
+          surface-wide declaration. */}
+      <SettledScheduleRegisterProvider register={registerSettledSchedule}>
+        {children}
+      </SettledScheduleRegisterProvider>
     </div>
+  );
+
+  // THE SCREEN'S OWN MARKED PLACE (cinatra#3174, criterion 2). Where the turn
+  // carries a settled schedule card, the agent's own next screen is not
+  // withheld - it is moved out of that container into its own, a sibling in the
+  // same conversation, so the two roots are never both children of one turn
+  // container and neither is nested inside the other. Where the turn carries no
+  // such card, this container does not exist and the turn is exactly what it
+  // always was.
+  if (!turnCarriesSettledSchedule) return turn;
+  return (
+    <>
+      {turn}
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>
+    </>
   );
 }
 

@@ -264,3 +264,67 @@ describe("the pending card is untouched by any of this", () => {
     expect("superseded" in (view as object)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE DURABLE FIRED SIGNAL ON THE WIRE (cinatra#3174, criterion 4).
+// ---------------------------------------------------------------------------
+// The card's own section names "Fired, recurring - runs still to come" as a
+// reading of its own, and nothing else on the settled body can tell it from
+// "Configured" once the schedule has been stopped: `canCancel` goes false the
+// moment **Cancel schedule** is pressed, so a stopped-after-firing card and a
+// never-fired one answered identically.
+//
+// The producer therefore forwards the resolver's OWN `firedOnce` - the trigger
+// row's `lastFiredAt` for a recurring schedule, its `releasedAt` for a one-off,
+// already read server-side for the floor - and forwards it under exactly the
+// rule `superseded` is under: OMITTED unless true, because this schema is
+// `.strict()` and a client on an older bundle would otherwise reject EVERY
+// settled payload rather than only the fired ones.
+//
+// This is the producer half. That the CARD then reads the key into one of the
+// section's five readings is pinned in
+// `packages/agents/src/__tests__/schedule-card-reported-reading-3174.test.tsx`,
+// which mounts the real card; what is pinned HERE is that the key the card
+// reads is a key the resolver actually emits.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3174 - the fired signal reaches the card", () => {
+  it("emits `firedOnce: true` when the resolver says the schedule has fired", async () => {
+    resolveProposalForReader.mockResolvedValue({
+      ...settledResolution(false),
+      firedOnce: true,
+    });
+
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
+
+    expect(view).not.toBeNull();
+    expect((view as Record<string, unknown>).firedOnce).toBe(true);
+    // And it is a body the SHIPPED schema accepts, not a loose object.
+    expect(() => triggerScheduleProposalSettledViewSchema.parse(view)).not.toThrow();
+  });
+
+  it("emits NO `firedOnce` key for a schedule that has not fired", async () => {
+    resolveProposalForReader.mockResolvedValue(settledResolution(false));
+
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
+
+    // ABSENT, not `false` - the same rule `superseded` is under, and the only
+    // shape a `.strict()` parser that predates the key can accept.
+    expect("firedOnce" in (view as object)).toBe(false);
+    expect(() => preSupersededSettledViewSchema.parse(view)).not.toThrow();
+  });
+
+  it("keeps the fired body readable by the shipped parser AND unreadable by the older one", async () => {
+    resolveProposalForReader.mockResolvedValue({
+      ...settledResolution(false),
+      firedOnce: true,
+    });
+
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
+
+    // The point of the omission rule, stated both ways round: only a card that
+    // has actually fired is out of reach of a bundle that predates the key.
+    expect(() => triggerScheduleProposalSettledViewSchema.parse(view)).not.toThrow();
+    expect(() => preSupersededSettledViewSchema.parse(view)).toThrow();
+  });
+});

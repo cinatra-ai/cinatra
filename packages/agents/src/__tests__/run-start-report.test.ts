@@ -132,7 +132,16 @@ describe("the dispatch line says what is TRUE at the moment it is composed", () 
     for (const status of ["queued", "pending_trigger", "pending_approval", "pending_input", "armed"]) {
       const report = describeStartedRun({ ...STARTED, status });
       expect(report).not.toContain(RUN_START_STARTED_CLAUSE);
-      expect(report).toContain(`status: \`${status}\``);
+    }
+    // THE STATUS TOKEN, WHERE THE LINE STILL CARRIES ONE (narrowed by
+    // cinatra#3174). What #3147 fixed was the CLAUSE — a pre-running status
+    // described with a sentence claiming a start — and that half is asserted
+    // over all five readings above. The token beside it was never this test's
+    // subject, and the two schedule-wait readings have since dropped their whole
+    // parenthetical because the card's own section draws those turns in plain
+    // prose. Every reading that still prints one is still checked here.
+    for (const status of ["queued", "pending_approval", "pending_input"]) {
+      expect(describeStartedRun({ ...STARTED, status })).toContain(`status: \`${status}\``);
     }
   });
 
@@ -335,5 +344,62 @@ describe("what a start that threw answers with", () => {
     // the agent back would confirm which names resolve to a template.
     const answered = startFailureAnswer(scopeDenial(), "@cinatra-ai/lint-policy-agent");
     expect(answered.error).not.toContain("@cinatra-ai/lint-policy-agent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SCHEDULE-WAIT DISPATCH LINE IS PLAIN PROSE (cinatra#3174, criterion 3).
+// ---------------------------------------------------------------------------
+// The drawing's own example turns for this card carry plain assistant prose —
+// "The card is the scheduling step, in the turn — and it is the only thing
+// drawn" — and not one of them prints a machine token beside the sentence. The
+// two statuses a schedule waits in are exactly the readings those example lines
+// cover: `pending_trigger` (the rows are open and nothing is armed yet) and
+// `armed` (the schedule is set and the run is waiting on it). For both, the
+// line the assistant says back drops the parenthetical entirely: no `runId:`
+// token and no `status:` token.
+//
+// Every OTHER status keeps the parenthetical it has always had. This is a
+// narrowing to the readings the drawing draws, not a rewrite of the line.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3174 — the schedule-wait line carries no machine tokens", () => {
+  const SCHEDULE_WAIT = ["armed", "pending_trigger"] as const;
+
+  it("prints neither a runId nor a status token for the readings the drawing draws", () => {
+    for (const status of SCHEDULE_WAIT) {
+      const report = describeStartedRun({ ...STARTED, status });
+      expect(report).not.toMatch(/runId:/);
+      expect(report).not.toMatch(/status:/);
+      expect(report).not.toContain(STARTED.runId);
+      expect(report).not.toContain(status);
+    }
+  });
+
+  it("pins the two sentences whole, so the shape cannot drift back", () => {
+    expect(describeStartedRun({ ...STARTED, status: "armed" })).toBe(
+      `Dispatched \`${STARTED.packageName}\`. ${RUN_START_AWAITING_TRIGGER_CLAUSE}`,
+    );
+    expect(describeStartedRun({ ...STARTED, status: "pending_trigger" })).toBe(
+      `Dispatched \`${STARTED.packageName}\`. ${RUN_START_TRIGGER_NOT_SET_CLAUSE}`,
+    );
+  });
+
+  it("leaves every other status's line exactly as it was", () => {
+    for (const status of [
+      "queued",
+      "pending_input",
+      "pending_approval",
+      "running",
+      "waiting_trigger",
+      "completed",
+      "failed",
+      "stopped",
+      "a_status_nobody_has_written_yet",
+    ]) {
+      const report = describeStartedRun({ ...STARTED, status });
+      expect(report).toContain(`runId: \`${STARTED.runId}\``);
+      expect(report).toContain(`status: \`${status}\``);
+    }
   });
 });

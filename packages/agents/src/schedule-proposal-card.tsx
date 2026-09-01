@@ -164,6 +164,7 @@ import type {
   TriggerScheduleProposalPendingView,
   TriggerScheduleProposalSettledView,
   TriggerScheduleProposalExpiredView,
+  TriggerScheduleProposalViewBody,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { Button } from "@/components/ui/button";
@@ -181,6 +182,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useReportSettledSchedule,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS } from "./trigger-recurrence";
@@ -340,6 +342,41 @@ export async function adjustAndConfirmSchedule(input: {
 // The card
 // ---------------------------------------------------------------------------
 
+/** The section's own five readings, as the names it gives them. */
+export type ScheduleReading =
+  | "first-shown"
+  | "configured"
+  | "expired"
+  | "fired-one-off"
+  | "fired-recurring";
+
+/**
+ * The five readings the card's own section names, and nothing else:
+ *
+ *   first shown     nothing exists yet          editable    Confirm
+ *   configured      the schedule as it stands   editable    Save changes
+ *   expired         nothing was scheduled       editable    Confirm
+ *   fired, one-off  the schedule was spent      read-only   none at all
+ *   fired, recurring runs still to come         editable    Save changes ·
+ *                                                           Cancel schedule
+ *
+ * READ OFF THE DURABLE SIGNAL, not off a control. `firedOnce` is the trigger
+ * row's own answer — `lastFiredAt` for a recurring schedule, `releasedAt` for a
+ * one-off — and it stays true after **Cancel schedule** is pressed, which is
+ * exactly where `canCancel` stops being able to answer this question.
+ *
+ * `released` is still consulted for the one-off family: it IS that family's
+ * firing, and a card resolved before this key reached the wire still has it.
+ */
+export function scheduleReadingOf(body: TriggerScheduleProposalViewBody): ScheduleReading {
+  if (body.phase === "proposal") return "first-shown";
+  if (body.phase === "expired") return "expired";
+  if (body.triggerType === "recurring") {
+    return body.firedOnce === true ? "fired-recurring" : "configured";
+  }
+  return body.released || body.firedOnce === true ? "fired-one-off" : "configured";
+}
+
 /**
  * §VI's card, on whichever host declared itself.
  *
@@ -380,6 +417,18 @@ export function ScheduleProposalCard({
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
+
+  // THE TURN IS TOLD WHAT IT IS CARRYING (cinatra#3174, criteria 1 and 2).
+  //
+  // Only the card knows this: the reading comes back from the authoritative
+  // resolve above, and the payload the transcript carries is a ref. Reported
+  // unconditionally - a hook may not sit behind the early returns below - and
+  // reported as FALSE for every other reading, so a card that leaves the
+  // settled reading gives the turn back.
+  //
+  // A NO-OP WHERE NOBODY IS LISTENING. The run page and the review page declare
+  // no register, so this changes nothing on them.
+  useReportSettledSchedule(wireRef, present && body !== null && body.phase === "settled");
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -450,6 +499,21 @@ export function ScheduleProposalCard({
       data-lifecycle-card-state={state.state}
       data-lifecycle-card-host={host}
       data-lifecycle-card-phase={body.phase}
+      // WHICH OF THE SECTION'S FIVE READINGS THIS IS (cinatra#3174).
+      //
+      // "One card, five readings, and never a second card." The phase mark
+      // above answers three of them at best: both fired readings and the
+      // configured one share `settled`, and the two that differ most in what
+      // the reader is told — a recurring schedule that has fired against one
+      // that never has — were until now indistinguishable from outside the
+      // card.
+      //
+      // REPORTED, NEVER DRAWN. The same section rules out saying it on screen:
+      // "No summary box is ever drawn, no status label, and nothing stands
+      // between the reader and the form." So this is a passive attribute,
+      // exactly like the marks beside it: it names the reading for a test and
+      // for a rendered reading of the screen, and it draws nothing.
+      data-schedule-reading={scheduleReadingOf(body)}
       data-conformance-id="schedule-proposal-card"
     >
       {drawn}
