@@ -21,9 +21,17 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 // The generic single-select combobox the spec names at `@/components/ui/combobox`.
 // AccessCombobox stays what it is — the access-picker, with its scope algebra,
 // grouped rows and per-row reasons; this is the plain one every long flat list
-// reaches for. The trigger repeats SelectTrigger's chrome verbatim so a list
-// that crosses the ~8 threshold changes its BEHAVIOUR without changing how the
-// row reads beside the selects next to it.
+// reaches for.
+//
+// The trigger's chrome is the INPUT's, which is what the drawing names for it —
+// down to the fill, `bg-surface-strong`, the pure white the surfaces section
+// reserves for "Card bodies, input fields, popovers. Only place pure white
+// lives in the system." A transparent fill borrowed from SelectTrigger let the
+// card behind show through instead, so the control read a half-step darker than
+// the Input beside it; the rest of the chrome (border, radius, focus ring,
+// placeholder ink, dark control fill) is unchanged and still matches the select
+// family, so a list crossing the ~8 threshold changes its BEHAVIOUR without
+// changing how the row reads beside its neighbours.
 
 export interface ComboboxOption {
   value: string
@@ -83,7 +91,7 @@ function Combobox({
           // placeholder ink the select family already uses for that state.
           data-placeholder={label === undefined ? "" : undefined}
           className={cn(
-            "flex h-9 w-fit items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
+            "flex h-9 w-fit items-center justify-between gap-2 rounded-md border border-input bg-surface-strong px-3 py-2 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
             className,
           )}
         >
@@ -105,7 +113,15 @@ function Combobox({
           contentClassName,
         )}
       >
-        <Command>
+        {/* cmdk highlights its FIRST row on mount unless it is told otherwise,
+            which on a list long enough to want this control (the drawing:
+            "whenever the option count passes ~8") opens the popover scrolled
+            past the current value — and a check nobody can see is no check.
+            Seeding cmdk with the bound value opens the list where the drawing's
+            own picture opens it: on the current value's row, highlighted and
+            checked at once. The popover unmounts when it closes, so each open
+            re-seeds from the value bound at that moment. */}
+        <Command defaultValue={value}>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
@@ -132,7 +148,21 @@ function Combobox({
                   // `data-checked`; the tint below makes it the indigo check the
                   // spec names, without a second check of our own.
                   data-checked={isSelected ? "true" : "false"}
-                  className="data-[checked=true]:[&_svg]:text-primary!"
+                  // cmdk stamps `data-selected` on EVERY row — "true" on the one
+                  // it has highlighted and "false" on all the others — so the
+                  // shared CommandItem base, which matches on the attribute's
+                  // PRESENCE, paints the indigo soft-tint across the whole list.
+                  // A tint on every row marks nothing, and the ground a reader
+                  // then sees is the tint rather than the popover's own white.
+                  // Redeclaring the same background group drops the base's
+                  // variant (tailwind-merge) and restores the drawing: the list
+                  // opens onto the popover surface, and THE highlighted row —
+                  // the one stamped "true" — is the only one tinted. Same idiom
+                  // the access-picker already uses for the same reason.
+                  className={cn(
+                    "data-selected:bg-transparent data-[selected=true]:bg-primary/[0.08]!",
+                    "data-[checked=true]:[&_svg]:text-primary!",
+                  )}
                   onSelect={() => {
                     onValueChange?.(option.value)
                     setOpen(false)

@@ -179,3 +179,46 @@ describe("the fix is the token, never a second divider style", () => {
     }
   });
 });
+
+describe("the section rule is the palette's own ink, never a neutral", () => {
+  /**
+   * The drawing states the section rule as an INK, not as a fresh colour: the
+   * `--line-strong` swatch reads "Etched paired-line dividers between major page
+   * sections, primary button strokes, table head underline. Full navy, 1px each,
+   * 5px gap", and the navy it points at is the ink swatch beside it — "--ink ·
+   * --foreground", whose use reads "All primary text. Section rules, hairline
+   * border-strong, and table-head underlines all use this navy." So in the light
+   * palette the rule's ink and the page's ink are ONE value, and the hairline
+   * beside them is that same navy at low alpha, "never grey".
+   *
+   * Over a dark ground the pairing inverts, but what inverts is the INK — the
+   * dark palette's own `--foreground` — and not the principle. A hand-picked
+   * neutral white (chroma 0, no hue at all) is precisely the "neutral grey on a
+   * divider" the drawing forbids, whichever end of the lightness scale it sits
+   * at, and it also breaks the identity the light palette states.
+   */
+  for (const [label, css] of Object.entries(SOURCES)) {
+    for (const selector of [":root", ".dark"] as const) {
+      it(`${label} ${selector}: the section rule is the palette's own ink token`, () => {
+        const rule = parseCssColor(resolve(css, selector, "--line-strong"));
+        const ink = parseCssColor(resolve(css, selector, "--foreground"));
+        expect(rule, "the section rule ink must parse").not.toBeNull();
+        expect(ink, "the palette's ink must parse").not.toBeNull();
+        expect(
+          [rule!.r, rule!.g, rule!.b, rule!.a],
+          "the section rule is painted in an ink of its own rather than in the " +
+            "palette's ink, which is the one colour the drawing names for it",
+        ).toEqual([ink!.r, ink!.g, ink!.b, ink!.a]);
+      });
+
+      it(`${label} ${selector}: the section rule ink is not a neutral`, () => {
+        const rule = parseCssColor(resolve(css, selector, "--line-strong"))!;
+        expect(
+          rule.r === rule.g && rule.g === rule.b,
+          `the section rule resolves to the neutral rgb(${rule.r}, ${rule.g}, ` +
+            `${rule.b}) — "Never use a neutral grey on a divider"`,
+        ).toBe(false);
+      });
+    }
+  }
+});

@@ -435,18 +435,29 @@
      full navy `#15213a` cascaded in and every etched rule in the dark theme was
      painted near-black on a dark ground: measured at grey 32 of 255 in BOTH
      themes on twelve frames, while the hairlines beside it read 224 in light
-     and 23 in dark. The drawing's principle — "Major section dividers use full
-     navy as paired rules … Never use a neutral grey on a divider" — inverts
-     over a dark ground to the white-over-ground vocabulary `--line` and
-     `--line-control` already speak here, at the strength a MAJOR divider asks
-     for. The alpha is the one whose composited reading holds the light
-     palette's on every ground a section rule sits on: 16.18:1 on --background
-     (light 14.15), 15.57:1 on --surface (light 14.92), 12.13:1 on
-     --surface-muted (light 13.04). Pinned by
+     and 23 in dark.
+     The drawing does not give the rule a colour of its own. It gives it an INK:
+     the section-rule swatch reads "Etched paired-line dividers between major
+     page sections … Full navy, 1px each, 5px gap", and the navy it points at is
+     the ink swatch beside it — "--ink · --foreground" — whose use reads "All
+     primary text. Section rules, hairline border-strong, and table-head
+     underlines all use this navy." So in the light palette the rule and the page
+     are one ink, `#15213a` twice over, and the hairline beside them is that same
+     navy at low alpha, "never grey".
+     Over a dark ground the pairing inverts — the drawing states that too:
+     "White-on-navy is the inverted pairing for dark grounds" — but what inverts
+     is the INK, so the rule is this palette's own `--foreground` and not a fresh
+     value. A hand-picked neutral white (chroma 0, no hue at all) is exactly the
+     "neutral grey on a divider" the principle forbids, whichever end of the
+     lightness scale it sits at. Composited on every ground a section rule sits
+     on, the ink reads 19.27:1 on --background (light 14.15), 18.43:1 on
+     --surface (light 14.92), 14.00:1 on --surface-muted (light 13.04) — above
+     what the neutral read on each of the three (16.18, 15.57, 12.12), so the
+     etched rule's measured visibility is kept rather than traded away. Pinned by
      src/app/__tests__/etched-rule-theme-parity.test.ts. The paired 1px/5px-gap
      geometry is untouched — that pair is the drawing, and #3106 ruled it
      intended; this is the ink, and only the ink. */
-  --line-strong: oklch(1 0 0 / 90%);
+  --line-strong: var(--foreground);
   /* Control chrome (cinatra#3107). The light palette's full navy IS invisible
      against dark surfaces, so the dark control boundary stays in the same
      white-over-ground vocabulary as --line — but STRENGTHENED, because --line

@@ -35,9 +35,20 @@ async function open(
   await expect(page.locator("#timezone-scheduled")).toBeVisible();
 }
 
-/** The text a reader sees in the closed control. */
+/**
+ * The text a reader sees in the closed control.
+ *
+ * Read through a RETRYING expectation rather than once: a Select trigger is
+ * filled from its ITEMS, which register a tick after mount, so a single-shot
+ * read can catch the trigger in the gap between first paint and registration
+ * and report an emptiness the control never settles on. The claim these tests
+ * make is about what the control SETTLES on, so the wait belongs here — and a
+ * control that never settles still fails, with the same message.
+ */
 async function triggerText(page: Page, id: string): Promise<string> {
-  return (await page.locator(`#${id}`).innerText()).replace(/\s+/g, " ").trim();
+  const control = page.locator(`#${id}`);
+  await expect(control).not.toHaveText("", { timeout: 15_000 });
+  return (await control.innerText()).replace(/\s+/g, " ").trim();
 }
 
 for (const theme of ["light", "dark"] as const) {
