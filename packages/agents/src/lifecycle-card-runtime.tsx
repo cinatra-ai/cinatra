@@ -905,6 +905,80 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
 // ever, and a run that has settled is read once and left alone.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// WHAT THE SCHEDULE CARD IS READING, TOLD TO THE TURN AROUND IT (cinatra#3044)
+// ---------------------------------------------------------------------------
+//
+// "Where the sentence and the card could disagree, the card is right." The line
+// above a schedule card is the platform's, minted at dispatch and frozen into
+// the turn, and the conversation already re-reads it against the RUN'S OWN ROW
+// while the run stands at its schedule. After the schedule has been spent the
+// row cannot answer any more: it names no schedule at all, and it never said
+// whether the schedule was a one-off or a recurring one.
+//
+// AND THAT DIFFERENCE DECIDES THE SENTENCE. The ratified drawing's section VI
+// gives the spent reading its own words -- "It ran at the time you set. A
+// one-time schedule is spent once it fires..." -- and rules out saying them of
+// anything else: "Only a one-off -- Run right after setup or Schedule for
+// later -- reaches this reading. A recurring schedule is never spent by
+// firing: its past runs are history and its runs still to come stay
+// changeable." A turn that guessed from the row would say "spent" over a
+// recurring schedule that is still live, which is the same class of untruth the
+// correction exists to remove.
+//
+// So the CARD reports it. The card is the one thing that resolved the reading
+// -- the released stamp and the trigger type are in its own body -- and this is
+// the seam it says so through: a sink the enclosing turn provides, written by
+// the card and read by the block that renders the turn's prose. It carries a
+// READING, never a sentence: what the words are is the run-status leaf's, and
+// what is true of this schedule is the card's.
+//
+// PASSIVE. A turn that provides no sink gets no report and the card behaves
+// exactly as it did before this seam existed.
+
+/** The two readings a schedule card's own body can settle into, for the one
+ *  question the turn's sentence turns on. */
+export type ScheduleCardReading = "spent-one-off" | "other";
+
+const ScheduleReadingSinkContext = createContext<
+  ((reading: ScheduleCardReading) => void) | null
+>(null);
+
+/**
+ * The scope a schedule card's reading is reported into — mounted by the turn
+ * around the card, never by the card.
+ */
+export function ScheduleReadingReport({
+  onReading,
+  children,
+}: {
+  onReading: (reading: ScheduleCardReading) => void;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <ScheduleReadingSinkContext.Provider value={onReading}>
+      {children}
+    </ScheduleReadingSinkContext.Provider>
+  );
+}
+
+/**
+ * The card's own side of the report.
+ *
+ * A CARD THAT LEAVES TAKES ITS ANSWER WITH IT: the cleanup reports the neutral
+ * reading, so a turn is never left saying "spent" over a card that has been
+ * unmounted or has re-resolved into something else.
+ */
+export function useReportScheduleReading(reading: ScheduleCardReading): void {
+  const sink = useContext(ScheduleReadingSinkContext);
+  useEffect(() => {
+    if (sink === null) return;
+    sink(reading);
+    if (reading === "other") return;
+    return () => sink("other");
+  }, [sink, reading]);
+}
+
 /** The run's moment, and the card reference that moment was stated with. */
 export type RunMomentCard = {
   /** The run's own status, so a settled run is read once rather than watched. */
@@ -1004,19 +1078,45 @@ export function runMomentCardIsOpen(card: RunMomentCard): boolean {
 }
 
 /**
- * Statuses that end the watch. A settled run cannot open a new moment, and an
- * ARMED run's moment is settled too: its card is the trigger's own reading and
- * only the person acting on that card can change it, so the watch stops with
- * the card in place rather than polling behind a decided reading.
+ * Statuses that end the watch: the run has settled and cannot open, close or
+ * move a moment again.
+ *
+ * `armed` IS NOT ONE OF THEM (convergence finding, cinatra#3044). It reads like
+ * one — the person has answered the card and cannot answer it again — and the
+ * watch used to stop there. But the person is not the only writer of that row:
+ * the release job is, and what it writes is exactly the change this watch
+ * exists to see. `armed` is the run WAITING FOR THE INSTANT it was given
+ * (`SCHEDULE_PARK_STATUSES` in the coordinator states the schedule moment in
+ * `pending_trigger` AND `armed`, and the release job clears it when it fires),
+ * so a watch that ends there is a page that can never learn its one-off fired:
+ * the row goes on naming a schedule for ever, the run's own next reading never
+ * comes back, and the spent card never reaches the settled election below.
+ * That is the whole delayed one-off road — "Schedule for later" — and it is
+ * the road the drawing's own fired example is drawn on.
  *
  * TAKEN FROM THE STATE MACHINE, not written out again. A hand-copied set is how
  * a status that does not exist gets watched for ever while a real terminal one
  * is missed — and the run vocabulary is one module away, typed.
  */
-const RUN_MOMENT_WATCH_ENDS: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
-  ...TERMINAL_RUN_STATUSES,
-  "armed",
-]);
+const RUN_MOMENT_WATCH_ENDS: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(
+  TERMINAL_RUN_STATUSES,
+);
+
+/**
+ * Is this run standing at a moment A PERSON is about to act on?
+ *
+ * The brisk cadence below is bought by that question and not by "a card is on
+ * screen". `pending_trigger` is the card as a CONTROL: somebody is looking at
+ * the thing they are about to press, and the reading that replaces it is one
+ * gesture away. `armed` is the same card as a WAIT — the answer is given, and
+ * what changes it is an instant that may be days out. Polling that every two
+ * seconds for as long as a tab stays open would buy nothing and cost a request
+ * a second per parked run, which is why the wait takes the ordinary backed-off
+ * belt instead.
+ */
+function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
+  return runMomentCardIsOpen(card) && card.status !== "armed";
+}
 
 /**
  * HOW FAR APART THE LOOKS ARE, AND WHAT ENDS THEM.
@@ -1056,8 +1156,8 @@ const MOMENT_READ_TIMEOUT_MS = 8000;
  * every two seconds for a live run, so while the moment's card owns the slot
  * this watch is that poll rather than a second one.
  */
-function momentReadDelay(reads: number, momentOpen: boolean): number {
-  if (momentOpen) return 2000;
+function momentReadDelay(reads: number, momentAwaitsAPerson: boolean): number {
+  if (momentAwaitsAPerson) return 2000;
   if (reads < 5) return 2000;
   if (reads < 15) return 5000;
   return 10_000;
@@ -1159,7 +1259,7 @@ export function useRunMomentCard({
     };
     const timer = window.setTimeout(
       look,
-      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentCardIsOpen(card)),
+      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
     );
     // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
     // may have happened while nobody was looking" — the same signal the card
