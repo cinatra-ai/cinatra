@@ -132,6 +132,14 @@ const SOURCE = firstPartySourceFiles().map((file) => ({
  * that meets a genuinely new reason adds it here, in a commit a reader can see,
  * rather than typing a new excuse into the data file.
  */
+/**
+ * The aspects a manifest surface can declare, and therefore the only aspects a
+ * readiness entry can be ABOUT. Closed, because each of the three manifest
+ * reconciliations below selects its entries by aspect: an entry naming a fourth
+ * would be reconciled against nothing at all.
+ */
+const ASPECTS = new Set(["action", "field", "state"]);
+
 const REASON_TOKENS = new Set([
   // The reading is drawn by a SERVER component inside the review card's own
   // credentialed island frame, so no props-only harness mount can reach it.
@@ -169,6 +177,35 @@ describe("surface-readiness.json is still true of this tree", () => {
     }
   });
 
+  it("every entry names a known aspect, and a surface its own wave declares", () => {
+    for (const wave of readiness.waves) {
+      const declared = new Set(wave.surfaces);
+      for (const entry of wave.entries) {
+        // An aspect outside the closed set would slip past all three manifest
+        // reconciliations below, each of which selects entries by aspect.
+        expect(
+          ASPECTS.has(entry.aspect),
+          `${wave.wave}: ${entry.surface} names the unknown aspect ${entry.aspect}`,
+        ).toBe(true);
+        // The action and field reconciliations reject an entry for a surface a
+        // wave does not list, because they compare the whole listed set against
+        // what the wave's OWN surfaces declare. The state reconciliation walks
+        // wave.surfaces instead, so it cannot see such an entry at all. Hold
+        // every entry to the wave's own surfaces here, once, for all three.
+        expect(
+          declared.has(entry.surface),
+          `${wave.wave}: ${entry.surface} has an entry, but the wave does not list it among its surfaces`,
+        ).toBe(true);
+        if (entry.aspect === "state") {
+          expect(
+            new Set(entry.states).size,
+            `${wave.wave}: ${entry.surface} repeats a state in its readings`,
+          ).toBe(entry.states.length);
+        }
+      }
+    }
+  });
+
   it("no two entries of a wave describe the same aspect twice", () => {
     for (const wave of readiness.waves) {
       const seen = new Set();
@@ -183,7 +220,14 @@ describe("surface-readiness.json is still true of this tree", () => {
   it("a listed surface is not also covered — readiness and coverage are exclusive", () => {
     const covered = new Set(Object.keys(testidContract.surfaces));
     const allowed = new Set(allowlist.map((e) => e.surface));
-    for (const entry of entries) {
+    // Walk each wave's OWN surface list rather than the flattened entries: a
+    // surface a wave declares but writes no entry for is still a surface the
+    // wave says it could not drive, and it must not be covered, allowlisted or
+    // driven either. Every entry's surface is one of these, proved above.
+    const listedSurfaces = readiness.waves.flatMap((wave) =>
+      wave.surfaces.map((surface) => ({ surface })),
+    );
+    for (const entry of listedSurfaces) {
       expect(covered.has(entry.surface), `${entry.surface} is both listed and covered`).toBe(false);
       expect(allowed.has(entry.surface), `${entry.surface} is both listed and allowlisted`).toBe(
         false,
