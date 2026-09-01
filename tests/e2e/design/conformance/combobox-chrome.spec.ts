@@ -472,6 +472,46 @@ for (const theme of ["light", "dark"] as const) {
         ).toBe("1px");
       }
 
+      // AND NOTHING OUTSIDE THAT ONE OUTLINE.
+      //
+      // The drawing gives the pair a single 1px border and a soft drop shadow
+      // — nothing else. The shared popover layer additionally rings its content
+      // (`ring-1 ring-foreground/10`), and a ring is a hard 1px line painted
+      // OUTSIDE the border box on all four sides: a second outline around the
+      // list, and one that runs straight along the seam the border-top was
+      // dropped to open. That is the very reading sentence 19 rejects — a list
+      // outlined in a low-alpha line of its own — so it is measured here, off
+      // the resolved box-shadow rather than off a class name.
+      const rings = await page.evaluate((s) => {
+        const shadow = getComputedStyle(document.querySelector(s)!).boxShadow;
+        if (!shadow || shadow === "none") return [];
+        const layers: string[] = [];
+        let depth = 0;
+        let current = "";
+        for (const character of shadow) {
+          if (character === "(") depth += 1;
+          else if (character === ")") depth -= 1;
+          if (character === "," && depth === 0) {
+            layers.push(current.trim());
+            current = "";
+          } else {
+            current += character;
+          }
+        }
+        if (current.trim()) layers.push(current.trim());
+        // A hard hairline: no offset, no blur, a spread of its own. A soft drop
+        // shadow always carries blur, so this catches rings and nothing else.
+        return layers.filter((layer) =>
+          /(?:^|\s)0px 0px 0px (?!0px)[\d.]+px/.test(layer),
+        );
+      }, CONTENT);
+      expect(
+        rings,
+        `the list carries ${rings.length} hard hairline ring(s) outside its own ` +
+          `border (${rings.join(" · ")}) — a second outline the drawing does ` +
+          "not draw, running along the seam as well as around the sides",
+      ).toEqual([]);
+
       expect(
         outline["border-left-color"],
         `the list is outlined in ${outline["border-left-color"]} while its own ` +

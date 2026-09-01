@@ -164,7 +164,14 @@ function Combobox({
         sideOffset={0}
         data-slot="combobox-content"
         className={cn(
-          "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0",
+          // `ring-0`: the shared popover layer rings its content in a
+          // low-alpha hairline OUTSIDE its border box, on all four sides.
+          // Around a popover that belongs to nothing in particular that is
+          // an elevation cue; around this one it is a second outline where
+          // the drawing draws exactly one, and it runs straight along the
+          // seam the border-top is dropped to open — putting back the very
+          // low-alpha line that made the list read as a separate object.
+          "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0 ring-0",
           // The seam, drawn only on the side the drawing draws. A list with no
           // room beneath its trigger still flips above it — that is the
           // collision fallback rather than the drawing, so it keeps a whole
