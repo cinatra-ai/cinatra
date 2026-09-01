@@ -25,6 +25,7 @@ import {
 // to the leaf module `background-jobs-notify.ts` (cinatra#2039 S1 ratchet slice)
 // to keep this runtime module under its file-size ceiling; behaviour unchanged.
 import { notifyJobLifecycle, notifyJobStarted } from "@/lib/background-jobs-notify";
+import { clearSettledJobForReuse } from "@/lib/background-jobs-settled-reuse";
 
 // The background-job NAME constants, the `BackgroundJobName` type, and the
 // canonical recurring-loop jobIds now live in the leaf module
@@ -640,40 +641,6 @@ export async function getQueueDashContext() {
   };
 }
 
-/**
- * Remove a SETTLED (completed / failed) job of this id so BullMQ's HSETNX-based
- * `add` cannot silently return the retained entry and enqueue nothing. A LIVE
- * job of that id (waiting / active / delayed / waiting-children / prioritized)
- * is deliberately left alone — the id keeps its de-duplication meaning for a leg
- * that is genuinely still in flight.
- *
- * The read and the removal are NOT atomic: the retained entry can be evicted by
- * `removeOnComplete`, or removed by another producer, between `getState()` and
- * `remove()` — and BullMQ's `Job.remove()` throws whenever its script reports
- * that nothing was removed. That disappearance is exactly the outcome this
- * function wants, so it is re-read and tolerated rather than raised into a
- * caller that has usually already committed a database transition. Only a job
- * that is still there AND still settled re-raises.
- */
-async function clearSettledJobForReuse(
-  queue: BackgroundJobRuntime["queue"],
-  jobId: string,
-): Promise<void> {
-  const existing = await queue.getJob(jobId);
-  if (!existing) return;
-  const state = await existing.getState();
-  if (state !== "completed" && state !== "failed") return;
-  try {
-    await existing.remove();
-  } catch (err) {
-    const stillThere = await queue.getJob(jobId);
-    if (!stillThere) return;
-    const stillState = await stillThere.getState();
-    if (stillState !== "completed" && stillState !== "failed") return;
-    throw err;
-  }
-}
-
 export async function enqueueBackgroundJob(
   name: BackgroundJobName,
   data: Record<string, unknown>,
@@ -691,21 +658,9 @@ export async function enqueueBackgroundJob(
   > & {
     skipWorker?: boolean;
     /**
-     * When true and a SETTLED (completed / failed) job with the same jobId is
-     * still retained on the queue, remove it before adding the new entry so
-     * BullMQ's HSETNX-based `add` doesn't silently no-op. A LIVE job of that id
-     * (waiting / active / delayed) is deliberately left alone, so the id keeps
-     * its de-duplication meaning for a leg that is genuinely still in flight.
-     *
-     * Honoured on BOTH paths (cinatra#3033). It used to be read only on the
-     * `skipWorker: true` bootstrap branch, which made it a silent no-op for
-     * every ordinary caller — and the queue retains settled jobs
-     * (`removeOnComplete: 200` above), so ANY caller that re-uses one jobId
-     * across successive legs of the same workflow lost every leg after the
-     * first — which is how the setup-approval resume deadlocked a run at
-     * `queued` with no job, no trigger row and no error (that caller now mints
-     * a per-leg id instead, because clearing a settled entry cannot help a leg
-     * whose predecessor is still ACTIVE).
+     * Clear a SETTLED job of this `jobId` first (a LIVE one is left alone), or
+     * BullMQ's HSETNX-based `add` returns the retained entry and enqueues
+     * nothing. Honoured on BOTH paths — see `background-jobs-settled-reuse`.
      */
     overwriteIfStale?: boolean;
     /**
@@ -753,16 +708,13 @@ export async function enqueueBackgroundJob(
       inheritActorContext: _ih,
       ...jobOpts
     } = options;
-    if (overwriteIfStale && jobOpts.jobId) {
-      await clearSettledJobForReuse(runtime.queue, jobOpts.jobId);
-    }
+    await clearSettledJobForReuse(runtime.queue, overwriteIfStale, jobOpts.jobId);
     const job = await runtime.queue.add(name, payload, jobOpts);
     return String(job.id);
   }
   const {
-    // This function's OWN option keys are stripped here so none of them reaches
-    // BullMQ as a stray job option. `overwriteIfStale` used to fall through into
-    // `jobOpts` on this path, which is precisely why it did nothing here.
+    // This function's OWN option keys, stripped so none reaches BullMQ as a
+    // stray job option (`overwriteIfStale` used to fall through — cinatra#3033).
     skipWorker: _sw,
     overwriteIfStale,
     actorContext: _ac,
@@ -770,13 +722,7 @@ export async function enqueueBackgroundJob(
     ...jobOpts
   } = options ?? {};
   const runtime = await ensureBackgroundJobRuntime();
-  // A jobId that repeats across successive legs of one workflow needs the
-  // SETTLED entry of that id cleared first, or `add` returns the retained job
-  // and enqueues nothing at all (cinatra#3033). A live entry is left standing —
-  // that is the de-duplication the shared id is for.
-  if (overwriteIfStale && jobOpts.jobId) {
-    await clearSettledJobForReuse(runtime.queue, jobOpts.jobId);
-  }
+  await clearSettledJobForReuse(runtime.queue, overwriteIfStale, jobOpts.jobId);
   const job = await runtime.queue.add(name, payload, jobOpts);
   return String(job.id);
 }

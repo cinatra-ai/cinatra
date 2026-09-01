@@ -681,10 +681,22 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
 // winner's run id. Sharing the consume identity is what makes that reachable,
 // so it is this PR's to close, not a pre-existing one.
 
-/** A one-off in another zone — an adjust that moves the DURABLE fields too. */
+/**
+ * A one-off in another zone — an adjust that moves the DURABLE fields too.
+ *
+ * `runAt` is derived from NOW rather than written as a calendar literal.
+ * `adjustTriggerSchedule` legitimately refuses a one-off that is already in the
+ * past, so a fixed date is a time bomb: the suite goes red on the day the
+ * literal names and stays red. Nothing below reads the time — the assertions
+ * are on the trigger TYPE and the ZONE — so any comfortably-future instant
+ * serves, and 30 days out clears every zone offset.
+ */
+const ONCE_NEW_YORK_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
 const ONCE_NEW_YORK: ProposalSchedule = {
   kind: "scheduled",
-  runAt: "2026-09-01T08:00",
+  runAt: `${ONCE_NEW_YORK_DATE}T08:00`,
   timezone: "America/New_York",
 };
 
