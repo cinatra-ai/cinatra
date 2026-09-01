@@ -23,6 +23,7 @@ import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-f
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
+import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -217,6 +218,20 @@ export default function ConformanceHarnessPage() {
             notifications-filter-rail, notifications-bell, notifications-empty,
             notifications-vendor-gate, notifications-degraded. */}
         <NotificationsConformanceFixtures />
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation review suggestion chips (mount: chip-row-live)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3156, epic #3155: the REAL SuggestionChips row under the
+                REAL chat-thread host declaration. The harness holds only the
+                reader's local marks; the shipped component draws everything. */}
+            <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
       </PageContent>
     </Main>
   );
