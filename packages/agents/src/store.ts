@@ -25,6 +25,7 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+import { buildAssignmentScopeSnapshot } from "./assignment-scope-snapshot";
 // cinatra#2933 (lifecycle-b W5b) — `agent_run_messages` now carries a SECOND
 // use: the per-run conversation of the prompt windows outside the chat. This
 // reader is the RUN'S OWN replay thread and must keep returning exactly that,
@@ -1727,6 +1728,30 @@ export async function createAgentRun(
     // Persist whatever the caller supplied; the run-worker reads this at
     // re-authz time to reconstruct the originating user's authority.
     delegatedActorSnapshot: input.delegatedActorSnapshot ?? null,
+    // The IMMUTABLE assignment-scope snapshot (cinatra#2813 S1, epic #2812).
+    // Derived HERE rather than at each call site on purpose: run creation is
+    // funnelled through the launch fence, so deriving it once inside the
+    // store means a producer cannot forget it and a producer added tomorrow
+    // gets it for free. `RUN_CREATION_CALL_SITES` records that disposition
+    // per call site and its suite refuses a writer that is not listed.
+    assignmentScopeSnapshot: buildAssignmentScopeSnapshot({
+      orgId: input.orgId,
+      projectId: input.projectId ?? undefined,
+      teamIds: input.scopeActor?.teamIds ?? [],
+      // The originating HUMAN, and only a human: a personal-scope assignment
+      // belongs to a person, so a worker or service principal contributes no
+      // personal layer rather than a wrong one.
+      // ONLY an explicit HumanUser scope actor. `runBy` is durable OWNERSHIP,
+      // not evidence that a person launched THIS run: a schedule, a trigger or
+      // an orchestrator child keeps a human owner, and stamping that owner here
+      // would give a headless run a personal assignment layer nobody granted
+      // it. Absent is the fail-closed answer — the run simply carries no
+      // personal tier.
+      originatingHumanUserId:
+        input.scopeActor?.principalType === "HumanUser"
+          ? input.scopeActor.principalId
+          : undefined,
+    }),
     // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
@@ -3400,6 +3425,23 @@ export async function createAgentRunPendingInput(
         // the same project frame.
         projectId: input.projectId ?? null,
         oboCeiling: oboCeilingJson,
+        // Same derivation as createAgentRun — a pending-input run is a run,
+        // and it must not reach dispatch with an undecided scope.
+        assignmentScopeSnapshot: buildAssignmentScopeSnapshot({
+          orgId: input.orgId,
+          projectId: input.projectId ?? undefined,
+          teamIds: input.scopeActor?.teamIds ?? [],
+          // ONLY an explicit HumanUser scope actor. `runBy` is durable OWNERSHIP,
+          // not evidence that a person launched THIS run: a schedule, a trigger or
+          // an orchestrator child keeps a human owner, and stamping that owner here
+          // would give a headless run a personal assignment layer nobody granted
+          // it. Absent is the fail-closed answer — the run simply carries no
+          // personal tier.
+          originatingHumanUserId:
+            input.scopeActor?.principalType === "HumanUser"
+              ? input.scopeActor.principalId
+              : undefined,
+        }),
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
       // LAST in the guarded transaction: the row exists for it to reference, and
