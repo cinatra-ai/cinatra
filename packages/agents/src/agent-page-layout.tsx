@@ -156,8 +156,16 @@ export function AgentPageLayout({
       armedRef.current = { identity, epoch: crumbEpoch };
     }
     if (armedRef.current.epoch !== crumbEpoch) return;
+    // cinatra#3080 — the prefix is matched against `usePathname()`, which is
+    // the ENCODED path. The server-decoded `instanceId` is not: a repair run's
+    // id carries a colon, so an unencoded prefix never matched its own page
+    // and the run lost its crumb. A uuid encodes to itself, so every ordinary
+    // run's prefix is byte-identical.
     publishCrumbContributions(pathname, crumbEpoch, [
-      { prefix: `/agents/${agentId}/${instanceId}`, label: crumbLabel },
+      {
+        prefix: `/agents/${agentId}/${encodeURIComponent(instanceId)}`,
+        label: crumbLabel,
+      },
     ]);
   }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
