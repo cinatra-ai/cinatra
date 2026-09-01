@@ -116,7 +116,12 @@ type SeedData = {
    * card's first paint already knows whether it is the placeholder or the
    * review screen.
    */
-  reviewGate?: { ref: string | null; awaiting: boolean } | null;
+  reviewGate?: {
+    ref: string | null;
+    awaiting: boolean;
+    /** Whether the gate the ref names is still open (cinatra#3051). */
+    pending?: boolean;
+  } | null;
 };
 
 type LoadFailureReason = "not-found" | "forbidden" | "transient" | "unaddressable";
@@ -183,7 +188,13 @@ function reviewSlotReader(
   credential: ConversationCredential,
   runId: string,
 ):
-  | ((signal: AbortSignal) => Promise<{ ref: string | null; awaiting: boolean } | null>)
+  | ((
+      signal: AbortSignal,
+    ) => Promise<{
+      ref: string | null;
+      awaiting: boolean;
+      pending: boolean;
+    } | null>)
   | undefined {
   const request = seedRequest(credential, runId);
   if (!request) return undefined;
@@ -191,7 +202,11 @@ function reviewSlotReader(
     const res = await fetch(request.url, { ...request.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      reviewGate?: { ref?: string | null; awaiting?: boolean } | null;
+      reviewGate?: {
+        ref?: string | null;
+        awaiting?: boolean;
+        pending?: boolean;
+      } | null;
     };
     if (!data?.reviewGate) return null;
     return {
@@ -199,6 +214,10 @@ function reviewSlotReader(
         ? data.reviewGate.ref
         : null,
       awaiting: Boolean(data.reviewGate.awaiting),
+      // The widget's own re-read carries the SAME facts the seed does — a
+      // surface that drops one of them cannot draw the reading the other two
+      // hosts draw (cinatra#3051).
+      pending: Boolean(data.reviewGate.pending),
     };
   };
 }

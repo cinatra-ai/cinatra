@@ -1055,7 +1055,21 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
 
 /** The run's review slot: the server-minted ticket for its review screen, and
  *  whether a produced output's review question is still open. */
-export type RunReviewSlot = { ref: string | null; awaiting: boolean };
+export type RunReviewSlot = {
+  ref: string | null;
+  awaiting: boolean;
+  /**
+   * IS THE GATE THE REF NAMES STILL OPEN? (cinatra#3051.)
+   *
+   * The slot names the run's MOST RECENT gate whether it is pending or settled
+   * — a reader who decided one must keep seeing what they decided — so the ref
+   * alone cannot answer "is there a question waiting here". Optional because a
+   * seed written before this field existed carries no answer, and the absence
+   * reads as "not known to be open", which is the reading those seeds already
+   * had.
+   */
+  pending?: boolean;
+};
 
 /**
  * Reads the slot with the surface's OWN credential, and with the caller's abort
@@ -1067,7 +1081,111 @@ export type RunReviewSlotReader = (
   signal: AbortSignal,
 ) => Promise<RunReviewSlot | null>;
 
-export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = { ref: null, awaiting: false };
+export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = {
+  ref: null,
+  awaiting: false,
+  pending: false,
+};
+
+/**
+ * THE STATUSES IN WHICH THE RUN'S WORK IS OVER.
+ *
+ * Kept equal to `TERMINAL_STATUSES` in `orchestrator-execution.ts`, and named
+ * here because THIS is the module both run panels read the review slot through.
+ */
+export const RUN_WORK_IS_OVER_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * THE BELT ON A RUN PANEL'S UNTIL-TERMINAL POLL (cinatra#3051, convergence).
+ *
+ * Where the run stream stands down, the panel's own tick is the only transport
+ * and it has to keep its schedule until the run ends — but "until the run ends"
+ * is not the same sentence as "for ever". A run can stay non-terminal BY
+ * DESIGN and not because anyone is waiting on it: the defining run of a
+ * recurring schedule keeps its status while each cron tick launches a clone. A
+ * panel mounted on that row would otherwise ask the route every five seconds
+ * for as long as the tab is open and learn nothing each time.
+ *
+ * So the tick is belted the way the slot reader above is belted — a bounded
+ * number of looks, after which the surface holds what it was last told. It is
+ * sized as a WINDOW over the slow cadence, so it stays the same amount of
+ * patience if the cadence is ever retuned. Only the parked shapes are counted:
+ * a live run and a run waiting on the reader keep their own unbelted
+ * schedules, and the count is reset whenever the run's status actually moves.
+ */
+const UNTIL_TERMINAL_POLL_WINDOW_MS = 30 * 60 * 1000;
+const UNTIL_TERMINAL_POLL_CADENCE_MS = 5000;
+export const UNTIL_TERMINAL_TICK_LIMIT = Math.floor(
+  UNTIL_TERMINAL_POLL_WINDOW_MS / UNTIL_TERMINAL_POLL_CADENCE_MS,
+);
+
+/**
+ * THE STATUSES IN WHICH THE RUN'S OWN GATE MAY TAKE THE REVIEW SCREEN'S PLACE.
+ *
+ * A STRICT SUBSET of `RUN_WORK_IS_OVER_STATUSES`, and the difference is
+ * `stopped`, on purpose. Looking for the slot is one question and drawing the
+ * review in its place is another: a run the reader PAUSED must keep the
+ * affordance that resumes it, and both run panels have their own paused
+ * reading built on exactly that (the stepper's pause branch, the panel's own
+ * stopped rendering). Admitting the review here for `stopped` would have taken
+ * the slot on one panel and not the other — the same run answered two ways on
+ * two hosts, which the ratified drawing forbids in as many words: "Every card
+ * appears on every host, and it is the same card wherever it appears." Nothing
+ * measured says a paused run was hiding a pending gate, so the two panels are
+ * made to agree the conservative way, and `stopped` keeps the branches it
+ * shipped with on BOTH.
+ */
+export const RUN_REVIEW_TAKES_THE_SLOT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+]);
+
+/**
+ * PURE. WHICH REF THE RUN'S OWN SLOT PUTS IN THE REVIEW SCREEN'S PLACE, IF ANY.
+ *
+ * THE RATIFIED DRAWING FIXES THE CONDITION, and it is not a status:
+ *
+ *   "The placeholder is replaced, in place, by the review. WHEN THE RUN'S
+ *    OUTPUT IS GENERATED, the placeholder becomes the Review requested screen —
+ *    the same slot, in the same turn. It happens on its own: the reader neither
+ *    asks for the card nor presses anything to bring it."
+ *
+ * and, of the four hosts the card appears on:
+ *
+ *   "What holds a card back is the reader, not the host."
+ *
+ * WHAT WENT WRONG. Both panels asked `status === "completed"` instead. A run
+ * can generate its output and NOT reach `completed`: the produced-artifact
+ * outbox is drained on the artifact, and the gate it mints pins a real revision
+ * (`emitArtifactReviewGate` refuses an empty target set), so a run whose task
+ * fails after its output was produced carries a PENDING gate on a `failed` row.
+ * On that run the slot's review was withheld — and because the injected
+ * delivery is suppressed for exactly the turn that draws the run card, on the
+ * ground that the run card shows the gate, NOTHING drew the question on ANY
+ * host. That is the shape the sixth proof round measured.
+ *
+ * WHAT REPLACES IT, and why it is not simply "any terminal status". The panel's
+ * own reason for the narrow rule stands and is kept: a run carries its gate for
+ * ever, so a SETTLED gate must not take the slot back from the run's current
+ * reading — the error block with its Retry, the scheduling step, the spinner.
+ * So for a run that ended in any way other than `completed` the review draws
+ * only while its question is genuinely OPEN. `completed` is unchanged in both
+ * directions: it draws whatever gate the slot names, settled or not, exactly as
+ * it shipped.
+ */
+export function inPlaceRunReviewRef(
+  status: string,
+  slot: RunReviewSlot,
+): string | null {
+  if (slot.ref === null) return null;
+  if (!RUN_REVIEW_TAKES_THE_SLOT_STATUSES.has(status)) return null;
+  if (status !== "completed" && slot.pending !== true) return null;
+  return slot.ref;
+}
 
 /**
  * How often the slot is re-read while it is waiting for a gate, how many times,
@@ -1105,12 +1223,16 @@ function slotReadDelay(reads: number): number {
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
-  const slot = (data as { reviewGate?: { ref?: unknown; awaiting?: unknown } })
-    ?.reviewGate;
+  const slot = (
+    data as {
+      reviewGate?: { ref?: unknown; awaiting?: unknown; pending?: unknown };
+    }
+  )?.reviewGate;
   if (!slot) return null;
   return {
     ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
     awaiting: Boolean(slot.awaiting),
+    pending: Boolean(slot.pending),
   };
 }
 
@@ -1176,7 +1298,15 @@ export function useRunReviewSlot({
   useEffect(() => {
     // Only after the work is done. While the run is still working there is
     // nothing to find, and the placeholder is already the right drawing.
-    if (status !== "completed") return;
+    //
+    // AND "DONE" IS EVERY WAY A RUN CAN END, not only the successful one
+    // (cinatra#3051). A run whose output was generated and whose task then
+    // failed has a real, pending gate on its row; asking only under `completed`
+    // meant this surface never even LOOKED for it, so the question could not be
+    // drawn however the drawing rule read. The belt and the backoff below are
+    // unchanged, so a terminal run with no gate costs the same bounded look a
+    // completed one with no gate already cost.
+    if (!RUN_WORK_IS_OVER_STATUSES.has(status)) return;
     // Answered under this status, with nothing further owed.
     if (answered && !slot.awaiting) return;
     if (probe.reads >= SLOT_READ_LIMIT) return;

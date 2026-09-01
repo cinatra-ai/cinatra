@@ -409,7 +409,7 @@ export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRo
  */
 export async function readRunReviewSlot(
   runId: string,
-): Promise<{ reviewTaskId: string | null; awaiting: boolean }> {
+): Promise<{ reviewTaskId: string | null; awaiting: boolean; pending: boolean }> {
   const [pendingProduced] = await db
     .select({ eventId: artifactProducedOutbox.eventId })
     .from(artifactProducedOutbox)
@@ -421,7 +421,10 @@ export async function readRunReviewSlot(
     )
     .limit(1);
   const [gate] = await db
-    .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+    .select({
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      status: artifactReviewGates.status,
+    })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id))
@@ -429,6 +432,13 @@ export async function readRunReviewSlot(
   return {
     reviewTaskId: gate?.reviewTaskId ?? null,
     awaiting: Boolean(pendingProduced),
+    // IS THE QUESTION STILL OPEN? (cinatra#3051.) The slot has always carried
+    // the run's most recent gate whether it was pending or settled, because the
+    // reader who decided one must keep seeing what they decided. A surface that
+    // has to choose between the gate and the run's own current rendering needs
+    // the other half of that fact, and it is one column of a row this read
+    // already selects — never a second query, and never inferred from the run.
+    pending: gate?.status === "pending",
   };
 }
 

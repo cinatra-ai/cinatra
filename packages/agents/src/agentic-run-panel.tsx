@@ -42,6 +42,9 @@ import {
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
   useComposerFocusStore,
+  RUN_WORK_IS_OVER_STATUSES,
+  UNTIL_TERMINAL_TICK_LIMIT,
+  inPlaceRunReviewRef,
   useComposerTarget,
   useLifecycleCardAuth,
   useLifecycleCardFrame,
@@ -447,6 +450,19 @@ export function AgenticRunPanel({
   // (SSE owns status/error); they retain their initial values and serve as the
   // independent guard for the polling useEffect firing condition.
   const [pollStatus, setPollStatus] = useState(initialStatus);
+  // THE BELT ON THE UNTIL-TERMINAL TICK (cinatra#3051, convergence). Counted
+  // only while the stream has stood down and the run is neither live nor
+  // waiting on the reader — see the schedule below. Reset whenever the run's
+  // status actually moves, so a row that is still travelling is never cut off
+  // by looks it spent in an earlier state.
+  const [untilTerminalTicks, setUntilTerminalTicks] = useState(0);
+  const [beltedFromStatus, setBeltedFromStatus] = useState(initialStatus);
+  if (beltedFromStatus !== pollStatus) {
+    setBeltedFromStatus(pollStatus);
+    setUntilTerminalTicks(0);
+  }
+  // One read in flight at a time on the polling schedule.
+  const pollInFlightRef = useRef(false);
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   // Seeded from the server when the caller already derived the gate (see
@@ -713,6 +729,40 @@ export function AgenticRunPanel({
   // messages + hitlContext continue to be fetched even when SSE has advanced status.
   const isPollLive = pollStatus === "running" || pollStatus === "queued";
   const isPollPendingApproval = pollStatus === "pending_approval";
+  // AND WHERE THE STREAM STANDS DOWN, THE TICK RUNS UNTIL THE RUN ENDS
+  // (cinatra#3051).
+  //
+  // The two guards above are the stream's own division of labour: the wire
+  // carries every other status, so the tick only has to cover the two shapes
+  // that need messages and gates. On a host whose identity does not travel by
+  // cookie there IS no wire — the tick is the only transport — and those same
+  // two guards then stop it dead at any OTHER non-terminal status. A run that
+  // was released into its schedule is the case that matters here: it reads
+  // `pending_trigger`, the tick stops, and the run afterwards runs, produces its
+  // output and ends with nobody on that host ever hearing about it. The surface
+  // sits on the last status it was told, which is why a widget column could hold
+  // the working placeholder while the row had long since ended.
+  //
+  // So where the stream stands down the tick keeps its own schedule until the
+  // run reaches a TERMINAL status, at the same two cadences and with the same
+  // per-tick work — nothing new is asked for, and a run that has ended is still
+  // asked nothing at all.
+  //
+  // AND THE TICK IS BELTED, because "until the run ends" is not the same
+  // sentence as "for ever" (convergence finding). A run can stay non-terminal
+  // by design and not because anyone is waiting on it: a recurring schedule's
+  // defining run keeps its status while every cron tick launches a clone, so a
+  // panel mounted on that row would otherwise ask the route every five seconds
+  // for as long as the tab is open, learning nothing each time. The belt is the
+  // same idiom the slot reader already uses — a bounded number of looks, after
+  // which the surface holds what it was last told rather than keeping a hot
+  // loop nobody asked for. It is sized in TIME so it survives a cadence change:
+  // long enough to hear a released run run, produce and end, short enough that
+  // a parked row costs a bounded number of reads.
+  const pollRunsUntilTerminal =
+    !streamEnabled &&
+    !RUN_WORK_IS_OVER_STATUSES.has(pollStatus) &&
+    untilTerminalTicks < UNTIL_TERMINAL_TICK_LIMIT;
 
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -1162,8 +1212,14 @@ export function AgenticRunPanel({
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
   }, [runId, taskId, streamEnabled, readRunSnapshot]);
 
+  // Whether the polling schedule below is the BELTED one — the stream stood
+  // down and the run is neither live nor waiting on the reader, so nothing but
+  // the belt ends it. A live run and a run waiting on the reader keep their own
+  // unbelted schedules, exactly as they shipped.
+  const beltedByTicks = !isPollLive && !isPollPendingApproval;
+
   useEffect(() => {
-    if (!isPollLive && !isPollPendingApproval) return;
+    if (!isPollLive && !isPollPendingApproval && !pollRunsUntilTerminal) return;
     const intervalMs = isPollLive ? 2000 : 5000;
     // NO leading tick on purpose. A run that is already paused when its surface
     // mounts is handed its gate as a seed (`initialHitlContext`), so the first
@@ -1171,10 +1227,26 @@ export function AgenticRunPanel({
     // recovery state's "has it even tried yet?" tolerance on the very first
     // frame, which is the one moment a paused run must not be called degraded.
     const interval = window.setInterval(() => {
-      void refetchDerivedContext();
+      // ONE READ IN FLIGHT AT A TIME. The tick fires on a clock, not on the
+      // answer, so a slow or hung read would otherwise stack a second request
+      // on top of the first every interval — the shape that turns one degraded
+      // read into a queue of them. A tick that finds the previous read still
+      // out simply skips: the next one is only an interval away.
+      if (pollInFlightRef.current) return;
+      if (beltedByTicks) setUntilTerminalTicks((prev) => prev + 1);
+      pollInFlightRef.current = true;
+      void refetchDerivedContext().finally(() => {
+        pollInFlightRef.current = false;
+      });
     }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [isPollLive, isPollPendingApproval, refetchDerivedContext]);
+  }, [
+    beltedByTicks,
+    isPollLive,
+    isPollPendingApproval,
+    pollRunsUntilTerminal,
+    refetchDerivedContext,
+  ]);
 
   // -------------------------------------------------------------------------
   // THE REVIEW SLOT (cinatra#2997) — kept current by the ONE shared reader both
@@ -1674,13 +1746,24 @@ export function AgenticRunPanel({
   // `site_widget` card asking with the reader's own broker proof and
   // `credentials: "omit"`. The suppression is therefore gone from both
   // readings, and it is gone for the marked-gate path too, which never had it.
+  //
+  // AND "FINISHED" IS EVERY WAY THE WORK CAN END (cinatra#3051). The rule above
+  // said `status === "completed"`, and the ratified drawing says the condition
+  // is the OUTPUT: "when the run's output is generated, the placeholder becomes
+  // the Review requested screen — the same slot, in the same turn". A run can
+  // generate its output and then fail — the gate is minted on the produced
+  // artifact and pins a real revision — and on that run the slot's review was
+  // withheld while the injected delivery was suppressed for the very turn that
+  // draws this card, so nothing anywhere drew the question. The condition is
+  // now the slot's own, in one shared place both run panels read it from
+  // (`inPlaceRunReviewRef`): the work is over, and for a run that ended any way
+  // other than `completed` the gate is still OPEN — a settled gate never takes
+  // the slot back from the run's own current reading.
   const inPlaceReviewRef = blockedOnInputGate
     ? null
     : markedReviewGate
       ? reviewGateCardRef
-      : status === "completed"
-        ? reviewSlot.ref
-        : null;
+      : inPlaceRunReviewRef(status, reviewSlot);
   const runIsWorking =
     inPlaceReviewRef === null &&
     !blockedOnInputGate &&
