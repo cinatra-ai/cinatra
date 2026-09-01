@@ -49,6 +49,11 @@ import {
   BREADCRUMB_ENTITY_PLACEHOLDER,
 } from "../../../../src/app/design-fixtures/conformance/breadcrumb-conformance-seed";
 import {
+  LIFECYCLE_SUGGESTION_CHIP_FIXTURES,
+  type LifecycleSuggestionChipFixture,
+  type LifecycleSuggestionChipMount,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -321,6 +326,120 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
   }
 
   return driver;
+}
+
+// ---------------------------------------------------------------------------
+// The SUGGESTION-CHIP family (cinatra#3156, epic #3155 W0)
+// ---------------------------------------------------------------------------
+//
+// One surfaced suggestion has ONE control and TWO drawn states, and the two
+// manifest surfaces are the two ends of that one shape. So they are driven by
+// one family factory over one fixture list, the same shape `cardDriver` +
+// CONFORMANCE_CARD_FIXTURES already give the six extension listing cards. W0
+// lands the factory and proves it on one surface; the waves after it add fixture
+// rows and nothing else.
+//
+// EVERY ASPECT DRIVEN HERE IS SHIPPED ON THE DEFAULT BRANCH. The chip's control
+// names (`dismiss-suggestion -> dismissed` on an accepted chip,
+// `accept-suggestion -> accepted` on a dismissed one) are literals of
+// packages/agents/src/review-gate-card.tsx, and testid-contract.json requires
+// each of them in that file — so a driver that named a control the product does
+// not ship would be RED in scripts/design/check-conformance-testids.mjs before
+// any browser opened.
+//
+// The manifest's actions elsewhere in this drawing that no shipped control
+// carries are NOT driven here, and are not approximated through a different
+// control either. They are on this wave's surface-readiness list.
+
+/** The chip row of one mounted fixture row. */
+function chipRow(root: Locator): Locator {
+  return root.locator('[data-conformance-id="suggestion-chips"]');
+}
+
+/**
+ * One chip, addressed by the MANIFEST'S OWN action name.
+ *
+ * The shipped attribute is written `"<action> -> <outcome>"`, so this locator
+ * cannot resolve at all unless the product ships a control for exactly the
+ * action-and-outcome pair the manifest declares. That is deliberate: it is what
+ * stops a driver from pressing one control and reporting another one's outcome.
+ */
+function chipOffering(root: Locator, action: string, outcome: string): Locator {
+  return chipRow(root).locator(`[data-action="${action} -> ${outcome}"]`);
+}
+
+/**
+ * Press until the reaction is observed. Same hydration retry as
+ * `clickCtaUntil`: a click that lands before React hydration is silently
+ * swallowed on the production standalone build.
+ */
+async function pressChipUntil(chip: Locator, reacted: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await chip.getByRole("button").click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/**
+ * The manifest surface each harness mount stands for.
+ *
+ * It lives HERE, on the test side, rather than on the fixture row, because the
+ * suggestion chip's spec anchors may appear as a literal in exactly ONE
+ * production module — the card that draws them — and the repository proves that
+ * by scanning src and packages. Keyed by the mount union, so a new mount without
+ * a manifest surface is a typecheck failure rather than an undefined driver key.
+ */
+const SUGGESTION_CHIP_MANIFEST_SURFACE: Readonly<
+  Record<LifecycleSuggestionChipMount, string>
+> = {
+  "chip-row-live": "suggestion-accepted",
+};
+
+export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.mount}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const row = chipRow(root);
+      await expect(row).toBeVisible();
+      // LIVE, not the recorded or the read-only partition: this reader may mark.
+      await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
+      // A suggestion ARRIVES accepted — there is no unmarked state to return to.
+      const accepted = row.locator('[data-conformance-id="suggestion-accepted"]');
+      await expect(accepted).toBeVisible();
+      await expect(accepted).toHaveAttribute("data-suggestion-state", "accepted");
+      await expect(accepted).toContainText(fixture.suggestion.label);
+    },
+    fields: {},
+    actions: {
+      // The chip's one control on an accepted suggestion. The press is the REAL
+      // chip button and every drawn consequence — the state it moves to, the
+      // control it then offers, the name of that control — is computed by the
+      // shipped component from the reader's local marks.
+      "dismiss-suggestion": {
+        outcome: "dismissed",
+        run: async (_page, root) => {
+          const row = chipRow(root);
+          const dismissedChip = row.locator('[data-conformance-id="suggestion-dismissed"]');
+          await pressChipUntil(chipOffering(root, "dismiss-suggestion", "dismissed"), async () => {
+            await expect(dismissedChip).toBeVisible({ timeout: 5_000 });
+          });
+          await expect(dismissedChip).toHaveAttribute("data-suggestion-state", "dismissed");
+          // ONE control per suggestion, and the toggle is its own inverse: the
+          // accepted reading is gone and the same chip now offers the way back.
+          await expect(row.locator('[data-conformance-id="suggestion-accepted"]')).toHaveCount(0);
+          await expect(chipOffering(root, "accept-suggestion", "accepted")).toHaveCount(1);
+          // A dismissal is a MARK, not a submit — the row stays live and the
+          // suggestion stays on screen (§VIII: the chips carry no submit).
+          await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
+          await expect(dismissedChip).toContainText(fixture.suggestion.label);
+        },
+      },
+    },
+    states: {},
+  };
 }
 
 const STATUS_PILLS_DRIVER: SurfaceDriver = {
@@ -2858,5 +2977,13 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
+  ),
+  // The in-conversation suggestion chips (cinatra#3156, epic #3155). One family
+  // factory over one fixture list — the later waves add rows, not drivers.
+  ...Object.fromEntries(
+    LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
+      SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
+      suggestionChipDriver(fixture),
+    ]),
   ),
 };
