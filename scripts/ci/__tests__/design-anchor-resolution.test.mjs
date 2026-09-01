@@ -499,7 +499,19 @@ describe("the CLI", () => {
       throw new Error(`unexpected git ${args.join(" ")}`);
     };
 
-  async function run({ argv = [], env = {}, dir, anchors, touched = [], pins }) {
+  // `recordedUnresolved` defaults to null because these runs drive FIXTURE
+  // drawings: reading the repository's own recorded set into them would compare
+  // a record about the real drawings with a finding about a two-line fixture,
+  // and turn a suite about the CHECKER red every time the RECORD moves.
+  async function run({
+    argv = [],
+    env = {},
+    dir,
+    anchors,
+    touched = [],
+    pins,
+    recordedUnresolved = null,
+  }) {
     const out = [];
     const err = [];
     const code = await runCli({
@@ -507,6 +519,7 @@ describe("the CLI", () => {
       env: { DESIGN_DRAWINGS_DIR: dir, DESIGN_PIN_DRIFT_DIFF_BASE: "base", ...env },
       pins,
       anchors,
+      recordedUnresolved,
       runGit: gitStub(touched),
       log: (l) => out.push(String(l)),
       logError: (l) => err.push(String(l)),
@@ -613,16 +626,20 @@ describe("the CLI", () => {
 // ---------------------------------------------------------------------------
 
 describe("anchorsUnresolvedAtPin is a fourth digest input", () => {
-  it("leaves today's recorded digest exactly where it stands while it is absent", () => {
+  it("is bound into today's recorded digest, now that the adoption has recorded it", () => {
     expect(auditAnchorContract({ anchorContract: contract(), manifest: manifest() })).toEqual([]);
-    const recomputed = computeAnchorDigest(
-      anchorDigestInputs({
-        specCommit: manifest().specCommit,
-        domExpectations: contract().domExpectations,
-        captureAnchors: captureAnchorExpectations(),
-      }),
+    const three = {
+      specCommit: manifest().specCommit,
+      domExpectations: contract().domExpectations,
+      captureAnchors: captureAnchorExpectations(),
+    };
+    const withRecorded = computeAnchorDigest(
+      anchorDigestInputs({ ...three, anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin }),
     );
-    expect(recomputed).toBe(contract().digest);
+    expect(withRecorded).toBe(contract().digest);
+    // and dropping it moves the digest, which is what makes it an input rather
+    // than a comment beside one.
+    expect(computeAnchorDigest(anchorDigestInputs(three))).not.toBe(contract().digest);
   });
 
   it("moves the digest the moment it is recorded, and again when it is edited", () => {
@@ -797,6 +814,7 @@ describe("a run that did not read the sibling drawings says so", () => {
       env: {},
       pins: [pin()],
       anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
+      recordedUnresolved: null,
       createReader: remoteReader(drawingWith('[data-other="x"]')),
       runGit: () => "",
       log: (l) => out.push(String(l)),
@@ -873,8 +891,13 @@ describe("a recorded anchorsUnresolvedAtPin is compared with what this check fin
     expect(r.all).not.toContain("is not what this check finds");
   });
 
-  it("is silent while the key is absent, which is this repository's state today", () => {
-    expect(contract().anchorsUnresolvedAtPin).toBeUndefined();
+  it("has a recorded set to compare against, which is this repository's state today", () => {
+    const recorded = contract().anchorsUnresolvedAtPin;
+    expect(Array.isArray(recorded)).toBe(true);
+    expect(recorded.length).toBeGreaterThan(0);
+    // sorted and without a repeat — the shape the contract's own audit refuses
+    // in any other form, because a re-examination may not hide behind an order.
+    expect([...recorded]).toEqual([...new Set(recorded)].sort());
   });
 });
 

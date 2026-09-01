@@ -113,6 +113,9 @@ describe("a changed design pin without a re-ratified anchor digest fails", () =>
           specCommit: movedPin,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          // the fourth input, recorded by the adoption road: a re-ratification
+          // that left it out would produce a digest over three of the four.
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     };
@@ -213,6 +216,7 @@ describe("the digest is a digest, not a formatting fingerprint", () => {
           specCommit: manifest().specCommit,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     );

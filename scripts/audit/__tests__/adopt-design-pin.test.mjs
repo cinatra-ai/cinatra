@@ -221,7 +221,7 @@ describe("adopting a pin", () => {
 // ---------------------------------------------------------------------------
 
 describe("the repository's own pin is untouched by this suite", () => {
-  it("leaves the real manifest and contract exactly where the branch found them", () => {
+  it("leaves the real manifest and contract agreeing at the adopted pin", () => {
     const manifest = JSON.parse(
       readFileSync(join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"), "utf8"),
     );
@@ -229,9 +229,14 @@ describe("the repository's own pin is untouched by this suite", () => {
       readFileSync(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"), "utf8"),
     );
     expect(contract.specCommit).toBe(manifest.specCommit);
-    // The adoption has not run here: the re-examination array is not recorded
-    // yet, which is exactly the state cinatra#3144 says G0 lands later.
-    expect(contract.anchorsUnresolvedAtPin).toBeUndefined();
+    // The adoption HAS run on this branch, so the re-examination array is
+    // recorded — sorted and without a repeat. This suite still writes only to
+    // its own temporary trees; what it asserts here is that it left the
+    // repository's record alone, not that the record never moved.
+    const recorded = contract.anchorsUnresolvedAtPin;
+    expect(Array.isArray(recorded)).toBe(true);
+    expect(recorded.length).toBeGreaterThan(0);
+    expect([...recorded]).toEqual([...new Set(recorded)].sort());
   });
 });
 
