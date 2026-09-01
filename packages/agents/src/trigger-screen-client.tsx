@@ -614,24 +614,39 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             <div className="flex flex-col gap-2" role="radiogroup" aria-label="When should this run?">
 
               {/* Run right after setup — the drawing's lightning glyph between
-                  the disc and the label. A plain button, not the `Button`
-                  primitive: see `optionRowClass`. */}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={triggerType === "immediate"}
+                  the disc and the label. THE ROW IS A DIV WITH A RADIO HEAD,
+                  exactly like the two rows below it. It was the one row still
+                  drawn as a bare `button` element, which the design-system
+                  boundary reserves for the `Button` primitive — and the
+                  primitive is the one thing this row cannot be (see
+                  `optionRowClass`). So the three rows of the group are now one
+                  shape: the row carries the drawn edge, the head is the radio,
+                  and the keyboard reaches this row exactly the way it reaches
+                  the other two. */}
+              <div
                 data-schedule-option="immediate"
-                onClick={readOnly ? undefined : () => setValue("triggerType", "immediate")}
                 className={optionRowClass(triggerType === "immediate", !readOnly)}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "immediate")}
               >
-                <span data-schedule-option-head="" className="flex items-center gap-3">
+                <div
+                  data-schedule-option-head=""
+                  role="radio"
+                  aria-checked={triggerType === "immediate"}
+                  tabIndex={readOnly ? -1 : 0}
+                  onKeyDown={
+                    readOnly
+                      ? undefined
+                      : (e) => selectOnKey(e, () => setValue("triggerType", "immediate"))
+                  }
+                  className={OPTION_HEAD_CLASS}
+                >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "immediate")}>
                     {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-primary" />}
                   </span>
                   <Zap aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Run right after setup</span>
-                </span>
-              </button>
+                </div>
+              </div>
 
               {/* Schedule for later */}
               {/* THE ROW IS A DIV, so the read-only reading's disabled fieldset
@@ -833,27 +848,36 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                              (cinatra#3182 item 7): unselected is
                              `border: 1px solid var(--line-strong);
                              background: var(--surface-strong)`, selected is the
-                             blue fill. A plain button for the same reason the
-                             option rows are plain (see `optionRowClass`): the
-                             `Button` outline variant carries
-                             `dark:bg-input-fill/30`, a `dark:` utility that
-                             outranks whatever ground the cell asks for, so in
-                             the dark palette the cell stood on the control fill
-                             however it was asked to stand on the reserved
-                             surface. */
-                          <button
+                             blue fill.
+
+                             THE VARIANT CARRIES THE STATE, the class list only
+                             names the tokens — the same reading the schedule
+                             proposal card already ships for its own weekday
+                             chips. A selected day is the `default` variant,
+                             which holds no `dark:` fill of its own, so the blue
+                             stays legible on both grounds. An unselected day is
+                             `outline`, whose `dark:bg-input-fill/30` would
+                             otherwise paint the control fill over the reserved
+                             surface in the dark palette; naming the surface
+                             under `dark:` as well lets tailwind-merge's
+                             same-modifier dedup drop the variant's own class
+                             instead, so the cell stands where the drawing
+                             stands it on both grounds. */
+                          <Button
                             key={i}
                             type="button"
+                            variant={recurring.weekdays.includes(i) ? "default" : "outline"}
+                            size="sm"
                             aria-pressed={recurring.weekdays.includes(i)}
                             onClick={() => toggleWeekday(i)}
-                            className={`h-8 w-10 rounded-control border text-xs font-semibold transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 ${
+                            className={`h-8 w-10 rounded-control border text-xs font-semibold transition-colors ${
                               recurring.weekdays.includes(i)
                                 ? "border-primary bg-primary text-primary-foreground"
-                                : "border-input bg-surface-strong text-muted-foreground"
+                                : "border-input bg-surface-strong text-muted-foreground dark:bg-surface-strong"
                             }`}
                           >
                             {label}
-                          </button>
+                          </Button>
                         ))}
                       </div>
                     </div>

@@ -327,7 +327,9 @@ describe("TriggerScreenClient — the read-only reading of a fired one-off", () 
     // Every row lives INSIDE it, so no row can be selected — a disabled
     // fieldset disables its descendants, which is the whole reason it is the
     // wrapper rather than a per-control flag that a new control could miss.
-    const row = screen.getByText("Run right after setup").closest("button");
+    const row = screen
+      .getByText("Run right after setup")
+      .closest("[data-schedule-option]");
     expect(row).not.toBeNull();
     expect(fieldset?.contains(row!)).toBe(true);
   });
@@ -340,7 +342,9 @@ describe("TriggerScreenClient — the read-only reading of a fired one-off", () 
   it("does not change its own selection when a row is pressed", () => {
     renderForm({ readOnly: true });
     const recurringRow = screen.getByText("Recurring").closest("div");
-    const immediateRow = screen.getByText("Run right after setup").closest("button");
+    const immediateRow = screen
+      .getByText("Run right after setup")
+      .closest("[data-schedule-option]");
     expect(immediateRow?.className).toContain("border-primary");
 
     fireEvent.click(screen.getByText("Recurring"));

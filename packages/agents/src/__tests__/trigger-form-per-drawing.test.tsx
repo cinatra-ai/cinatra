@@ -254,11 +254,17 @@ describe("a keyboard can choose every row, not only the first", () => {
 
   it("puts every unchosen row in the tab order and marks it unchecked", () => {
     renderForm();
-    for (const option of ["scheduled", "recurring"] as const) {
+    // THE HEAD IS THE RADIO IN ALL THREE ROWS. The immediate row used to be
+    // its own radio because it was the one row drawn as a bare `button`
+    // element; the three rows are one shape now, so the reading is taken from
+    // the same place in each of them.
+    for (const option of ["immediate", "scheduled", "recurring"] as const) {
       expect(head(option).getAttribute("tabindex")).toBe("0");
+    }
+    for (const option of ["scheduled", "recurring"] as const) {
       expect(head(option).getAttribute("aria-checked")).toBe("false");
     }
-    expect(row("immediate").getAttribute("aria-checked")).toBe("true");
+    expect(head("immediate").getAttribute("aria-checked")).toBe("true");
   });
 
   it("chooses the scheduled row from the keyboard, and reveals its fields", () => {
