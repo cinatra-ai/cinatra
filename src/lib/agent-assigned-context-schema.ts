@@ -47,10 +47,9 @@ function quoteIdent(value: string) {
  */
 export function agentAssignedContextSchemaQueries(schemaName: string): Array<{ text: string }> {
   const s = quoteIdent(schemaName);
-  const table = `${s}.${quoteIdent(AGENT_ASSIGNED_CONTEXT_TABLE_NAME)}`;
   return [
     {
-      text: `CREATE TABLE IF NOT EXISTS ${table} (
+      text: `CREATE TABLE IF NOT EXISTS ${s}.${quoteIdent(AGENT_ASSIGNED_CONTEXT_TABLE_NAME)} (
       agent_package_name text NOT NULL,
       slot_id text NOT NULL,
       artifact_id text NOT NULL REFERENCES ${s}."resource"(id) ON DELETE CASCADE,
@@ -64,10 +63,10 @@ export function agentAssignedContextSchemaQueries(schemaName: string): Array<{ t
     )`,
     },
     {
-      text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_CONTEXT_ARTIFACT_INDEX} ON ${table} (artifact_id)`,
+      text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_CONTEXT_ARTIFACT_INDEX} ON ${s}.${quoteIdent(AGENT_ASSIGNED_CONTEXT_TABLE_NAME)} (artifact_id)`,
     },
     {
-      text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_CONTEXT_SCOPE_INDEX} ON ${table} (agent_package_name, scope_kind, scope_id)`,
+      text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_CONTEXT_SCOPE_INDEX} ON ${s}.${quoteIdent(AGENT_ASSIGNED_CONTEXT_TABLE_NAME)} (agent_package_name, scope_kind, scope_id)`,
     },
   ];
 }
