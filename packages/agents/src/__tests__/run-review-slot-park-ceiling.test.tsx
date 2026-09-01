@@ -392,3 +392,116 @@ describe("useRunReviewSlot: the park a mount waited a long time for", () => {
   }, 120_000);
 
 });
+
+describe("useRunReviewSlot: the look and the caller's own tick", () => {
+  // THE CONVERGENCE ROUND OVER FIX LEG 8. Leg 8 put the caller's liveness
+  // signal into the scheduling effect's dependencies so a parked page rides the
+  // transport its surface has proved alive. That is right, and it opened a
+  // second road to the same silence the whole leg is about: the effect's
+  // cleanup marked the look ALREADY IN FLIGHT as cancelled, so on a surface
+  // whose tick bumps every five seconds a look that takes six never landed at
+  // all — its answer was discarded, its read count never moved, and a fresh
+  // request was started on top of it every five seconds for the life of the
+  // park. The cases below pin the two halves of that: an answer slower than the
+  // caller's tick still arrives, and this reader never has two looks open at
+  // once.
+  it("lands a look that is slower than the caller's own tick, and never overlaps two", async () => {
+    // Six seconds per read against a five-second tick: the read is always still
+    // open when the next bump arrives.
+    const READ_MS = 6000;
+    const TICK_MS = 5000;
+    let answer: RunReviewSlot = PARKED_WITH_GATE;
+    let open = 0;
+    let mostOpenAtOnce = 0;
+    const read = () =>
+      new Promise<RunReviewSlot>((resolve) => {
+        open += 1;
+        mostOpenAtOnce = Math.max(mostOpenAtOnce, open);
+        window.setTimeout(() => {
+          open -= 1;
+          resolve(answer);
+        }, READ_MS);
+      });
+
+    let live = 1;
+    const { result, rerender } = renderHook(
+      ({ liveSignal }: { liveSignal: number }) =>
+        useRunReviewSlot({
+          status: "pending_approval",
+          initial: NOT_PARKED,
+          read,
+          liveSignal,
+        }),
+      { initialProps: { liveSignal: live } },
+    );
+
+    // Two minutes of the surface ticking at its parked cadence, exactly as the
+    // panel does while it waits.
+    for (let i = 0; i < 24; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TICK_MS);
+      });
+      live += 1;
+      rerender({ liveSignal: live });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    expect(mostOpenAtOnce, "this reader had more than one look open at once").toBe(1);
+    expect(
+      result.current.slot.ref,
+      "every answer slower than the tick was thrown away, so the park never arrived",
+    ).toBe(PARKED_WITH_GATE.ref);
+
+    // And the reader is still moving: a park REPAIRED under the same status
+    // still reaches this mount.
+    answer = { ...PARKED_WITH_GATE, ref: "lcr-ceiling-park-gate-2" };
+    await letItLook(60_000);
+    expect(result.current.slot.ref).toBe("lcr-ceiling-park-gate-2");
+  }, 120_000);
+
+  it("keeps a review already delivered when the step reading flaps", async () => {
+    // The panel's `stepOnFile` is its RAW interrupt reading, and that reading
+    // has two sources — the stream's interrupt context when the stream is
+    // enabled, the polled context otherwise. A stream that reconnects can clear
+    // it and bring it straight back. That flap is not the park's edge and must
+    // not take a review off a screen somebody is looking at.
+    const answer: RunReviewSlot = PARKED_WITH_GATE;
+    const read = async () => answer;
+    const { result, rerender } = renderHook(
+      ({ stepOnFile }: { stepOnFile: boolean }) =>
+        useRunReviewSlot({
+          status: "pending_approval",
+          initial: NOT_PARKED,
+          read,
+          stepOnFile,
+        }),
+      { initialProps: { stepOnFile: true } },
+    );
+
+    await letItLook(10_000);
+    expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
+
+    // READ THE FRAME, not the settled state. The reset the flap used to take
+    // empties the slot IN RENDER and the next look puts it back a moment later,
+    // so a test that advances the clock first cannot see it at all — while the
+    // surface, which draws every frame, shows the review going away and coming
+    // back.
+    rerender({ stepOnFile: false });
+    expect(
+      result.current.slot.ref,
+      "the step reading flapping took a review off the screen for a frame",
+    ).toBe(PARKED_WITH_GATE.ref);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
+
+    rerender({ stepOnFile: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
+  }, 120_000);
+});

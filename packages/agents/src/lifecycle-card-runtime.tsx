@@ -1203,11 +1203,49 @@ export function useRunReviewSlot({
   // budget (fix leg 8).
   const lastLookAtRef = useRef<number>(0);
   const lastLookSignalRef = useRef<number | undefined>(liveSignal);
+  // AND WHICH LOOK OWNS THE ANSWER (cinatra#3007, fix leg 8, convergence).
+  //
+  // Leg 8 put the caller's liveness signal into the scheduling effect's
+  // dependencies, which is what lets a parked page ride the transport its own
+  // surface has proved alive. It also meant the effect is REBUILT every time
+  // that signal moves - every two to five seconds while a run is parked - and
+  // the effect's cleanup used to mark the look ALREADY IN FLIGHT as cancelled.
+  // A look slower than the caller's tick was therefore thrown away before it
+  // could answer, its read count never moved, and a second request was started
+  // on top of it on every bump: the same silence this leg exists to end,
+  // reached by a different road, plus overlapping requests on the way.
+  //
+  // So cancellation is keyed to the WAIT rather than to the effect run. The
+  // epoch moves only when this reader is genuinely re-keyed - the status
+  // changed, the step went away, the surface unmounted - and a look whose epoch
+  // still matches keeps its answer however many times the effect was rebuilt
+  // underneath it. `inFlightRef` is the other half: while a current look is
+  // open no second one is scheduled, so the reader asks once and waits.
+  const lookEpochRef = useRef(0);
+  const inFlightRef = useRef(false);
+  const inFlightEpochRef = useRef(0);
+  // A LOOK THAT NEVER SETTLES MUST NOT BE ABLE TO STOP THE READER either, which
+  // is the failure mode of every guard like the one above. The deadline aborts
+  // a read at SLOT_READ_TIMEOUT_MS; past that plus a margin the guard lets go
+  // and the reader looks again.
+  const IN_FLIGHT_GUARD_MS = SLOT_READ_TIMEOUT_MS + 2000;
+  useEffect(
+    () => () => {
+      // Unmount is a re-key: nothing in flight may set state after it.
+      lookEpochRef.current += 1;
+    },
+    [],
+  );
   if (seenStatus !== status) {
     setSeenStatus(status);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+    // The look in flight was asking about the status this reader has just left,
+    // so its answer is not about this wait. Releasing the guard here is what
+    // keeps the re-key's own immediate look immediate.
+    lookEpochRef.current += 1;
+    inFlightRef.current = false;
   }
   // AND THE OTHER EDGE, WHICH THE STATUS COLUMN CANNOT SHOW (fix leg 8). See
   // `stepOnFile` above: the measured run shape parks onto a row that is already
@@ -1218,10 +1256,27 @@ export function useRunReviewSlot({
   const [seenStepOnFile, setSeenStepOnFile] = useState(stepOnFile);
   if (seenStepOnFile !== stepOnFile) {
     setSeenStepOnFile(stepOnFile);
-    if (stepOnFile === false && status === PARKED_RUN_STATUS) {
+    //
+    // AND NEVER OVER A REVIEW ALREADY ON THE SCREEN (convergence over leg 8).
+    // The caller's reading is its RAW interrupt, and that has two sources - the
+    // stream's interrupt context while the stream is enabled, the polled context
+    // otherwise - so a stream that reconnects can clear it and bring it straight
+    // back. The edge this reader wants is the step going away on a run whose
+    // park it has NOT heard about yet; once the review is delivered there is no
+    // window left to reopen and nothing to look for, and emptying the slot on a
+    // flap would take a review off a screen somebody is reading and put it back
+    // a moment later. So the reset is for a wait that has nothing to lose.
+    if (
+      stepOnFile === false &&
+      status === PARKED_RUN_STATUS &&
+      slot.ref === null &&
+      lastAnswerRef.current.ref === null
+    ) {
       lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
       setSlot(EMPTY_RUN_REVIEW_SLOT);
       setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+      lookEpochRef.current += 1;
+      inFlightRef.current = false;
     }
   }
   // THE RE-ARM (cinatra#3007, fix leg 6). Adjusted during render, for the same
@@ -1379,7 +1434,19 @@ export function useRunReviewSlot({
     // mounting this reader is already polling the same run on, so it is not a
     // new class of load, and the run LEAVING the status still ends it.
     if (parkedStatus && probe.failures >= PARK_READ_FAILURE_LIMIT) return;
-    let cancelled = false;
+    // ONE LOOK AT A TIME, AND THE ONE ALREADY ASKING IS THE ONE THAT COUNTS
+    // (convergence over fix leg 8). See `inFlightRef` above. This effect is
+    // rebuilt on every liveness bump; a rebuild must not schedule a second read
+    // on top of the read that is still open, and must not shorten its wait -
+    // when that read lands it moves the probe, which brings this effect back to
+    // schedule the next one.
+    if (
+      inFlightRef.current &&
+      inFlightEpochRef.current === lookEpochRef.current &&
+      Date.now() - lastLookAtRef.current < IN_FLIGHT_GUARD_MS
+    ) {
+      return;
+    }
     // THE DELAY IS AN ELAPSED-TIME BUDGET, NOT A FRESH COUNTDOWN (fix leg 8).
     //
     // This effect re-runs on every one of its dependencies, and on a live parked
@@ -1414,6 +1481,9 @@ export function useRunReviewSlot({
           // The budget above is spent HERE, when the look actually starts, and
           // the signal it was taken against travels with it: a bump that has
           // already been answered by a look must not shorten the next one.
+          const epoch = lookEpochRef.current;
+          inFlightRef.current = true;
+          inFlightEpochRef.current = epoch;
           lastLookAtRef.current = Date.now();
           lastLookSignalRef.current = liveSignal;
           const abort = new AbortController();
@@ -1422,7 +1492,9 @@ export function useRunReviewSlot({
           let changed = false;
           try {
             const next = await read(abort.signal);
-            if (cancelled) return;
+            // STALE ONLY IF THIS READER WAS RE-KEYED. A rebuild of the effect
+            // is not a re-key and no longer discards this answer.
+            if (lookEpochRef.current !== epoch) return;
             if (next) {
               // DID THIS LOOK SAY ANYTHING NEW? Read against the slot this
               // effect was scheduled with, which is the last answer the surface
@@ -1445,7 +1517,8 @@ export function useRunReviewSlot({
             // terminal rendering while it does.
           } finally {
             window.clearTimeout(deadline);
-            if (!cancelled) {
+            if (lookEpochRef.current === epoch) {
+              inFlightRef.current = false;
               setProbe((prev) => ({
                 answered: prev.answered || landed,
                 reads: prev.reads + 1,
@@ -1467,7 +1540,6 @@ export function useRunReviewSlot({
       probe.reads === 0 ? 0 : Math.max(0, dueAt - now),
     );
     return () => {
-      cancelled = true;
       window.clearTimeout(timer);
     };
   }, [
