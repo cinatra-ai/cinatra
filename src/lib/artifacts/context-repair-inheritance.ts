@@ -1,6 +1,9 @@
 import "server-only";
 
-import { readRunContextSelectionsForRun } from "./run-context-selections-store";
+import {
+  readRunContextSelectionsForRun,
+  type ReadRunContextSelectionRow,
+} from "./run-context-selections-store";
 import { refTripleKey, type ContextCandidate } from "./context-route-support";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +37,28 @@ import { refTripleKey, type ContextCandidate } from "./context-route-support";
 // it does today. A vanished ref is never quietly dropped: a repair that could
 // only inherit PART of the answer inherits none of it, because a silently
 // different context is a different piece of work, not a repair of this one.
+//
+// WHICH answer, and WHOSE. The audit store is APPEND-ONLY and says so itself:
+// "corrections are a NEW row, never a mutation". A producing run whose person
+// answered the slot and then answered it again therefore leaves BOTH answers
+// standing, so the rows for a slot are grouped by their write moment and only
+// the LATEST group is the answer the run holds — a union of every historical
+// row would hand an `override` slot two refs and the finalize would refuse the
+// repair outright. The rows are also scoped to the package the slot is being
+// run under, so an earlier package identity cannot contaminate the answer. And
+// the provenance travels with the answer: the audit row the repair writes says
+// exactly what the producing run's row said about who chose, rather than
+// asserting a person for a pick a resolver made.
+//
+// AN ANSWER OF NOTHING IS STILL AN ANSWER — as far as an append-only store of
+// PICKS can show it. A slot that declares no `minItems` admits an empty
+// selection, which writes no rows at all, so "answered with nothing" and
+// "never reached" look identical in isolation. They can be told apart when the
+// producing run answered some OTHER slot: that run demonstrably ran the
+// context flow to its end, so a slot of its own that admits emptiness and
+// holds no row was answered with nothing. When the producing run holds no
+// audited row anywhere, the two remain indistinguishable and the screen opens
+// — the fail-closed side, and a residual named here rather than hidden.
 // ---------------------------------------------------------------------------
 
 /** The `source_type` the dispatch drain mints a repair run under. */
@@ -67,6 +92,31 @@ export function producingRunOfRepair(run: RunForContextInheritance): string | nu
 }
 
 /**
+ * The answer a repair inherits: the trusted candidates resolved for THIS run,
+ * plus the provenance the producing run's own audit rows recorded for them.
+ *
+ * `refs` may be empty — an answer of nothing is an answer (see the header).
+ */
+export type InheritedContextAnswer = {
+  refs: ContextCandidate[];
+  /** Verbatim from the producing run's rows: what the audit already says about
+   *  who chose these refs. Never upgraded to `user` by the repair. */
+  selectedBy: ReadRunContextSelectionRow["selectedBy"];
+};
+
+/** The rows of the LATEST answer for a slot: the append-only store keeps every
+ *  correction, and one finalize batch commits in one transaction, so the rows
+ *  sharing the greatest `selectedAt` are the answer the run holds now. */
+function latestAnswerRows(
+  rows: ReadRunContextSelectionRow[],
+): ReadRunContextSelectionRow[] {
+  if (rows.length === 0) return [];
+  let latest = rows[0]!.selectedAt;
+  for (const row of rows) if (row.selectedAt > latest) latest = row.selectedAt;
+  return rows.filter((row) => row.selectedAt === latest);
+}
+
+/**
  * The producing run's answer to this slot, expressed as the trusted candidates
  * resolved for THIS run — or null when there is nothing to inherit.
  *
@@ -78,18 +128,37 @@ export function producingRunOfRepair(run: RunForContextInheritance): string | nu
 export function resolveInheritedContextSelection(input: {
   run: RunForContextInheritance;
   slotId: string;
+  /** The package the slot is being run under, server-derived — the audited
+   *  rows are scoped to it so an earlier package identity cannot contaminate. */
+  parentPackageName: string;
   candidates: ContextCandidate[];
-}): ContextCandidate[] | null {
-  const { run, slotId, candidates } = input;
+  /** The trusted slot's `minItems`. A slot that admits an empty selection can
+   *  have been answered with nothing, which writes no audit row. */
+  slotMinItems: number;
+}): InheritedContextAnswer | null {
+  const { run, slotId, parentPackageName, candidates, slotMinItems } = input;
   if (!run.orgId) return null;
   const producingRunId = producingRunOfRepair(run);
   if (!producingRunId) return null;
 
-  const answered = readRunContextSelectionsForRun({
+  const auditedForRun = readRunContextSelectionsForRun({
     orgId: run.orgId,
     parentRunId: producingRunId,
-  }).filter((row) => row.slotId === slotId);
-  if (answered.length === 0) return null;
+  }).filter((row) => row.parentPackageName === parentPackageName);
+  const answered = latestAnswerRows(
+    auditedForRun.filter((row) => row.slotId === slotId),
+  );
+
+  if (answered.length === 0) {
+    // An answer of nothing, but only where it can be READ as one: the slot
+    // admits an empty selection AND the producing run demonstrably ran the
+    // context flow (it answered some other slot). Otherwise: fail closed.
+    const ranTheContextFlow = auditedForRun.length > 0;
+    if (slotMinItems === 0 && ranTheContextFlow) {
+      return { refs: [], selectedBy: "user" };
+    }
+    return null;
+  }
 
   const byTriple = new Map<string, ContextCandidate>();
   for (const candidate of candidates) byTriple.set(refTripleKey(candidate), candidate);
@@ -105,7 +174,7 @@ export function resolveInheritedContextSelection(input: {
     if (!match) return null;
     inherited.push(match);
   }
-  return inherited.length > 0 ? inherited : null;
+  return { refs: inherited, selectedBy: answered[0]!.selectedBy };
 }
 
 /**
@@ -119,7 +188,7 @@ export function resolveInheritedContextSelection(input: {
  */
 export function effectiveSelectionMode(
   declared: "interactive" | "autonomous",
-  inherited: ContextCandidate[] | null,
+  inherited: InheritedContextAnswer | null,
 ): "interactive" | "autonomous" {
   return inherited ? "autonomous" : declared;
 }

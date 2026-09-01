@@ -6,6 +6,7 @@ import {
   parseUserResponseEnvelope,
   revalidateSelectedRefs,
   buildSelectionRows,
+  canonicalizeTriples,
   ContextRouteError,
 } from "@/lib/artifacts/context-route-support";
 import {
@@ -102,7 +103,11 @@ export async function POST(req: Request): Promise<Response> {
     const inherited = resolveInheritedContextSelection({
       run: ctx.run,
       slotId: body.slotId,
+      // Same scoping as `/api/context-resolve`, and the same value the audit
+      // rows below are written under.
+      parentPackageName: ctx.trustedPackageName,
       candidates,
+      slotMinItems: typeof slot.minItems === "number" ? slot.minItems : 0,
     });
     const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
     if (body.selectionMode !== selectionMode) {
@@ -144,6 +149,29 @@ export async function POST(req: Request): Promise<Response> {
     // cannot be compensated after a partial commit, so any incoherent ref
     // aborts the whole selection. Idempotent: each ref's deterministic
     // selection id and the pin's natural key make an exact replay a no-op.
+    // AN INHERITED SELECTION IS THE INHERITED SELECTION. The child flow's
+    // autonomous node builds its envelope out of the very `selectedRefs` the
+    // resolve returned, so on the honest road these are equal by construction.
+    // Checking it is what stops the `autonomous` branch from being steerable:
+    // without this, anything able to reach the route with the repair run's
+    // binding could submit ANY other member of the trusted candidate set and
+    // have it written as the repair's context under the producing run's
+    // provenance. The refs are compared as canonical triples — the same
+    // identity the audit row is content-addressed by.
+    if (inherited) {
+      const submittedKeys = canonicalizeTriples(trusted);
+      const inheritedKeys = canonicalizeTriples(inherited.refs);
+      if (
+        submittedKeys.length !== inheritedKeys.length ||
+        submittedKeys.some((key, i) => key !== inheritedKeys[i])
+      ) {
+        throw new ContextRouteError(
+          422,
+          "inherited_selection_mismatch",
+          `submitted ${submittedKeys.length} refs != the ${inheritedKeys.length} the producing run answered`,
+        );
+      }
+    }
     const rows = buildSelectionRows({
       orgId: ctx.run.orgId!,
       parentRunId: ctx.run.id,
@@ -151,10 +179,11 @@ export async function POST(req: Request): Promise<Response> {
       slotId: body.slotId,
       selectionMode,
       trusted,
-      // An inherited pick ran with no person in THIS run, but a person made
-      // it, on the producing run — so the audit row keeps saying `user`
-      // rather than crediting the machine with someone else's choice.
-      ...(inherited ? { selectedBy: "user" as const } : {}),
+      // An inherited pick ran with no person in THIS run, but SOMEONE made it
+      // on the producing run — so the audit row repeats VERBATIM what that
+      // run's own row said about who chose. A person's pick stays a person's;
+      // a resolver's pick is never promoted to a person's.
+      ...(inherited ? { selectedBy: inherited.selectedBy } : {}),
     });
     // epic #1785 wave A4: warm the object-type registry before finalize. The
     // finalizer is a sync store-leaf (it cannot import the heavy registrar), so

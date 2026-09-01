@@ -89,11 +89,18 @@ export async function POST(req: Request): Promise<Response> {
     const inherited = resolveInheritedContextSelection({
       run: ctx.run,
       slotId: parsed.data.slotId,
+      // The audit rows are scoped to the run's own TEMPLATE package — the same
+      // value finalize writes them under — so an earlier package identity's
+      // rows are never read as this run's answer.
+      parentPackageName: ctx.trustedPackageName,
       candidates,
+      slotMinItems: declaredSlotMeta.minItems,
     });
     const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
     const slotMeta = { ...declaredSlotMeta, selectionMode };
-    const selectedRefs = inherited ?? computeRouteSelectedRefs(candidates, slot);
+    const selectedRefs = inherited
+      ? inherited.refs
+      : computeRouteSelectedRefs(candidates, slot);
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({
       kind: "resolve",
