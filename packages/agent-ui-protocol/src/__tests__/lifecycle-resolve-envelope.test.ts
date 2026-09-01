@@ -364,7 +364,7 @@ describe("a target header belongs to the review gate and to no other kind", () =
     typeLabel: "Email",
     objectType: "@cinatra-ai/email:draft",
     revisionId: "rev_8f3a1c2d4e5f6a7b",
-    facts: ["Ownership: team", "Visibility: private", "text/html", "updated 8 minutes ago"],
+    facts: ["team", "private", "text/html", "updated 8 minutes ago"],
   };
 
   it("reads it on the REVIEW GATE, which is the one kind that has a target", () => {

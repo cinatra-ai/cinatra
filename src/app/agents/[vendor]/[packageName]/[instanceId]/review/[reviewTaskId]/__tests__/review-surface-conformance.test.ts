@@ -89,8 +89,6 @@ const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
  */
 const SPEC_CONFORMANCE = {
   "review-target": ["loading", "error"],
-  "review-provenance-native": ["loading", "error"],
-  "review-provenance-marketplace": ["loading", "error"],
   "review-target-floor": ["error"],
   "review-decision-bar": [],
   "review-decision-disabled": ["loading"],
@@ -280,15 +278,24 @@ describe("§II — the immutable target header is inert (no edit control, no rev
   });
 });
 
-describe("§III — renderer provenance is host-derived; the floor is never blank", () => {
-  it("maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor", () => {
-    expect(MODEL).toMatch(/"review-provenance-native"/);
-    expect(MODEL).toMatch(/"review-provenance-marketplace"/);
+describe("§V — a display says nothing about itself; only the floor speaks", () => {
+  it("names no provenance anchor but the floor's", () => {
+    expect(MODEL).not.toMatch(/review-provenance-native/);
+    expect(MODEL).not.toMatch(/review-provenance-marketplace/);
     expect(MODEL).toMatch(/"review-target-floor"/);
-    // build-map → native, runtime → marketplace, floor → floor.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
-    expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+  });
+
+  // §V, read at the ratified drawings' default branch: "It is not put on screen:
+  // a display shows the work and nothing about itself — no renderer name, no
+  // package identity, no provenance line". The panel drew a type chip, a package
+  // chip and a `build-time · <slot>` mono line above every rendered target.
+  it("the target panel prints no renderer name, no package identity, no provenance line", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/build-time/);
+    expect(panel).not.toMatch(/runtime ·/);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+    expect(panel).not.toMatch(/reviewTypeLabel/);
   });
 
   // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
@@ -297,16 +304,19 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
   // tiers a PACKAGE supplies and to the floor; the host's own text rendering
   // takes none of them and is given no fourth one. The strip is therefore
   // OPTIONAL in the panel — rendered only when there is a provenance to state.
-  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
-    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+  it("every rendered rung renders NO region — the panel gates the whole strip", () => {
+    // build-map, form and runtime share one arm now: the drawing lets none of
+    // the three name what drew the work.
+    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/);
     const panel = stripComments(TARGET_PANEL);
     // The strip exists only behind a null check on the resolved region id.
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
-  it("a runtime provenance additionally shows its package identity (§III)", () => {
-    expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
-    expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
+  it("the floor's region carries the Floor pill over its structured-data reading", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/Floor/);
+    expect(panel).toMatch(/structured data/);
   });
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {

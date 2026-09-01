@@ -96,14 +96,14 @@ const HEADER_ONE = {
   typeLabel: "Email",
   objectType: "@cinatra-ai/email:draft",
   revisionId: "rev_8f3a1c2d4e5f6a7b",
-  facts: ["Ownership: team", "Visibility: private", "text/html", "updated 8 minutes ago"],
+  facts: ["team", "private", "text/html", "updated 8 minutes ago"],
 };
 const HEADER_TWO = {
   title: "Q3 cohort brief",
   typeLabel: "Document",
   objectType: "@cinatra-ai/doc:brief",
   revisionId: "rev_11223344556677",
-  facts: ["Ownership: team", "Visibility: private", "text/markdown", "updated 3 minutes ago"],
+  facts: ["team", "private", "text/markdown", "updated 3 minutes ago"],
 };
 
 function mockResolve(
@@ -384,6 +384,40 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
     mockResolve({ state: "settled", outcome: "approved" }, { targetHeaders: [HEADER_ONE] });
     const { container } = renderOn("run_card");
     await waitFor(() => expect(headers(container)).toHaveLength(1));
+  });
+
+  it("the target's own frame carries NO control of its own — no Expand, no Collapse", async () => {
+    // §IV of the ratified artifact-review drawing: "The renderer fills the slot
+    // exactly as it would on the detail surface; the review surface adds no
+    // per-type controls of its own around it." §V.1 repeats it for the display
+    // that sits in the slot: "the surface around it adds no controls of its own".
+    // An Expand / Collapse toggle on the island's own footer is exactly such a
+    // control, and it was measured on the graded frames.
+    const { container } = await renderPending("run_card");
+    const island = container.querySelector('[data-conformance-id="review-target-island"]')!;
+    expect(island.querySelector('[data-action="toggle-review-target-height"]')).toBeNull();
+    expect(island.textContent).not.toContain("Expand");
+    expect(island.textContent).not.toContain("Collapse");
+    expect(island.querySelector("[aria-expanded]")).toBeNull();
+  });
+
+  it("keeps that frame control-free once the island has painted, and on a settled gate", async () => {
+    const { container } = await renderPending("chat_thread");
+    const frame = container.querySelector("iframe")!;
+    await act(async () => {
+      fireEvent.load(frame);
+    });
+    expect(
+      container.querySelector('[data-action="toggle-review-target-height"]'),
+      "no height control over a painted target",
+    ).toBeNull();
+    cleanup();
+    mockResolve({ state: "settled", outcome: "approved" }, { targetHeaders: [HEADER_ONE] });
+    const settled = renderOn("run_card");
+    await waitFor(() => expect(headers(settled.container)).toHaveLength(1));
+    expect(
+      settled.container.querySelector('[data-action="toggle-review-target-height"]'),
+    ).toBeNull();
   });
 
   it("an answer that carries no headers draws none — never an invented one", async () => {

@@ -153,6 +153,20 @@ function utilityColoursIn(source: string): Set<string> {
   return found;
 }
 
+/** The gate header's glyph tile, read out of the card's own source. */
+function glyphTileClasses(): string {
+  const card = readFileSync(join(ROOT, REVIEW_GATE_SOURCES[0]), "utf8");
+  const tile = /<span className="([^"]*place-items-center[^"]*)">\s*\n?\s*<ClipboardCheck/.exec(card);
+  expect(tile, "the gate header's glyph tile").not.toBeNull();
+  return tile![1]!;
+}
+
+/** The radius utility on a class list — `rounded-chip` yields `chip`. */
+function radiusUtilityOf(classes: string): string | null {
+  const m = /\brounded-([a-z0-9-]+)\b/.exec(classes);
+  return m ? m[1]! : null;
+}
+
 // ---------------------------------------------------------------------------
 
 describe("#3141 items 2-4 — the drawing's colours are REGISTERED colours", () => {
@@ -196,15 +210,37 @@ describe("#3141 items 2-4 — the drawing's colours are REGISTERED colours", () 
   it("the gate glyph sits in a rounded mustard-tinted tile at the drawing's 28px, not 30px", () => {
     // The drawing's gate header: width:28px;height:28px;border-radius:8px;
     // background:rgba(199,149,69,0.16);color:var(--mustard-ink).
-    const card = readFileSync(join(ROOT, REVIEW_GATE_SOURCES[0]), "utf8");
-    const tile = /<span className="([^"]*place-items-center[^"]*)">\s*\n?\s*<ClipboardCheck/.exec(card);
-    expect(tile, "the gate header's glyph tile").not.toBeNull();
-    const classes = tile![1]!;
+    const classes = glyphTileClasses();
     expect(classes).toContain("size-7");
     expect(classes).not.toContain("size-[30px]");
-    expect(classes).toMatch(/rounded-lg/);
     expect(classes).toMatch(/bg-brand-mustard\/\[0\.16\]/);
     expect(classes).toContain("text-mustard-ink");
+  });
+
+  // ITEM 4 of the first proof round grading, dark half. The tile measured 28 x 28
+  // at radius 8 px in the light palette and radius 10 px in the DARK one, where
+  // the drawing fixes 8 px for both: the drawing gives the tile one radius, not
+  // one per palette, and the app draws one treatment.
+  //
+  // WHY THE TILE MOVED AND NOT THE TOKEN. `rounded-lg` resolves through
+  // `--radius-lg: var(--radius)`, and `--radius` is 0.5rem in the light palette
+  // block and 0.625rem in the dark one — so the 10 px reading was every
+  // `rounded-lg` element in the product in dark, not this tile. Re-pointing the
+  // shared token would have moved all of them for one graded tile. The tile is
+  // pointed at a radius that is already 8 px in BOTH palettes instead, and this
+  // test reads the resolution rather than the class name so a later rename
+  // cannot quietly restore the split.
+  it("the glyph tile's radius resolves to 8px in BOTH palettes, as the drawing fixes it", () => {
+    const utility = radiusUtilityOf(glyphTileClasses());
+    expect(utility, "a radius utility on the glyph tile").toBeTruthy();
+    const themeKey = `--radius-${utility}`;
+    const declared = THEME.get(themeKey);
+    expect(declared, `${themeKey} registered in the theme block`).toBeTruthy();
+    const varName = /^var\(\s*(--[A-Za-z0-9-]+)\s*\)$/.exec(declared!.trim());
+    const light = varName ? resolve(CINATRA_TOKENS, varName[1]!) : declared!;
+    const dark = varName ? resolve(DARK_TOKENS, varName[1]!) : declared!;
+    expect(light).toBe("0.5rem");
+    expect(dark).toBe("0.5rem");
   });
 });
 

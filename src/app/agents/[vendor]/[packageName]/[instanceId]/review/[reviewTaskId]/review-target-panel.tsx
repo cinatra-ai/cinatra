@@ -10,25 +10,33 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
-  reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
 /**
  * ONE review target panel (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
- * the RENDERER-PROVENANCE chip, over the REPRESENTATION SLOT into which the
- * artifact's type renderer mounts (fed host display-only props). Every target is
- * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
+ * the REPRESENTATION SLOT into which the artifact's type renderer mounts (fed
+ * host display-only props). Every target is type-agnostic: it keys on the OPAQUE
+ * host mount kind only (G1-clean).
  *
- * Conformance anchors (design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f): the panel is `review-target`; the
- * provenance region is `review-provenance-native` (build-time), `review-
- * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
- * §III axis derived from the mount kind — and there is NO region at all when the
- * host itself rendered a declared text form (cinatra#2931 W4): the three drawn
- * regions each state which package's renderer drew the work, or that nothing
- * did, and neither reading is true of the host's own markdown / plain-text
- * rendering. The reviewer gets the draft with nothing above it.
+ * NOTHING IS DRAWN ABOVE THE WORK ANY MORE. The panel used to open a
+ * renderer-provenance region over every rendered target — a type chip, a package
+ * chip for a runtime tier, and a mono `build-time · detail` line. §V of the
+ * ratified artifact-review drawing forbids it outright: the resolution "is not
+ * put on screen: a display shows the work and nothing about itself — no renderer
+ * name, no package identity, no provenance line". §V.1 repeats it for the display
+ * in the slot, and the lifecycle-cards drawing §III says it a third time.
+ *
+ * THE ISSUE QUOTED AN OLDER SENTENCE. cinatra#3141's own wording asks for a chip
+ * here, which is what the drawing said at the commit this repository's pin names.
+ * The drawing at its default branch is the text that governs the branch under
+ * proof, and it decides against the region.
+ *
+ * Conformance anchors: the panel is `review-target`; the ONE region left is
+ * `review-target-floor`, which the drawing keeps and requires — "the one that
+ * does speak on a surface is the floor, and only because a reader must be told a
+ * render failed".
  *
  * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
  * used to pass a generic "no type renderer resolved" card — a sentence, a table
@@ -57,8 +65,6 @@ export function ReviewTargetPanel({
   capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
   const { props, mount } = prepared;
-  const objectType = props?.artifact.objectType ?? "";
-  const typeLabel = objectType ? reviewTypeLabel(objectType) : "Artifact";
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
@@ -81,34 +87,20 @@ export function ReviewTargetPanel({
           server: the provenance reading and the representation itself. Exactly
           one header per pinned target, and the card is the only place one can
           come from. */}
-      {/* §III — renderer provenance chip. NOTHING is drawn above the reviewed
-          work when the host itself rendered a declared text form: that target
-          has no provenance region at all (cinatra#2931 W4). */}
+      {/* §V — THE FLOOR'S REGION, AND NO OTHER. A target that rendered says
+          nothing about what rendered it; a target that did NOT render is the one
+          reading the drawing keeps on screen, over the generic read-only view of
+          the representation. */}
       {provenanceConformanceId !== null && provenance !== null ? (
         <div
           data-conformance-id={provenanceConformanceId}
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
         >
-          {provenance.kind === "floor" ? (
-            <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
-              Floor
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-info/30 bg-info/10 px-2 py-0.5 text-badge-xs font-semibold text-info">
-              {typeLabel}
-            </span>
-          )}
-          {provenance.kind === "runtime" && provenance.packageName ? (
-            <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
-              {provenance.packageName}
-            </span>
-          ) : null}
+          <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
+            Floor
+          </span>
           <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
-            {provenance.kind === "build-time"
-              ? `build-time · ${provenance.slot}`
-              : provenance.kind === "runtime"
-                ? `runtime · ${provenance.slot}`
-                : "structured data"}
+            structured data
           </span>
         </div>
       ) : null}

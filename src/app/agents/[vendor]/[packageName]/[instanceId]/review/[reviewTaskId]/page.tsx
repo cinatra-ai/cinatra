@@ -41,6 +41,7 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import {
@@ -384,18 +385,37 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   );
 }
 
-/** The canonical review-document shell (§I) — inherits the app's single light
- * treatment + the shared shell (Main + PageHeader + PageContent). */
+/**
+ * The review shell — the app's single light treatment and the shared shell
+ * (Main + PageContent), and NO page-title block.
+ *
+ * THE GATE IS THE WHOLE SURFACE. §III of the ratified artifact-review drawing:
+ * "the gate itself — header, the one review target, decision bar and the run's
+ * prompt window — fills the run detail on the right. There is no standalone
+ * review document." The shell used to open with an eyebrow ("Agent run"), a page
+ * heading ("Review") and a subtitle above the gate; the drawing gives the run
+ * detail none of the three, and the graded proof frames measured all three. The gate's
+ * own header — "Review requested" over the awaiting-your-decision pill — is the
+ * heading this surface has, and the card draws it on every host.
+ *
+ * The not-authorized panel below keeps its own header: that reading is not the
+ * gate at all (§VII), and a refusal with no title names nothing.
+ *
+ * WHAT THE BLOCK CARRIED THAT IS NOT PIXELS STAYS. The drawing fixes what is
+ * DRAWN; it does not ask this route to stop naming itself to a screen reader or
+ * to the breadcrumb. The page-title block was also the surface's only `h1` and
+ * the only thing broadcasting a leaf-crumb title, so removing it outright left
+ * the reading with no heading at all and left the breadcrumb humanising the raw
+ * review-task id (`buildBreadcrumbTrail` falls through to `idSegmentPlaceholder`
+ * with no page title on the bus). Both are kept here with zero drawn pixels: an
+ * `sr-only` heading and the same title broadcast the removed header mounted.
+ */
 function ReviewShell({ children }: { children: React.ReactNode }) {
   return (
     <Main className="min-h-screen">
-      <PageHeader
-        label="Agent run"
-        title="Review"
-        description="Approve, reject, or comment on what an agent produced — before the run continues."
-        divider={false}
-      />
-      <PageContent className="flex flex-col gap-4 pb-10" data-surface="artifact-review">
+      <h1 className="sr-only">Review</h1>
+      <PageHeaderTitleSync title="Review" />
+      <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
         {children}
       </PageContent>
     </Main>

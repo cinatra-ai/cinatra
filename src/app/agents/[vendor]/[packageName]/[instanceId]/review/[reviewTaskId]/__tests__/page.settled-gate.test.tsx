@@ -136,6 +136,11 @@ vi.mock("@/components/layout/main", () => ({
 vi.mock("@/components/page-content", () => ({
   PageContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
+vi.mock("@/components/page-header-title-sync", () => ({
+  PageHeaderTitleSync: ({ title }: { title: string }) => (
+    <span data-page-title-sync={title} />
+  ),
+}));
 vi.mock("@/components/page-header", () => ({
   PageHeader: ({ description }: { description?: string }) => (
     <header data-page-header-description={description} />
@@ -185,6 +190,40 @@ beforeEach(() => {
 vi.mock("../review-actor", () => ({
   resolveReviewActorContext: () => mocks.resolveReviewActorContext(),
 }));
+
+describe("the gate is the whole surface — no page-title block above it", () => {
+  // §III of the ratified artifact-review drawing fixes what the surface carries:
+  // "the gate itself — header, the one review target, decision bar and the run's
+  // prompt window — fills the run detail on the right. There is no standalone
+  // review document." The drawing gives the run detail no eyebrow, no page
+  // heading and no page subtitle above the gate, and the graded frames measured
+  // all three. The gate's own header ("Review requested" + the awaiting pill) is
+  // the heading this surface has.
+  it("a pending gate draws no eyebrow, page heading or subtitle", async () => {
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+    const html = await renderPage();
+    expect(html).toContain('data-lifecycle-card-host="page_gate_region"');
+    expect(html).not.toContain("data-page-header-description");
+  });
+
+  it("a settled gate draws none either", async () => {
+    mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled" });
+    const html = await renderPage();
+    expect(html).not.toContain("data-page-header-description");
+  });
+
+  // The drawing fixes what is DRAWN. Removing the block must not also take the
+  // two things it carried that no reader ever sees as pixels: the surface's only
+  // heading, and the leaf-crumb title broadcast (without it the breadcrumb
+  // humanises the raw review-task id). Both stay, drawn as nothing.
+  it("still names itself: an sr-only heading and the leaf-crumb title, no pixels", async () => {
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+    const html = await renderPage();
+    expect(html).toContain('<h1 class="sr-only">Review</h1>');
+    expect(html).toContain('data-page-title-sync="Review"');
+    expect(html).not.toContain("data-page-header-description");
+  });
+});
 
 describe("a DECIDED gate composes the one card on the review page (cinatra#2904)", () => {
   it("mounts ReviewGateCard under host page_gate_region instead of the blocked panel", async () => {
