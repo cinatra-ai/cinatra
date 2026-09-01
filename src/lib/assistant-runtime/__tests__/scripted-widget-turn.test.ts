@@ -150,7 +150,7 @@ import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config"
 // The fixtures below answer with it because the real primitive does, and the
 // sentence is read from the minter rather than retyped so the seam cannot drift
 // from what a person is actually shown.
-import { describeStartedRun } from "@cinatra-ai/agents/run-status";
+import { RUN_START_QUEUED_CLAUSE, describeStartedRun } from "@cinatra-ai/agents/run-status";
 
 const wpPrincipal: WidgetPrincipal = {
   kind: "public_site_widget",
@@ -631,7 +631,10 @@ describe("runAssistantTurn scripted-provider short-circuit (/chat agent-start br
       .filter((f) => f.event === "text")
       .map((f) => (f.data as { content: string }).content)
       .join("");
-    expect(text).toContain(HELD_TURN_RUNNING_TEXT);
+    // A queued run has not started (cinatra#3147), so what travels is the
+    // queued clause — and the started clause is never on this turn at all.
+    expect(text).toContain(RUN_START_QUEUED_CLAUSE);
+    expect(text).not.toContain(HELD_TURN_RUNNING_TEXT);
     expect(text).not.toContain(HELD_TURN_PAUSED_TEXT);
   });
 
