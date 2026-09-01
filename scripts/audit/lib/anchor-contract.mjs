@@ -29,6 +29,15 @@
  * refreshed. There is no regeneration mode, for the same reason the acceptance
  * manifest has none: these are claims a person makes.
  *
+ * A FOURTH INPUT, once it is recorded (cinatra#3144 G0/G4). The contract may
+ * carry `anchorsUnresolvedAtPin` — exactly the anchors the resolution check
+ * reports unresolved at this pin, recorded as DATA rather than as prose so a
+ * re-ratification cannot claim a re-reading it never did. It joins the digest
+ * the moment it is present, so it cannot be edited, emptied or deleted without
+ * re-deriving; while it is ABSENT the digest is taken over the original three
+ * inputs and stands exactly where it stood, which is what lets the check land
+ * before the adoption that writes it.
+ *
  * THE OTHER HALF OF THE BINDING lives in the TypeScript suite
  * (`src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts`), which asserts
  * the recorded `domExpectations` deep-equal the EXECUTABLE ones. Together the
@@ -120,8 +129,19 @@ function selectorOf(spec) {
  * the program declares — so the anchor file's own copy of it is a readable
  * mirror rather than the authority.
  */
-export function anchorDigestInputs({ specCommit, domExpectations, captureAnchors }) {
-  return { specCommit, domExpectations, captureAnchors };
+export function anchorDigestInputs({
+  specCommit,
+  domExpectations,
+  captureAnchors,
+  anchorsUnresolvedAtPin,
+}) {
+  const inputs = { specCommit, domExpectations, captureAnchors };
+  // Present-only, and deliberately so: an unconditional fourth key would move
+  // every recorded digest the day this line landed, which would make the
+  // schema change a re-ratification of every contract rather than a place for
+  // the next one to record what it re-read.
+  if (anchorsUnresolvedAtPin !== undefined) inputs.anchorsUnresolvedAtPin = anchorsUnresolvedAtPin;
+  return inputs;
 }
 
 export function computeAnchorDigest(inputs) {
@@ -172,8 +192,39 @@ export function auditAnchorContract({
     violations.push("the anchor contract records no sha256 `digest`");
     return violations;
   }
+  const unresolved = anchorContract.anchorsUnresolvedAtPin;
+  if (unresolved !== undefined) {
+    if (!Array.isArray(unresolved) || unresolved.some((s) => typeof s !== "string")) {
+      violations.push(
+        "the anchor contract records `anchorsUnresolvedAtPin` as something other than an array of " +
+          "selectors — it is the re-examination recorded as data, and a shape nothing can compare " +
+          "is a shape nothing re-reads",
+      );
+      return violations;
+    }
+    const sorted = [...unresolved].slice().sort();
+    if (JSON.stringify(sorted) !== JSON.stringify(unresolved)) {
+      violations.push(
+        "`anchorsUnresolvedAtPin` is not sorted — the order is part of the digest, so an " +
+          "unordered array would let a re-ordering pass as a re-examination",
+      );
+      return violations;
+    }
+    if (new Set(unresolved).size !== unresolved.length) {
+      violations.push(
+        "`anchorsUnresolvedAtPin` repeats a selector — it is the SET the resolution check " +
+          "reported, and a repeat moves the digest without changing what was found",
+      );
+      return violations;
+    }
+  }
   const recomputed = computeAnchorDigest(
-    anchorDigestInputs({ specCommit: pin, domExpectations: dom, captureAnchors }),
+    anchorDigestInputs({
+      specCommit: pin,
+      domExpectations: dom,
+      captureAnchors,
+      anchorsUnresolvedAtPin: unresolved,
+    }),
   );
   if (recomputed !== anchorContract.digest) {
     violations.push(

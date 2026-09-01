@@ -319,6 +319,7 @@
       "@cinatra-ai/mcp-server/auth-plugins": ["./packages/mcp-server/src/auth-plugins.ts"],
       "@cinatra-ai/mcp-server/obo-ceiling": ["./packages/mcp-server/src/obo-ceiling.ts"],
       "@cinatra-ai/mcp-server/credentials": ["./packages/mcp-server/src/llm-credentials.ts"],
+      "@cinatra-ai/mcp-server/mcp-public-base-url-shape": ["./packages/mcp-server/src/mcp-public-base-url-shape.mjs"],
       "@cinatra-ai/mcp-server/dev-admin-bypass": ["./packages/mcp-server/src/dev-admin-bypass.ts"],
       "@cinatra-ai/mcp-server/delegated-chat-tool-policy": ["./packages/mcp-server/src/delegated-chat-tool-policy.ts"],
       "@cinatra-ai/mcp-server/request-context": ["./packages/mcp-server/src/request-context.ts"],
