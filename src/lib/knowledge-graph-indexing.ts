@@ -14,7 +14,9 @@ import "server-only";
 // and nothing anywhere said so.
 //
 // THIS MODULE IS THE ONE ANSWER TO "IS INDEXING ON?" — used by
-//   - `scripts/gen-graphiti-env.mjs` (bring-up: materializes the container env),
+//   - `scripts/gen-graphiti-env.mjs` (bring-up: hands the key to the indexer
+//     container through the environment of the compose command that creates it —
+//     it is never written to a file),
 //   - the boot phase that states the answer in the app log,
 //   - the objects seam's indexing probe (gates the per-episode usage row).
 //
@@ -294,11 +296,12 @@ export function resolveKnowledgeGraphProviderKey(): KnowledgeGraphKeyResolution 
       readRawOpenAIConnectionRow();
       bindingUnknown = true;
       // "Could not ask" — and it MUST be reported as such. The bring-up
-      // generator decides preserve-vs-clear on `storedReadFailed`: a readable
-      // configuration holding no key is a disconnect it must propagate, while
-      // an unreadable one must leave an already-materialized credential alone.
-      // An unknown binding is squarely the second kind, and reporting it as the
-      // first would wipe a working key on a transient read error.
+      // generator decides whether to RECREATE the indexer container on
+      // `storedReadFailed`: a readable configuration holding no key is a
+      // disconnect it must propagate, while an unreadable one with nothing to
+      // offer must leave a container that may be running a good key alone. An
+      // unknown binding is squarely the second kind, and reporting it as the
+      // first would turn extraction off on a transient read error.
       storedReadError = "the configured extraction provider could not be determined";
     } catch {
       // No database. `unbound` stands, and the legacy path stays open.
