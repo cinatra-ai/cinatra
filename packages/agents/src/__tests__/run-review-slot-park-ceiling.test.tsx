@@ -246,4 +246,149 @@ describe("useRunReviewSlot: the park a mount waited a long time for", () => {
     expect(result.current.stillReading).toBe(true);
   }, 60_000);
 
+  it("keeps looking on a page whose reader is re-keyed faster than its own cadence", async () => {
+    // THE STANDING PAGE'S OWN DEFECT (cinatra#3007, fix leg 8).
+    //
+    // The look is scheduled by a timer this reader's effect owns, and the effect
+    // re-runs on every one of its dependencies. On a live parked page several of
+    // them move on the surface's own schedule: the failure count toggles as a
+    // look fails and the caller's liveness clears it, the slot's fields move, the
+    // status is re-derived from the row on every tick. Each re-run CANCELLED the
+    // pending look and started the whole delay again from zero, so a page
+    // re-keyed more often than its own backed-off cadence took its first look and
+    // then never another for the life of the tab — while a freshly opened page,
+    // whose first look is at delay 0, read at once. That is the divergence every
+    // graded reading has recorded, and the seventh measured it on three of four
+    // untouched surfaces across 900 s of one-second polls.
+    //
+    // So the delay is an elapsed-time budget: a look that is DUE fires however
+    // many times the effect has been rebuilt since it was scheduled.
+    let answer: RunReviewSlot = NOT_PARKED;
+    let looks = 0;
+    const read = async () => {
+      looks += 1;
+      return answer;
+    };
+    let churn = 0;
+    const { result, rerender } = renderHook(
+      ({ n }: { n: number }) =>
+        useRunReviewSlot({
+          status: "pending_approval",
+          initial: NOT_PARKED,
+          // A NEW READER IDENTITY EVERY RENDER is the shape of the churn, and it
+          // is the effect's own dependency: whatever moves it, the reader must
+          // not lose its place. `n` is threaded through so the identity really
+          // is new on each render rather than hoisted away.
+          read: () => {
+            void n;
+            return read();
+          },
+        }),
+      { initialProps: { n: churn } },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const afterTheFirstLook = looks;
+    expect(afterTheFirstLook, "the immediate first look never ran").toBeGreaterThan(0);
+
+    // Five minutes of a page being re-keyed once a second — faster than every
+    // step of the cadence, which is exactly the case that starved.
+    for (let elapsed = 0; elapsed < 300_000; elapsed += 1000) {
+      churn += 1;
+      rerender({ n: churn });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+
+    expect(
+      looks,
+      "a page re-keyed faster than its own cadence never looked again",
+    ).toBeGreaterThan(afterTheFirstLook + 20);
+
+    // AND THE PARK WRITTEN ONTO THAT SAME ROW STILL REACHES IT.
+    answer = PARKED_WITH_GATE;
+    for (let elapsed = 0; elapsed < 30_000; elapsed += 1000) {
+      churn += 1;
+      rerender({ n: churn });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+    expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
+    expect(result.current.mayStillOpen).toBe(true);
+  }, 120_000);
+
+  it("takes the step going away as the edge the status column never shows", async () => {
+    // THE MEASURED RUN SHAPE HAS NO STATUS EDGE. It is inserted
+    // `pending_approval` to ask its setup question and the park is written onto
+    // that same already-parked row, so the reader's one re-key never fires and
+    // the mount's unheard window — which is what holds the quiet placeholder over
+    // the seconds between "the run stopped" and "this surface has heard which
+    // pause it is" — was spent on the mount's first look, minutes before the park
+    // existed. The panel then read the park as a QUESTION and drew the run's own
+    // arm over it, which is what the seventh graded reading counted on both untouched
+    // run pages.
+    //
+    // There IS an edge: the step the person was answering goes away. The caller
+    // hands it over, and it re-keys this reader exactly as a status edge does.
+    let answer: RunReviewSlot = NOT_PARKED;
+    let looks = 0;
+    const read = async () => {
+      looks += 1;
+      return answer;
+    };
+    const { result, rerender } = renderHook(
+      ({ stepOnFile }: { stepOnFile: boolean }) =>
+        useRunReviewSlot({
+          status: "pending_approval",
+          initial: NOT_PARKED,
+          read,
+          stepOnFile,
+        }),
+      { initialProps: { stepOnFile: true } },
+    );
+
+    // The question window: minutes of it, with the step on the row throughout.
+    await letItLook(600_000);
+    expect(
+      result.current.mayStillOpen,
+      "the mount's own unheard window should be long spent by now",
+    ).toBe(false);
+    const looksOnTheQuestion = looks;
+
+    // THE PERSON ANSWERS AND THE RUN PARKS. Same row, same status, no status
+    // edge — only the step going away, and the row's own answer moving with it.
+    answer = { ref: null, awaiting: true, producedReviewPark: true };
+    rerender({ stepOnFile: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(
+      looks,
+      "the step going away did not put a look at the instant the park was written",
+    ).toBeGreaterThan(looksOnTheQuestion);
+    expect(
+      result.current.mayStillOpen,
+      "the wait's own unheard window did not reopen, so the surface draws a question over a park",
+    ).toBe(true);
+
+    // And a step ARRIVING is not an edge for this reader: it has nothing to say
+    // about a question, and re-keying on it would drop a review already drawn.
+    answer = PARKED_WITH_GATE;
+    await letItLook(30_000);
+    expect(result.current.slot.ref).toBe(PARKED_WITH_GATE.ref);
+    rerender({ stepOnFile: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(
+      result.current.slot.ref,
+      "a step arriving dropped a review this surface was already drawing",
+    ).toBe(PARKED_WITH_GATE.ref);
+  }, 120_000);
+
 });

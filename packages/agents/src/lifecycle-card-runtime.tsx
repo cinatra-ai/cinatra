@@ -994,6 +994,26 @@ function slotReadDelay(reads: number): number {
   return 10_000;
 }
 
+/**
+ * THE FLOOR THE CALLER'S OWN EVIDENCE PUTS UNDER THE CADENCE (cinatra#3007,
+ * fix leg 8).
+ *
+ * The cadence above widens because a sweeper that is not running should not be
+ * asked twice a second. It is the wrong bound for the case the seventh graded
+ * reading measured: a page that had been open for minutes before its run parked,
+ * whose OWN tick was answering the whole time — the recovery arm it drew is
+ * produced only by that tick's classifier, so the transport was alive at every
+ * shutter — while the one reader that carries the park's third fact delivered
+ * nothing across 900 s and 900 polls, on three of four untouched surfaces.
+ *
+ * So when the surface has just heard back from this run on its own schedule,
+ * this reader asks too, at this spacing rather than at the widened cadence. It
+ * is not a second poller: the spacing is a FLOOR under a look that is due
+ * anyway, the caller's tick is the same 2 to 5 seconds, and nothing bumps this
+ * signal on a surface whose transport has stopped answering.
+ */
+const SLOT_LIVE_LOOK_SPACING_MS = 2000;
+
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
@@ -1052,6 +1072,7 @@ export function useRunReviewSlot({
   initial,
   read,
   liveSignal,
+  stepOnFile,
 }: {
   status: string;
   initial?: RunReviewSlot | null;
@@ -1086,6 +1107,37 @@ export function useRunReviewSlot({
    * the terminal belt exactly as it was.
    */
   liveSignal?: number;
+  /**
+   * IS THERE A STEP ON THE RUN'S ROW FOR THE PERSON TO ANSWER (cinatra#3007,
+   * fix leg 8)? The caller's raw reading — the interrupt the row carries, never
+   * the one this render happens to be drawing.
+   *
+   * THIS IS THE EDGE THE MEASURED RUN SHAPE HAS AND THE STATUS COLUMN DOES NOT.
+   * Leg 7 established that the reader must be keyed to the WAIT rather than to
+   * the mount, and moved the ceiling onto the wait's own count. One reading was
+   * left on the mount's: the unheard window, which holds the quiet placeholder
+   * over the seconds between "the run stopped" and "this surface has heard which
+   * pause it is". It is `probe.reads < 1`, and `reads` only ever grows, so a
+   * page open since before the park reached the park with that window long spent
+   * — and the panel, which reads "parked, no step, and no park on file" as a
+   * question, drew the run's own arm instead: the progress heading, the paused
+   * sentence, a Review-approval link, "Loading the approval step" and a Re-check,
+   * six of which the seventh graded reading counted on both untouched run pages while
+   * the run was parked.
+   *
+   * The run this was measured on is inserted `pending_approval` to ask its setup
+   * question and the park is written onto that same already-parked row, so there
+   * is no status edge to re-key on. There IS an edge, and this is it: the step
+   * the person was answering goes away. So the caller hands it over, and this
+   * hook treats it exactly as it treats a status edge — the stale answer is
+   * dropped and the next look is immediate — which both restores the window the
+   * quiet placeholder is drawn in and puts a look at the very instant the park
+   * is written.
+   *
+   * Optional, and absent it nothing changes: a caller that passes none keeps the
+   * mount-keyed reading it had.
+   */
+  stepOnFile?: boolean;
 }): {
   slot: RunReviewSlot;
   answered: boolean;
@@ -1145,11 +1197,32 @@ export function useRunReviewSlot({
   // has already moved past — and the ceiling's re-arm must turn on whether the
   // ROW said something new, never on which render the comparison happened in.
   const lastAnswerRef = useRef<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
+  // WHEN THIS READER LAST LOOKED, and which liveness signal it looked against.
+  // Held in refs because they are the schedule's own book-keeping and must never
+  // themselves re-key the schedule — see the effect's note on the elapsed-time
+  // budget (fix leg 8).
+  const lastLookAtRef = useRef<number>(0);
+  const lastLookSignalRef = useRef<number | undefined>(liveSignal);
   if (seenStatus !== status) {
     setSeenStatus(status);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+  }
+  // AND THE OTHER EDGE, WHICH THE STATUS COLUMN CANNOT SHOW (fix leg 8). See
+  // `stepOnFile` above: the measured run shape parks onto a row that is already
+  // in the waiting status, so the step going away is the only edge there is. It
+  // is taken ONLY in that direction and ONLY under the waiting status — a step
+  // ARRIVING is a question this reader has nothing to say about, and re-keying
+  // on it would drop a review the surface is already drawing.
+  const [seenStepOnFile, setSeenStepOnFile] = useState(stepOnFile);
+  if (seenStepOnFile !== stepOnFile) {
+    setSeenStepOnFile(stepOnFile);
+    if (stepOnFile === false && status === PARKED_RUN_STATUS) {
+      lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
+      setSlot(EMPTY_RUN_REVIEW_SLOT);
+      setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+    }
   }
   // THE RE-ARM (cinatra#3007, fix leg 6). Adjusted during render, for the same
   // reason the status reset above is: the surface has to see the reader come
@@ -1307,9 +1380,42 @@ export function useRunReviewSlot({
     // new class of load, and the run LEAVING the status still ends it.
     if (parkedStatus && probe.failures >= PARK_READ_FAILURE_LIMIT) return;
     let cancelled = false;
+    // THE DELAY IS AN ELAPSED-TIME BUDGET, NOT A FRESH COUNTDOWN (fix leg 8).
+    //
+    // This effect re-runs on every one of its dependencies, and on a live parked
+    // page several of them move on the surface's own schedule: the failure count
+    // toggles as a look fails and the caller's liveness clears it, the slot's own
+    // fields move, the status is re-derived from the row on every tick. Each
+    // re-run used to CANCEL the pending look and start the full delay again from
+    // zero, so a page whose reader was re-keyed more often than its own widened
+    // cadence never took another look for the life of the tab — while a freshly
+    // opened page, whose first look is at delay 0, always read at once. That is
+    // the exact divergence every graded reading has recorded: fresh mounts drew the
+    // card immediately in both palettes, and three of four standing pages drew
+    // nothing across 900 s.
+    //
+    // So the schedule is computed from WHEN THE LAST LOOK RAN. A look that is
+    // already due fires on the next tick of the event loop however many times
+    // this effect has been rebuilt, and a look that is not due yet keeps the
+    // remainder of its wait instead of restarting it.
+    const now = Date.now();
+    const dueAt =
+      lastLookAtRef.current +
+      // AND THE CALLER'S OWN EVIDENCE PUTS A FLOOR UNDER THE CADENCE. A bump
+      // says the surface has just heard back from this run on a transport that
+      // is answering; the park's third fact rides that transport's schedule
+      // instead of the backed-off one. See `SLOT_LIVE_LOOK_SPACING_MS`.
+      (liveSignal !== undefined && liveSignal !== lastLookSignalRef.current
+        ? Math.min(slotReadDelay(probe.reads), SLOT_LIVE_LOOK_SPACING_MS)
+        : slotReadDelay(probe.reads));
     const timer = window.setTimeout(
       () => {
         void (async () => {
+          // The budget above is spent HERE, when the look actually starts, and
+          // the signal it was taken against travels with it: a bump that has
+          // already been answered by a look must not shorten the next one.
+          lastLookAtRef.current = Date.now();
+          lastLookSignalRef.current = liveSignal;
           const abort = new AbortController();
           const deadline = window.setTimeout(() => abort.abort(), SLOT_READ_TIMEOUT_MS);
           let landed = false;
@@ -1358,7 +1464,7 @@ export function useRunReviewSlot({
       },
       // The first look under a new status is immediate — the gate is usually
       // already open by the time the run reports done.
-      probe.reads === 0 ? 0 : slotReadDelay(probe.reads),
+      probe.reads === 0 ? 0 : Math.max(0, dueAt - now),
     );
     return () => {
       cancelled = true;
@@ -1373,6 +1479,12 @@ export function useRunReviewSlot({
     probe.failures,
     read,
     isProducedReviewPark,
+    // SAFE ONLY BECAUSE THE DELAY IS AN ELAPSED-TIME BUDGET (fix leg 8). The
+    // caller bumps this every two to five seconds, so on the previous schedule
+    // — a fresh countdown per re-run — adding it here would have guaranteed the
+    // starvation it is here to end. With the budget above, a re-run can only
+    // bring a look FORWARD, never postpone one.
+    liveSignal,
   ]);
 
   return {

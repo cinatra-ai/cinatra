@@ -766,6 +766,24 @@ export function AgenticRunPanel({
   // credential and must never send an ambient cookie — passes its own, exactly
   // as it already does for the seed.
   // -------------------------------------------------------------------------
+  // Prefer SSE-delivered interruptContext when the stream is enabled;
+  // fall back to polling-derived hitlContext otherwise (the poll endpoint
+  // already returns the HitlContext shape).
+  //
+  // READ HERE, ABOVE THE SLOT READER, because the reader is told about it
+  // (cinatra#3007, fix leg 8). The run shape this defect was measured on parks
+  // onto a row that is ALREADY in the waiting status, so there is no status edge
+  // for the reader to re-key on — and the one edge that does exist is this
+  // reading going away: the person answered the step, the run produced its
+  // output, and the pause stopped being a question. See `stepOnFile` on the
+  // reader. It is the RAW reading on purpose, the same one
+  // `pauseWithNothingToDraw` takes below: a live step that this render is merely
+  // suppressing is still a step on the row.
+  const rawEffectiveHitlContext: HitlContext | null =
+    streamEnabled && streamResult.interruptContext
+      ? mapInterruptToHitlContext(streamResult.interruptContext)
+      : hitlContext;
+
   const fallbackSlotReader = useMemo(
     () => defaultRunReviewSlotReader(runId),
     [runId],
@@ -784,6 +802,15 @@ export function AgenticRunPanel({
     // failures and had no way back; this is the way back, and it is a fact the
     // surface already has rather than a second request.
     liveSignal: heardFromRun,
+    // THE EDGE THE STATUS COLUMN CANNOT SHOW (cinatra#3007, fix leg 8). The step
+    // the person was answering going away, under a status that never moved, is
+    // the moment this run's park is written — and it is the moment the reader
+    // has to look, and the moment the panel's unheard window has to reopen. On a
+    // page that has been open since before the park, both were spent on the
+    // mount's own first look, minutes earlier: what the seventh graded reading
+    // photographed on both untouched run pages is this panel drawing a question's
+    // arm over a park nothing had told it about.
+    stepOnFile: rawEffectiveHitlContext !== null,
   });
   // KNOWN COST, stated rather than hidden: for a run with no A2A task id this
   // panel's own tick reads the SAME seed route on its own 2s schedule, so during
@@ -864,13 +891,6 @@ export function AgenticRunPanel({
     producedReviewParkRef.current = parkedOnProducedReview;
   }, [parkedOnProducedReview]);
 
-  // Prefer SSE-delivered interruptContext when the stream is enabled;
-  // fall back to polling-derived hitlContext otherwise (the poll endpoint
-  // already returns the HitlContext shape).
-  const rawEffectiveHitlContext: HitlContext | null =
-    streamEnabled && streamResult.interruptContext
-      ? mapInterruptToHitlContext(streamResult.interruptContext)
-      : hitlContext;
 
   // Suppress re-showing the same HITL screen after Approve/Reject while the server
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
