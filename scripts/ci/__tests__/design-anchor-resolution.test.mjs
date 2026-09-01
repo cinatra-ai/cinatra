@@ -183,11 +183,20 @@ describe("the report", () => {
     expect(formatReport(report)).toContain("recommendation_hold");
   });
 
-  it("reports TODAY'S recorded owner anchors as unresolved against a drawing that draws none of them, all eight named", () => {
+  // The count is FIVE, not eight, and the drawing at the pin is why. `recommendation_hold`
+  // recorded four owner anchors — the chip row's conformance id and one per per-chip
+  // action — until specs/app-lifecycle-cards.html §V redrew the row as checkbox pills:
+  // "There is no heading plate above the row, and a pill carries nothing to press — no
+  // Confirm, no Adjust, no Skip. The reader sets the boxes and presses Continue beneath
+  // the list … and the whole row is answered at once, every box together." The three
+  // per-chip anchors are absent from the drawing at the pin, so the contract narrows this
+  // kind to the one anchor its owner draws on EVERY host, which is the shape every other
+  // kind in the table already has: five kinds, one owner anchor each.
+  it("reports TODAY'S recorded owner anchors as unresolved against a drawing that draws none of them, all five named", () => {
     const anchors = collectRecordedAnchors({ anchorContract: contract() }).filter(
       (a) => a.origin === "ownerAnchors",
     );
-    expect(anchors).toHaveLength(8);
+    expect(anchors).toHaveLength(5);
     const report = checkAnchorResolution({
       pin: pin(),
       anchors,
@@ -196,7 +205,7 @@ describe("the report", () => {
       ],
       others: [],
     });
-    expect(report.unresolved).toHaveLength(8);
+    expect(report.unresolved).toHaveLength(5);
     const text = formatReport(report);
     for (const a of anchors) expect(text, a.selector).toContain(a.selector);
     for (const kind of [
