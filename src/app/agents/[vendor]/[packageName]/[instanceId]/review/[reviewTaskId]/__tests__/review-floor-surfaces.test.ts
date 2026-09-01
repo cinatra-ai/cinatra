@@ -130,13 +130,24 @@ describe("the floor's own words, everywhere a review is read (cinatra#3080)", ()
     );
   });
 
-  it("a SETTLED gate's card heading reads as settled, not as still requested", () => {
+  it("a SETTLED gate's card carries no request heading at all", () => {
     // THE DEFECT: `ReviewGateHeader` printed the literal "Review requested" on
     // every reading, so a gate that had already been continued or superseded
-    // still headed its card with a request nobody was being asked for.
-    expect(stripComments(GATE_CARD)).toMatch(
-      /pending \? "Review requested" : "Review settled"/,
-    );
+    // still headed its card with a request nobody was being asked for. The
+    // fourth leg swapped the word rather than the reading, and headed a settled
+    // gate with a settled wording no drawing draws.
+    //
+    // THE DRAWING'S SETTLED READING, in a conversation and outside one, is "the
+    // same pane, the marker below the whole card, no floor" — no request
+    // heading and no awaiting pill above the target; the settled marker below
+    // the whole card is what says the gate is done. So the header block is the
+    // PENDING reading's alone, drawn exactly as the drawing draws it, and a
+    // settled gate draws none of it.
+    const code = stripComments(GATE_CARD);
+    expect(code).toMatch(/if \(!pending\) return null;/);
+    expect(code).toContain('<span className="font-sans text-sm font-bold text-foreground">Review requested</span>');
+    // No second heading wording was invented in its place.
+    expect(code).not.toContain("Review settled");
   });
 
   it("no PENDING review surface renders a retired word in its PROSE, not only in its buttons", () => {

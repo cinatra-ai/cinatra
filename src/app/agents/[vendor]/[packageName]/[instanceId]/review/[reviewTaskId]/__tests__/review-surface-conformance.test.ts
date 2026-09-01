@@ -134,16 +134,6 @@ const HOST_STANDARD_IDS = new Set([
   // the identical reason the anchors above are: this suite's closed set is the
   // older ratified revision's, and the redrawn floor is not in it.
   "review-regenerate-prompt-field",
-  // cinatra#3080 — THE REVIEW'S RECORDED NOTES. `Comment` records the reviewer's
-  // words against the review and leaves the gate pending; the words reached the
-  // store and no surface at all until this anchor. Its drawn shape is not
-  // invented: the cards drawing fixes ONE reading for the comments hanging off a
-  // gate (a label over one panel per comment, each carrying its author kind in
-  // mono above the comment itself), which the verification card already draws
-  // off the same seam. Listed here for the identical reason the anchors above
-  // are: this suite's closed set is the OLDER ratified revision's, and this
-  // reading is not in it.
-  "review-recorded-notes",
   // cinatra#2997 — the RUN CARD'S placeholder for the review screen. It is not a
   // review-page anchor at all: this route never draws it, and the module it
   // lives in is scanned here only because that module owns the review screen's

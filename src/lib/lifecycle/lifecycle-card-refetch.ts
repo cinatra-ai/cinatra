@@ -54,16 +54,12 @@ import type {
   LifecycleDataPartViewType,
   LifecycleResolveEnvelope,
   LifecycleResolveEnvelopeFor,
-  LifecycleReviewNote,
   VerificationSummaryAdvisoryComment,
   VerificationSummaryBody,
   VerificationSummaryFieldDiff,
   VerificationSummaryOutcome,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
-  LIFECYCLE_MAX_REVIEW_NOTES,
-  LIFECYCLE_REVIEW_NOTE_AUTHOR_KIND_MAX_LENGTH,
-  LIFECYCLE_REVIEW_NOTE_MAX_LENGTH,
   VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH,
   VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH,
   VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS,
@@ -144,31 +140,27 @@ async function resolveReviewGateState(
   const gate = await readReviewGateState(runId, reviewTaskId);
   if (gate.status === "unavailable") return ABSENT;
 
-  // 2b. THE NOTES THE REVIEW HAS COLLECTED (cinatra#3080).
+  // 2b. NO NOTES REGION IS PROJECTED (cinatra#3080, fix leg 5).
   //
-  // `Comment` is the floor's non-terminal act — it "records the reviewer's note
-  // against the review and leaves the gate pending" — and the words it recorded
-  // were reaching the store and no surface at all: after a press the typed
-  // sentence appeared zero times on the run page, the review page and the
-  // conversation, with no panel, line or toast saying it had been taken.
+  // This resolver briefly read the gate's advisory comments and put them on the
+  // state, which drew a third region on the review card between the target and
+  // the floor. The ratified cards drawing enumerates the card as two regions —
+  // "the target panel naming what is under review and pinning its exact
+  // revision, then the decision floor that governs it" (§II) — and puts
+  // Advisory comments on the VERIFICATION card instead, where "the reading's
+  // provenance is the body of a service comment there, not a line of its own"
+  // (§VII). Because that seam also carries the Audit lane's own
+  // service-authored diagnostic, the region drew an internal projection digest,
+  // an authorization verdict and the projected field paths onto a reviewer's
+  // decision surface.
   //
-  // They ride the STATE, not a prop. The review card carries no body (its target
-  // arrives through the island) and the one renderer draws on four hosts — a
-  // chat transcript has nobody to pass notes down from — so they travel on the
-  // authorized answer, behind the run READ check cleared above, exactly as the
-  // suggestion chips do. No second access axis: they hang off the same gate row
-  // this reader has already been allowed to see.
-  //
-  // A STORE FAILURE COSTS THE PANEL, NOT THE CARD, AND SAYS SO BY OMISSION. The
-  // field is left OFF rather than sent as `[]`: an empty list is the statement
-  // "this review carries no notes", and making it after a failed read asserts an
-  // absence nobody established. A `try` BLOCK rather than a `.catch()` on the
-  // call, for the reason the verification resolver already records — a
-  // synchronous throw happens before a `.catch` can be attached and would escape
-  // to this module's outer handler, collapsing the whole card into `absent`.
-  const notes = await readRecordedNotes(runId, reviewTaskId);
+  // THE READ IS GONE, NOT FILTERED. Dropping only the service-authored rows
+  // would have left an undrawn region standing, one bad seam away from drawing
+  // a diagnostic again. The advisory comments are not read for a review gate at
+  // all; the diagnostic stays where it was always meant to be read — the
+  // server's own log, and the verification card the drawing gives it to.
 
-  if (gate.status !== "pending") return { state: "settled", ...notes };
+  if (gate.status !== "pending") return { state: "settled" };
 
   // 3. The decision axis (§IV `restricted`): a terminal decision — Continue or
   //    Regenerate — needs the run's approve access; commenting needs respond
@@ -184,65 +176,9 @@ async function resolveReviewGateState(
       canDecide: false,
       canComment: comment.ok,
       reason: LIFECYCLE_RESTRICTED_REASON,
-      ...notes,
     };
   }
-  return { state: "pending", canDecide: true, canComment: comment.ok, ...notes };
-}
-
-/**
- * The gate's recorded notes, as the spread the state carries — `{}` when there
- * is nothing to draw or nothing could be read.
- *
- * The gate row's own id is what the comment seam is keyed on, and
- * `readReviewGateState` answers a status and a pinned set rather than an id, so
- * the row is resolved with the same single read the verification resolver uses.
- * Both reads are inside the guard: a reader who has not cleared run READ never
- * reaches this function at all.
- */
-async function readRecordedNotes(
-  runId: string,
-  reviewTaskId: string,
-): Promise<{ notes?: LifecycleReviewNote[] }> {
-  try {
-    const gate = await readReviewGate(runId, reviewTaskId);
-    if (!gate) return {};
-    const rows = await readAdvisoryCommentsForGates([gate.id]);
-    const notes = projectReviewNotes(rows);
-    return notes.length > 0 ? { notes } : {};
-  } catch {
-    // The panel is unknown; the rest of the reading is not. Omit it.
-    return {};
-  }
-}
-
-/**
- * Project the advisory rows into the wire's bounded note list.
- *
- * A row with no author kind or no body is DROPPED rather than drawn blank — the
- * panel is "author kind over the comment", and half of that is not a comment.
- *
- * THE CLAMP KEEPS THE LATEST. The store answers oldest-first, and the words that
- * matter on an open review are the most recent ones a reader left, so a gate
- * that collected more than the ceiling keeps its TAIL — still in store order, so
- * the panel reads as the store wrote it.
- */
-function projectReviewNotes(
-  rows: readonly { authorKind: string; body: string }[],
-): LifecycleReviewNote[] {
-  return rows
-    .filter(
-      (r) =>
-        typeof r?.authorKind === "string" &&
-        r.authorKind.length > 0 &&
-        typeof r?.body === "string" &&
-        r.body.length > 0,
-    )
-    .slice(-LIFECYCLE_MAX_REVIEW_NOTES)
-    .map((r) => ({
-      authorKind: clamp(r.authorKind, LIFECYCLE_REVIEW_NOTE_AUTHOR_KIND_MAX_LENGTH),
-      body: clamp(r.body, LIFECYCLE_REVIEW_NOTE_MAX_LENGTH),
-    }));
+  return { state: "pending", canDecide: true, canComment: comment.ok };
 }
 
 /** Clamp one string to a ceiling the body schema will accept. */
