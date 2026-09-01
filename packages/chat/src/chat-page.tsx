@@ -97,6 +97,7 @@ import {
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
+import { recallThreadTranscript, rememberThreadTranscript } from "./thread-transcript-memory";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
@@ -151,7 +152,18 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
-  const [messages, setMessages] = useState<Message[]>([]);
+  // THE TRANSCRIPT THIS PAGE ALREADY HAD FOR THIS THREAD (cinatra#3007, fix leg
+  // 10). A page opened cold has none and starts empty, exactly as before. A page
+  // REBUILT on a thread it was already showing starts with that thread's turns
+  // already drawn, so the conversation — and every lifecycle card drawn at a
+  // turn's own slot — is never absent from the document while the thread read is
+  // in flight. The read still lands and still replaces this. Resolved ONCE, and
+  // used to seed both the list and the load fingerprint below, so the persist
+  // effect reads a seeded page as a passive open rather than as new activity.
+  const rememberedTranscript = useRef<Message[]>(
+    (recallThreadTranscript(initialThreadId) as Message[] | null) ?? [],
+  );
+  const [messages, setMessages] = useState<Message[]>(() => rememberedTranscript.current);
   // Streaming registry: one AbortController per in-flight streamResponse call.
   // Replaces the single boolean flag so N concurrent streams can coexist.
   const [streamingCount, setStreamingCount] = useState(0);
@@ -226,7 +238,11 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // opened/loaded the thread". Only the former advances `updatedAt` and the
   // sidebar position (issue #283). Empty string == nothing loaded yet (a
   // brand-new thread starts empty, so its first user message reads as activity).
-  const loadedFingerprintRef = useRef<string>("");
+  const loadedFingerprintRef = useRef<string>(
+    rememberedTranscript.current.length > 0
+      ? fingerprintMessages(rememberedTranscript.current)
+      : "",
+  );
   // The active thread's immutable createdAt as read from the loaded thread
   // data. Used as the createdAt fallback when persisting so the payload's
   // createdAt does not drift to `now`/updatedAt if the local `threads` summary
@@ -571,6 +587,16 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       ),
     );
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // KEEP WHAT IS ON SCREEN, so a rebuild of this page redraws it (cinatra#3007,
+  // fix leg 10). Recorded only while the list on screen really is this thread's —
+  // `loadedThreadIdRef` is the same gate the persist effect above uses, and for
+  // the same reason: mid-load the list still belongs to the thread being left.
+  useEffect(() => {
+    if (!activeThreadId) return;
+    if (loadedThreadIdRef.current !== activeThreadId) return;
+    rememberThreadTranscript(activeThreadId, messages);
+  }, [activeThreadId, messages]);
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
   useEffect(() => {
