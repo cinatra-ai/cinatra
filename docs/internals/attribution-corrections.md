@@ -1253,3 +1253,48 @@ The correction commit states no verification line of its own: the verification a
 the correction's merge, by the merge tooling, from the maintainer's approval standing on the
 correction pull request, and a later mirror commit appends the merge record's composed arm lines to
 this entry.
+
+---
+
+## Correction for `757ab2a91be681cea128dd7058fe469217c94417`
+
+correction: verification record for afd10ed98 (ci: wire the design-pin-freshness gate beside
+design-pin-drift) (PR #3177).
+
+The message that landed carries TWO `Correction-for` lines in one record block —
+`15958ddd12ef6d06af1b7980d5e3ae624786f80d` and `afd10ed984dea46d8ed2e4491c56e7228f68b805` — because
+the merge tooling composed this merge's record from a stacked sibling's trailer block as well as
+this branch's own. The ratified grammar admits exactly ONE `Correction-for` line per record, so a
+second one is a grammar violation and the record is invalid. Because a correction whose own record
+is invalid does not govern, this commit repairs neither of the two commits it names: afd10ed98's
+record is repaired instead by a correction naming afd10ed98 directly, on its own branch, and
+15958ddd1's record already stands repaired by the correction naming it directly. This entry repairs
+757ab2a91's OWN verdict and nothing else. The change is untouched — this repairs the RECORD only.
+
+The commit is documentation only: it appends one entry to this file and touches nothing else, so
+the gate's own classifier reports it not high-risk and the machine arm is the arm it needs. A
+maintainer arm nonetheless stood behind it truthfully and is restated here rather than dropped:
+@groganz approved pull request #3177 at `87933313e967458cfc9dbcb0519bea0717270444` on
+2026-09-01T14:10:45Z, the latest non-dismissed review by that login, APPROVED at the pull request's
+head sha, non-self (the author is @groganz-bot[bot]), and that login's repository permission is
+admin, which meets tier=maintainer. Both required contexts concluded success at that same reviewed
+head: `truthful-attribution-gate` at 2026-09-01T14:02:49Z and `source-leak-gate` at
+2026-09-01T14:02:58Z. The defect in the record is the duplicate `Correction-for` line alone; every
+other line the message carries is truthful.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 757ab2a91be681cea128dd7058fe469217c94417
+```
+
+Every assistant the corrected record named is carried forward and the agent that produced this
+correction is already among them, so nothing is dropped and nothing is invented.
+
+The correction commit states no verification line of its own: the verification arm of this
+correction is composed at its merge, by the merge tooling, from the live gate suite, and a later
+mirror commit appends the merge record's composed arm lines to this entry.
