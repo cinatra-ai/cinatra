@@ -37,42 +37,64 @@ const SCREEN_SRC = fs.readFileSync(
 const ACTIVE_STATE = `data-state=${JSON.stringify("active")}`;
 const SELECTED = `aria-selected=${JSON.stringify("true")}`;
 
-function strip(inputStepIsOpen: boolean, showTriggerTab = false): string {
+function strip(
+  moment: { inputStepIsOpen: boolean; inputStepsInRail: boolean },
+  showTriggerTab = false,
+): string {
   return renderToStaticMarkup(
     <AgentInstanceNav
       agentId="acme/blog-idea-generator-agent"
       instanceId="run-1"
-      activeTab={runPageActiveTab({ inputStepIsOpen })}
+      activeTab={runPageActiveTab(moment)}
       showTriggerTab={showTriggerTab}
     />,
   );
 }
 
+/** The form the run is asking right now. */
+const OPEN = { inputStepIsOpen: true, inputStepsInRail: true };
+/** The same step, answered -- its row still on the rail, its screen read-only. */
+const SETTLED = { inputStepIsOpen: false, inputStepsInRail: true };
+/** Every moment on this path that draws no input step at all. */
+const NO_INPUT_STEP = { inputStepIsOpen: false, inputStepsInRail: false };
+
 describe("the run page's tab strip while a step is drawn inside the frame", () => {
   it("draws NO tab selected while the input step is the step in the frame", () => {
-    const html = strip(true);
+    const html = strip(OPEN);
     expect(html).not.toContain(ACTIVE_STATE);
     expect(html).not.toContain(SELECTED);
   });
 
-  it("still carries the SAME tabs -- the strip is part of the constant frame", () => {
-    const html = strip(true);
-    expect(html).toContain(">Setup<");
-    expect(html).toContain(">Permissions<");
-    expect(strip(true, true)).toContain(">Schedule<");
+  // THE ANSWERED FORM IS STILL THAT STEP. A person answers the run's first step
+  // and presses its row: the rail keeps the entry, the frame draws the step's
+  // read-only screen -- and the first reading of this fix lit Setup under it
+  // again, which is the very reading the drawing forbids.
+  it("draws NO tab selected while the SETTLED input step is the step in the frame", () => {
+    const html = strip(SETTLED);
+    expect(html).not.toContain(ACTIVE_STATE);
+    expect(html).not.toContain(SELECTED);
+    expect(runPageActiveTab(SETTLED)).toBe("none");
   });
 
-  it("lights Setup again for every other moment on the run's own path", () => {
-    const html = strip(false);
+  it("still carries the SAME tabs -- the strip is part of the constant frame", () => {
+    const html = strip(OPEN);
+    expect(html).toContain(">Setup<");
+    expect(html).toContain(">Permissions<");
+    expect(strip(SETTLED)).toContain(">Setup<");
+    expect(strip(OPEN, true)).toContain(">Schedule<");
+  });
+
+  it("lights Setup again for every moment that draws no input step", () => {
+    const html = strip(NO_INPUT_STEP);
     expect(html).toContain(ACTIVE_STATE);
-    expect(runPageActiveTab({ inputStepIsOpen: false })).toBe("setup");
+    expect(runPageActiveTab(NO_INPUT_STEP)).toBe("setup");
   });
 });
 
 describe("the screen's JSX asks that question instead of hard-coding the tab", () => {
   it("hands the layout the answer, not the literal", () => {
     expect(SCREEN_SRC).toContain(
-      "activeTab={runPageActiveTab({ inputStepIsOpen })}",
+      "activeTab={runPageActiveTab({ inputStepIsOpen, inputStepsInRail })}",
     );
     expect(SCREEN_SRC).not.toContain(`activeTab=${JSON.stringify("setup")}`);
   });

@@ -210,6 +210,12 @@ describe("the screen JSX composes the rail through those two answers", () => {
     expect(SCREEN_SRC).toMatch(
       /const upcomingRailStepKeys = upcomingRunRailStepKeys\(\{\s*\n\s*drawUpcoming: railDrawsUpcomingRunSteps\(\{/,
     );
+    // AND ON THE RUN'S OWN THREE FACTS. Asserting only that the two names are
+    // nested would stay green if the screen handed the predicate a constant, or
+    // the wrong run's execution reading, so the arguments are pinned too.
+    expect(SCREEN_SRC).toMatch(
+      /railDrawsUpcomingRunSteps\(\{\s*\n\s*inputStepIsOpen,\s*\n\s*inputStepsInRail,\s*\n\s*hasExecution: runHasExecution,\s*\n\s*\}\),\s*\n\s*drawnKeys: railSteps\.map\(\(step\) => step\.key\),/,
+    );
     // The leg-2 gate, which took the rows away the moment the form was answered.
     expect(SCREEN_SRC).not.toContain("if (inputStepIsOpen) {");
   });

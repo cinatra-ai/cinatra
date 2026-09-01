@@ -579,11 +579,22 @@ export function upcomingRunRailStepKeys(params: {
  * the strip itself is unchanged: the same tabs on every route, which is the
  * constant frame cinatra#2487 bought. Every other moment on this path keeps the
  * Setup tab it has always lit.
+ *
+ * AND THE ANSWERED FORM IS STILL THAT STEP (convergence on this leg). The first
+ * reading asked only whether the form was OPEN, so the moment a person answered
+ * it and pressed its row on the rail, its read-only screen stood in the frame
+ * with Setup lit again -- the same contradiction, one press later. The span the
+ * answer reads is therefore the whole span in which the rail carries the run's
+ * input steps: for as long as the frame is drawing them, the frame is drawing a
+ * STEP, and the drawing gives that reading no lit tab. Outside that span --
+ * every moment this branch did not add -- the page lights Setup exactly as it
+ * always has, so the gate steps tracked elsewhere are left as they are.
  */
 export function runPageActiveTab(params: {
   inputStepIsOpen: boolean;
+  inputStepsInRail: boolean;
 }): "setup" | "none" {
-  return params.inputStepIsOpen ? "none" : "setup";
+  return params.inputStepIsOpen || params.inputStepsInRail ? "none" : "setup";
 }
 
 /**
@@ -1290,7 +1301,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab={runPageActiveTab({ inputStepIsOpen })}
+        activeTab={runPageActiveTab({ inputStepIsOpen, inputStepsInRail })}
         // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
         // schedule step is named in the page header because it answers at its
         // own sub-route; the run's first step answers on the run's own path, so
