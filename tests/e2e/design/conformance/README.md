@@ -107,6 +107,45 @@ the change, drivers and harness mounts included, and a hash-only re-pin is
 refused. See
 [`docs/internals/contracts/design-conformance-pin-drift.md`](../../../../docs/internals/contracts/design-conformance-pin-drift.md).
 
+## Committed but not yet pinned: what a wave may drive
+
+A drawing whose manifest is committed under `manifests/` but is NOT named in
+`conformance-pins.json` is mid-adoption: one wave at a time lands its drivers,
+and the pin — the ratchet — is granted only once every surface of that drawing
+is covered. Until then `functional-acceptance.spec.ts` generates the same
+battery for the surfaces that DO have a driver, and a surface no wave has
+reached yet simply has no test.
+
+That is not a licence to write a driver for a surface the product does not have
+yet. The standing rule for every adoption wave:
+
+- **Ground first.** Before driving a surface, check each of its declared
+  fields, actions and states against the DEFAULT BRANCH's shipped behaviour.
+- **Never approximate.** A surface whose behaviour is still on an open pull
+  request is not stubbed, not monkeypatched, and not driven through a different
+  control that happens to exist. It goes on that wave's surface-readiness list,
+  named with the pull request that lands it, and is driven in a later wave.
+- **A driver that cannot fail is worse than no driver.** A green test over a
+  surface the product does not draw reports coverage the pin is later granted
+  for.
+
+The mechanical check for the second rule is already here: every control a driver
+presses is a required literal in `testid-contract.json` against the source file
+that ships it, so a driver naming a control the product does not ship is red in
+`scripts/design/check-conformance-testids.mjs` before a browser opens.
+
+### The artifact-kind review cards
+
+Worth knowing before planning a wave over the in-conversation review cards. The
+review-gate card draws NO DOM until an authorised server resolve has answered,
+and every per-kind reading of a review target is drawn by a SERVER component
+inside the card's own credentialed island frame. Neither is reachable from a
+props-only harness mount, and no transport substitution is permitted in this
+harness. So a per-kind review card becomes drivable only once its own display
+ships AND the floor action it declares ships; until then it is
+surface-readiness work rather than driver work, however complete the drawing
+around it is.
+
 ## Stable data-testid contract (`testid-contract.json`)
 
 Each covered surface maps to the real component file(s) that implement it and

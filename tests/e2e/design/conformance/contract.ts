@@ -350,6 +350,20 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
 // The manifest's actions elsewhere in this drawing that no shipped control
 // carries are NOT driven here, and are not approximated through a different
 // control either. They are on this wave's surface-readiness list.
+//
+// THE ARTIFACT-KIND REVIEW CARDS ARE NOT ROWS OF THIS FAMILY YET (cinatra#3157,
+// epic #3155 W1). The in-conversation card for an individual artifact kind —
+// the email body, the mixed kind, the picture, the slide deck, the dashboard,
+// the portlet, the CMS page and the Drupal pointer — declares one field
+// binding, one floor action and the three generic card states apiece, and none
+// of them is addressable from a props-only mount on the default branch today:
+// the card draws no DOM before an authorised server resolve, each per-kind
+// reading of the target is drawn by a SERVER component inside the card's own
+// credentialed island frame, and no first-party control carries the
+// continue-review or open-in-cms action the manifest declares. Adding a fixture
+// row for one of them is therefore not a fixture-data edit yet — it waits on
+// that display and that floor landing. See README.md, "Committed but not yet
+// pinned".
 
 /** The chip row of one mounted fixture row. */
 function chipRow(root: Locator): Locator {
