@@ -754,7 +754,6 @@ export function AgenticRunPanel({
   // This keeps the poll loop alive while SSE drives the status badge, ensuring
   // messages + hitlContext continue to be fetched even when SSE has advanced status.
   const isPollLive = pollStatus === "running" || pollStatus === "queued";
-  const isPollPendingApproval = pollStatus === "pending_approval";
 
   // -------------------------------------------------------------------------
   // THE REVIEW SLOT (cinatra#2997) — kept current by the ONE shared reader both
@@ -2091,6 +2090,16 @@ export function AgenticRunPanel({
               // has left every state this box waits in, and nothing this surface
               // HOLDS - an open review question in the outbox, a park on the row
               // - says a review is still coming.
+              // AND AN UNANSWERED LOOK IS NOT A REASON TO GO ON CLAIMING ONE
+              // (convergence). It was put to this reading that a surface whose
+              // reader has not answered yet under `completed` should keep the
+              // arc turning, because a review may still be minted in that
+              // window. That is the state the eighth graded reading
+              // photographed on three untouched surfaces at once — the row
+              // already reading `completed` and the arc still turning — and it
+              // is the defect, not the contract. The BOX is what holds that
+              // window open, and it is untouched here; the arc is a claim about
+              // a run that has stopped, and it stops with it.
               settled={
                 status !== "queued" &&
                 status !== "running" &&

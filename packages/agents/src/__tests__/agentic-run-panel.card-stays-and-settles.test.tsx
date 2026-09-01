@@ -233,12 +233,15 @@ describe("the review card the conversation was given stays there", () => {
         producedReviewPark: true,
       },
     };
-    // The fail-soft this route serves when it cannot read the slot: the run's
-    // own row still says it is parked, and the gate facts come back empty.
+    // The fail-soft this route serves when it cannot read the slot, AS IT
+    // SERVES IT (convergence): the gate facts come back empty, and the park —
+    // read off the run's own row rather than off the slot read that threw —
+    // comes back true beside them. Serving three empties here would have been a
+    // stand-in, and it is the shape of this answer that the rule turns on.
     const FAIL_SOFT = {
       status: "pending_approval",
       hitlContext: null,
-      reviewGate: { ref: null, awaiting: false, producedReviewPark: false },
+      reviewGate: { ref: null, awaiting: false, producedReviewPark: true },
     };
     let body: Record<string, unknown> = seedBody();
     stubFetch(() => body);

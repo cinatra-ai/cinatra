@@ -979,8 +979,9 @@ const SLOT_READ_TIMEOUT_MS = 8000;
  * answering at all. Consecutive failures only - one answer resets it - because
  * a park that lasts an hour will cross a flaky minute and must not be given up
  * for it. When the transport is dead this reader does not know whether the park
- * is still real, so it stops asking and stops holding the placeholder rather
- * than retrying every ten seconds for the life of the tab.
+ * is still real, so it stops HOLDING the placeholder and falls back to the run's
+ * own rendering. It goes on asking behind that drawing at the recovery spacing
+ * (fix leg 9), so a transport that comes back brings the card with it.
  *
  * Both are re-keyed by the run LEAVING the status, which resets the probe in
  * render - the event every surface is waiting for anyway.
@@ -1585,18 +1586,51 @@ export function useRunReviewSlot({
               // reader's own rule elsewhere is the same one, written for the
               // same reason: never take a review off a screen somebody is
               // reading.
-              const nextSaysNothing =
-                next.ref === null &&
-                next.awaiting !== true &&
+              //
+              // AND IT IS READ AS THE ROUTE ACTUALLY SERVES IT (fix leg 9,
+              // convergence). The route takes the park off the RUN ROW this
+              // response is about and the two GATE facts off a second read
+              // that can throw on its own, and it says so in its own words:
+              // "a slot read that THREW costs the card the two gate facts
+              // and none of this one". So the fail-soft answer beside a
+              // still-parked row is not three empties — it is an empty gate
+              // beside a park that is still true. A rule that asked for
+              // three empties never fired on the answer it was written for,
+              // and the card still left the thread. What a stumbled read
+              // empties is the GATE, and the gate is what must not be
+              // withdrawn from a surface already drawing it.
+              const nextGateIsEmpty =
+                next.ref === null && next.awaiting !== true;
+              const lastGateSaidSomething =
+                last.ref !== null || last.awaiting === true;
+              // AND THE ROW'S OWN WORD IS ALWAYS TAKEN WHOLE. `producedReviewPark`
+              // is the one field a stumbled slot read does not cost, so a row
+              // that has STOPPED saying parked has answered the wait — and it
+              // is the only answer that can end one without a status change,
+              // which is exactly the case the status cannot show: a produced
+              // review released into a second wait under the same
+              // `pending_approval`. Taking it whole is what stops a delivered
+              // card from being held over a question the run has moved on to.
+              const rowSaysTheParkIsOver =
+                last.producedReviewPark === true &&
                 next.producedReviewPark !== true;
-              const lastSaidSomething =
-                last.ref !== null ||
-                last.awaiting === true ||
-                last.producedReviewPark === true;
-              if (nextSaysNothing && lastSaidSomething) {
+              if (nextGateIsEmpty && lastGateSaidSomething && !rowSaysTheParkIsOver) {
+                if (next.producedReviewPark !== last.producedReviewPark) {
+                  // The ROW moved into the park while its gate row does not
+                  // exist yet: that is a fact, and it is taken beside the
+                  // gate this surface is already drawing rather than instead
+                  // of it.
+                  const merged: RunReviewSlot = {
+                    ...last,
+                    producedReviewPark: next.producedReviewPark,
+                  };
+                  changed = true;
+                  lastAnswerRef.current = merged;
+                  setSlot(merged);
+                }
                 // The transport answered, so this is a landed look and the
-                // failure belt is cleared by it; it said nothing new, so the
-                // ceiling spends one.
+                // failure belt is cleared by it; it said nothing new about
+                // the gate, so the ceiling spends one.
                 landed = true;
               } else {
                 changed =
@@ -1611,8 +1645,8 @@ export function useRunReviewSlot({
           } catch {
             // Transport failure or the deadline: `landed` stays false, so this
             // look does not count as an ANSWER — the loop retries on the backoff
-            // until the belt ends it, and the surface falls back to the run's own
-            // terminal rendering while it does.
+            // and, past the belt, at the recovery spacing, while the surface
+            // falls back to the run's own terminal rendering (fix leg 9).
           } finally {
             window.clearTimeout(deadline);
             if (lookEpochRef.current === epoch) {

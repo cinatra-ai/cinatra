@@ -112,6 +112,15 @@ const RUN_STATUS_TERMINAL: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * HAS THIS RUN FINISHED? The set above, read as a question, so a surface that
+ * has to stop doing something when the run ends asks the same one reading every
+ * other surface asks rather than keeping a list of its own.
+ */
+export function runStatusIsTerminal(status: string | null): boolean {
+  return status !== null && RUN_STATUS_TERMINAL.has(status);
+}
+
+/**
  * SHOULD THIS SURFACE'S OWN TICK BE RUNNING (cinatra#3007, fix leg 9)?
  *
  * The panel's tick is the ONLY carrier of the run ROW on a first-party surface:

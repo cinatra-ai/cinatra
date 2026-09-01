@@ -2055,9 +2055,9 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // review screen will fill. Never an empty column.
     //
     // AND THE PLACEHOLDER HALF CARRIES THE READER'S OWN BOUNDS (cinatra#3007,
-    // fix leg 6, convergence). This panel passes no liveness evidence, by the
-    // reasoning stated at its reader above, so its failure belt and its read
-    // ceiling are both terminal. A spinner drawn on `ref === null` alone would
+    // fix leg 6, convergence). This panel's only liveness evidence is the row
+    // watch above (fix leg 9), so its failure belt has a way back but its read
+    // ceiling still ends. A spinner drawn on `ref === null` alone would
     // outlive them: the last answer this reader ever got still says the run is
     // parked, so the arm would hold a spinning icon for the life of the tab
     // after the reader had stopped looking for the row that would end it. That
