@@ -19,10 +19,36 @@ import { test, expect, type Page } from "@playwright/test";
 const FIXTURE = "/design-fixtures/timezone-control";
 const CONTROLS = ["timezone-scheduled", "timezone-recurring"] as const;
 
-async function setTheme(page: Page, theme: "light" | "dark") {
+/**
+ * Switch the palette the way a reader switches it, and the way the pixel
+ * harness beside this one switches it.
+ *
+ * The two palettes are EXCLUSIVE classes on the root element -- `cinatra` and
+ * `dark` -- and `next-themes` owns that class: it writes the persisted theme
+ * onto the root when it mounts. A helper that merely ADDS `dark` beside the
+ * mounted `cinatra` is overwritten the moment hydration lands, so it measures
+ * the LIGHT palette in both passes while calling one of them dark -- and the
+ * dark half of every claim below could not fail whatever the token said. So
+ * the theme is persisted and the page reloaded, letting the anti-flicker
+ * script settle the root class before paint, and the root class is READ BACK:
+ * a palette that did not take is a red here rather than a silent pass.
+ */
+async function visitInTheme(
+  page: Page,
+  theme: "light" | "dark",
+  url: string = FIXTURE,
+): Promise<void> {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.evaluate((t) => {
-    document.documentElement.classList.toggle("dark", t === "dark");
+    window.localStorage.setItem("theme", t === "dark" ? "dark" : "cinatra");
   }, theme);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
+  const root = await page.evaluate(() => document.documentElement.className);
+  expect(
+    root.split(/\s+/),
+    `the root carries "${root}" rather than the ${theme} palette's own class`,
+  ).toContain(theme === "dark" ? "dark" : "cinatra");
 }
 
 async function open(
@@ -30,8 +56,7 @@ async function open(
   theme: "light" | "dark",
   condition: "ordinary" | "degraded" | "blank" = "ordinary",
 ) {
-  await page.goto(`${FIXTURE}?condition=${condition}`);
-  await setTheme(page, theme);
+  await visitInTheme(page, theme, `${FIXTURE}?condition=${condition}`);
   await expect(page.locator("#timezone-scheduled")).toBeVisible();
 }
 

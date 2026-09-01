@@ -183,3 +183,83 @@ describe("the highlight follows the bound value, not only the first mount", () =
     ).toEqual(["Europe/Berlin"])
   })
 })
+
+// THE TRIGGER'S POPUP CONTRACT, AND THE KEYBOARD ROAD INTO IT.
+//
+// Both claims are about the element that ANNOUNCES itself as a combobox. A
+// reader's assistive technology is told two things by it — what the popup is
+// (`aria-haspopup`) and where it is (`aria-controls`) — and those two have to
+// describe the same element, or the second contradicts the first. And a
+// combobox is expected to open on the arrows; a button only answers Enter and
+// Space, which on the long lists this control exists for left the keyboard
+// road undiscoverable.
+describe("the trigger's popup contract and its keyboard road", () => {
+  it("names the popup the role its aria-controls target actually has", () => {
+    render(<Combobox id="under-test" value="UTC" options={SHARED_LABEL} />)
+    const trigger = document.getElementById("under-test") as HTMLElement
+
+    expect(trigger.getAttribute("role")).toBe("combobox")
+    // cmdk stamps its own id on the element carrying `role="listbox"`, so the
+    // only element this trigger can reference is the popover container — whose
+    // role is `dialog`. Advertising `listbox` named a role that target has not.
+    expect(
+      trigger.getAttribute("aria-haspopup"),
+      "aria-haspopup must name the role of the element aria-controls resolves to",
+    ).toBe("dialog")
+
+    fireEvent.click(trigger)
+    const controls = trigger.getAttribute("aria-controls")
+    expect(controls, "an open combobox must address its popup").toBeTruthy()
+    const popup = document.getElementById(controls as string)
+    expect(popup, "aria-controls must resolve to a real element").not.toBeNull()
+    expect(
+      (popup as HTMLElement).querySelector('[role="listbox"]'),
+      "the referenced popup is the container that HOLDS the listbox, not the listbox",
+    ).not.toBeNull()
+  })
+
+  it("opens on ArrowDown and on ArrowUp", () => {
+    for (const key of ["ArrowDown", "ArrowUp"] as const) {
+      render(<Combobox id="under-test" value="UTC" options={SHARED_LABEL} />)
+      const trigger = document.getElementById("under-test") as HTMLElement
+      expect(trigger.getAttribute("aria-expanded")).toBe("false")
+
+      fireEvent.keyDown(trigger, { key })
+
+      expect(
+        trigger.getAttribute("aria-expanded"),
+        `${key} on the closed trigger must open the popup`,
+      ).toBe("true")
+      expect(
+        document.querySelector('[data-slot="command-list"]'),
+        `${key} must open the list itself, not only the expanded state`,
+      ).not.toBeNull()
+      cleanup()
+    }
+  })
+
+  it("leaves the arrows to the list once the popup is open", () => {
+    render(<Combobox id="under-test" value="UTC" options={SHARED_LABEL} />)
+    const trigger = document.getElementById("under-test") as HTMLElement
+    fireEvent.keyDown(trigger, { key: "ArrowDown" })
+    expect(trigger.getAttribute("aria-expanded")).toBe("true")
+
+    // The handler must not re-open (and so re-seed) a list already open —
+    // cmdk owns navigation from here, and the search field holds focus.
+    const reopened = fireEvent.keyDown(trigger, { key: "ArrowDown" })
+    expect(reopened, "the open trigger must not consume the arrow").toBe(true)
+    expect(trigger.getAttribute("aria-expanded")).toBe("true")
+  })
+
+  it("does not open when it is disabled", () => {
+    render(
+      <Combobox id="under-test" value="UTC" options={SHARED_LABEL} disabled />,
+    )
+    const trigger = document.getElementById("under-test") as HTMLElement
+    fireEvent.keyDown(trigger, { key: "ArrowDown" })
+    expect(
+      trigger.getAttribute("aria-expanded"),
+      "a disabled control must stay closed on the arrows too",
+    ).toBe("false")
+  })
+})

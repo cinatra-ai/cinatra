@@ -82,10 +82,42 @@ function Combobox({
           role="combobox"
           aria-expanded={open}
           aria-controls={listId}
-          aria-haspopup="listbox"
+          // THE POPUP IS A DIALOG, AND `aria-haspopup` NAMES WHAT IT IS.
+          //
+          // `aria-controls` can only reference the popover container: cmdk owns
+          // the element that carries `role="listbox"` and stamps its OWN id on
+          // it last, so an id passed to CommandList is overwritten and the
+          // listbox is unaddressable from here. The container it CAN reference
+          // is Radix's PopoverContent, whose role is `dialog` — a dialog that
+          // holds the search field and the list together, which is also what
+          // the drawing describes ("an Input-chrome trigger opens a
+          // type-to-filter list"). Advertising `listbox` therefore pointed a
+          // reader's assistive technology at a role the referenced element does
+          // not have. Naming `dialog` makes the pair agree, which is what the
+          // combobox pattern asks for: `aria-haspopup` describes the popup that
+          // `aria-controls` resolves to.
+          aria-haspopup="dialog"
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           disabled={disabled}
+          // ARROW KEYS OPEN THE CLOSED CONTROL.
+          //
+          // The trigger is a button, so Radix gives it Enter and Space and
+          // nothing else — but the element announces itself as a combobox, and
+          // for a combobox ArrowDown/ArrowUp opening the popup is the behaviour
+          // a keyboard reader arrives with. Without it the only way into a
+          // list the drawing reaches for precisely because it is LONG
+          // ("whenever the option count passes ~8") was to know that Enter also
+          // works. Opening on the arrows costs nothing to a pointer user and
+          // makes the keyboard road the expected one; once open, focus is in
+          // the search field and cmdk owns every subsequent key.
+          onKeyDown={(event) => {
+            if (disabled || open) return
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+            // Otherwise the same keypress scrolls the page behind the popover.
+            event.preventDefault()
+            setOpen(true)
+          }}
           data-slot="combobox-trigger"
           // A trigger with nothing bound is marked, so it takes the muted
           // placeholder ink the select family already uses for that state.
