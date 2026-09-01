@@ -140,6 +140,24 @@ export function verificationReopenReviewTaskId(gateId: string): string {
   return `${VERIFICATION_REOPEN_TASK_PREFIX}${gateId}`;
 }
 
+/** The RETIRED spelling of the same gate's reopen `reviewTaskId`, for READING
+ * ONLY — nothing writes it (cinatra#3080, the convergence round of the fourth
+ * reproduction).
+ *
+ * The released build derives this id from the verification RECORD id, and that
+ * id is itself `verify:{gateId}`, so it minted `lifecycle-review:verify:verify:
+ * {gateId}` — and rows carrying that spelling sit in every database this branch
+ * deploys over. Emitting the corrected id beside such a row would open a SECOND
+ * pending gate for ONE verification, which is the defect this leg closes. The
+ * store looks the retired spelling up first and re-emits onto the row it finds.
+ *
+ * It mirrors the record id's shape deliberately (a test pins the two together):
+ * the retired id is a fact about data already written, not a thing to derive
+ * afresh. */
+export function legacyVerificationReopenReviewTaskId(gateId: string): string {
+  return `${VERIFICATION_REOPEN_TASK_PREFIX}verify:${gateId}`;
+}
+
 /** Whether a `reviewTaskId` names an S4 verification-reopen gate. */
 export function isVerificationReopenTaskId(reviewTaskId: string): boolean {
   return reviewTaskId.startsWith(VERIFICATION_REOPEN_TASK_PREFIX);

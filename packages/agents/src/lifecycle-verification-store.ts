@@ -33,7 +33,7 @@ import { eq } from "drizzle-orm";
 
 import { db } from "./db";
 import { artifactVerificationRecords, lifecycleRepair } from "./schema";
-import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { emitArtifactReviewGate, readReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
 import { dispatchAutoGateOpen } from "./run-wait-notifier";
 
 import {
@@ -44,7 +44,10 @@ import {
   type VerificationVerdict,
 } from "@/lib/lifecycle/lifecycle-verification";
 import { MAX_REPAIR_CYCLES, type RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
-import { verificationReopenReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  legacyVerificationReopenReviewTaskId,
+  verificationReopenReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 
 // The record READ lives in its own leaf (cinatra#2567) so a caller that only
 // asks "is there a verification reading for this gate?" — the lifecycle card
@@ -213,7 +216,19 @@ async function writeVerificationRecordAndMaybeReopen(
   // builder's prefix already ends in `verify:` — handing it `id` spelled the
   // word twice and minted `lifecycle-review:verify:verify:{gateId}` on the
   // running application (cinatra#3080, the fourth reproduction).
-  const reopenTaskId = verificationReopenReviewTaskId(input.gateId);
+  //
+  // AND IT READS THE RETIRED SPELLING FIRST. The released build wrote its
+  // reopen gates under `lifecycle-review:verify:verify:{gateId}`, so a gate
+  // this branch deploys over can already carry one. Emitting the corrected id
+  // beside that row would leave TWO pending gates for ONE verification — this
+  // leg's own defect, arriving through the data instead of the code. Where the
+  // retired row exists the emit goes onto it and converges idempotently; every
+  // gate reopened from here on is written under the corrected id.
+  const legacyReopenTaskId = legacyVerificationReopenReviewTaskId(input.gateId);
+  const legacyReopen = await readReviewGate(input.runId, legacyReopenTaskId);
+  const reopenTaskId = legacyReopen
+    ? legacyReopenTaskId
+    : verificationReopenReviewTaskId(input.gateId);
   try {
     const emitted = await emitArtifactReviewGate({
       runId: input.runId,
@@ -367,8 +382,8 @@ export async function recordVerificationForExternalChange(input: {
  * reproduction of the real road).
  *
  * `defaultRepresentationFieldProjector` projects REPRESENTATION IDENTITY —
- * revision, content pointer, form — and a landed repair advances all three BY
- * CONSTRUCTION: that is what landing a repair IS. The scope manifest the verdict
+ * revision, content pointer, form — and a landed repair advances the revision
+ * and the content pointer BY CONSTRUCTION: that is what landing a repair IS. The scope manifest the verdict
  * is otherwise judged against is derived from the accepted findings' field
  * `path`s, which name CONTENT fields and can never name a `representation.*`
  * one. So on the default projector the two axes never intersect: every landed
@@ -383,12 +398,23 @@ export async function recordVerificationForExternalChange(input: {
  * drift verdict supplies a type-aware projector AND its own manifest to
  * `recordVerificationForRepair`; the external-change path is untouched.
  *
- * A verdict over this projection can still come back non-`verified` on a
- * caller-supplied validator failure or a representation mismatch — the bounded
- * reopen is intact, it is no longer fired by the projection's own axis.
+ * A verdict over this projection can still come back non-`verified` on a form
+ * change, a caller-supplied validator failure or a representation mismatch —
+ * the bounded reopen is intact, it is no longer fired by the projection's own
+ * axis.
+ *
+ * THE FORM IS DELIBERATELY NOT AUTHORIZED (the convergence round). Landing a
+ * repair appends a new REVISION of the same representation, pointing at new
+ * content: `representation.revision` and `representation.resource` advance by
+ * construction, and authorizing those two is the whole fix. The FORM does not
+ * advance by construction — a repair that returns a different form returned
+ * something the review never asked for, and that must still read as `drifted`
+ * and reopen the one bounded gate. Authorizing exactly what landing a repair
+ * advances, and nothing else, keeps the bounded reopen able to fire on the
+ * automatic path instead of turning it off.
  */
 export const DEFAULT_REPRESENTATION_SCOPE: VerificationScopeManifest = {
-  paths: ["representation.form", "representation.resource", "representation.revision"],
+  paths: ["representation.resource", "representation.revision"],
 };
 
 export function defaultRepresentationFieldProjector(orgId: string): VerificationFieldProjector {

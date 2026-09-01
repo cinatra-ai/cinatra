@@ -6,7 +6,10 @@
  * success). No React / DB — every seam is plain data.
  */
 import { REVIEW_FLOOR_ACTIONS } from "@/lib/artifacts/review-surface-model";
-import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import {
+  artifactReviewGateSchemaQueries,
+  lifecycleRepairSchemaQueries,
+} from "@/lib/artifacts/artifact-review-gate-schema";
 import { describe, expect, it } from "vitest";
 
 import type { ReviewTargetMount } from "@/lib/artifacts/artifact-review-preparation";
@@ -455,11 +458,33 @@ describe("cinatra#3080 — the settled act, and the schema gap it is stored acro
     // reads the shipped DDL rather than asserting a remembered fact, so the day
     // a migration widens the constraint this test says so and the encoding table
     // above is revisited instead of quietly lying.
-    const ddl = artifactReviewGateSchemaQueries("any_schema")
-      .map((query) => query.text)
-      .join("\n");
-    expect(ddl).toContain("disposition IN ('approve','reject','changes_requested')");
-    expect(ddl).not.toContain("superseded");
+    //
+    // IT READS THE WHOLE BOOTSTRAP, in order (the convergence round). The gate
+    // table's CHECK is created by the first query set and then DROPPED and
+    // RE-ADDED by `lifecycleRepairSchemaQueries`, which runs after it — so a
+    // guard that read only the first set would stay green while the effective
+    // constraint widened underneath it.
+    const gateDdl = artifactReviewGateSchemaQueries("any_schema").map((query) => query.text);
+    const repairDdl = lifecycleRepairSchemaQueries("any_schema").map((query) => query.text);
+    const bootstrap = [...gateDdl, ...repairDdl];
+    expect(bootstrap.join("\n")).toContain("disposition IN ('approve','reject','changes_requested')");
+    // NO disposition constraint anywhere in the bootstrap admits the word — and
+    // the check is scoped to the disposition statements, because `superseded`
+    // IS a legal `lifecycle_repair.status`, which is a different column saying
+    // a different thing (the repair a supersede started, not the gate's own
+    // recorded act).
+    const dispositionChecks = bootstrap.filter(
+      (text) => text.includes("CHECK") && text.includes("disposition IN"),
+    );
+    expect(dispositionChecks.length).toBeGreaterThan(0);
+    for (const check of dispositionChecks) expect(check).not.toContain("superseded");
+    // The LAST word on the gate table's disposition — the constraint actually
+    // in force after the bootstrap has run — admits the same three values.
+    const lastGateCheck = bootstrap
+      .filter((text) => text.includes("artifact_review_gates_disposition_check") && text.includes("CHECK"))
+      .pop();
+    expect(lastGateCheck).toBeDefined();
+    expect(lastGateCheck).toContain("disposition IN ('approve','reject','changes_requested')");
     // …so the act SUPERSEDED is written as `changes_requested`, and that relation
     // lives in exactly one place.
     expect(REVIEW_SETTLED_ACT_STORAGE.superseded).toBe("changes_requested");
