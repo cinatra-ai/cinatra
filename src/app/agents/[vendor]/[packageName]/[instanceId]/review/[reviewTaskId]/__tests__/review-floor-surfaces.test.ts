@@ -77,35 +77,56 @@ const RETIRED = [
 ];
 
 describe("the floor's own words, everywhere a review is read (cinatra#3080)", () => {
-  it("the review page's standing prose uses neither retired word", () => {
-    // THE DEFECT: the dedicated review page carried a standing subheading —
+  it("the review page carries NO standing prose at all, and no refusal reading brings a retired word back", () => {
+    // THE FIRST DEFECT: the dedicated review page carried a standing subheading —
     // "Approve, reject, or comment on what an agent produced" — drawn above a
     // PENDING review. Item 1 forbids either retired word on a review surface,
-    // and a heading is exactly as much a surface as a button is.
-    const prose = [...stripComments(REVIEW_PAGE).matchAll(/description="([^"]*)"/g)].map(
-      (m) => m[1],
-    );
-    expect(prose.length).toBeGreaterThan(0);
+    // and a heading is exactly as much a surface as a button is. It was rewritten
+    // to name the floor instead.
+    //
+    // THE SECOND DEFECT, and why this case now asks for LESS rather than for
+    // different words (cinatra#3080, the fourth reproduction of the real road):
+    // an independent grade charged the whole block — eyebrow, heading and
+    // instructional sentence — as an UNSPECIFIED element. The drawing says "There
+    // is no standalone review document; the reviewer decides in the run, with its
+    // steps in view", and the gate's own header is the reading at the top of the
+    // detail column. The right subheading on this surface is no subheading. The
+    // shell therefore draws no page header, and the strongest guarantee against
+    // a retired word in prose is prose that does not exist.
+    const code = stripComments(REVIEW_PAGE);
+    // The DRAWN review shell renders no header block.
+    const shell = code.slice(code.indexOf("function ReviewShell"));
+    const shellBody = shell.slice(0, shell.indexOf("\nfunction "));
+    expect(shellBody).not.toMatch(/PageHeader/);
+    // What page headers remain belong to the REFUSAL readings — a viewer who may
+    // not see the run is owed a page that names itself, and no gate is drawn
+    // there to do it — and none of them carries a retired word.
+    const prose = [...code.matchAll(/description="([^"]*)"/g)].map((m) => m[1]);
     for (const line of prose) {
       expect(line).not.toMatch(/approve/i);
       expect(line).not.toMatch(/reject/i);
     }
-    // …and it says what the floor actually offers instead.
-    expect(prose.some((l) => /Comment/.test(l) && /Regenerate/.test(l) && /Continue/.test(l))).toBe(
-      true,
-    );
   });
 
-  it("the run page's rail prints the SETTLED WORD, never the stored token", () => {
+  it("the run page's rail prints the SETTLED ACT, and never reads the stored column at all", () => {
     // THE DEFECT: the rail rendered `entry.gate.disposition` straight out of the
     // column, so a settled Review entry read APPROVE after a Continue and
     // CHANGES_REQUESTED after a Regenerate — the machine's vocabulary, uppercased
     // by the badge's own CSS, on a person's surface.
+    //
+    // AND THEN A SECOND ONE (cinatra#3080, the fourth reproduction of the real
+    // road): relabelling the column HERE left the card relabelling the wire
+    // outcome THERE, two independent choices of word for one decision, which is
+    // how the settled card could read "Superseded" while the store row read
+    // `changes_requested` with nothing relating the two. The act is now derived
+    // once, where a store row becomes a rail entry, and this component reads the
+    // act and nothing else — it never sees the raw column.
     const code = stripComments(RAIL_ENTRY);
-    expect(code).not.toMatch(/\{entry\.gate\?\.disposition/);
-    expect(code).toMatch(/reviewSettledWord\(entry\.gate\?\.disposition\)/);
+    expect(code).not.toMatch(/entry\.gate\?\.disposition/);
+    expect(code).toMatch(/entry\.gate\?\.settledAct/);
+    expect(code).toMatch(/REVIEW_SETTLED_ACT_TITLE\[settledAct\]/);
     expect(RAIL_ENTRY).toContain(
-      'import { reviewSettledWord } from "@/lib/artifacts/review-surface-model";',
+      'import { REVIEW_SETTLED_ACT_TITLE } from "@/lib/artifacts/review-surface-model";',
     );
   });
 

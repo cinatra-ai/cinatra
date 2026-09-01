@@ -487,7 +487,15 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
       .split("\n")
       .filter((l) => l.includes('"changes_requested"'));
     for (const l of literalLines) {
-      expect(l).toMatch(/ReviewSettledOutcome|case "changes_requested":/);
+      // …and, since cinatra#3080's fourth reproduction, the ONE named encoding
+      // that crosses the schema gap. The gate's `disposition` column is
+      // CHECK-constrained with no `superseded` value, so the act SUPERSEDED is
+      // stored as `changes_requested`; that relation is data in
+      // `REVIEW_SETTLED_ACT_STORAGE` rather than a display string chosen twice,
+      // which is exactly the spread this lock exists to prevent.
+      expect(l).toMatch(
+        /ReviewSettledOutcome|case "changes_requested":|^\s*superseded: "changes_requested",$/,
+      );
     }
   });
 
