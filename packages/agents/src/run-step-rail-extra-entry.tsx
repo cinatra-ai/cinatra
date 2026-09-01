@@ -7,7 +7,11 @@ import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reu
 import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
-import { useRunStepSelection } from "./run-surface-rail";
+// The SELECTION only — never the frame module that provides it. This row is
+// reachable from four LOCKED routes, so importing the frame here to read the
+// selection put the whole two-column frame on all four of their graphs
+// (`__tests__/run-surface-rail-selection-narrowness.test.ts`).
+import { useRunStepSelection } from "./run-surface-rail-selection";
 
 // ---------------------------------------------------------------------------
 // The NON-STEP rail rows — gates ("Review"), verifications ("Audit")

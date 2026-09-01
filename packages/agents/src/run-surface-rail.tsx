@@ -42,8 +42,6 @@
 import { Check } from "lucide-react";
 import {
   Fragment,
-  createContext,
-  useContext,
   useState,
   type ReactElement,
   type ReactNode,
@@ -74,6 +72,18 @@ import {
 // would be handed a client reference.
 export type { RunStepSelection, RunSurfaceRailStep };
 
+// The selection's context and hook, re-exported so the rail steps that already
+// take them from this module (`recommendation-rail-step.tsx`,
+// `schedule-rail-step.tsx`, which re-exports the hook again for the review page)
+// keep one import site. A consumer that needs ONLY the selection should import
+// the selection module directly instead — that is the whole point of the split.
+import {
+  RunStepSelectionContext,
+  useRunStepSelection,
+} from "./run-surface-rail-selection";
+
+export { useRunStepSelection };
+
 // THE RAIL'S LABELS ARE NOT DECLARED HERE. They live in
 // `run-surface-rail-labels.ts`, a module carrying no directive, because the
 // setup run page's SERVER component reads them: an export of THIS module reaches
@@ -82,34 +92,14 @@ export type { RunStepSelection, RunSurfaceRailStep };
 // plain value instead. The components stay here — a component is exactly what
 // the boundary is built to carry.
 
-const RunStepSelectionContext = createContext<{
-  selected: RunStepSelection;
-  select: (next: RunStepSelection) => void;
-  /**
-   * Does THIS frame carry a step under that key, with something to open?
-   *
-   * A row drawn beside the frame cannot see the step list, so it used to infer
-   * "I open something" from the mere presence of this context — and a frame
-   * that carries no such step would then draw a pressable, focusable row that
-   * does nothing when pressed (`select` refuses it). The frame is the one
-   * authority on selectability (`isRunSurfaceStepSelectable`), so it answers.
-   */
-  canSelect: (key: RunStepSelection) => boolean;
-} | null>(null);
-
-/**
- * The selection, for a rail row drawn by the rail BESIDE this frame.
- *
- * The review page's rail is its own component (`ReviewRunSteps`) and its Review
- * row has to be able to bring the review card back into the run detail after a
- * gate step was opened — "selecting a step opens it on the right" is the rail's
- * property, not any one row's. `null` when there is no gate step on the page at
- * all, which is how a rail keeps its inert shape unchanged for a run that has
- * none.
- */
-export function useRunStepSelection() {
-  return useContext(RunStepSelectionContext);
-}
+// THE SELECTION IS NOT DECLARED HERE. The context and its hook live in
+// `run-surface-rail-selection.tsx` so a rail ROW can ask which step is open
+// without pulling this whole frame — the two columns and every row component in
+// them — onto its module graph. `run-step-rail-extra-entry.tsx`, the shared
+// non-step row, is reachable from four LOCKED routes, and taking the hook from
+// here cost each of them +2 reachable first-party modules where the split costs
+// one (`__tests__/run-surface-rail-selection-narrowness.test.ts`). This module
+// stays the one PROVIDER of that context, which is what a frame is for.
 
 /**
  * THE ROW VOCABULARY, shared so the rail's rows cannot drift apart.
