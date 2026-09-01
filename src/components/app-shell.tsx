@@ -32,7 +32,7 @@ import {
   humanizePathSegment,
   isIdLikeSegment,
   type BreadcrumbCrumb,
-  documentTitleLabelFromTrail,
+  documentTitleLabelForAgentInstance,
 } from "@/lib/breadcrumb-trail";
 import {
   selectCrumbContributions,
@@ -677,7 +677,16 @@ export function AppShell({
       // trail already drawn above the page, which by construction carries no
       // id. A trail whose own leaf is unresolved answers null and nothing is
       // written, leaving the server title in place.
-      const label = agentLabel ?? documentTitleLabelFromTrail(breadcrumbSegments);
+      // ONE decision point: the published label is not automatically safe
+      // either — the owning page publishes the id's first eight characters
+      // plus an ellipsis when it has no name to publish, and a truncated
+      // identifier is still an identifier. The helper guards BOTH inputs and
+      // answers null when neither can be said without an id, in which case
+      // nothing is written and the server title stands.
+      const label = documentTitleLabelForAgentInstance(
+        agentLabel,
+        breadcrumbSegments,
+      );
       if (label) document.title = `${label} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
@@ -889,6 +898,15 @@ export function AppShell({
                 still one click away at every viewport while the left edge
                 belongs to the trail alone. Desktop collapse also remains on
                 the sidebar's own rail. */}
+            {/* Below `sm` the trail is not drawn, so there is nothing for the
+                toggle to push: it stays at the left edge, where the primary
+                navigation control has always been. At `sm` and up it is
+                `sm:hidden` here and leads the right-hand cluster instead, so
+                the trail alone sits at the gutter the drawing names. */}
+            <SidebarTrigger
+              variant="outline"
+              className="max-md:scale-125 sm:hidden"
+            />
             <Breadcrumb data-testid="app-shell-topbar-left" className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
@@ -914,8 +932,11 @@ export function AppShell({
               </BreadcrumbList>
             </Breadcrumb>
             <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
-            <SidebarTrigger variant="outline" className="max-md:scale-125" />
-            <Separator orientation="vertical" className="h-6 shrink-0" />
+            <SidebarTrigger
+              variant="outline"
+              className="max-md:scale-125 max-sm:hidden"
+            />
+            <Separator orientation="vertical" className="h-6 shrink-0 max-sm:hidden" />
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {
               setDevToolsOpen(open);
               if (open) {

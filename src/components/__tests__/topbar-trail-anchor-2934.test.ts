@@ -54,18 +54,19 @@ describe("the top-bar's left element is the trail, at the standard gutter", () =
     expect(className).not.toMatch(/\b(pl-|ml-|sm:pl-|sm:ml-)/);
   });
 
-  it("nothing is drawn between the gutter and the trail", () => {
+  it("nothing is drawn between the gutter and the trail, where the trail is drawn", () => {
     const row = topbarRow();
     const trail = row.indexOf("<Breadcrumb");
-    const toggle = row.indexOf("<SidebarTrigger");
     expect(trail).toBeGreaterThan(-1);
-    // The toggle is no longer the row's left element; if it is drawn in the
-    // row at all it comes after the trail, never before it.
-    if (toggle > -1) expect(toggle).toBeGreaterThan(trail);
-    // No separator, no spacer, no other element ahead of the trail either.
     const ahead = row.slice(0, trail);
+    // No separator, no spacer ahead of the trail.
     expect(ahead).not.toContain("<Separator");
-    expect(/<[A-Z]/.test(ahead)).toBe(false);
+    // The ONLY element permitted ahead of it is one that is not rendered at
+    // the widths where the trail is: the trail is `hidden sm:flex`, so an
+    // `sm:hidden` element cannot ever push it. Anything else would.
+    for (const tag of ahead.match(/<[A-Z][A-Za-z]*[^>]*>/g) ?? []) {
+      expect(tag).toContain("sm:hidden");
+    }
   });
 
   it("the trail is the element the shell names as the top-bar's left one", () => {
@@ -75,5 +76,43 @@ describe("the top-bar's left element is the trail, at the standard gutter", () =
     expect(left).toBeGreaterThan(trail);
     // …and it belongs to the trail's own tag, not to something before it.
     expect(row.slice(trail, left)).not.toContain(">");
+  });
+});
+
+/**
+ * THE MOBILE LEFT EDGE, and THE ONE DECISION POINT (convergence of fix leg 8).
+ *
+ * Moving the sidebar toggle out of the trail's way is right where the trail is
+ * drawn — but the trail is `hidden sm:flex`, so below `sm` there is no trail to
+ * make room for. Sending the toggle to the right-hand cluster at THOSE widths
+ * would empty the row's left edge and move the primary navigation control to
+ * the opposite side of the bar, which the drawing never asks for. So the
+ * toggle stays at the left exactly where the trail is not drawn, and leads the
+ * right cluster exactly where it is.
+ *
+ * And the tab title: the shell must reach the guard through the one function
+ * that applies it to BOTH inputs, never by preferring the published label
+ * itself — a published label can be the short-id placeholder.
+ */
+describe("the left edge below sm, and the single title decision point", () => {
+  it("keeps the sidebar toggle at the left only where the trail is not drawn", () => {
+    const row = topbarRow();
+    const trail = row.indexOf("<Breadcrumb");
+    const ahead = row.slice(0, trail);
+    // Below sm the toggle is the left element; at sm and up it is gone from
+    // the left, so the trail alone sits at the gutter.
+    expect(ahead).toContain("<SidebarTrigger");
+    expect(/<SidebarTrigger[^>]*sm:hidden/.test(ahead)).toBe(true);
+    // …and it must not be joined by a divider that would inset it further.
+    expect(ahead).not.toContain("<Separator");
+    // The trail itself is still the sm-and-up left element.
+    expect(row).toContain('data-testid="app-shell-topbar-left"');
+  });
+
+  it("decides the agent-instance tab title through the single guarded helper", () => {
+    expect(source).toContain("documentTitleLabelForAgentInstance");
+    // The published label must never be preferred ahead of the guard.
+    expect(source).not.toContain("agentLabel ?? documentTitleLabelFromTrail");
+    expect(source).not.toContain("`${agentLabel} | Cinatra`");
   });
 });

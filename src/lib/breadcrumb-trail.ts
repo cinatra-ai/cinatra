@@ -64,6 +64,45 @@ export function idSegmentPlaceholder(segment: string): string {
 const ID_PLACEHOLDER_LABEL_RE = /^\S{1,8}…$/;
 
 /**
+ * Is this LABEL still an identifier? Three shapes count, and the third is the
+ * one a raw-segment test misses: the trail humanizes any agent-instance
+ * sub-route it has no name for, and humanizing an id turns
+ * "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a" into
+ * "9C0dfce6 B2cb 4dab 8a01 661ca3288b9a" — no longer id-SHAPED, still every
+ * character of the id. So the label is also judged with its spacing collapsed.
+ * A humanized id is an id.
+ */
+function labelLooksIdentifying(label: string): boolean {
+  if (isIdLikeSegment(label)) return true;
+  if (ID_PLACEHOLDER_LABEL_RE.test(label)) return true;
+  return isIdLikeSegment(label.replace(/\s+/g, ""));
+}
+
+/**
+ * THE AGENT-INSTANCE TAB TITLE — the whole decision, in one place.
+ *
+ * Two inputs feed it: the label the owning page published for the instance
+ * crumb, and the resolved trail. NEITHER is safe on its own. The page
+ * publishes the id's first eight characters plus an ellipsis whenever no run
+ * name and no template name is available, and the trail humanizes a sub-route
+ * segment it cannot name. The drawing's rule is unqualified — an id-bearing
+ * route never shows a raw id in the tab — so the same guard stands in front of
+ * both, here, where the shell cannot reach around it.
+ *
+ * Answers the published name when it is a real name, else the trail's last
+ * resolved crumb, else `null` — meaning do not write, and let the route's own
+ * server-rendered title stand.
+ */
+export function documentTitleLabelForAgentInstance(
+  publishedLabel: string | undefined,
+  trail: readonly BreadcrumbCrumb[],
+): string | null {
+  const published = publishedLabel?.trim();
+  if (published && !labelLooksIdentifying(published)) return published;
+  return documentTitleLabelFromTrail(trail);
+}
+
+/**
  * THE TAB TITLE MIRRORS THE RESOLVED TRAIL (cinatra#2934).
  *
  * The ratified drawing binds the two in one sentence: the browser-tab title
@@ -87,7 +126,7 @@ export function documentTitleLabelFromTrail(
     if (!crumb || crumb.ellipsis) continue;
     const label = crumb.label?.trim();
     if (!label) continue;
-    if (isIdLikeSegment(label) || ID_PLACEHOLDER_LABEL_RE.test(label)) return null;
+    if (labelLooksIdentifying(label)) return null;
     return label;
   }
   return null;

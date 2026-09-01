@@ -5,6 +5,7 @@ import {
   breadcrumbCrumbKey,
   connectorCanonicalCrumbHref,
   documentTitleLabelFromTrail,
+  documentTitleLabelForAgentInstance,
   idSegmentPlaceholder,
   isIdLikeSegment,
   isPagelessContainerCrumb,
@@ -743,5 +744,93 @@ describe("documentTitleLabelFromTrail — the tab mirrors the resolved trail", (
 
   it("answers null on an empty trail, so nothing is written", () => {
     expect(documentTitleLabelFromTrail([])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WHOLE DECISION, NOT HALF OF IT (cinatra#2934, convergence of fix leg 8).
+//
+// The tab title of an agent-instance route is decided from TWO inputs: the
+// label the owning page published for the instance crumb, and — when there is
+// none — the resolved trail. The published label is not automatically safe:
+// the page publishes the id's first eight characters plus an ellipsis whenever
+// neither a run name nor a template name is available, and that placeholder is
+// still an identifier. The drawing's rule is unqualified — an id-bearing route
+// never shows a raw id in the tab — so the SAME guard has to stand in front of
+// both inputs. This is the function the shell calls, so the guard cannot be
+// bypassed by reaching around it.
+//
+// The trail's own leaf is not automatically safe either: an agent-instance
+// sub-route the trail has no name for is humanized, and a humanized id
+// ("9c0dfce6 B2cb 4dab 8a01 661ca3288b9a") no longer looks like an id to a
+// raw-form test while still carrying the id. A humanized id is an id.
+// ---------------------------------------------------------------------------
+describe("documentTitleLabelForAgentInstance — one guard in front of both inputs", () => {
+  const RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+  const RUN_PAGE = `/agents/vendor/pkg/${RUN_ID}`;
+  const SCHEDULE = `${RUN_PAGE}/trigger`;
+  const UNNAMED_SUB = `${RUN_PAGE}/${RUN_ID}`;
+  const trailFor = (pathname: string) =>
+    buildBreadcrumbTrail(pathname, { contributions: [] });
+  /** Every substring of the run id three characters and longer. */
+  const idPartsIn = (text: string): string[] => {
+    const hits: string[] = [];
+    for (let start = 0; start < RUN_ID.length; start++)
+      for (let end = start + 3; end <= RUN_ID.length; end++)
+        if (text.includes(RUN_ID.slice(start, end)))
+          hits.push(RUN_ID.slice(start, end));
+    return hits;
+  };
+
+  it("takes a real published name — the run's own title still wins", () => {
+    expect(
+      documentTitleLabelForAgentInstance("Weekly digest", trailFor(RUN_PAGE)),
+    ).toBe("Weekly digest");
+  });
+
+  it("REFUSES the published short-id placeholder and falls back to the trail", () => {
+    const published = idSegmentPlaceholder(RUN_ID);
+    expect(published).toBe("9c0dfce6…");
+    const label = documentTitleLabelForAgentInstance(published, trailFor(RUN_PAGE));
+    expect(label).toBe("Agent run");
+    expect(idPartsIn(label ?? "")).toEqual([]);
+  });
+
+  it("REFUSES a published raw id and falls back to the trail", () => {
+    const label = documentTitleLabelForAgentInstance(RUN_ID, trailFor(SCHEDULE));
+    expect(label).toBe("Schedule");
+    expect(idPartsIn(label ?? "")).toEqual([]);
+  });
+
+  it("answers null on a sub-route the trail can only humanize into an id", () => {
+    // The trail has no name for this segment, so it title-cases the id.
+    const leaf = trailFor(UNNAMED_SUB).at(-1)?.label ?? "";
+    expect(idPartsIn(leaf).length).toBeGreaterThan(0);
+    // The title must NOT take it: no write, the server title stands.
+    expect(documentTitleLabelForAgentInstance(undefined, trailFor(UNNAMED_SUB))).toBeNull();
+  });
+
+  it("carries no substring of the run id on any of these readings", () => {
+    for (const [published, pathname] of [
+      [undefined, RUN_PAGE],
+      [undefined, SCHEDULE],
+      [undefined, UNNAMED_SUB],
+      [idSegmentPlaceholder(RUN_ID), RUN_PAGE],
+      [RUN_ID, SCHEDULE],
+    ] as const) {
+      const label = documentTitleLabelForAgentInstance(published, trailFor(pathname)) ?? "";
+      expect(idPartsIn(label)).toEqual([]);
+    }
+  });
+});
+
+describe("documentTitleLabelFromTrail — a humanized id is still an id", () => {
+  it("refuses a title-cased id label", () => {
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "9C0dfce6 B2cb 4dab 8a01 661ca3288b9a", href: "/agents/x" },
+      ]),
+    ).toBeNull();
   });
 });
