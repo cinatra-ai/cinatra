@@ -4,10 +4,11 @@ import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
 
 import * as authSession from "@/lib/auth-session";
-const { getActorContext, requireActorContext } = authSession;
+const { requireActorContext } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
+import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 import { AuthzError } from "@/lib/authz/errors";
@@ -44,33 +45,13 @@ import {
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
 // title repeats the page's read gate before disclosing the project name; any
-// failure yields the generic title.
+// failure yields the generic title. The gate and the read live in ONE place
+// (cinatra#2807 fix leg 2) so this tab title and the page heading beneath it
+// can never disagree about what the viewer may be told.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  try {
-    // Non-throwing session read: requireAuthSession() redirects (throws
-    // NEXT_REDIRECT), which this try/catch would swallow. No session → the
-    // generic title; the page component itself still redirects.
-    const session = await authSession.getAuthSession();
-    if (!session) return { title: "Project" };
-    const { projectId } = await params;
-    const rows = await projectsDb
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
-    const project = rows[0];
-    if (!project) return { title: "Project" };
-    // Sealed-room read gate (#1898): the caller must hold a resolved project
-    // grant for THIS project. `getActorContext` resolves the canonical
-    // `projectGrants` axis (owned ∪ accessed) via `readProjectGrantsForUser`.
-    const actor = await getActorContext();
-    if (!actor || !actorHoldsProjectGrant(actor, project.id)) {
-      return { title: "Project" };
-    }
-    return { title: project.name };
-  } catch {
-    return { title: "Project" };
-  }
+  const { projectId } = await params;
+  const name = await readScopeSurfaceEntityName({ kind: "project", id: projectId });
+  return { title: name || "Project" };
 }
 
 type Props = {

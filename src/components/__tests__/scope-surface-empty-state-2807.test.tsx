@@ -38,8 +38,7 @@ const SCOPES: ReadonlyArray<readonly [string, ScopeSurfaceRef]> = [
 ];
 
 /** The one primary action each tab carries, by the href it leads to. */
-const ACTION_HREF: Record<ScopeSurfaceTab | "dashboards", string> = {
-  dashboards: "/organizations",
+const ACTION_HREF: Record<ScopeSurfaceTab, string> = {
   assistants: "/assistants",
   agents: "/agents",
   artifacts: "/artifacts",
@@ -47,15 +46,19 @@ const ACTION_HREF: Record<ScopeSurfaceTab | "dashboards", string> = {
 };
 
 /** The label that action carries, held here as an independent oracle. */
-const ACTION_LABEL: Record<ScopeSurfaceTab | "dashboards", string> = {
-  dashboards: "Go to Organizations",
+const ACTION_LABEL: Record<ScopeSurfaceTab, string> = {
   assistants: "Go to Assistants",
   agents: "Go to Agents",
   artifacts: "Go to Artifacts",
   skills: "Go to Skills",
 };
 
-const TABS = ["dashboards", ...SCOPE_SURFACE_TABS] as const;
+// The FOUR scoped tabs only. The drawing names them: "While one of the four
+// scoped tabs - Assistants, Agents, Artifacts, Skills - holds nothing to list,
+// it reads as the Empty state of Components and nothing else". The Dashboards
+// tab is given its own body and its own empty reading by the Dashboards tab
+// section, and is asserted in the route-matrix suite.
+const TABS = SCOPE_SURFACE_TABS;
 
 afterEach(cleanup);
 

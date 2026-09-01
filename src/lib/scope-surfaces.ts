@@ -88,6 +88,24 @@ export const SCOPE_SURFACE_KIND_LABEL: Record<ScopeSurfaceKind, string> = {
   project: "Project",
 };
 
+/**
+ * The name a scope's page header falls back to when the entity's own name is
+ * not available to this reader.
+ *
+ * The ratified drawing makes the heading the ENTITY's: "The page's heading
+ * reads Workspace, and the page is an entity page". The workspace and the
+ * personal scope ARE named by the drawing, so they need no read at all; the
+ * three id-bearing scopes fall back to their kind noun, never to a raw or
+ * title-cased id, and never to the name of the active tab.
+ */
+export const SCOPE_SURFACE_ENTITY_FALLBACK: Record<ScopeSurfaceKind, string> = {
+  workspace: "Workspace",
+  personal: "Personal",
+  organization: "Organization",
+  team: "Team",
+  project: "Project",
+};
+
 /** Tab labels, exactly as the strip renders them. */
 export const SCOPE_SURFACE_TAB_LABEL: Record<ScopeSurfaceTab | "dashboards", string> = {
   dashboards: "Dashboards",
@@ -111,15 +129,17 @@ export function scopeSurfaceEmptyTestId(tab: ScopeSurfaceTab | "dashboards"): st
  * its own today (their add affordances live in a page toolbar or a dialog), so
  * each tab takes the pattern's neutral action instead of an invented one: the
  * existing top-level surface that lists that domain today, named and addressed
- * exactly as the sidebar already names and addresses it. The Dashboards tab has
- * no top-level listing route in the product at all, so its neutral action leads
- * to the scopes whose Dashboards tab is already live.
+ * exactly as the sidebar already names and addresses it.
+ *
+ * The FOUR scoped tabs only. The drawing binds this pattern to them by name -
+ * "While one of the four scoped tabs - Assistants, Agents, Artifacts, Skills -
+ * holds nothing to list, it reads as the Empty state of Components" - and gives
+ * the Dashboards tab its own body and its own empty reading instead.
  */
 export const SCOPE_SURFACE_TAB_ACTION: Record<
-  ScopeSurfaceTab | "dashboards",
+  ScopeSurfaceTab,
   { label: string; href: string }
 > = {
-  dashboards: { label: "Go to Organizations", href: "/organizations" },
   assistants: { label: "Go to Assistants", href: "/assistants" },
   agents: { label: "Go to Agents", href: "/agents" },
   artifacts: { label: "Go to Artifacts", href: "/artifacts" },

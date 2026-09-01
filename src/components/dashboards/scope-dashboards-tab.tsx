@@ -43,6 +43,7 @@ import type { ListingScopeKind } from "@cinatra-ai/dashboards/entity-links";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScopeDashboardsEmptyState } from "./scope-dashboards-empty";
 import {
   SCOPE_LISTING_REASON_COPY,
   type ScopeListingRemovalSource,
@@ -142,7 +143,7 @@ export function ScopeDashboardsTab({
           ))}
         </ul>
       ) : (
-        <EmptyState canManage={data.canManage} />
+        <ScopeDashboardsEmptyState canManage={data.canManage} />
       )}
     </section>
   );
@@ -207,30 +208,6 @@ function ScopeRow({
         </Link>
       </Button>
     </li>
-  );
-}
-
-function EmptyState({ canManage }: { canManage: boolean }) {
-  return (
-    <div
-      data-state="empty"
-      className="rounded-lg border border-dashed border-line px-3 py-[18px] text-center"
-    >
-      <p className="text-xs font-semibold text-foreground">
-        No dashboards in this scope yet
-      </p>
-      <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
-        {canManage ? (
-          <>
-            A manager can{" "}
-            <b className="font-semibold text-foreground">Add</b> an existing
-            dashboard, or create one that homes here.
-          </>
-        ) : (
-          <>Dashboards homed or listed here will appear on this tab.</>
-        )}
-      </p>
-    </div>
   );
 }
 
