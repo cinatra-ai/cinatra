@@ -53,14 +53,25 @@ type ConfirmInput = {
 };
 type DecisionResult = { ok: true; dispatched?: boolean } | { ok: false; error: string };
 
+/**
+ * THE DEFAULT DECISION LEAVES THE RUN PARKED (cinatra#3062, convergence round).
+ *
+ * `dispatched` is not decoration: `true` means the release CROSSED INTO
+ * EXECUTION and the run is running, which §V draws read-only with no Continue.
+ * The arms below are about the reading BEFORE the run starts — "Continue does
+ * not close the row… for as long as the run has not started" — so the fixture
+ * has to say so. It said `dispatched: true` and then demanded the editable
+ * reading, which is the contradiction this round found in the component.
+ * The started reading is measured in its own arm at the end of this file.
+ */
 const confirmMock = vi.fn(async (_input: ConfirmInput): Promise<DecisionResult> => ({
   ok: true,
-  dispatched: true,
+  dispatched: false,
 }));
 const skipMock = vi.fn(
   async (_input: { runId: string; holdRef?: string }): Promise<DecisionResult> => ({
     ok: true,
-    dispatched: true,
+    dispatched: false,
   }),
 );
 const holdStateMock = vi.fn();
@@ -195,7 +206,8 @@ function installBrokerStub(options: {
     if (url === LIFECYCLE_RECOMMENDATION_HOLD_PATH) return answer(options.hold());
     if (url === LIFECYCLE_RECOMMENDATION_DECIDE_PATH) {
       return answer({
-        outcome: options.decide ? options.decide(body) : { ok: true, dispatched: true },
+        // See the note on `confirmMock`: the default leaves the run parked.
+        outcome: options.decide ? options.decide(body) : { ok: true, dispatched: false },
       });
     }
     throw new Error(`unstubbed path: ${url}`);
@@ -232,9 +244,10 @@ beforeEach(() => {
   holdStateMock.mockReset();
   holdStateMock.mockResolvedValue({ state: "none" });
   confirmMock.mockReset();
-  confirmMock.mockResolvedValue({ ok: true, dispatched: true });
+  // The run stays PARKED by default — see the note on `confirmMock`.
+  confirmMock.mockResolvedValue({ ok: true, dispatched: false });
   skipMock.mockReset();
-  skipMock.mockResolvedValue({ ok: true, dispatched: true });
+  skipMock.mockResolvedValue({ ok: true, dispatched: false });
 });
 
 afterEach(() => {
@@ -354,6 +367,31 @@ describe("the chat host draws the checkbox row and one Continue", () => {
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(2));
     expect(confirmMock.mock.calls[1]![0].holdRef).toBe("hold-ref-3062");
+  });
+
+  it("takes §V's started reading the moment the press starts the run", async () => {
+    // §V: "Once the run is running, the selection is fixed and the row is
+    // read-only… No Continue is left beneath it, and nothing is left to press."
+    //
+    // `dispatched: true` IS that moment — the release crossed into execution —
+    // and the card knows it a whole authority re-read before the resolver does.
+    // Handing the editable reading back on it drew live boxes over a running run
+    // and let a second decision be taken on a hold the run had already left.
+    confirmMock.mockResolvedValueOnce({ ok: true, dispatched: true });
+    const { container } = mount("chat_thread");
+    await waitFor(() => expect(pills(container)).toHaveLength(2));
+
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+
+    await waitFor(() => expect(continueButton(container)).toBeNull());
+    expect(container.querySelector("[data-skills-step-floor]")).toBeNull();
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("false");
+    // The pills stay, stating box by box what the run applied.
+    expect(pills(container)).toHaveLength(2);
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(true);
+    // …and there is no second decision to take.
+    expect(confirmMock).toHaveBeenCalledTimes(1);
   });
 
   it("draws the server's refusal when the run has moved on, and stays decidable", async () => {
@@ -630,7 +668,9 @@ describe("the conversation card is truthful when the authority answers underneat
           resolve = r;
         }),
     );
-    return { land: (r: DecisionResult = { ok: true, dispatched: true }) => resolve(r) };
+    // Lands PARKED by default: the arms below are about the reading before the
+    // run starts (see the note on `confirmMock`).
+    return { land: (r: DecisionResult = { ok: true, dispatched: false }) => resolve(r) };
   }
 
   it("gives a reader who may not decide a box that does not move", async () => {
@@ -724,7 +764,7 @@ describe("the conversation card is truthful when the authority answers underneat
     expect((continueButton(container) as HTMLButtonElement).disabled).toBe(false);
 
     // …and the step is genuinely decidable again, against the same hold.
-    confirmMock.mockResolvedValue({ ok: true, dispatched: true });
+    confirmMock.mockResolvedValue({ ok: true, dispatched: false });
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(2));
     expect(confirmMock.mock.calls[1]![0].holdRef).toBe("hold-ref-3062");

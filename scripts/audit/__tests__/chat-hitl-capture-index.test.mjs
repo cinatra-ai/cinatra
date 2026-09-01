@@ -110,8 +110,8 @@ function chatAssertions(kind = "recommendation_hold", state = "pending") {
  * assert nothing about the card, be accepted here, and be refused by the
  * canonical half that never had the chat-only guard.
  */
-function hostAssertions(host, kind = "recommendation_hold", state = "pending") {
-  return captureRequirementsFor(host, kind, state).map((r) => ({
+function hostAssertions(host, kind = "recommendation_hold", state = "pending", cell = null) {
+  return captureRequirementsFor(host, kind, state, cell).map((r) => ({
     ...r,
     expect: r.expect ?? "present",
     count: (r.expect ?? "present") === "absent" ? 0 : 1,
@@ -1105,18 +1105,18 @@ describe("the manifest to capture-index binding", () => {
     expect(CARD_KINDS.recommendation_hold.decisionControlsByHost.chat_thread).toEqual(
       row.decisionControls,
     );
-    // …and the same one control on the other two checklist hosts, because §V
-    // reproduces ONE row rather than redrawing it per host.
-    for (const host of ["run_card", "site_widget"]) {
+    // …and the same one control on the other three declared hosts, because §V
+    // reproduces ONE row rather than redrawing it per host. The review page's
+    // gate region is among them: `SKILLS_CHECKLIST_HOSTS` names all four, so
+    // leaving it on the trio (cinatra#3062, before the convergence round) made
+    // the contract refuse an honest picture of the shipped gate region.
+    for (const host of ["run_card", "page_gate_region", "site_widget"]) {
       expect(CARD_KINDS.recommendation_hold.decisionControlsByHost[host]).toEqual([
         "[data-skills-step-continue]",
       ]);
     }
-    // The review page's gate region is the one host still drawing the trio, so
-    // it has no per-host entry and falls to the kind's default.
-    expect(
-      CARD_KINDS.recommendation_hold.decisionControlsByHost.page_gate_region,
-    ).toBeUndefined();
+    // The kind's host-blind default is now reachable by NO declared host; it
+    // survives as the vocabulary the frozen pre-redraw cells are graded against.
     expect(KIND_REQUIRED_ACTIONS.recommendation_hold).toEqual([
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
@@ -1333,8 +1333,13 @@ const CONTINUE = "[data-skills-step-continue]";
 const CONFIRM = '[data-skill-action="confirm"]';
 const ADJUST = '[data-skill-action="adjust"]';
 const SKIP = '[data-skill-action="skip"]';
-/** The trio the review page's gate region still draws. */
-const GATE_REGION_CONTROLS = [CONFIRM, ADJUST, SKIP];
+/**
+ * The trio NO declared host draws any longer — kept as the vocabulary the 26
+ * frozen pre-redraw cells were photographed against (cinatra#3062, convergence
+ * round). It named the review page's gate region until that host was found to
+ * be drawing the checklist like the other three.
+ */
+const RETIRED_CONTROLS = [CONFIRM, ADJUST, SKIP];
 const DECISION_CONTROLS = [CONTINUE];
 
 /** One `recommendation_hold` card as the chat draws it, painted or not. */
@@ -1703,26 +1708,23 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     }
   });
 
-  it("still requires EVERY member on the host whose group has three of them", () => {
-    // The review page's gate region keeps §V's per-chip reading, so the
-    // divergence this tier declares — every member, where the canonical contract
-    // takes any one — is still measured on a group that actually has several.
-    const record = {
-      ...chatRecord(),
-      cell: "X9__page_gate_region__recommendation-hold-held",
-      declaredHost: "page_gate_region",
-      finalUrl:
-        "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5/review/lifecycle-review%3A28c4a63d1b6068e89bdd57f6c24f35ca3c2c47d928531997d2c2b6355b94a8ac",
-      instance: chatInstance("recommendation_hold", {
-        attributes: {
-          "data-lifecycle-card": "recommendation_hold",
-          "data-lifecycle-card-host": "page_gate_region",
-        },
-      }),
-    };
-    const base = hostAssertions("page_gate_region");
-    expect(base.filter((a) => GATE_REGION_CONTROLS.includes(a.selector))).toHaveLength(3);
-    for (const dropped of GATE_REGION_CONTROLS) {
+  it("still requires EVERY member of the one group that has three of them", () => {
+    // WHERE THE MULTI-MEMBER CASE LIVES NOW (cinatra#3062, convergence round).
+    // It used to be measured on the review page's gate region, on the belief
+    // that that host still drew the per-chip trio. It does not — every declared
+    // host draws §V's checklist and owes the one Continue — so the only group
+    // with several members left is the one a FROZEN PRE-REDRAW CELL is graded
+    // against: a picture taken before the redraw reached its host, which owes
+    // the whole trio it photographed.
+    //
+    // And the divergence this arm was written to declare is CLOSED there: the
+    // canonical contract no longer takes any one of the three on such a cell,
+    // it takes all three, so both tiers now refuse the same record.
+    const cell = "A1__recommendation-card__chat_thread__pending__light";
+    const record = { ...chatRecord(), cell };
+    const base = hostAssertions("chat_thread", "recommendation_hold", "pending", cell);
+    expect(base.filter((a) => RETIRED_CONTROLS.includes(a.selector))).toHaveLength(3);
+    for (const dropped of RETIRED_CONTROLS) {
       const assertions = base.map((a) =>
         a.selector === dropped ? { ...a, count: 0, visible: 0 } : a,
       );

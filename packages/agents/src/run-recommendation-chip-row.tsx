@@ -875,6 +875,30 @@ export function RunRecommendationChipRow({
    */
   const [submitted, setSubmitted] = useState(false);
   /**
+   * THIS PRESS STARTED THE RUN (cinatra#3062, convergence round).
+   *
+   * §V draws three readings and no fourth: "Once the run is running, the
+   * selection is fixed and the row is read-only: each pill states in its own box
+   * whether that skill was applied to the run. No Continue is left beneath it,
+   * and nothing is left to press."
+   *
+   * A decision that comes back `{ ok: true, dispatched: true }` is the run
+   * CROSSING INTO EXECUTION — `releaseRecommendationHold` answers `dispatched`
+   * true only after the dispatcher accepted it. The authority's own answer says
+   * so too, but it arrives a re-read later, and the whole reason this leg exists
+   * is that the answer can stay stale. Between the two the row was handing the
+   * editable reading back on a run that had already started: §V's read-only
+   * reading redrawn with live boxes and a live Continue, and a second decision
+   * genuinely takeable on it — the Skip path would then write durable skip
+   * evidence for a run dispatched on a Confirm, which is the double-counted
+   * telemetry the decision path documents as its residual race.
+   *
+   * So the reading follows the outcome that is already known here, and the
+   * authority's later answer confirms it. Cleared when the authority's reading
+   * changes — a re-park mints a new hold, and that hold is decidable again.
+   */
+  const [startedHere, setStartedHere] = useState(false);
+  /**
    * THE GUARDS BELONG TO ONE DECISION, NOT TO THE MOUNT (cinatra#3062).
    *
    * §V: "Continue is not a lock. For as long as the run has not started, a
@@ -927,6 +951,10 @@ export function RunRecommendationChipRow({
      */
     if (inFlightRef.current) return;
     releasedRef.current = false;
+    // The authority has spoken, so this reader's own knowledge that the run
+    // started is no longer the newer of the two; `decision.runStarted` carries
+    // the reading from here.
+    setStartedHere((was) => (was ? false : was));
     // Functional updaters, because this effect now fires on a re-park as well
     // as on a settle: returning the value it was handed lets React bail out, so
     // a reading that has nothing to reset costs no render.
@@ -1022,8 +1050,16 @@ export function RunRecommendationChipRow({
      * against a fresh scoring.
      */
     pool: readonly SkillsStepCandidate[],
-    /** Told whether the decision LANDED — see `releasedRef` (cinatra#3047). */
-    onOutcome?: (ok: boolean) => void,
+    /**
+     * Told HOW the decision landed — see `releasedRef` (cinatra#3047).
+     *
+     * THE WHOLE RESULT, NOT A BOOLEAN (cinatra#3062, convergence round).
+     * `{ ok: true, dispatched: true }` means the release crossed into execution:
+     * the run HAS started, which §V draws as read-only with no Continue at all.
+     * Flattening it to `ok` handed the editable reading back on exactly that
+     * outcome, so the row offered a second decision on a run already running.
+     */
+    onOutcome?: (outcome: { ok: boolean; dispatched: boolean }) => void,
   ) => {
     setError(null);
     const kept = pool.filter((r) => next[r.skillId]?.keep === true);
@@ -1044,15 +1080,15 @@ export function RunRecommendationChipRow({
           });
         } catch {
           setError(RECOMMENDATION_ROW_REFUSAL);
-          onOutcome?.(false);
+          onOutcome?.({ ok: false, dispatched: false });
           return;
         }
         if (!res.ok) {
           setError(res.error || "Could not skip.");
-          onOutcome?.(false);
+          onOutcome?.({ ok: false, dispatched: false });
           return;
         }
-        onOutcome?.(true);
+        onOutcome?.({ ok: true, dispatched: res.dispatched });
         onDecided?.();
         router.refresh();
       });
@@ -1088,15 +1124,15 @@ export function RunRecommendationChipRow({
         });
       } catch {
         setError(RECOMMENDATION_ROW_REFUSAL);
-        onOutcome?.(false);
+        onOutcome?.({ ok: false, dispatched: false });
         return;
       }
       if (!res.ok) {
         setError(res.error || "Could not confirm the skill selection.");
-        onOutcome?.(false);
+        onOutcome?.({ ok: false, dispatched: false });
         return;
       }
-      onOutcome?.(true);
+      onOutcome?.({ ok: true, dispatched: res.dispatched });
       onDecided?.();
       router.refresh();
     });
@@ -1219,8 +1255,17 @@ export function RunRecommendationChipRow({
     }
     chipsRef.current = next;
     setChips(next);
-    release(next, stepCandidates, (ok) => {
+    release(next, stepCandidates, (outcome) => {
       inFlightRef.current = false;
+      if (outcome.ok && outcome.dispatched) {
+        // THE RUN STARTED ON THIS PRESS (cinatra#3062, convergence round). §V
+        // leaves NOTHING to press on a started run, so the guards stay closed
+        // and the row takes the read-only reading at once rather than flickering
+        // through an editable one the drawing does not draw.
+        setStartedHere(true);
+        setSubmitted(false);
+        return;
+      }
       // THE GUARDS BELONG TO THE IN-FLIGHT WINDOW, AND TO NOTHING LONGER
       // (cinatra#3062, the second capture).
       //
@@ -1415,13 +1460,30 @@ export function RunRecommendationChipRow({
       // settled hold whose recorded offer cannot be read has nothing a
       // re-decision could resolve against, and falls to the read-only reading
       // rather than offering a box that the decision path would refuse.
-      const canEdit = settledInputs.runNotStarted && canDecide && stepCandidates.length > 0;
-      if (canEdit) {
+      /**
+       * WHICH READING, AND WHO MAY ANSWER IT, ARE TWO QUESTIONS (cinatra#3062,
+       * convergence round). `canDecide` was folded into the reading itself, so a
+       * reader without run access fell straight past §V's settled-but-not-started
+       * reading into the started one — boxes read-only and no Continue at all —
+       * on a run that had not started. §V says the opposite for that reader:
+       * "Every box, and the Continue beneath them, stays on screen disabled —
+       * the reader sees exactly what is being asked, and that it is not theirs
+       * to answer." It is the same reading the LIVE step already gives them.
+       *
+       * The offer is what an edit may pin, so the reading still needs one: a
+       * settled hold whose recorded offer cannot be read has nothing a
+       * re-decision could resolve against, and falls to the read-only reading.
+       */
+      const beforeTheRunStarts =
+        settledInputs.runNotStarted && !startedHere && stepCandidates.length > 0;
+      if (beforeTheRunStarts) {
         return skillsStep({
           cardState: "decided",
           pills: stepCandidates,
-          editable: !submitted,
+          editable: canDecide && !submitted,
           ready: true,
+          // Drawn for every reader; the button itself is `disabled` without run
+          // access, which is what the drawing's restricted reading asks for.
           control: true,
         });
       }
@@ -1530,9 +1592,11 @@ export function RunRecommendationChipRow({
       // be an affordance that moves and decides nothing — the same reading the
       // per-chip row refused them by disabling every chip control, and the same
       // test the SETTLED editable reading already applies below.
-      editable: canDecide && !submitted,
+      editable: canDecide && !submitted && !startedHere,
       ready: loaded,
-      control: loaded,
+      // NOTHING TO PRESS ONCE THE RUN HAS STARTED (cinatra#3062, convergence
+      // round) — §V's started reading keeps the pills and drops the floor.
+      control: loaded && !startedHere,
     });
   }
 

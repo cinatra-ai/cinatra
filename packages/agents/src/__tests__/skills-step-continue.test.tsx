@@ -184,6 +184,11 @@ describe("Continue on the held Skills step", () => {
     // floor beneath disabled boxes belongs to the reader who may NOT shape the
     // run — so the window this latch names is the IN-FLIGHT one its own contract
     // names, and the arm measures both of its edges.
+    //
+    // AND THE OUTCOME IS NOT A BOOLEAN (cinatra#3062, convergence round). This
+    // arm settled with `dispatched: true` and then demanded the editable reading
+    // — but `dispatched: true` is the run CROSSING INTO EXECUTION, which §V
+    // draws read-only with no Continue at all. It is measured on its own below.
     let settle: (v: { ok: true; dispatched: boolean }) => void = () => {};
     confirmRunRecommendationAction.mockImplementation(
       () => new Promise((resolve) => { settle = resolve as typeof settle; }),
@@ -204,10 +209,10 @@ describe("Continue on the held Skills step", () => {
     fireEvent.click(continueButton(container)!);
     expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1);
 
-    // HOME: the run has not started, so the drawing's reading comes back —
+    // HOME, AND THE RUN HAS NOT STARTED: the drawing's reading comes back —
     // the same pills, the boxes able to take a change, Continue beneath them.
     await act(async () => {
-      settle({ ok: true, dispatched: true });
+      settle({ ok: true, dispatched: false });
       await Promise.resolve();
     });
     await waitFor(() =>
@@ -218,6 +223,44 @@ describe("Continue on the held Skills step", () => {
     for (const box of container.querySelectorAll('[role="checkbox"]')) {
       expect(box.hasAttribute("disabled")).toBe(false);
     }
+  });
+
+  it("a press that STARTS the run takes §V's started reading, not the editable one", async () => {
+    // §V: "Once the run is running, the selection is fixed and the row is
+    // read-only: each pill states in its own box whether that skill was applied
+    // to the run. No Continue is left beneath it, and nothing is left to press."
+    //
+    // `{ ok: true, dispatched: true }` is that moment: the release crossed into
+    // execution. Handing the guards back on it drew live boxes and a live
+    // Continue over a running run, and a second press was genuinely takeable —
+    // the Skip path would then write durable skip evidence for a run dispatched
+    // on a Confirm.
+    let settle: (v: { ok: true; dispatched: boolean }) => void = () => {};
+    confirmRunRecommendationAction.mockImplementation(
+      () => new Promise((resolve) => { settle = resolve as typeof settle; }),
+    );
+    const { container } = mount();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      settle({ ok: true, dispatched: true });
+      await Promise.resolve();
+    });
+
+    // THE FLOOR IS GONE, and so is everything a press could reach.
+    await waitFor(() => expect(continueButton(container)).toBeNull());
+    expect(container.querySelector("[data-skills-step-floor]")).toBeNull();
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("false");
+    // …and the pills are still there, stating what the run applied.
+    expect(container.querySelectorAll('[role="checkbox"]').length).toBeGreaterThan(0);
+    for (const box of container.querySelectorAll('[role="checkbox"]')) {
+      expect(box.hasAttribute("disabled")).toBe(true);
+    }
+    // A second decision is not reachable at all.
+    expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1);
+    expect(skipRunRecommendationAction).not.toHaveBeenCalled();
   });
 
   it("REFUSED: says so, claims no decision, and leaves the step decidable", async () => {

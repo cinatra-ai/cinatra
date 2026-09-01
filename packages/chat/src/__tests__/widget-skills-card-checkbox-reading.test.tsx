@@ -297,7 +297,11 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
       () => HELD,
       (body) => {
         bodies.push(body);
-        return { ok: true, dispatched: true };
+        // THE RUN STAYS PARKED (cinatra#3062, convergence round). `dispatched`
+        // is not decoration: `true` is the release CROSSING INTO EXECUTION, and
+        // §V draws a running run read-only with no Continue at all. This arm is
+        // about the reading BEFORE the run starts, so the broker says so.
+        return { ok: true, dispatched: false };
       },
     );
     try {
@@ -347,6 +351,30 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
       expect(cookieConfirm).not.toHaveBeenCalled();
       expect(cookieSkip).not.toHaveBeenCalled();
       expect(cookieHoldRead).not.toHaveBeenCalled();
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("takes §V's started reading the moment the press starts the run", async () => {
+    // §V: "Once the run is running, the selection is fixed and the row is
+    // read-only… No Continue is left beneath it, and nothing is left to press."
+    // `dispatched: true` is that moment, and the widget knows it a whole
+    // authority re-read before the resolver does.
+    const { stub, root } = await mountWidget(
+      () => HELD,
+      () => ({ ok: true, dispatched: true }),
+    );
+    try {
+      const cont = root.querySelector<HTMLButtonElement>("[data-skills-step-continue]")!;
+      await act(async () => {
+        fireEvent.click(cont);
+      });
+      await waitFor(() =>
+        expect(root.querySelector("[data-skills-step-continue]")).toBeNull(),
+      );
+      expect(root.querySelector("[data-skills-step-floor]")).toBeNull();
+      expect(decisionCalls(stub)).toHaveLength(1);
     } finally {
       stub.restore();
     }

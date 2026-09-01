@@ -89,13 +89,25 @@ const READ_ONLY: RunRecommendationDecision = {
 
 const row = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-run-recommendation-chip-row]")!;
 
-/** Every element from the row's root down to (but not including) a pill. */
+/**
+ * Every element from the row's root down to (but not including) a pill.
+ *
+ * THE CONTINUE FLOOR IS NOT PANEL CHROME (cinatra#3062, convergence round). §V
+ * draws the control's own wrapper verbatim —
+ * `display:flex; justify-content:flex-end; margin-top:12px; padding-top:12px;
+ * border-top:1px solid var(--line)` — so its hairline rule and the padding
+ * beneath it are the DRAWING's, not a card this step wrapped itself in. What
+ * this file bans is a panel around the step: a border, a ground or a radius that
+ * closes the row off from the column it sits in. The floor is excluded by name
+ * rather than by loosening the pattern, so a real card would still be caught.
+ */
 function frameElements(c: HTMLElement): HTMLElement[] {
   const root = row(c);
   const out: HTMLElement[] = [root];
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
     if (el.closest("[data-skills-step-pill]")) continue;
     if (el.hasAttribute("data-skills-step-pill")) continue;
+    if (el.hasAttribute("data-skills-step-floor")) continue;
     if (el.closest("button") || el.tagName === "BUTTON") continue;
     out.push(el);
   }

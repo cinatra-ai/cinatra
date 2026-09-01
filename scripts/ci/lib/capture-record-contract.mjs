@@ -194,13 +194,18 @@ export const CARD_KINDS = {
     //
     // THE GROUP IS PER HOST, AND THE DEBT ABOVE IS CLOSED (cinatra#3062).
     //
-    // Three of the four hosts draw §V's CHECKLIST — the run page, the chat and
-    // the widget — and the drawing gives that reading exactly one decision act:
+    // ALL FOUR DECLARED HOSTS draw §V's CHECKLIST — the run page, the review
+    // page's gate region, the chat and the widget. `SKILLS_CHECKLIST_HOSTS` in
+    // packages/agents/src/run-recommendation-chip-row.tsx names all four, and
+    // the gate region's mount keeps its own host declaration while drawing the
+    // same reading, so there is no host left drawing the per-chip trio. The
+    // drawing gives that reading exactly one decision act:
     // "The reader sets the boxes and presses Continue beneath the list … and the
     // whole row is answered at once, every box together", with "a pill carries
     // nothing to press — no Confirm, no Adjust, no Skip." The review page's gate
-    // region is the one host still drawing the per-chip trio, so the trio is
-    // ITS vocabulary rather than the kind's, and it stays below as the default.
+    // region draws it too, so `decisionControls` below survives only as the
+    // host-BLIND default a host with no entry of its own would fall to — no
+    // declared host takes it, and the trio is FORBIDDEN on every one of them.
     //
     // WHY IT HAD TO MOVE: the shipped recorder refused every honest capture of
     // the card this branch draws. A dry run against a real chat transcript came
@@ -214,6 +219,12 @@ export const CARD_KINDS = {
     ],
     decisionControlsByHost: {
       run_card: ['[data-skills-step-continue]'],
+      // THE LAST EXCEPTION IS GONE (cinatra#3062, convergence round). The gate
+      // region was left on the trio here while production had already moved it
+      // onto the checklist, so the contract required controls the page does not
+      // draw and admitted the three it retired — it refused an honest picture
+      // of the shipped gate region and accepted a picture of a regression.
+      page_gate_region: ['[data-skills-step-continue]'],
       chat_thread: ['[data-skills-step-continue]'],
       site_widget: ['[data-skills-step-continue]'],
     },
@@ -245,7 +256,11 @@ export const CARD_KINDS = {
      * The list only ever shrinks. When it is empty the two eras have finished
      * changing places and it can go.
      */
-    preChecklistPendingCells: [
+    // FROZEN IN THE RUNTIME SENSE TOO (cinatra#3062, convergence round): it was
+    // described as closed and frozen while being an ordinary mutable array an
+    // importer could push a freshly minted cell onto, which would hand that cell
+    // the retired reading instead of the shipped one.
+    preChecklistPendingCells: Object.freeze([
       "A1__recommendation-card__chat_thread__pending__dark",
       "A1__recommendation-card__chat_thread__pending__light",
       "A2__recommendation-card__run_card__pending__dark",
@@ -272,7 +287,7 @@ export const CARD_KINDS = {
       "W1__recommendation-card__site_widget__held__light",
       "W2__recommendation-card__site_widget__held__column__dark",
       "W2__recommendation-card__site_widget__held__dark",
-    ],
+    ]),
   },
   trigger_schedule_proposal: {
     cellTokens: ["trigger-card", "schedule-card", "trigger-schedule-proposal"],
@@ -686,7 +701,17 @@ export function requiredAssertionsFor({ host, kind, state, cell = null }) {
    */
   const preRedraw =
     cell !== null && (spec?.preChecklistPendingCells ?? []).includes(cell) && state === "pending";
-  const hostControls = spec?.decisionControlsByHost?.[host] ?? null;
+  /**
+   * OWN KEYS ONLY (cinatra#3062, convergence round). A plain property read
+   * answers for `constructor`, `__proto__` and `toString` as well, and a record
+   * declaring one of those as its host handed `controls` a function — which the
+   * `for … of` below threw on, aborting the whole index validation with a
+   * TypeError instead of returning the finding that names the bad record.
+   */
+  const hostControls =
+    spec && spec.decisionControlsByHost && Object.hasOwn(spec.decisionControlsByHost, host)
+      ? spec.decisionControlsByHost[host]
+      : null;
   const controls = preRedraw
     ? (spec?.decisionControls ?? [])
     : (hostControls ?? spec?.decisionControls ?? []);
@@ -697,8 +722,21 @@ export function requiredAssertionsFor({ host, kind, state, cell = null }) {
   if (spec) {
     if (!settledAbsence) required.push({ selector: spec.root, scope: "frame" });
     if (state === "pending") {
+      /**
+       * A PRE-REDRAW CELL OWES ITS WHOLE READING (cinatra#3062, convergence
+       * round). The kind's group is an any-of — one of the three was enough —
+       * which the frozen list's own note contradicted: it says such a cell
+       * "OWES the retired trio — REQUIRED, not merely admitted", and that is the
+       * only thing stopping an old name from being reused for a picture of the
+       * shipped card. Any-of let a record show Confirm alone and pass here while
+       * the strict audit tier refused it, so the two tiers graded one record
+       * differently. Every one of the 26 records on file observes all three, so
+       * naming all three costs no truthful picture.
+       */
       for (const sel of controls) {
-        required.push({ selector: sel, scope: "root", any: controls });
+        required.push(
+          preRedraw ? { selector: sel, scope: "root" } : { selector: sel, scope: "root", any: controls },
+        );
       }
     }
     // A retired control is a regression wherever it appears on a host that

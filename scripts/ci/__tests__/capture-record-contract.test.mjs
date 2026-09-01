@@ -221,15 +221,22 @@ describe("requiredAssertionsFor", () => {
 // The ratified drawing gives this card ONE decision act on the three checklist
 // hosts — "The reader sets the boxes and presses Continue beneath the list …
 // and the whole row is answered at once" — and "a pill carries nothing to press
-// — no Confirm, no Adjust, no Skip." The review page's gate region is the one
-// host that still draws the per-chip trio, so the trio is ITS vocabulary and
-// not the kind's.
+// — no Confirm, no Adjust, no Skip."
+//
+// ALL FOUR DECLARED HOSTS, not three (cinatra#3062, convergence round). This
+// block was written with the review page's gate region left on the per-chip
+// trio, on the belief that it still drew it. It does not:
+// `SKILLS_CHECKLIST_HOSTS` in packages/agents/src/run-recommendation-chip-row.tsx
+// names run_card, page_gate_region, chat_thread and site_widget, and the gate
+// region's own suite states that the last exception is gone. The contract was
+// therefore refusing an honest picture of the shipped gate region and admitting
+// a picture of a regression on it.
 //
 // The debt this closes, in one line: the shipped recorder refused every honest
 // capture of the branch's own card, because it demanded three controls the card
 // no longer draws on the host it was drawing them for.
 describe("recommendation_hold decision controls, per host", () => {
-  const skillsCheckHosts = ["run_card", "chat_thread", "site_widget"];
+  const skillsCheckHosts = ["run_card", "page_gate_region", "chat_thread", "site_widget"];
   const RETIRED = [
     '[data-skill-action="confirm"]',
     '[data-skill-action="adjust"]',
@@ -273,15 +280,49 @@ describe("recommendation_hold decision controls, per host", () => {
     expect(forbidden.map((f) => f.selector)).not.toContain("[data-skills-step-continue]");
   });
 
-  it("leaves the review page's gate region on the per-chip trio", () => {
+  it("leaves NO declared host on the per-chip trio", () => {
+    // Every host the card declares draws §V's checklist, so the kind's
+    // host-blind default is reachable by no capture at all.
+    for (const host of skillsCheckHosts) {
+      expect(CARD_KINDS.recommendation_hold.decisionControlsByHost[host]).toEqual([
+        "[data-skills-step-continue]",
+      ]);
+    }
+  });
+
+  it("does not derive requirements from an inherited property", () => {
+    // A record declaring `constructor`, `__proto__` or `toString` as its host
+    // used to read a function off the prototype chain and throw a TypeError out
+    // of the whole index validation instead of returning the finding that names
+    // the bad record.
+    for (const host of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(() =>
+        requiredAssertionsFor({ host, kind: "recommendation_hold", state: "pending" }),
+      ).not.toThrow();
+    }
+  });
+
+  it("holds a pre-redraw cell to ALL THREE of the controls its name claims", () => {
+    // The frozen list's own note says such a cell "OWES the retired trio —
+    // REQUIRED, not merely admitted". It was pushed as an any-of group, so a
+    // record showing Confirm alone passed here while the strict audit tier
+    // refused it — one record, two different gradings.
+    const cell = "A1__recommendation-card__chat_thread__pending__light";
     const { required } = requiredAssertionsFor({
-      host: "page_gate_region",
+      host: "chat_thread",
       kind: "recommendation_hold",
       state: "pending",
+      cell,
     });
-    const rooted = required.filter((r) => r.scope === "root").map((r) => r.selector);
-    for (const sel of RETIRED) expect(rooted).toContain(sel);
-    expect(rooted).not.toContain("[data-skills-step-continue]");
+    for (const sel of RETIRED) {
+      const req = required.find((r) => r.selector === sel && r.scope === "root");
+      expect(req).toBeDefined();
+      expect(req.any).toBeUndefined();
+    }
+  });
+
+  it("keeps the pre-redraw list frozen against a stray push", () => {
+    expect(Object.isFrozen(CARD_KINDS.recommendation_hold.preChecklistPendingCells)).toBe(true);
   });
 
   it("admits an honest capture of the shipped card, and refuses one that shows the retired trio", () => {
