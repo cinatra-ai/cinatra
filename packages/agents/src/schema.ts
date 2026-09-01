@@ -342,6 +342,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS
   //   delegated_actor_snapshot text;
   delegatedActorSnapshot: text("delegated_actor_snapshot"),
+  // assignment_scope_snapshot (cinatra#2813 S1, epic #2812): the IMMUTABLE
+  // assignment scopes this run was created under —
+  // {v, orgId, projectId?, teamIds[], originatingHumanUserId?}. Written ONCE
+  // by the store on every creation path and never updated; a run whose scope
+  // could move is a run whose assignments can change under it. NOT the same
+  // thing as delegatedActorSnapshot above (execution identity) and
+  // deliberately not reused for it. NULL for pre-migration rows, which
+  // resolve to workspace + the durable organization and nothing else.
+  // Migration: src/lib/drizzle-store.ts entry + core__0100.
+  assignmentScopeSnapshot: jsonb("assignment_scope_snapshot"),
   // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
   // creation from the LOCKED template owner anchor + org + project launch, and
   // re-derived + containment-checked at MCP-token mint. NULL only for a corrupt

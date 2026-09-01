@@ -130,6 +130,12 @@ const DIRECT_GRANTS: Record<Role, ReadonlySet<Permission>> = {
   org_admin: new Set<Permission>([
     // Admin-level mutations within the org.
     "agent.update",
+    // Per-scope assignment authority (cinatra#2813 S1, epic #2812).
+    // ADMISSION, not authority over a particular scope: the exact-scope
+    // resolver in assignment-authority.ts still fences every write to the
+    // organization / team / project / person the actor administers.
+    "agent.assignments.manage",
+    "context.assign",
     "agent.delete",
     "agent.share",
     "object.update",
@@ -189,6 +195,11 @@ const DIRECT_GRANTS: Record<Role, ReadonlySet<Permission>> = {
     "team.manageMembers",
     "agent.share",
     "skill.assign",
+    // The team-admin write surface the epic names. `teamMember.role` is the
+    // axis, and the resolver reads `teamRoles[scopeId]` — so this grant
+    // reaches the teams this person administers and no others.
+    "agent.assignments.manage",
+    "context.assign",
     // Team admins may install registry packages at team-target scope.
     // Target-team checks live in installRegistryPackageAtScope; the
     // team-owner short-circuit in enforce-resource-access.ts allows the
