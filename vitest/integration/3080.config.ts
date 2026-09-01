@@ -55,6 +55,12 @@ export default defineConfig({
       // OWN schema from inside its `beforeAll` — the tier is serial, so the two
       // files never overlap.
       "src/lib/artifacts/__tests__/context-repair-inheritance.integration.test.ts",
+      // The same decision one layer up, with nothing stubbed between the
+      // route and the audit store: what `/api/context-resolve` actually
+      // answers the child flow decides whether a person stands in the
+      // repair's road, and leg 2 could only see that with the decision
+      // mocked out.
+      "src/app/api/context-resolve/__tests__/repair-real-road.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

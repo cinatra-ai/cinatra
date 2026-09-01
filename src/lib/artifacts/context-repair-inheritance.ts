@@ -50,15 +50,27 @@ import { refTripleKey, type ContextCandidate } from "./context-route-support";
 // exactly what the producing run's row said about who chose, rather than
 // asserting a person for a pick a resolver made.
 //
-// AN ANSWER OF NOTHING IS STILL AN ANSWER — as far as an append-only store of
-// PICKS can show it. A slot that declares no `minItems` admits an empty
-// selection, which writes no rows at all, so "answered with nothing" and
-// "never reached" look identical in isolation. They can be told apart when the
-// producing run answered some OTHER slot: that run demonstrably ran the
-// context flow to its end, so a slot of its own that admits emptiness and
-// holds no row was answered with nothing. When the producing run holds no
-// audited row anywhere, the two remain indistinguishable and the screen opens
-// — the fail-closed side, and a residual named here rather than hidden.
+// AN ANSWER OF NOTHING IS STILL AN ANSWER, AND THE REAL ROAD IS MADE OF THEM.
+// A slot that declares no `minItems` admits an empty selection, which writes no
+// rows at all, so in an append-only store of PICKS "answered with nothing" and
+// "never reached" leave the same trace: none. Reading them apart from a SIBLING
+// slot's rows — "the producing run answered some OTHER slot, so it ran the
+// context flow to its end" — only works for a template that HAS another slot.
+// The producing template measured here has exactly one, and its accepted
+// extensions matched nothing in the instance, so the person was shown an empty
+// screen and passed it: no row anywhere, the repair read the answer as
+// unreadable, and every press parked. That is the whole defect. The evidence a
+// single-slot template DOES leave is the repair's own delivered request: it is
+// raised over a base revision THE PRODUCING RUN FILED, and the producing step
+// that files it is downstream of every context slot the flow resolves. A run
+// cannot have filed that revision without having answered this slot first, so
+// a repair carrying a base target is a repair whose producing run reached the
+// end of the context flow — read from the delivery the dispatch drain wrote,
+// never from anything a caller says.
+//
+// The fail-closed side is still there and still real: a delivered request that
+// names no base target at all inherits nothing, and so does a slot that
+// REQUIRES items. Only a slot that admits emptiness is ever answered with it.
 // ---------------------------------------------------------------------------
 
 /** The `source_type` the dispatch drain mints a repair run under. */
@@ -89,6 +101,29 @@ export function producingRunOfRepair(run: RunForContextInheritance): string | nu
   if ((delivered as { kind?: unknown }).kind !== "lifecycle_repair_request") return null;
   const producing = run.parentRunId;
   return typeof producing === "string" && producing.length > 0 ? producing : null;
+}
+
+/**
+ * The base revision the delivered repair request was raised over, or null when
+ * the run is not a repair / its delivery names none.
+ *
+ * This is the PRODUCING RUN'S OWN OUTPUT: the drain writes `baseTarget` from
+ * the repair row's `base_representation_revision_id`, which is the revision the
+ * gate under repair pinned, and that gate pins what the producing run filed.
+ * The producing step that files it runs downstream of the context subflow, so
+ * the presence of this value is a server-read proof that the producing run ran
+ * its flow PAST the context slot — the one such proof a single-context-slot
+ * template leaves behind.
+ */
+export function deliveredRepairBaseRevisionId(
+  run: RunForContextInheritance,
+): string | null {
+  if (!producingRunOfRepair(run)) return null;
+  const delivered = (run.inputParams ?? {})["lifecycleRepairRequest"] as
+    | { baseTarget?: { representationRevisionId?: unknown } }
+    | undefined;
+  const revision = delivered?.baseTarget?.representationRevisionId;
+  return typeof revision === "string" && revision.length > 0 ? revision : null;
 }
 
 /**
@@ -152,8 +187,16 @@ export function resolveInheritedContextSelection(input: {
   if (answered.length === 0) {
     // An answer of nothing, but only where it can be READ as one: the slot
     // admits an empty selection AND the producing run demonstrably ran the
-    // context flow (it answered some other slot). Otherwise: fail closed.
-    const ranTheContextFlow = auditedForRun.length > 0;
+    // context flow past this slot. TWO readings prove that, and a real
+    // producing run leaves at least one of them:
+    //   • it answered some OTHER slot — available only to a template with more
+    //     than one context slot;
+    //   • the repair delivered to this run is raised over a base revision that
+    //     producing run FILED, which it could not have done before answering
+    //     this slot — available to every repair, single-slot templates included.
+    // Neither is anything a caller can say. Otherwise: fail closed.
+    const ranTheContextFlow =
+      auditedForRun.length > 0 || deliveredRepairBaseRevisionId(run) !== null;
     if (slotMinItems === 0 && ranTheContextFlow) {
       return { refs: [], selectedBy: "user" };
     }

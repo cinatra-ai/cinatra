@@ -121,8 +121,21 @@ function inheritedFor(input: {
 }
 
 /** The repair run the dispatch drain mints: its source type, the delivered
- *  request it carries, and the producing run it names. */
-function repairRun(producingRunId: string | null) {
+ *  request it carries, and the producing run it names.
+ *
+ *  The delivered request is the drain's OWN shape, `baseTarget` included — the
+ *  revision the gate under repair pinned, which is the revision the producing
+ *  run filed. Leg 2's fixture stopped at `{kind, repairId}`, so every case it
+ *  wrote drove a delivery no drain ever writes, and the one reading that
+ *  decides the real road never ran. */
+function repairRun(
+  producingRunId: string | null,
+  over: { baseTarget?: { artifactId: string; representationRevisionId: string } | null } = {},
+) {
+  const baseTarget =
+    over.baseTarget === undefined
+      ? { artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }
+      : over.baseTarget;
   return {
     id: `lifecycle-repair-run:${randomUUID()}`,
     orgId: ORG,
@@ -130,7 +143,11 @@ function repairRun(producingRunId: string | null) {
     parentRunId: producingRunId,
     inputParams: {
       idea: { title: "an idea" },
-      lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: randomUUID() },
+      lifecycleRepairRequest: {
+        kind: "lifecycle_repair_request",
+        repairId: randomUUID(),
+        ...(baseTarget ? { baseTarget, expectedBaseRevisionId: baseTarget.representationRevisionId } : {}),
+      },
     },
   };
 }
@@ -342,15 +359,73 @@ describe.skipIf(!HAS_DB)(
       expect(inheritance.effectiveSelectionMode("interactive", inherited)).toBe("autonomous");
     });
 
-    it("a producing run that answered nothing ANYWHERE is unreadable, so the screen opens — the fail-closed side", async () => {
+    // -------------------------------------------------------------------
+    // THE ROAD THE RUNNING APPLICATION ACTUALLY TAKES (fix leg 3).
+    //
+    // The producing template has exactly ONE context slot, and nothing in the
+    // instance matched its accepted extensions, so the person was shown an
+    // empty screen and passed it. That writes NO audit row — not for this slot
+    // and not for any other — which is the case leg 2 asserted as unreadable.
+    // It is the only case the real road ever produces, so leg 2's suite was
+    // green while every measured press parked on the screen it was meant to
+    // remove. What a single-slot template DOES leave is the repair's own
+    // delivered request, raised over a revision the producing run FILED.
+    // -------------------------------------------------------------------
+
+    it("a producing run that answered its ONE slot with nothing is still readable — the repair is raised over a revision that run filed, so it ran the context flow past the slot", async () => {
       const producingRunId = `run-${randomUUID()}`;
-      // No audited row at all: "answered with nothing" and "never reached"
-      // cannot be told apart from a store that records only picks.
+      // No audited row anywhere: exactly what the measured producing run left.
+      const inherited = inheritedFor({
+        run: repairRun(producingRunId),
+        candidates: [candidate()],
+        slotMinItems: 0,
+      });
+
+      expect(inherited).not.toBeNull();
+      expect(inherited!.refs).toEqual([]);
+      // And therefore NO human step stands between the press and the work.
+      expect(inheritance.effectiveSelectionMode("interactive", inherited)).toBe("autonomous");
+    });
+
+    it("a delivery that names no base revision inherits nothing — the fail-closed side is still there", async () => {
+      const producingRunId = `run-${randomUUID()}`;
+      expect(
+        inheritedFor({
+          run: repairRun(producingRunId, { baseTarget: null }),
+          candidates: [candidate()],
+          slotMinItems: 0,
+        }),
+      ).toBeNull();
+      expect(
+        inheritance.deliveredRepairBaseRevisionId(repairRun(producingRunId, { baseTarget: null })),
+      ).toBeNull();
+    });
+
+    it("a slot that REQUIRES items is never answered with nothing, however the repair was raised", async () => {
+      const producingRunId = `run-${randomUUID()}`;
       expect(
         inheritedFor({
           run: repairRun(producingRunId),
           candidates: [candidate()],
-          slotMinItems: 0,
+          slotMinItems: 1,
+        }),
+      ).toBeNull();
+    });
+
+    it("an ORDINARY run reads no base revision out of its own params, whatever they hold", async () => {
+      // Nothing a caller writes into `input_params` makes a run a repair.
+      expect(
+        inheritance.deliveredRepairBaseRevisionId({
+          id: `run-${randomUUID()}`,
+          orgId: ORG,
+          sourceType: "agent_builder",
+          parentRunId: `run-${randomUUID()}`,
+          inputParams: {
+            lifecycleRepairRequest: {
+              kind: "lifecycle_repair_request",
+              baseTarget: { artifactId: "a", representationRevisionId: "r" },
+            },
+          },
         }),
       ).toBeNull();
     });
