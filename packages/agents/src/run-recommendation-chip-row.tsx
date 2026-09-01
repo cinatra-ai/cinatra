@@ -639,7 +639,23 @@ function SkillsStepPill({
       // a state tint the stylesheet does not give it, on every checked pill on
       // every host. What a box is set to is stated by the box, and on this root
       // as `data-skill-applied`; it is not restated as a colour behind it.
-      className="inline-flex items-center gap-2 rounded-chip border border-line bg-surface-strong px-3 py-1 text-xs text-foreground"
+      //
+      // AND IT IS DRAWN AS A PILL (cinatra#3062, the fourth proof round). The same
+      // one declaration gives the shape: `border-radius: 9999px`. §V calls the
+      // thing it draws by that shape's name throughout — "one pill per skill",
+      // "A pill carries a checkbox, the skill's name and its vendor, and
+      // nothing else" — and a 9999px radius on a 26 pixel box is a stadium,
+      // with no straight run of edge left between its two half-circle ends.
+      //
+      // This row carried `rounded-chip`, which is the design package's SHARED
+      // chip radius (`--r-chip: 0.5rem`). At the height this pill is actually
+      // drawn at, the fourth proof round measured that as an 8px corner in both
+      // palettes — a rounded rectangle, not a pill. `rounded-full` is the
+      // full-round utility the app's other pills already carry, and it is the
+      // drawing's own value. The SHARED TOKEN IS NOT MOVED: chips all over the
+      // app consume `--r-chip` and this drawing says nothing about them, so the
+      // correction belongs to this pill's own class list and nowhere else.
+      className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-strong px-3 py-1 text-xs text-foreground"
       {...(title ? { title } : {})}
     >
       {/* THE CHECKBOX, IN FRONT OF THE NAME. The vendored primitive, because the
