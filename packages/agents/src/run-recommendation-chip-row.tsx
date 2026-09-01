@@ -2405,8 +2405,9 @@ export function RecommendationHoldCard({
                 kind: "confirmed",
                 skillNames: state.skillNames,
                 decided: state.decided,
-                // The resolver's own answer, never the screen's — see
-                // `recommendationRunHasStarted`.
+                // The resolver's own answer, never the screen's, and re-asked of
+                // the run ROW on every mount — see
+                // `recommendationRunHasStartedForRow`.
                 runStarted: state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
