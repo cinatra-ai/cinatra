@@ -20,6 +20,7 @@ import "server-only";
 // (registry read), and a pre-resolved `actor`.
 
 import type { ExtensionUiAction } from "@/lib/extension-ui-registry";
+import { withExtensionEgressScope } from "@/lib/extension-egress-fetch";
 
 /** The canonical install row fields the dispatch + authz need. */
 export type DispatchInstallRow = {
@@ -81,6 +82,13 @@ export type DispatchExtensionUiActionDeps = {
     version: string | null | undefined,
     actionId: string,
   ) => VersionedActionServeResult;
+  /**
+   * How long to wait for the action handler before giving up on it and
+   * answering the person. Defaults to
+   * `DEFAULT_EXTENSION_UI_ACTION_TIMEOUT_MS`. Present so a caller (and a test)
+   * can choose its own bound; there is no way to switch the bound OFF.
+   */
+  timeoutMs?: number;
 };
 
 export type DispatchExtensionUiActionResult = {
@@ -90,6 +98,24 @@ export type DispatchExtensionUiActionResult = {
 };
 
 const LIVE_STATUSES = new Set(["active", "locked"]);
+
+/**
+ * The default bound on ONE named ui action.
+ *
+ * An extension handler runs in process, so an await inside it that never
+ * settles holds this request open with no answer at all — measured: a real
+ * "add" press sat for over a minute with nothing rendered, nothing stored and
+ * nothing logged, because the handler awaited a body release the app runtime
+ * could not settle (see `src/lib/extension-egress-fetch.ts`). The handler
+ * cannot be cancelled from here — it keeps running, its eventual outcome is
+ * discarded, and it may still write. So the answer says the action may still be
+ * running and asks the person to check before retrying, rather than implying it
+ * stopped: a blind retry of a handler that is still going could write twice.
+ * Cancelling arbitrary handler work needs a cancellation signal in the
+ * extension ui-action contract, which is a change to that contract and not to
+ * this dispatch.
+ */
+export const DEFAULT_EXTENSION_UI_ACTION_TIMEOUT_MS = 30_000;
 
 /**
  * Map a version-keyed serve refusal to an HTTP-shaped status. A pinned version
@@ -118,6 +144,8 @@ function statusForVersionedRefuse(code: string): number {
  *  4. 404 when no action is registered for (packageName, actionId).
  *  5. 200 with the handler's return value on success.
  *  6. 500 with the error message when the handler throws.
+ *  7. 504 when the handler does not settle within the bound — the person gets a
+ *     readable answer instead of a request that never returns.
  */
 export async function dispatchExtensionUiAction(
   { installId, actionId, input, actor }: DispatchExtensionUiActionInput,
@@ -186,13 +214,42 @@ export async function dispatchExtensionUiAction(
     run = () => action.handler(input);
   }
 
+  // The handler runs inside the host's extension-egress scope (an unbounded
+  // extension fetch inherits a bound there) AND under this dispatch's own
+  // bound. Both are needed: the scope keeps the common case — an external
+  // request — from wedging at all, and the bound guarantees an answer for every
+  // other way a handler can stop.
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_EXTENSION_UI_ACTION_TIMEOUT_MS;
+  // Settle-shaped, so the abandoned handler's eventual rejection is already
+  // handled here and never surfaces as an unhandled rejection after we answered.
+  const settled = withExtensionEgressScope(run).then(
+    (value) => ({ kind: "value" as const, value }),
+    (error: unknown) => ({ kind: "error" as const, error }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
   try {
-    const result = await run();
-    return { status: 200, result };
-  } catch (error) {
+    const outcome = await Promise.race([settled, gaveUp]);
+    if (outcome.kind === "value") {
+      return { status: 200, result: outcome.value };
+    }
+    if (outcome.kind === "error") {
+      const error = outcome.error;
+      return {
+        status: 500,
+        error: error instanceof Error ? error.message : "Action handler failed.",
+      };
+    }
     return {
-      status: 500,
-      error: error instanceof Error ? error.message : "Action handler failed.",
+      status: 504,
+      error:
+        `The "${actionId}" action did not respond within ${Math.round(timeoutMs / 1000)} seconds, ` +
+        `so we stopped waiting for it. It may still be running: reload the page and check ` +
+        `whether it completed before you try again.`,
     };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
