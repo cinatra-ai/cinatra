@@ -59,11 +59,11 @@ const STAGE_PREFIX = ".cinatra-stage-";
 export const DEFAULT_REQUIRED_OAS_SEED_DIR = "/app/.cinatra-required-oas-seed";
 
 /**
- * The deploy-owned override for the seed directory this reconcile reads
- * (cinatra#3169). Deploy tooling that projects the pinned required-extension
+ * The deploy-owned override for the seed directory this reconcile reads.
+ * Deploy tooling that projects the pinned required-extension
  * fleet's OAS seed OUTSIDE the image (a served checkout, whose seed cannot live
- * at the image-baked path) exports this variable into the served process; until
- * cinatra#3169 nothing in this repository read it, so the reconcile always read
+ * at the image-baked path) exports this variable into the served process; before
+ * this change nothing in this repository read it, so the reconcile always read
  * the image path and the projected fleet was silently the wrong one. The image
  * road is unchanged: unset ⇒ `DEFAULT_REQUIRED_OAS_SEED_DIR`.
  */

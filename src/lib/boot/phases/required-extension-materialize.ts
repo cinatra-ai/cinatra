@@ -13,7 +13,7 @@
 //     the filesystem, so without this gate a prod boot could come up "healthy"
 //     while WayFlow points at an empty/stale tree. Failing closed surfaces a
 //     broken image at deploy time.
-// Seed source (cinatra#3169): the reconcile reads the directory named by
+// Seed source: the reconcile reads the directory named by
 // `CINATRA_REQUIRED_OAS_SEED_DIR` when the deploy sets it, and the image-baked
 // `DEFAULT_REQUIRED_OAS_SEED_DIR` otherwise — so a deploy that projects the
 // pinned fleet's seed outside the image (a served checkout) is honoured instead
@@ -75,7 +75,7 @@ export function requiredExtensionMaterializePhases(): BootPhase[] {
         const installDir = resolveAgentRuntimeMountDir();
 
         let result;
-        // The seed the deploy handed us when it named one (cinatra#3169), else the
+        // The seed the deploy handed us when it named one, else the
         // image-baked default. A refused override throws here and is treated exactly
         // like a missing/corrupt seed: fatal in prod, warned and swallowed in dev.
         let seed = {

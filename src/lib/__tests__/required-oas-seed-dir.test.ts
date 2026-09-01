@@ -1,4 +1,4 @@
-// Unit tests for the required-extension OAS seed-dir RESOLUTION (cinatra#3169).
+// Unit tests for the required-extension OAS seed-dir RESOLUTION.
 //
 // `CINATRA_REQUIRED_OAS_SEED_DIR` is the deploy-owned override for the seed the
 // boot reconcile reads. These tests pin the resolver: unset ⇒ the image-baked
@@ -20,7 +20,7 @@ let storeRoot: string;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(os.tmpdir(), "seeddir-3169-"));
+  root = mkdtempSync(path.join(os.tmpdir(), "required-oas-seed-dir-"));
   storeRoot = path.join(root, "store");
   for (const key of [REQUIRED_OAS_SEED_DIR_ENV, "CINATRA_EXTENSION_DATA_ROOT"]) {
     savedEnv[key] = process.env[key];

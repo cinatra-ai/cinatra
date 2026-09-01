@@ -1,4 +1,4 @@
-// Boot-phase tests for the deploy-owned OAS seed override (cinatra#3169).
+// Boot-phase tests for the deploy-owned OAS seed override.
 //
 // The deploy tooling that projects the pinned fleet's required-extension OAS
 // seed already exports `CINATRA_REQUIRED_OAS_SEED_DIR` into the served process
@@ -61,7 +61,7 @@ async function runPhase() {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(os.tmpdir(), "phase-3169-"));
+  root = mkdtempSync(path.join(os.tmpdir(), "required-oas-seed-phase-"));
   seedDir = path.join(root, "required-oas-seed");
   mkdirSync(seedDir, { recursive: true });
   mountHolder.dir = path.join(root, "mount");
