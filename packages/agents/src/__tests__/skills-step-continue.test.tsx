@@ -165,13 +165,25 @@ describe("Continue on the held Skills step", () => {
     expect(skipRunRecommendationAction).not.toHaveBeenCalled();
   });
 
-  it("goes INERT the moment it is submitted — before the settled reading arrives", async () => {
-    // FOUND IN THE CONVERGENCE ROUND. The synchronous guard stops a second
-    // CALL; it does not stop a second PRESS from looking possible. React's
-    // transition `pending` flag goes false as soon as the action resolves, and
-    // the authoritative re-read lands later — so without this the reader would
-    // be looking at editable boxes and a live Continue on a run that has
-    // already been decided, and a press on them would do nothing at all.
+  it("is inert WHILE the decision is in flight, and live again once it is home", async () => {
+    // WHAT THIS ARM USED TO PIN, and why it moved (cinatra#3062, the second
+    // capture). It read "goes INERT the moment it is submitted", and it kept the
+    // step inert AFTER the decision came back OK as well, on the reasoning that
+    // "a press on them would do nothing at all". That reasoning was true before
+    // this card could be decided twice. It is not true now: §V's own reading —
+    // "Continue does not close the row… For as long as the run has not started,
+    // a reader who comes back to the Skills step is shown the same pills with
+    // the boxes still able to take a change and Continue still beneath them, and
+    // may change the selection" — is a press that does something, and the row
+    // already takes it on the settled-but-not-started reading.
+    //
+    // Kept inert after the press left the card frozen wherever the authority's
+    // reading does not change, which is what a conversation does: a real capture
+    // measured a chat card at rest with every box disabled and a greyed Continue
+    // on a run that had not started. §V draws no such reading — the disabled
+    // floor beneath disabled boxes belongs to the reader who may NOT shape the
+    // run — so the window this latch names is the IN-FLIGHT one its own contract
+    // names, and the arm measures both of its edges.
     let settle: (v: { ok: true; dispatched: boolean }) => void = () => {};
     confirmRunRecommendationAction.mockImplementation(
       () => new Promise((resolve) => { settle = resolve as typeof settle; }),
@@ -182,21 +194,30 @@ describe("Continue on the held Skills step", () => {
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
 
-    // …and once the decision comes back OK the step stays inert, because the
-    // reading on screen is no longer the run's state.
-    await act(async () => {
-      settle({ ok: true, dispatched: true });
-      await Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true"),
-    );
+    // IN FLIGHT: the whole reading states that it is, and a second press is not
+    // a second decision.
+    expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true");
     expect(continueButton(container)!.hasAttribute("disabled")).toBe(true);
     for (const box of container.querySelectorAll('[role="checkbox"]')) {
       expect(box.hasAttribute("disabled")).toBe(true);
     }
     fireEvent.click(continueButton(container)!);
     expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1);
+
+    // HOME: the run has not started, so the drawing's reading comes back —
+    // the same pills, the boxes able to take a change, Continue beneath them.
+    await act(async () => {
+      settle({ ok: true, dispatched: true });
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("false"),
+    );
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    expect(continueButton(container)!.hasAttribute("disabled")).toBe(false);
+    for (const box of container.querySelectorAll('[role="checkbox"]')) {
+      expect(box.hasAttribute("disabled")).toBe(false);
+    }
   });
 
   it("REFUSED: says so, claims no decision, and leaves the step decidable", async () => {

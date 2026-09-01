@@ -192,26 +192,86 @@ export const CARD_KINDS = {
     // A pending capture owes at least one of the three; a decided capture owes
     // the absence of all three, which is exactly what a settled row draws.
     //
-    // OWED, AND LEFT ALONE ON THIS BRANCH (cinatra#3047, then cinatra#3062).
-    // Three of the four hosts draw §V's CHECKLIST now — the run page, the chat
-    // and the widget — whose one decision act is the Continue beneath the list,
-    // while the review page's gate region still draws these three. So this list
-    // is the vocabulary of the pictures ON FILE rather than of every reading the
-    // tree draws, and moving it is not a free edit: every anchor named here must
-    // be ASSERTED by every record of this kind, so a fourth member would refuse
-    // 34 truthful records that were measured before it existed — records nobody
-    // can re-measure without re-taking the photographs.
+    // THE GROUP IS PER HOST, AND THE DEBT ABOVE IS CLOSED (cinatra#3062).
     //
-    // WHAT CLOSES IT is the capture leg, in one change: the group becomes
-    // per-host (the Continue on the three checklist hosts, these three on the
-    // gate region) at the same moment the cells for those hosts are RE-SHOT
-    // against the reading they now draw. The anchor contract records the same
-    // debt in its own words, and `chat-hitl-capture-index.test.mjs` pins both
-    // lists exactly so this cannot close quietly or drift apart.
+    // Three of the four hosts draw §V's CHECKLIST — the run page, the chat and
+    // the widget — and the drawing gives that reading exactly one decision act:
+    // "The reader sets the boxes and presses Continue beneath the list … and the
+    // whole row is answered at once, every box together", with "a pill carries
+    // nothing to press — no Confirm, no Adjust, no Skip." The review page's gate
+    // region is the one host still drawing the per-chip trio, so the trio is
+    // ITS vocabulary rather than the kind's, and it stays below as the default.
+    //
+    // WHY IT HAD TO MOVE: the shipped recorder refused every honest capture of
+    // the card this branch draws. A dry run against a real chat transcript came
+    // back "host chat_thread requires [data-skill-action=confirm] PRESENT
+    // (root-scoped); the record observed 0" for all three — a contract demanding
+    // controls the card no longer draws on the host it was demanding them for.
     decisionControls: [
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
+    ],
+    decisionControlsByHost: {
+      run_card: ['[data-skills-step-continue]'],
+      chat_thread: ['[data-skills-step-continue]'],
+      site_widget: ['[data-skills-step-continue]'],
+    },
+    // Never drawn on a checklist host again, in ANY state — so a picture that
+    // shows one there is a picture of a regression, and is refused as such.
+    retiredDecisionControls: [
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ],
+    /**
+     * THE PICTURES ON FILE, NAMED — a CLOSED list, frozen.
+     *
+     * Every pending picture of this card on the three checklist hosts was shot
+     * before §V's checklist reached that host, against the per-chip trio, and
+     * nobody can re-measure one without re-taking the photograph. Holding them
+     * to the vocabulary the shipped card draws today would refuse 26 truthful
+     * records for showing what they honestly showed at the time.
+     *
+     * NAMING THEM IS NOT AN ESCAPE HATCH, and that is the point of naming them
+     * rather than admitting both readings everywhere. A cell on this list OWES
+     * the retired trio — REQUIRED, not merely admitted — so a re-shoot cannot
+     * slip a picture of the new reading in under an old name: the shipped card
+     * draws none of the three, so such a record is refused for showing none of
+     * what its cell claims. It takes the cell OFF this list, or it takes a new
+     * name. Every cell not on it — which is every cell a future capture can mint
+     * — is held to the ratified anatomy in full.
+     *
+     * The list only ever shrinks. When it is empty the two eras have finished
+     * changing places and it can go.
+     */
+    preChecklistPendingCells: [
+      "A1__recommendation-card__chat_thread__pending__dark",
+      "A1__recommendation-card__chat_thread__pending__light",
+      "A2__recommendation-card__run_card__pending__dark",
+      "A2__recommendation-card__run_card__pending__light",
+      "C0__recommendation-card__run_card__held__per-chip-control",
+      "G8__recommendation-card__run_card__held",
+      "H1__recommendation-card__site_widget__held",
+      "H2__recommendation-card__site_widget__held__dark",
+      "H3__recommendation-card__site_widget__held__mid-decision",
+      "R5__recommendation-card__run_card__held",
+      "R5__recommendation-card__run_card__held__dark",
+      "S1__recommendation-card__chat_thread__held",
+      "S1__recommendation-card__chat_thread__held__dark",
+      "S9b-1__recommendation-hold__chat_thread__held",
+      "S9b-2__recommendation-hold__chat_thread__held__root",
+      "S9b-2b__recommendation-hold__chat_thread__held__shaped",
+      "V1__recommendation-card__run_card__held",
+      "V2__recommendation-card__run_card__held__dark",
+      "V3__recommendation-card__run_card__held__mid-decision",
+      "V4__recommendation-card__run_card__held__adjust-panel",
+      "V7__recommendation-card__run_card__held__read-only",
+      "V8__recommendation-card__run_card__held__trigger-position",
+      "W1__recommendation-card__site_widget__held__column",
+      "W1__recommendation-card__site_widget__held__light",
+      "W2__recommendation-card__site_widget__held__column__dark",
+      "W2__recommendation-card__site_widget__held__dark",
     ],
   },
   trigger_schedule_proposal: {
@@ -588,7 +648,7 @@ export function parseCellName(cellName) {
  *   "root"  -- counted INSIDE the card's own root, so a marker borrowed from a
  *              different card on the same screen cannot answer for this one.
  */
-export function requiredAssertionsFor({ host, kind, state }) {
+export function requiredAssertionsFor({ host, kind, state, cell = null }) {
   const spec = kind ? CARD_KINDS[kind] : null;
   const required = [];
   const forbidden = [];
@@ -615,13 +675,39 @@ export function requiredAssertionsFor({ host, kind, state }) {
       scope: "frame",
     });
   }
+  /**
+   * WHICH DECISION ACT THIS CLAIM OWES.
+   *
+   * The host's own group where the kind names one — a kind whose reading
+   * differs by host cannot be graded from one list. A cell named on the kind's
+   * frozen pre-redraw list is a picture of the reading that host drew BEFORE the
+   * redraw, so it is graded against that reading instead, and the shipped
+   * control is forbidden on it so the name cannot be reused for a re-shoot.
+   */
+  const preRedraw =
+    cell !== null && (spec?.preChecklistPendingCells ?? []).includes(cell) && state === "pending";
+  const hostControls = spec?.decisionControlsByHost?.[host] ?? null;
+  const controls = preRedraw
+    ? (spec?.decisionControls ?? [])
+    : (hostControls ?? spec?.decisionControls ?? []);
+  // The controls this host RETIRED — never drawn there again, in any state.
+  // On a pre-redraw picture they are the reading itself, so nothing is banned.
+  const retired =
+    preRedraw || hostControls === null ? [] : (spec?.retiredDecisionControls ?? []);
   if (spec) {
     if (!settledAbsence) required.push({ selector: spec.root, scope: "frame" });
     if (state === "pending") {
-      for (const sel of spec.decisionControls) {
-        required.push({ selector: sel, scope: "root", any: spec.decisionControls });
+      for (const sel of controls) {
+        required.push({ selector: sel, scope: "root", any: controls });
       }
     }
+    // A retired control is a regression wherever it appears on a host that
+    // stopped drawing it — pending or decided, and whether or not the shipped
+    // control is there beside it.
+    if (!settledAbsence) {
+      for (const sel of retired) forbidden.push({ selector: sel, scope: "root" });
+    }
+
     if (state === "decided") {
       if (settledAbsence) {
         // THE WHOLE CARD IS THE ABSENCE, counted frame-wide because there is no
@@ -629,13 +715,27 @@ export function requiredAssertionsFor({ host, kind, state }) {
         // required nor forbidden: another kind's card may legitimately be on the
         // same screen, and refusing that would refuse an honest picture.
         forbidden.push({ selector: spec.root, scope: "frame" });
-        for (const sel of spec.decisionControls) {
+        for (const sel of controls) {
           forbidden.push({ selector: sel, scope: "frame" });
         }
       } else {
         required.push({ selector: DECIDED_SUMMARY_SELECTOR, scope: "root" });
-        for (const sel of spec.decisionControls) {
-          forbidden.push({ selector: sel, scope: "root" });
+        /**
+         * A DECIDED CAPTURE OWES THE ABSENCE OF THE DECISION — except where the
+         * drawing itself keeps the control on a settled reading (cinatra#3062).
+         *
+         * §V: "Continue does not close the row. For as long as the run has not
+         * started, a reader who comes back to the Skills step is shown the same
+         * pills with the boxes still able to take a change and Continue still
+         * beneath them." That reading declares itself `decided`, so banning its
+         * control here would refuse a truthful picture of a reading the drawing
+         * prescribes. What a settled checklist capture DOES owe the absence of
+         * is the retired trio, and that is pushed above for every state alike.
+         */
+        if (hostControls === null) {
+          for (const sel of controls) {
+            forbidden.push({ selector: sel, scope: "root" });
+          }
         }
       }
     }
@@ -1626,6 +1726,9 @@ export function validateCaptureRecord(record, io = {}) {
     host,
     kind: record.declaredKind ?? claim.kind,
     state: record.declaredState ?? claim.state,
+    // The record's own cell, so a picture taken of a reading its host has since
+    // retired is graded against the reading it was actually taken of.
+    cell: typeof record.cell === "string" ? record.cell : null,
   });
   const satisfied = (sel, scope) => (observed.get(`${scope}::${sel}`) ?? 0) >= 1;
   for (const req of required) {

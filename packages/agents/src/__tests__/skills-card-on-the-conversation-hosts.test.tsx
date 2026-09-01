@@ -317,24 +317,43 @@ describe("the chat host draws the checkbox row and one Continue", () => {
     expect(marked!.getAttribute("data-lifecycle-card-state")).toBe("held");
   });
 
-  it("releases the hold ONCE per run — a second press changes nothing", async () => {
+  it("releases ONCE per press, and comes back to the drawing's reading", async () => {
+    // ONE DECISION PER PRESS, and Continue is not a lock (cinatra#3062, the
+    // second capture). Two presses inside the IN-FLIGHT window are one decision:
+    // the guard is written synchronously on the press, before the transition
+    // starts. What follows is §V verbatim — "Continue does not close the row.
+    // For as long as the run has not started, a reader who comes back to the
+    // Skills step is shown the same pills with the boxes still able to take a
+    // change and Continue still beneath them, and may change the selection."
+    //
+    // This arm used to keep the row inert after the decision came home. That
+    // left the chat card frozen for good wherever the authority goes on
+    // answering `held`, which is what a real capture measured at rest: every box
+    // disabled and a greyed Continue on a run that had not started, a reading §V
+    // draws only for the reader who may NOT shape the run.
     const { container } = mount("chat_thread");
     await waitFor(() => expect(pills(container)).toHaveLength(2));
 
     fireEvent.click(continueButton(container)!);
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
-    // The screen states the refusal too: the whole reading is inert until the
-    // settled reading replaces it.
-    expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true");
-    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("false");
-    expect((continueButton(container) as HTMLButtonElement).disabled).toBe(true);
-    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(continueButton(container)!);
-    expect(confirmMock).toHaveBeenCalledTimes(1);
     // Checked in, unchecked out — decided in one act, through the shipped path.
     expect(confirmMock.mock.calls[0]![0].confirmedSkillIds).toEqual(["skill-blog"]);
     expect(confirmMock.mock.calls[0]![0].holdRef).toBe("hold-ref-3062");
+
+    // Home, on a run that has not started: the drawing's reading, in full.
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("false"),
+    );
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    expect((continueButton(container) as HTMLButtonElement).disabled).toBe(false);
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+
+    // …and a later press is a new decision bound to the SAME hold — the
+    // idempotent retry the settled-but-not-started reading already takes.
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(2));
+    expect(confirmMock.mock.calls[1]![0].holdRef).toBe("hold-ref-3062");
   });
 
   it("draws the server's refusal when the run has moved on, and stays decidable", async () => {
@@ -528,9 +547,15 @@ describe("the widget host draws the same card, under its own credential", () => 
       confirmedSkillIds: ["skill-blog"],
       holdRef: "hold-ref-3062",
     });
-    // ONE release per run, on this transport too.
+    // …and the card comes back to §V's reading on this transport too: the run
+    // has not started, so a later press is a new decision on the SAME hold
+    // rather than a control that has been locked shut.
+    await waitFor(() =>
+      expect((continueButton(container) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(continueButton(container)!);
-    expect(broker.decisions()).toHaveLength(1);
+    await waitFor(() => expect(broker.decisions()).toHaveLength(2));
+    expect(broker.decisions()[1]!.body).toMatchObject({ holdRef: "hold-ref-3062" });
     // …and no cookie-bound action was reached from this host.
     expect(confirmMock).not.toHaveBeenCalled();
     expect(skipMock).not.toHaveBeenCalled();

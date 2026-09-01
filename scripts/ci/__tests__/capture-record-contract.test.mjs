@@ -214,6 +214,164 @@ describe("requiredAssertionsFor", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE RECOMMENDATION CARD'S DECISION CONTROLS ARE PER HOST (cinatra#3062)
+// ---------------------------------------------------------------------------
+//
+// The ratified drawing gives this card ONE decision act on the three checklist
+// hosts — "The reader sets the boxes and presses Continue beneath the list …
+// and the whole row is answered at once" — and "a pill carries nothing to press
+// — no Confirm, no Adjust, no Skip." The review page's gate region is the one
+// host that still draws the per-chip trio, so the trio is ITS vocabulary and
+// not the kind's.
+//
+// The debt this closes, in one line: the shipped recorder refused every honest
+// capture of the branch's own card, because it demanded three controls the card
+// no longer draws on the host it was drawing them for.
+describe("recommendation_hold decision controls, per host", () => {
+  const skillsCheckHosts = ["run_card", "chat_thread", "site_widget"];
+  const RETIRED = [
+    '[data-skill-action="confirm"]',
+    '[data-skill-action="adjust"]',
+    '[data-skill-action="skip"]',
+  ];
+
+  it.each(skillsCheckHosts)("makes a pending capture on %s owe the Continue", (host) => {
+    const { required } = requiredAssertionsFor({
+      host,
+      kind: "recommendation_hold",
+      state: "pending",
+    });
+    const rooted = required.filter((r) => r.scope === "root").map((r) => r.selector);
+    expect(rooted).toContain("[data-skills-step-continue]");
+    // …and NOT the trio the card retired on this host.
+    for (const sel of RETIRED) expect(rooted).not.toContain(sel);
+  });
+
+  it.each(skillsCheckHosts)("forbids the retired trio on %s, pending and decided", (host) => {
+    for (const state of ["pending", "decided"]) {
+      const { forbidden } = requiredAssertionsFor({
+        host,
+        kind: "recommendation_hold",
+        state,
+      });
+      const banned = forbidden.map((f) => f.selector);
+      for (const sel of RETIRED) expect(banned).toContain(sel);
+    }
+  });
+
+  it("does NOT forbid the Continue on a decided capture of a checklist host", () => {
+    // §V draws a Continue on a SETTLED reading whose run has not started —
+    // "Continue does not close the row… Continue still beneath them" — and that
+    // reading declares itself `decided`. Banning the control there would refuse
+    // a truthful picture of a reading the drawing prescribes.
+    const { forbidden } = requiredAssertionsFor({
+      host: "chat_thread",
+      kind: "recommendation_hold",
+      state: "decided",
+    });
+    expect(forbidden.map((f) => f.selector)).not.toContain("[data-skills-step-continue]");
+  });
+
+  it("leaves the review page's gate region on the per-chip trio", () => {
+    const { required } = requiredAssertionsFor({
+      host: "page_gate_region",
+      kind: "recommendation_hold",
+      state: "pending",
+    });
+    const rooted = required.filter((r) => r.scope === "root").map((r) => r.selector);
+    for (const sel of RETIRED) expect(rooted).toContain(sel);
+    expect(rooted).not.toContain("[data-skills-step-continue]");
+  });
+
+  it("admits an honest capture of the shipped card, and refuses one that shows the retired trio", () => {
+    // The dry run of the shipped recorder against the branch's own card is
+    // exactly this record, and the contract refused it.
+    const honest = {
+      cell: "F1__recommendation-card__chat_thread__pending__light",
+      recorder: RECORDER_ID,
+      declaredHost: "chat_thread",
+      declaredKind: "recommendation_hold",
+      declaredState: "pending",
+      finalUrl: "http://localhost:3000/chat/1f0c",
+      screenshot: IMAGE_A,
+      sha256: hashA,
+      assertions: [
+        { selector: "[data-conversation-list]", scope: "frame", count: 1 },
+        { selector: '[data-lifecycle-card-host="chat_thread"]', scope: "frame", count: 1 },
+        { selector: '[data-lifecycle-card="recommendation_hold"]', scope: "frame", count: 1 },
+        { selector: "[data-skills-step-continue]", scope: "root", count: 1 },
+        ...RETIRED.map((selector) => ({ selector, scope: "root", count: 0 })),
+      ],
+    };
+    expect(validateCaptureRecord(honest, { repoRoot })).toEqual([]);
+
+    // A record of the SAME cell showing the retired controls is refused: the
+    // card does not draw them on this host any more, so a picture that shows
+    // them is a picture of a regression.
+    const regressed = {
+      ...honest,
+      assertions: honest.assertions.map((a) =>
+        RETIRED.includes(a.selector) ? { ...a, count: 3 } : a,
+      ),
+    };
+    expect(codes(validateCaptureRecord(regressed, { repoRoot }))).toContain(
+      "record/decided-still-offers-decision",
+    );
+  });
+
+  it("holds the pictures ON FILE to the reading they were taken of, and only those", () => {
+    // THE 26 RECORDS THIS CANNOT RE-MEASURE. Every pending picture of this card
+    // on the three checklist hosts was shot before §V's checklist reached that
+    // host, against the per-chip trio, and no one can re-measure them without
+    // re-taking the photographs. They are named — a CLOSED list, frozen — and
+    // held to the vocabulary they were actually taken against.
+    //
+    // The naming is not an escape hatch, and this arm is what makes it so: a
+    // named cell OWES the retired trio — required, not merely admitted — so a
+    // re-shoot under an old name is refused, because the shipped card draws none
+    // of the three. It must take the cell off the list, or take a new name.
+    const named = CARD_KINDS.recommendation_hold.preChecklistPendingCells;
+    expect(Array.isArray(named)).toBe(true);
+    expect(named).toHaveLength(26);
+    expect(named).toContain("A1__recommendation-card__chat_thread__pending__light");
+
+    const cell = "A1__recommendation-card__chat_thread__pending__light";
+    const { required } = requiredAssertionsFor({
+      host: "chat_thread",
+      kind: "recommendation_hold",
+      state: "pending",
+      cell,
+    });
+    const rooted = required.filter((r) => r.scope === "root").map((r) => r.selector);
+    for (const sel of RETIRED) expect(rooted).toContain(sel);
+    expect(rooted).not.toContain("[data-skills-step-continue]");
+
+    // …and a picture of the SHIPPED card, taken under that name, is refused —
+    // it shows none of the three the name claims.
+    const reshotUnderAnOldName = {
+      cell,
+      recorder: RECORDER_ID,
+      declaredHost: "chat_thread",
+      declaredKind: "recommendation_hold",
+      declaredState: "pending",
+      finalUrl: "http://localhost:3000/chat/1f0c",
+      screenshot: IMAGE_A,
+      sha256: hashA,
+      assertions: [
+        { selector: "[data-conversation-list]", scope: "frame", count: 1 },
+        { selector: '[data-lifecycle-card-host="chat_thread"]', scope: "frame", count: 1 },
+        { selector: '[data-lifecycle-card="recommendation_hold"]', scope: "frame", count: 1 },
+        { selector: "[data-skills-step-continue]", scope: "root", count: 1 },
+        ...RETIRED.map((selector) => ({ selector, scope: "root", count: 0 })),
+      ],
+    };
+    expect(codes(validateCaptureRecord(reshotUnderAnOldName, { repoRoot }))).toContain(
+      "record/anchor-count-zero",
+    );
+  });
+});
+
 describe("validateCaptureRecord", () => {
   it("accepts an honest host-anchored record", () => {
     expect(validateCaptureRecord(honestChatPending(), { repoRoot })).toEqual([]);

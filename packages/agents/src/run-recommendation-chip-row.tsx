@@ -11,7 +11,7 @@ import {
   type ReactElement,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, Check, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -559,10 +559,10 @@ function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): Re
  * the box is announced as the skill it toggles rather than as a sentence about
  * its publisher.
  *
- * NO PANEL CHROME (review point 4). The pill is a chip: a rounded outline and a
- * ground that states whether the box is ticked. It carries no card, and neither
- * does the list around it — the step's pills and their Continue sit directly in
- * the run detail column beside the rail.
+ * NO PANEL CHROME (review point 4). The pill is a chip: a rounded outline over
+ * ONE ground, the same ground whether its box is set or clear. It carries no
+ * card, and neither does the list around it — the step's pills and their
+ * Continue sit directly in the run detail column beside the rail.
  *
  * READ-ONLY IS `disabled`, NOT A DIFFERENT CONTROL. The pill keeps its role and
  * its accessible name in every reading, so one query finds it in all three and a
@@ -626,11 +626,20 @@ function SkillsStepPill({
       data-skills-step-vendor-state={vendor.kind}
       data-skills-step-pill-editable={editable ? "true" : "false"}
       data-forced={forced ? "true" : undefined}
-      className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${
-        checked
-          ? "border-success/45 bg-success/10 text-foreground"
-          : "border-line bg-surface-strong text-foreground"
-      }`}
+      // ONE GROUND, SET OR CLEAR (cinatra#3062, the second capture).
+      //
+      // The ratified drawing declares this pill exactly once — `border: 1px
+      // solid var(--line)` over `background: var(--surface-strong)` — and gives
+      // it NO checked variant anywhere in the stylesheet. Its only checked
+      // accent is on the box itself, `.skchip .cbx.on { background: var(--blue);
+      // border-color: var(--blue) }`, which the vendored `Checkbox` draws.
+      //
+      // The row used to tint the pill when its box was set. Measured on a real
+      // capture that read as a green ground with a green border in both themes —
+      // a state tint the stylesheet does not give it, on every checked pill on
+      // every host. What a box is set to is stated by the box, and on this root
+      // as `data-skill-applied`; it is not restated as a colour behind it.
+      className="inline-flex items-center gap-2 rounded-chip border border-line bg-surface-strong px-3 py-1 text-xs text-foreground"
       {...(title ? { title } : {})}
     >
       {/* THE CHECKBOX, IN FRONT OF THE NAME. The vendored primitive, because the
@@ -828,6 +837,13 @@ export function RunRecommendationChipRow({
    * must be able to press Continue again; a SUCCEEDED release keeps it, and the
    * row is replaced by its settled reading anyway.
    */
+  //
+  // IT NOW OPENS AND CLOSES WITH `inFlightRef` (cinatra#3062, the second
+  // capture): a SUCCEEDED release used to keep it, on the reasoning that the
+  // settled reading would replace the row anyway — which a conversation's card,
+  // settling in place under an authority that goes on answering `held`, never
+  // does. It is kept as the named "one release per run" guard because the effect
+  // above also clears it when the authority's reading changes.
   const releasedRef = useRef(false);
   /**
    * IS A DECISION IN FLIGHT RIGHT NOW? (cinatra#3062.)
@@ -874,14 +890,13 @@ export function RunRecommendationChipRow({
    * are therefore handed back the moment the AUTHORITY has answered, which is
    * the moment the reading stops being the one that was submitted.
    *
-   * Keyed on the ANSWER's kind rather than on the answer, because the card mints
-   * a fresh decision object every render: this fires exactly once per transition
-   * out of `pending`, and on a mount that starts settled it is a no-op over
-   * values that are already clear. The other half — a SECOND decision taken on
-   * the settled reading, where the kind does not change — is handed back by that
-   * decision's own outcome, in `onContinue` below.
+   * Keyed on the ANSWER's reading rather than on the answer, because the card
+   * mints a fresh decision object every render: this fires exactly once per
+   * change of reading, and on a mount that starts settled it is a no-op over
+   * values that are already clear. The other half — a decision whose own
+   * reading never changes, which is what a conversation takes — is handed back
+   * by that decision's own outcome, in `onContinue` below.
    */
-  const settledKind = decision.kind === "pending" ? null : decision.kind;
   /**
    * THE AUTHORITY'S READING, AND NOT ONLY ITS KIND (cinatra#3062, convergence
    * round — the boxes half).
@@ -898,17 +913,7 @@ export function RunRecommendationChipRow({
     decision.kind === "pending"
       ? "pending"
       : `${decision.kind}:${decision.runStarted === true ? "started" : "not-started"}`;
-  /**
-   * HAS THE AUTHORITY ALREADY ANSWERED? (cinatra#3062, convergence round.)
-   *
-   * Read by a decision's own outcome, which is the ONE place that can hand the
-   * guards back when the settle landed while that decision was still in flight
-   * — the effect below cannot, because it would be handing back the guards of a
-   * request that has not come home yet.
-   */
-  const settledRef = useRef(false);
   useEffect(() => {
-    settledRef.current = settledKind !== null;
     /**
      * A DECISION IN FLIGHT OWNS THE GUARDS (cinatra#3062, convergence round).
      *
@@ -917,8 +922,8 @@ export function RunRecommendationChipRow({
      * wire. Handing the guards back here would re-arm Continue underneath a
      * live request, and the server's own binding is a read-and-compare rather
      * than an atomic claim — two decisions on the same live hold both write.
-     * The in-flight decision's own outcome hands them back instead; it reads
-     * `settledRef` to know that nothing else will.
+     * The in-flight decision's own outcome hands them back instead, and it does
+     * so on every outcome, so nothing is left waiting on this effect.
      */
     if (inFlightRef.current) return;
     releasedRef.current = false;
@@ -1192,20 +1197,14 @@ export function RunRecommendationChipRow({
    * carries rows that recorded it before the drawing withdrew the affordance,
    * and a settled reading must state what a run actually decided.
    *
-   * ONE RELEASE PER RUN. `releasedRef` is written synchronously, so a double
+   * ONE DECISION PER PRESS. `inFlightRef` is written synchronously, so a double
    * press submits once; the server's own binding is the other half — a decision
    * naming a hold that is no longer this run's park is refused there, which is
-   * what "the run has moved on" means to a decision already in flight.
+   * what "the run has moved on" means to a decision already in flight, and it is
+   * SAID on the screen through the refusal line rather than pre-empted by a
+   * reading §V does not draw (cinatra#3062, the second capture).
    */
-  const onContinue = (
-    /**
-     * Was this press made on the SETTLED-but-not-started reading? That reading
-     * is the same question asked again (§V, "Continue is not a lock"), and no
-     * change of answer follows it — the authority's kind is already settled — so
-     * its own outcome is what hands the guards back.
-     */
-    reDecidable = false,
-  ) => {
+  const onContinue = () => {
     // ONE DECISION AT A TIME, on every reading.
     if (inFlightRef.current) return;
     // ONE RELEASE PER RUN, on the reading that is releasing a live hold.
@@ -1222,19 +1221,37 @@ export function RunRecommendationChipRow({
     setChips(next);
     release(next, stepCandidates, (ok) => {
       inFlightRef.current = false;
-      // A REFUSAL leaves the hold live and the step decidable — and so does a
-      // decision that LANDED on the settled reading, because the answer it
-      // landed on is the answer that was already on screen: no change of kind
-      // follows it, so nothing else would ever hand the guards back.
+      // THE GUARDS BELONG TO THE IN-FLIGHT WINDOW, AND TO NOTHING LONGER
+      // (cinatra#3062, the second capture).
       //
-      // AND SO DOES A SETTLE THAT LANDED WHILE THIS DECISION WAS IN FLIGHT
-      // (cinatra#3062, convergence round): the effect above stood aside for the
-      // live request rather than re-arming Continue underneath it, so this
-      // outcome is the only place left that can hand the guards back.
-      if (!ok || reDecidable || settledRef.current) {
-        releasedRef.current = false;
-        setSubmitted(false);
-      }
+      // §V: "Continue does not close the row." — "For as long as the run has not
+      // started, a reader who comes back to the Skills step is shown the same
+      // pills with the boxes still able to take a change and Continue still
+      // beneath them, and may change the selection."
+      //
+      // This used to hand the guards back on three readings only: a refusal, a
+      // decision taken on the settled reading, and a settle that landed while
+      // this one was in flight. The fourth is the one a conversation actually
+      // takes — a decision that LANDS on the held reading while the authority
+      // goes on answering `held`, because this card's own resolve is not what
+      // moves when the run leaves the recommendation gate for its next one. On
+      // that reading `authorityReading` never changed, so the effect that clears
+      // the latch never fired and the row stayed submitted for good: boxes
+      // disabled, Continue greyed, on a run that had not started, for a reader
+      // who may decide. A real capture measured exactly that, at rest.
+      //
+      // §V draws three readings and that is none of them. The disabled floor
+      // beneath disabled boxes belongs to the reader who may NOT shape the run;
+      // a run that HAS started is read-only with no Continue at all. So the
+      // window this latch names is the one its own contract names — the press
+      // until the decision comes home — and the outcome hands the guards back
+      // whichever way it went. `inFlightRef`, written synchronously above, is
+      // what keeps two presses in one tick one decision; and a press that the
+      // run has genuinely moved past is refused by the server and SAID on the
+      // screen, through `error` above, rather than pre-empted by a reading the
+      // drawing does not draw.
+      releasedRef.current = false;
+      setSubmitted(false);
     });
   };
 
@@ -1260,12 +1277,6 @@ export function RunRecommendationChipRow({
     ready: boolean;
     /** Draw the control? Never on a reading a person cannot act on. */
     control: boolean;
-    /**
-     * Is this the settled reading a re-decision is taken on (cinatra#3062)? It
-     * changes nothing about what is drawn — only which decision the press
-     * belongs to, which is what decides when the guards come back.
-     */
-    reDecidable?: boolean;
   }): ReactElement => (
     <div
       data-run-recommendation-chip-row=""
@@ -1345,10 +1356,25 @@ export function RunRecommendationChipRow({
           and NOT drawn at all once the run has started, because there is then
           nothing a press could change. */}
       {opts.control ? (
-        <div className="flex">
+        // THE FLOOR THE DRAWING SEATS CONTINUE IN (cinatra#3062, the second
+        // capture). Its own wrapper, verbatim:
+        //
+        //   display:flex; justify-content:flex-end; margin-top:12px;
+        //   padding-top:12px; border-top:1px solid var(--line)
+        //
+        // — the control right-aligned beneath the row, over a hairline rule that
+        // separates it from the pills. The 12px above the rule is this step
+        // root's own `gap-3`; `pt-3` is the 12px below it. It was drawn
+        // left-aligned at the card's own edge with no rule at all, which the
+        // capture measured as clean background across the full card width.
+        //
+        // It is "the same Continue the HITL screen draws" (§V), down to the
+        // trailing arrow glyph after the word.
+        <div data-skills-step-floor="" className="flex justify-end border-t border-line pt-3">
           <Button
             type="button"
             size="sm"
+            className="gap-1.5"
             data-action="continue-skills-step -> released"
             data-skills-step-continue=""
             // INERT EXACTLY WHEN THE READING SAYS SO (cinatra#3047, review point
@@ -1363,13 +1389,12 @@ export function RunRecommendationChipRow({
             // the in-flight window as well: it is true from the press until the
             // decision comes back, and only a refusal clears it.
             disabled={!canDecide || submitted}
-            // …and the press still carries the RE-DECIDABLE flag cinatra#3062
-            // added, because `onContinue` takes it as its first argument: a bare
-            // `onClick={onContinue}` would hand the click event to that
-            // parameter and read as `true` on every press.
-            onClick={() => onContinue(opts.reDecidable === true)}
+            // WRAPPED, not passed by reference: `onContinue` takes no argument
+            // and a bare `onClick={onContinue}` would hand it the click event.
+            onClick={() => onContinue()}
           >
             Continue
+            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
           </Button>
         </div>
       ) : null}
@@ -1398,7 +1423,6 @@ export function RunRecommendationChipRow({
           editable: !submitted,
           ready: true,
           control: true,
-          reDecidable: true,
         });
       }
       // READ-ONLY. One pill per skill the hold asked about — the offer's own

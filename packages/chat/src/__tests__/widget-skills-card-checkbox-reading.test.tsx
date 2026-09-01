@@ -291,7 +291,7 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
     }
   });
 
-  it("decides through the BROKER, once per run, under the widget's own credential", async () => {
+  it("decides through the BROKER, once per press, under the widget's own credential", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const { stub, root } = await mountWidget(
       () => HELD,
@@ -323,11 +323,25 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
         (sent[0].init.headers as Record<string, string>)["X-Cinatra-Widget-User-Token"],
       ).toBe("cwu_user");
 
-      // A SECOND PRESS CHANGES NOTHING — one release per run.
+      // ONE DECISION PER PRESS, and Continue is not a lock (cinatra#3062, the
+      // second capture). §V: "Continue does not close the row. For as long as
+      // the run has not started, a reader who comes back to the Skills step is
+      // shown the same pills with the boxes still able to take a change and
+      // Continue still beneath them, and may change the selection." So the
+      // widget comes back to that reading, and a later press is a NEW decision
+      // bound to the SAME hold — the idempotent retry the decision path takes.
+      //
+      // This arm used to read "a second press changes nothing", which the row
+      // delivered by staying inert for good after the first press. That froze
+      // the card wherever the authority goes on answering `held`, and a real
+      // capture measured exactly that at rest: every box disabled and a greyed
+      // Continue on a run that had not started.
+      await waitFor(() => expect(cont.disabled).toBe(false));
       await act(async () => {
         fireEvent.click(cont);
       });
-      expect(bodies).toHaveLength(1);
+      await waitFor(() => expect(bodies).toHaveLength(2));
+      expect(bodies[1]).toMatchObject({ holdRef: "hold-ref-3062-widget" });
 
       // …and no cookie-bound road was taken from this host.
       expect(cookieConfirm).not.toHaveBeenCalled();

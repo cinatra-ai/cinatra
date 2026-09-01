@@ -28,7 +28,13 @@
 //      skipped), and the run's selected-skill rows therefore read back the
 //      latest selection;
 //   6. it is idempotent under a double press: two presses inside the in-flight
-//      window are ONE decision.
+//      window are ONE decision;
+//   7. AND THE PRESS ITSELF DOES NOT FREEZE THE CARD (cinatra#3062, the second
+//      capture). §V: "Continue does not close the row." A decision that lands
+//      while the run has NOT started leaves the drawing's editable reading on
+//      screen — the same pills, the boxes still able to take a change, and
+//      Continue still beneath them. The card in a conversation settles IN PLACE,
+//      so a reading the authority never changes must still hand the row back.
 //
 // Run:
 //   cd packages/agents && npx vitest run \
@@ -123,6 +129,28 @@ function settled(runStarted: boolean | undefined) {
     holdRef: HOLD_REF,
     canDecide: true,
     ...(runStarted === undefined ? {} : { runStarted }),
+  };
+}
+
+/**
+ * The hold as the authority answers it while the run is still parked at the
+ * gate — the reading the second capture measured BEFORE and AFTER the press,
+ * because this card's own resolve is not what moves when the run leaves the
+ * recommendation gate for its next one.
+ */
+function held() {
+  return {
+    state: "held" as const,
+    agentPackageName: PKG,
+    promptText: "Write the Q3 post.",
+    recommendations: CANDIDATES.map((c) => ({
+      ...c,
+      score: c.recommended ? 0.9 : 0.2,
+      rank: 1,
+      scoredFeatures: [],
+    })),
+    holdRef: HOLD_REF,
+    canDecide: true,
   };
 }
 
@@ -344,5 +372,95 @@ describe("the reading has reached every host", () => {
     expect(row(frozen.container)!.getAttribute("data-skills-step-editable")).toBe("false");
     for (const box of boxes(frozen.container)) expect(box.hasAttribute("disabled")).toBe(true);
     expect(continueButton(frozen.container)).toBeNull();
+  });
+});
+
+describe("Continue is not a lock — a decision that lands while the run has not started", () => {
+  // THE DEFECT THE SECOND CAPTURE MEASURED, driven here. In the chat the card
+  // settles IN PLACE, and the authority's re-read can still answer `held` after
+  // the decision has landed. The row's submit latch was handed back only by a
+  // CHANGE in the authority's reading, so a reading that never changed left the
+  // boxes disabled and the Continue greyed for good — a card frozen at
+  // `stepSubmitted=true` / `stepEditable=false` with a disabled Continue, for a
+  // reader who may decide, on a run that has not started.
+  //
+  // §V draws exactly three readings and that is none of them: the boxes take a
+  // change and Continue stands beneath them while the run has not started; the
+  // pills are read-only with NO Continue once it has; and the disabled floor
+  // belongs to the reader who may not shape the run at all. The guards are
+  // therefore handed back when the decision comes HOME, whichever way it went.
+  beforeEach(() => holdStateMock.mockResolvedValue(held()));
+
+  it("hands the row back to the drawing's editable reading, with a LIVE Continue", async () => {
+    const { container } = mount("chat_thread");
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("false"),
+    );
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+    expect(continueButton(container)!.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("takes a CHANGED selection on the next press, bound to the same hold", async () => {
+    // "…and may change the selection." The second press is the same question
+    // asked again, against the same hold — the idempotent-retry case the
+    // decision path already accepts.
+    const { container } = mount("chat_thread");
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(continueButton(container)!.hasAttribute("disabled")).toBe(false),
+    );
+
+    fireEvent.click(boxFor(container, CANDIDATES[1].skillId));
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(2));
+    const second = confirmRunRecommendationAction.mock.calls[1]![0];
+    expect(second.confirmedSkillIds).toEqual([CANDIDATES[0].skillId, CANDIDATES[1].skillId]);
+    expect(second.holdRef).toBe(HOLD_REF);
+  });
+
+  it("is still ONE decision under a double press inside the in-flight window", async () => {
+    // Handing the guards back on the outcome must not re-open the window the
+    // press itself closes: `inFlightRef` is written synchronously, and it is
+    // what makes two presses in one tick one decision.
+    let settle: (v: { ok: true; dispatched: boolean }) => void = () => {};
+    confirmRunRecommendationAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve as typeof settle;
+        }),
+    );
+    const { container } = mount("chat_thread");
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    fireEvent.click(continueButton(container)!);
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    // …and while it is in flight the step states that it is, which is the whole
+    // window `data-skills-step-submitted` names.
+    expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true");
+    settle({ ok: true, dispatched: false });
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("false"),
+    );
+    expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the same reading on the run page host", async () => {
+    // The card chrome travels: the run page host takes the same
+    // reading, and the capture measured the same freeze there.
+    const { container } = mount("run_card");
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true"),
+    );
+    expect(continueButton(container)!.hasAttribute("disabled")).toBe(false);
   });
 });

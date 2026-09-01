@@ -17,7 +17,15 @@
 //   3. no pill carries a placeholder byline. That is a LAYOUT invariant as much
 //      as a wording one: the drawing draws its rows on one line, and a
 //      placeholder standing in for an absent vendor more than doubles a pill's
-//      drawn width, which is what pushed the row onto a second line.
+//      drawn width, which is what pushed the row onto a second line;
+//   4. a pill has ONE ground, whether its box is set or clear. The drawing
+//      declares `.skchip` once — `border: 1px solid var(--line); background:
+//      var(--surface-strong)` — with no checked variant of it anywhere, and puts
+//      its ONLY checked accent on the box: `.skchip .cbx.on { background:
+//      var(--blue); border-color: var(--blue) }`;
+//   5. Continue is seated in the drawing's own footer: `display:flex;
+//      justify-content:flex-end; margin-top:12px; padding-top:12px; border-top:
+//      1px solid var(--line)`, and the label carries a TRAILING ARROW GLYPH.
 //
 // Measured against the drawing's own stylesheet: at the width the chat draws the
 // card at, four pills reading name-alone sit on ONE line, and the same four
@@ -73,6 +81,10 @@ const CANDIDATES = [
   scoredFeatures: [],
 }));
 
+// The SAME four skills with one box left clear, so a set pill and a clear pill
+// are measured side by side in one row: the drawing gives them one ground.
+const MIXED = CANDIDATES.map((c, i) => ({ ...c, recommended: i !== 1 }));
+
 const HELD: RunRecommendationDecision = { kind: "pending" };
 
 // EVERY host the row is drawn on — the four `SKILLS_CHECKLIST_HOSTS` the card
@@ -88,7 +100,7 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
-function mount(host: (typeof HOSTS)[number]) {
+function mount(host: (typeof HOSTS)[number], candidates = CANDIDATES) {
   return render(
     <LifecycleCardSurfaceProvider
       host={host}
@@ -99,7 +111,7 @@ function mount(host: (typeof HOSTS)[number]) {
         agentPackageName="@cinatra-ai/blog-draft-writer-agent"
         decision={HELD}
         holdRef="hold-ref-3062"
-        initialRecommendations={CANDIDATES}
+        initialRecommendations={candidates}
       />
     </LifecycleCardSurfaceProvider>,
   );
@@ -135,6 +147,64 @@ describe.each(HOSTS)("the Skills step's row, on %s", (host) => {
     // Directly in the row: each pill is a CHILD of it, not nested in a column
     // wrapper of the row's own making.
     for (const pill of Array.from(pills)) expect(pill.parentElement).toBe(row);
+  });
+
+  it("gives a set box and a clear one the SAME pill ground — the drawing draws no checked tint", () => {
+    // `.skchip` is declared ONCE in the drawing and carries no checked variant:
+    // one hairline `var(--line)` border over one `var(--surface-strong)` ground,
+    // whichever way the box is set. The accent belongs to the box alone.
+    const { container } = mount(host, MIXED);
+    const pills = Array.from(
+      list(container).querySelectorAll<HTMLElement>("[data-skills-step-pill]"),
+    );
+    expect(pills).toHaveLength(MIXED.length);
+    // Both readings really are on screen, or this arm proves nothing.
+    expect(new Set(pills.map((p) => p.getAttribute("data-skill-applied")))).toEqual(
+      new Set(["true", "false"]),
+    );
+    // …and every one of them declares the same ground and the same border.
+    const grounds = pills.map((p) =>
+      p.className
+        .split(/\s+/)
+        .filter((c) => c.startsWith("bg-") || c.startsWith("border-"))
+        .sort()
+        .join(" "),
+    );
+    expect(new Set(grounds).size).toBe(1);
+    for (const pill of pills) {
+      const cls = pill.className.split(/\s+/);
+      expect(cls).toContain("bg-surface-strong");
+      expect(cls).toContain("border-line");
+      // No accent of ANY kind on the pill itself — the measured defect was a
+      // green ground and a green border on the set pill.
+      expect(cls.some((c) => /-(success|blue|primary)(\/|$)/.test(c))).toBe(false);
+    }
+  });
+
+  it("seats Continue in the drawing's right-aligned footer, over its hairline rule, with the trailing glyph", () => {
+    // The drawing's own wrapper for this control:
+    //   display:flex; justify-content:flex-end; margin-top:12px;
+    //   padding-top:12px; border-top:1px solid var(--line)
+    // …and the label reads `Continue` followed by an arrow glyph. The step's
+    // root supplies the 12px margin as its own `gap-3`.
+    const { container } = mount(host);
+    const button = container.querySelector<HTMLElement>("[data-skills-step-continue]");
+    expect(button).not.toBeNull();
+    const floor = button!.parentElement!;
+    const cls = floor.className.split(/\s+/);
+    expect(cls).toContain("flex");
+    expect(cls).toContain("justify-end");
+    // The hairline rule the row is separated from, and the drawing's 12px above it.
+    expect(cls).toContain("border-t");
+    expect(cls).toContain("border-line");
+    expect(cls).toContain("pt-3");
+    // The 12px between the row and the rule is the step root's own gap.
+    expect(floor.parentElement!.className.split(/\s+/)).toContain("gap-3");
+    // The word, and then the glyph after it.
+    expect(button!.textContent).toContain("Continue");
+    const glyph = button!.querySelector("svg");
+    expect(glyph).not.toBeNull();
+    expect(button!.lastElementChild).toBe(glyph);
   });
 
   it("draws no placeholder byline, so each pill keeps the drawn width", () => {

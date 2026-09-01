@@ -312,8 +312,13 @@ export const CAPTURE_SCOPES = Object.freeze(["page", "frame", "root"]);
  * Every spec carries the canonical `scope` plus this tier's own `frame` /
  * `within` / `expect`, which the canonical validator ignores as unknown fields.
  */
-export function captureRequirementsFor(host, kind = null, state = null) {
-  const { required, forbidden } = requiredAssertionsFor({ host, kind, state });
+export function captureRequirementsFor(host, kind = null, state = null, cell = null) {
+  // `cell` is CARRIED, not interpreted here: a kind whose reading differs by era
+  // grades a picture on file against the reading it was actually taken of, and
+  // the canonical half is the one authority on which era a cell belongs to. A
+  // walk that is minting a NEW cell passes none, and is held to the shipped
+  // reading in full (cinatra#3062).
+  const { required, forbidden } = requiredAssertionsFor({ host, kind, state, cell });
   const root = cardRootFor(kind);
   const frameOf = (scope) =>
     scope === "page" ? "main" : (CAPTURE_FRAME_FOR_HOST[host] ?? "main");
@@ -739,7 +744,7 @@ export async function observeCapture({
   // it is drawn — which is also what makes the S9d run-page cell recordable at
   // all, since the schedule step's controls ARE the kind's requirement set.
   const required = kind
-    ? captureRequirementsFor(declaredHost, kind, state)
+    ? captureRequirementsFor(declaredHost, kind, state, cell ?? null)
     : captureRequirementsFor(declaredHost);
   const specs = [...required, ...extraAssertions.map((a) => ({ scope: "frame", ...a }))];
 
@@ -1564,7 +1569,12 @@ export function validateCaptureRecord(
   // different requirements from one record is the drift this module exists to
   // close.
   const hostRequirements = LIFECYCLE_KINDS.includes(record?.declaredKind)
-    ? captureRequirementsFor(host, record.declaredKind, record.declaredState ?? "pending")
+    ? captureRequirementsFor(
+        host,
+        record.declaredKind,
+        record.declaredState ?? "pending",
+        typeof record?.cell === "string" ? record.cell : null,
+      )
     : captureRequirementsFor(host);
   // Keyed by scope, selector AND `within`. A root-scoped requirement names the
   // root it is counted inside; an observation that declares a DIFFERENT root
