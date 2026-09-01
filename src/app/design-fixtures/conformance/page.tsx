@@ -222,8 +222,7 @@ export default function ConformanceHarnessPage() {
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
-              In-conversation review suggestion chips (surfaces:
-              suggestion-accepted, suggestion-dismissed)
+              In-conversation review suggestion chips (mount: chip-row-live)
             </CardTitle>
           </CardHeader>
           <CardContent>

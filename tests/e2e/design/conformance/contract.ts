@@ -51,6 +51,7 @@ import {
 import {
   LIFECYCLE_SUGGESTION_CHIP_FIXTURES,
   type LifecycleSuggestionChipFixture,
+  type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
   CONNECTOR_CONFIG_TAB,
@@ -379,8 +380,23 @@ async function pressChipUntil(chip: Locator, reacted: () => Promise<void>): Prom
   }).toPass({ timeout: 30_000 });
 }
 
+/**
+ * The manifest surface each harness mount stands for.
+ *
+ * It lives HERE, on the test side, rather than on the fixture row, because the
+ * suggestion chip's spec anchors may appear as a literal in exactly ONE
+ * production module — the card that draws them — and the repository proves that
+ * by scanning src and packages. Keyed by the mount union, so a new mount without
+ * a manifest surface is a typecheck failure rather than an undefined driver key.
+ */
+const SUGGESTION_CHIP_MANIFEST_SURFACE: Readonly<
+  Record<LifecycleSuggestionChipMount, string>
+> = {
+  "chip-row-live": "suggestion-accepted",
+};
+
 export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): SurfaceDriver {
-  const rootSel = `[data-surface-id="${fixture.surfaceId}"]`;
+  const rootSel = `[data-surface-id="${fixture.mount}"]`;
 
   return {
     path: HARNESS_PATH,
@@ -2966,7 +2982,7 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   // factory over one fixture list — the later waves add rows, not drivers.
   ...Object.fromEntries(
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
-      fixture.surfaceId,
+      SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
       suggestionChipDriver(fixture),
     ]),
   ),

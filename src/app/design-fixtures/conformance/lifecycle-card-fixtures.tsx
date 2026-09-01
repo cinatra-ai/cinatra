@@ -30,6 +30,12 @@
 // no fetch wrapper, no route stub, no seeded server answer. The chip row is a
 // props-only component, so mounting it needs none.
 //
+// THE MOUNT IS NAMED, NOT THE MANIFEST SURFACE. Everywhere else in this harness
+// `data-surface-id` is the manifest surface id; the chips are the one place it
+// cannot be, because the chip's spec anchors may appear as a literal in exactly
+// one production module and the repository proves that by scanning. The binding
+// from mount to manifest surface lives in the driver map, on the test side.
+//
 // Kept OFF the pixel-diffed /design-fixtures index page (same convention as the
 // other conformance fixtures): coverage here is assertion-based —
 // tests/e2e/design/conformance/functional-acceptance.spec.ts.
@@ -66,7 +72,7 @@ function SuggestionChipFixture({
   }, []);
 
   return (
-    <div data-surface-id={fixture.surfaceId} className="flex flex-col gap-4">
+    <div data-surface-id={fixture.mount} className="flex flex-col gap-4">
       {/* The IN-THREAD host. The chips are host-independent by design — the same
           row is drawn on every host the card appears on — and the declaration is
           what makes this mount the in-conversation one. */}
@@ -89,7 +95,7 @@ export function LifecycleSuggestionChipFixtures(): ReactElement {
   return (
     <div className="flex flex-col gap-10">
       {LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => (
-        <SuggestionChipFixture key={fixture.surfaceId} fixture={fixture} />
+        <SuggestionChipFixture key={fixture.mount} fixture={fixture} />
       ))}
     </div>
   );

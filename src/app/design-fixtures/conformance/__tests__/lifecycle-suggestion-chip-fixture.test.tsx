@@ -22,13 +22,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const SURFACE = "suggestion-accepted";
+// The harness MOUNT. The manifest surface it stands for is bound on the test
+// side, in the driver map, because the chip anchors belong to one module only.
+const MOUNT = "chip-row-live";
 
 describe("the conformance harness mount for the suggestion chips", () => {
-  it("mounts the SHIPPED chip row under the surface id the manifest names", () => {
+  it("mounts the SHIPPED chip row under the harness mount the driver addresses", () => {
     const { container } = render(<LifecycleSuggestionChipFixtures />);
-    const root = container.querySelector(`[data-surface-id="${SURFACE}"]`);
-    expect(root, "the fixture row is the manifest surface id").not.toBeNull();
+    const root = container.querySelector(`[data-surface-id="${MOUNT}"]`);
+    expect(root, "the fixture row draws its declared mount").not.toBeNull();
     const row = root!.querySelector('[data-conformance-id="suggestion-chips"]');
     expect(row).not.toBeNull();
     // LIVE, not the recorded or the read-only partition: this reader may mark.
@@ -44,7 +46,7 @@ describe("the conformance harness mount for the suggestion chips", () => {
 
   it("presses the shipped chip and the PRODUCT decides what is then drawn", async () => {
     const { container } = render(<LifecycleSuggestionChipFixtures />);
-    const root = container.querySelector(`[data-surface-id="${SURFACE}"]`)!;
+    const root = container.querySelector(`[data-surface-id="${MOUNT}"]`)!;
     const row = root.querySelector('[data-conformance-id="suggestion-chips"]')!;
     const accepted = row.querySelector('[data-action="dismiss-suggestion -> dismissed"]')!;
     fireEvent.click(accepted.querySelector("button")!);
@@ -64,6 +66,6 @@ describe("the conformance harness mount for the suggestion chips", () => {
   });
 
   it("carries exactly the one fixture row this wave lands", () => {
-    expect(LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((f) => f.surfaceId)).toEqual([SURFACE]);
+    expect(LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((f) => f.mount)).toEqual([MOUNT]);
   });
 });
