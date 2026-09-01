@@ -18,6 +18,7 @@ import {
   AssignmentScopeSnapshotError,
   assignmentScopeFallback,
   buildAssignmentScopeSnapshot,
+  buildRunCreationAssignmentScopeSnapshot,
   parseAssignmentScopeSnapshot,
   readAssignmentScopeSnapshot,
 } from "../assignment-scope-snapshot";
@@ -193,5 +194,95 @@ describe("assignment-scope snapshot — the immutability guard", () => {
     const body = storeSource.slice(storeSource.indexOf("export async function updateAgentRunMeta"));
     const end = body.indexOf("\nexport ", 1);
     expect(body.slice(0, end)).toContain("assertAssignmentScopeSnapshotNotMutated(");
+  });
+});
+
+// THE RUN-CREATION DERIVATION, as a named seam of this module.
+//
+// `createAgentRun` and `createAgentRunPendingInput` derived the identical
+// snapshot from the identical three fields, each carrying its own copy of the
+// reasoning. Two copies of one authority rule is one copy too many: a fix
+// applied to one of them leaves the other deciding differently. The derivation
+// lives HERE, beside the builder it wraps, and the store calls it.
+describe("assignment-scope snapshot — the run-creation derivation", () => {
+  it("carries the org, the project and the actor's teams", () => {
+    const snap = buildRunCreationAssignmentScopeSnapshot({
+      orgId: ORG,
+      projectId: "proj_1",
+      scopeActor: {
+        principalType: "HumanUser",
+        principalId: "user_1",
+        teamIds: ["t_b", "t_a"],
+      },
+    });
+    expect(snap).toEqual({
+      v: ASSIGNMENT_SCOPE_SNAPSHOT_VERSION,
+      orgId: ORG,
+      projectId: "proj_1",
+      teamIds: ["t_a", "t_b"],
+      originatingHumanUserId: "user_1",
+    });
+  });
+
+  it("stamps the originating human ONLY for a HumanUser scope actor", () => {
+    // A schedule, a trigger or an orchestrator child keeps a human OWNER, and
+    // stamping that owner here would give a headless run a personal assignment
+    // layer nobody granted it.
+    for (const principalType of [
+      "ServiceAccount",
+      "InternalWorker",
+      "ExternalA2AAgent",
+      "System",
+    ]) {
+      const snap = buildRunCreationAssignmentScopeSnapshot({
+        orgId: ORG,
+        scopeActor: { principalType, principalId: "svc_1", teamIds: ["t_a"] },
+      });
+      expect(snap.originatingHumanUserId).toBeUndefined();
+      // The team layer is the actor's own and survives; only the personal tier
+      // is withheld.
+      expect(snap.teamIds).toEqual(["t_a"]);
+    }
+  });
+
+  it("has no project and no personal tier when the run carries neither", () => {
+    const snap = buildRunCreationAssignmentScopeSnapshot({
+      orgId: ORG,
+      projectId: null,
+      scopeActor: null,
+    });
+    expect(snap).toEqual({
+      v: ASSIGNMENT_SCOPE_SNAPSHOT_VERSION,
+      orgId: ORG,
+      teamIds: [],
+    });
+  });
+
+  it("refuses a run with no organization", () => {
+    expect(() => buildRunCreationAssignmentScopeSnapshot({ orgId: "   " })).toThrow(
+      AssignmentScopeSnapshotError,
+    );
+  });
+
+  it("is what BOTH run-creation paths call — the derivation is not re-inlined", () => {
+    const storeSource = readFileSync(
+      resolve(fileURLToPath(import.meta.url), "../../store.ts"),
+      "utf8",
+    );
+    for (const entry of [
+      "export async function createAgentRun(",
+      "export async function createAgentRunPendingInput(",
+    ]) {
+      const start = storeSource.indexOf(entry);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const body = storeSource.slice(start);
+      expect(body.slice(0, body.indexOf("\nexport ", 1))).toContain(
+        "buildRunCreationAssignmentScopeSnapshot(",
+      );
+    }
+    // The low-level builder is reached THROUGH the seam. A re-inlined
+    // `buildAssignmentScopeSnapshot({ ... })` at a call site is the exact
+    // duplication this seam exists to end.
+    expect(storeSource).not.toContain("buildAssignmentScopeSnapshot({");
   });
 });

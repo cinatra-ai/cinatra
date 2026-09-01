@@ -187,3 +187,37 @@ export type AssignmentSource = (typeof ASSIGNMENT_SOURCES)[number];
 export function assignmentSourceCheckSql(column = "source"): string {
   return `${column} IN (${ASSIGNMENT_SOURCES.map((s) => `'${s}'`).join(", ")})`;
 }
+
+// ---------------------------------------------------------------------------
+// The RUN's own scope column, as DDL.
+//
+// A run freezes the scopes it was created under into
+// `agent_runs.assignment_scope_snapshot`; the sole reader of that payload is
+// `packages/agents/src/assignment-scope-snapshot.ts`. The statement lives HERE,
+// beside the rest of this slice's SQL, rather than inline in the module that
+// composes it: `src/lib/drizzle-store.ts` is at its file-size ceiling, which
+// may only ever shrink, so DDL that can live outside it does — and this leaf is
+// ALREADY what that composition reaches for the slice's other SQL, so the move
+// costs the route graph nothing new.
+//
+// The thread twin of the same column is built the same way in
+// `src/lib/assistant-thread-schema.ts`; the operator-upgrade twin of both is
+// `migrations/core/core__0100_per-scope-assignment-stores.mjs`, and the two
+// halves are pinned against each other by the parity suites.
+//
+// ADDITIVE AND NULLABLE. A row that predates the column reads NULL, which the
+// reader resolves to workspace plus the durable organization and nothing else.
+// There is deliberately no backfill: inventing a scope for a historical run
+// would be recording an assignment nobody made. On replay the statement is a
+// no-op (ADD COLUMN IF NOT EXISTS) and it writes to no existing row.
+// ---------------------------------------------------------------------------
+
+/** The bootstrap statement for `agent_runs.assignment_scope_snapshot`. */
+export function agentRunAssignmentScopeSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [
+    { text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS assignment_scope_snapshot jsonb` },
+  ];
+}

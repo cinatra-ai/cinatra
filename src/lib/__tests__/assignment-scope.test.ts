@@ -15,6 +15,7 @@ import {
   assertAssignmentScope,
   assignmentScopeCheckSql,
   assignmentScopeKindCheckSql,
+  agentRunAssignmentScopeSchemaQueries,
   assignmentScopeLockKey,
   evaluateAssignmentScope,
 } from "@/lib/assignment-scope";
@@ -150,5 +151,42 @@ describe("assignment scope — the SHARED SQL CHECK shape", () => {
     const kinds = assignmentScopeKindCheckSql();
     for (const k of ASSIGNMENT_SCOPE_KINDS) expect(kinds).toContain(`'${k}'`);
     expect(kinds.match(/'/g)?.length).toBe(ASSIGNMENT_SCOPE_KINDS.length * 2);
+  });
+});
+
+// The run's scope column ships from this leaf (cinatra#2813 S1). It moved out
+// of `drizzle-store.ts` — which is at its file-size ceiling, and which may only
+// ever shrink — into the module that already owns this slice's SQL.
+describe("assignment scope — the run's scope column DDL", () => {
+  it("adds the column to agent_runs, idempotently and nullably", () => {
+    expect(agentRunAssignmentScopeSchemaQueries("cinatra").map((q) => q.text)).toEqual([
+      `ALTER TABLE "cinatra"."agent_runs" ADD COLUMN IF NOT EXISTS assignment_scope_snapshot jsonb`,
+    ]);
+  });
+
+  it("quotes an adversarial schema name", () => {
+    const sql = agentRunAssignmentScopeSchemaQueries('we"ird')
+      .map((q) => q.text)
+      .join("\n");
+    expect(sql).toContain('"we""ird"');
+  });
+});
+
+describe("assignment scope — a fresh install still gets the run column", () => {
+  it("the store schema builder adds it after agent_runs exists, beside the delegated-actor snapshot", async () => {
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    const texts = buildCreateStoreSchemaQueries("cinatra").map(
+      (q) => (q as { text: string }).text,
+    );
+    const runs = texts.findIndex((t) =>
+      t.includes(`CREATE TABLE IF NOT EXISTS "cinatra"."agent_runs"`),
+    );
+    const delegated = texts.findIndex((t) => t.includes("delegated_actor_snapshot"));
+    const scope = texts.findIndex(
+      (t) => t.includes("assignment_scope_snapshot") && t.includes(`"agent_runs"`),
+    );
+    expect(runs).toBeGreaterThanOrEqual(0);
+    expect(delegated).toBeGreaterThan(runs);
+    expect(scope).toBeGreaterThan(delegated);
   });
 });

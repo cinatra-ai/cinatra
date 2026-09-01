@@ -125,6 +125,59 @@ export function buildAssignmentScopeSnapshot(
   });
 }
 
+/**
+ * The scope actor a run-creation input carries, as this module needs it.
+ *
+ * Structural on purpose: an `ActorContext` satisfies it, and the snapshot
+ * module stays free of the authorization package's imports so it remains the
+ * one pure decision the store, the thread writer, delivery and the recommender
+ * all share.
+ */
+export type RunCreationScopeActor = {
+  readonly principalType: string;
+  readonly principalId: string;
+  readonly teamIds?: readonly string[] | null;
+};
+
+/**
+ * THE run-creation derivation.
+ *
+ * Every run-creation primitive freezes its scopes from the SAME three fields of
+ * the same create input, so the rule lives here once instead of beside each
+ * insert — two copies of one authority rule is one copy too many, because a fix
+ * applied to one of them leaves the other deciding differently.
+ *
+ * It is derived inside the STORE rather than at each producer on purpose: run
+ * creation is funnelled through the launch fence, so deriving it once at the
+ * primitive means a producer cannot forget it and a producer added tomorrow
+ * gets it for free. `RUN_CREATION_CALL_SITES` records that disposition per call
+ * site and its suite refuses a writer that is not listed.
+ *
+ * The originating human comes ONLY from an explicit `HumanUser` scope actor. A
+ * personal-scope assignment belongs to a person, so a worker or service
+ * principal contributes no personal layer rather than a wrong one — and `runBy`
+ * is durable OWNERSHIP, not evidence that a person launched THIS run: a
+ * schedule, a trigger or an orchestrator child keeps a human owner, and
+ * stamping that owner here would give a headless run a personal assignment
+ * layer nobody granted it. Absent is the fail-closed answer — the run simply
+ * carries no personal tier.
+ */
+export function buildRunCreationAssignmentScopeSnapshot(input: {
+  orgId: string;
+  projectId?: string | null;
+  scopeActor?: RunCreationScopeActor | null;
+}): AssignmentScopeSnapshot {
+  return buildAssignmentScopeSnapshot({
+    orgId: input.orgId,
+    projectId: input.projectId ?? undefined,
+    teamIds: input.scopeActor?.teamIds ?? [],
+    originatingHumanUserId:
+      input.scopeActor?.principalType === "HumanUser"
+        ? input.scopeActor.principalId
+        : undefined,
+  });
+}
+
 /** The JSON text the column carries. */
 export function serializeAssignmentScopeSnapshot(snapshot: AssignmentScopeSnapshot): string {
   return JSON.stringify(snapshot);
