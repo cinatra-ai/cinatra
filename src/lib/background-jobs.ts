@@ -17,6 +17,7 @@ import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
 import {
   BACKGROUND_JOB_REGISTRY,
+  clearSettledJobForReuse,
   dispatchRegisteredJob,
   UnclassifiedBackgroundJobError,
   type JobAuthorityMetadata,
@@ -25,7 +26,6 @@ import {
 // to the leaf module `background-jobs-notify.ts` (cinatra#2039 S1 ratchet slice)
 // to keep this runtime module under its file-size ceiling; behaviour unchanged.
 import { notifyJobLifecycle, notifyJobStarted } from "@/lib/background-jobs-notify";
-import { clearSettledJobForReuse } from "@/lib/background-jobs-settled-reuse";
 
 // The background-job NAME constants, the `BackgroundJobName` type, and the
 // canonical recurring-loop jobIds now live in the leaf module
@@ -660,7 +660,7 @@ export async function enqueueBackgroundJob(
     /**
      * Clear a SETTLED job of this `jobId` first (a LIVE one is left alone), or
      * BullMQ's HSETNX-based `add` returns the retained entry and enqueues
-     * nothing. Honoured on BOTH paths — see `background-jobs-settled-reuse`.
+     * nothing. Honoured on BOTH paths via `clearSettledJobForReuse`.
      */
     overwriteIfStale?: boolean;
     /**
