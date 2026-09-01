@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   adoptDesignPin,
@@ -340,5 +340,111 @@ describe("every write is inside the rollback guard", () => {
     });
     expect(result.exitCode).toBe(1);
     expect(err.join("\n")).toContain("could NOT be rolled back");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The seam: adoptDesignPin -> the resolution subprocess
+// ---------------------------------------------------------------------------
+
+describe("the resolution subprocess is the real one, and the transaction survives it", () => {
+  // Everything below drives the REAL `readUnresolvedAnchorsFrom`, which shells
+  // out to `design-anchor-resolution.mjs --print-unresolved` in this checkout.
+  // The manifest and the contract are held in memory through `readImpl` and
+  // `writeImpl`, so the repository's own two files never move — the suite above
+  // asserts that separately.
+  const drawings = [];
+  const previous = process.env.DESIGN_DRAWINGS_DIR;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.DESIGN_DRAWINGS_DIR;
+    else process.env.DESIGN_DRAWINGS_DIR = previous;
+  });
+
+  /** A local design copy carrying exactly the drawing this repository's pin governs. */
+  const copyDrawing = (text) => {
+    const dir = mkdtempSync(join(tmpdir(), "adopt-seam-drawings-"));
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    writeFileSync(join(dir, "specs", "app-lifecycle-cards.html"), text, "utf8");
+    drawings.push(dir);
+    return dir;
+  };
+
+  function adoptAgainst(dir) {
+    process.env.DESIGN_DRAWINGS_DIR = dir;
+    const files = new Map([
+      [join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"), manifestText()],
+      [join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"), contractText()],
+    ]);
+    const err = [];
+    const result = adoptDesignPin({
+      repoRoot: REPO_ROOT,
+      pin: `design@${NEW} specs/app-lifecycle-cards.html`,
+      write: true,
+      readImpl: (path) => {
+        if (!files.has(path)) throw new Error(`ENOENT ${path}`);
+        return files.get(path);
+      },
+      writeImpl: (path, text) => files.set(path, text),
+      readRecomputedDigest: () => DIGEST_NEW,
+      log: () => {},
+      logError: (l) => err.push(String(l)),
+    });
+    return { result, err: err.join("\n"), files };
+  }
+
+  it("completes and records what the re-examination found, both recorded forms decided", () => {
+    // The drawing draws the widget frame class, and carries the embed
+    // declaration WITHOUT the active phase on the same element. So the class
+    // selector resolves, the compound predicate does not, and both are
+    // DECIDED — which is what lets this transaction finish at all.
+    const dir = copyDrawing(
+      '<!doctype html><html><body><div class="cw-frame">' +
+        "<span data-embed-assistant>the widget</span></div></body></html>",
+    );
+    const { result, err, files } = adoptAgainst(dir);
+    expect(err).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(Array.isArray(result.unresolved)).toBe(true);
+    expect(result.unresolved).not.toContain(".cw-frame");
+    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+    const contract = JSON.parse(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json")));
+    expect(contract.specCommit).toBe(`design@${NEW} specs/app-lifecycle-cards.html`);
+    expect(contract.anchorsUnresolvedAtPin).toEqual(result.unresolved);
+    expect(contract.digest).toBe(DIGEST_NEW);
+  });
+
+  it("records the class selector as unresolved when the drawing draws no such frame", () => {
+    const dir = copyDrawing("<!doctype html><html><body><main>a drawing</main></body></html>");
+    const { result } = adoptAgainst(dir);
+    expect(result.exitCode).toBe(0);
+    expect(result.unresolved).toContain(".cw-frame");
+    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+  });
+
+  it("still rolls the tree back when the subprocess itself cannot run", () => {
+    // The protection is unchanged: a road that cannot answer is still a
+    // failure with a rollback, not a partial record.
+    process.env.DESIGN_DRAWINGS_DIR = join(tmpdir(), "adopt-seam-does-not-exist");
+    const files = new Map([
+      [join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"), manifestText()],
+      [join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"), contractText()],
+    ]);
+    const err = [];
+    const result = adoptDesignPin({
+      repoRoot: REPO_ROOT,
+      pin: `design@${NEW} specs/app-lifecycle-cards.html`,
+      write: true,
+      readImpl: (path) => files.get(path),
+      writeImpl: (path, text) => files.set(path, text),
+      readRecomputedDigest: () => DIGEST_NEW,
+      log: () => {},
+      logError: (l) => err.push(String(l)),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("rolled back");
+    expect(JSON.parse(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"))).specCommit).toBe(
+      oldPin,
+    );
   });
 });
