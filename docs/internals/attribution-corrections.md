@@ -1143,3 +1143,38 @@ Correction-for: 79e5daf7191e8df4f25cca0308c394a964d498d7
 The correction commit states no verification line of its own: the verification arm is composed at
 the correction's merge, by the merge tooling, from the live gate suite, and a later mirror commit
 appends the merge record's composed arm lines to this entry.
+
+---
+
+## Correction for `4a8fb0ef99f0352fc953cada1277848107088cc7`
+
+correction: verification record for 15958ddd1 (PR #3171).
+
+The message that landed ends in three paragraphs — `Assisted-by: none`, then the `Correction-for`
+line, then the squash machinery's `Co-authored-by:` identity line — each separated from the next by
+a blank line. The parser peels the terminal identity paragraph and folds in exactly ONE preceding
+paragraph, so the record paragraph it folds in is the `Correction-for` line alone: the record
+carries no `Assisted-by` and no verification arm, and the post-merge gate red-flagged it twice over
+(no-record for the missing `Assisted-by`, no-record again for the absent arm). Because that commit
+is itself a correction and its own record is invalid, it does not govern 15958ddd1 either; that
+target is repaired by a correction naming 15958ddd1 directly. This entry repairs 4a8fb0ef9's OWN
+verdict and nothing else. The change is untouched — this repairs the RECORD only.
+
+The commit is documentation only: it appends one entry to this file and touches nothing else, so
+the gate's own classifier reports it not high-risk and the machine arm is the arm it needs. Both
+required contexts concluded success at its reviewed head
+`5a7198382ebd47d612d5baa6976636f0acc44f46`: `truthful-attribution-gate` at 2026-09-01T07:58:11Z and
+`source-leak-gate` at 2026-09-01T07:58:22Z. No human arm belongs on this record and none is
+asserted: the only review on PR #3171 is an automated COMMENTED review, never an approval, so a
+maintainer verification line naming anyone would be fabricated.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 4a8fb0ef99f0352fc953cada1277848107088cc7
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the live gate suite, and a later mirror commit
+appends the merge record's composed arm lines to this entry.
