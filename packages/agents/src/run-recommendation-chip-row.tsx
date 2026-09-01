@@ -1203,6 +1203,14 @@ function useRecommendationHoldState(params: {
   // `useLifecycleCardResolve`; the reason is identical (a superseded answer is
   // exactly the staleness the refetch exists to prevent).
   const latestRequestRef = useRef(0);
+  // THE LAST ANSWER THIS CARD FILED, readable from inside a resolve that is
+  // already in flight. `resolved` is state, so the closure a look was issued
+  // with holds whatever was on screen when it started; the rule below is about
+  // what is on screen when it LANDS. Written in the one place `resolved` is.
+  const filedAnswerRef = useRef<{
+    runId: string;
+    state: RunRecommendationHoldState;
+  } | null>(null);
 
   /**
    * One resolve attempt. `true` means "this trigger is done" — either an answer
@@ -1227,6 +1235,38 @@ function useRecommendationHoldState(params: {
       // must NOT arm a retry, or a burst of wire changes would fan out into a
       // pile of competing retry chains.
       if (requestId !== latestRequestRef.current) return true;
+      // AN EMPTY ANSWER DOES NOT WITHDRAW A POSITIVE ONE THIS RUN ALREADY GAVE
+      // (cinatra#3007, fix leg 10). `none` is the authority's word for several
+      // different questions, and two of them are the collapse of a read that
+      // STUMBLED rather than a statement about the run: the run row and the park
+      // row are each read `.catch(() => null)` and each ends at this same word.
+      // Beside an answer this run has ALREADY given that was not itself `none`,
+      // it is a look that did not land — so it is treated as one: nothing is filed,
+      // the bounded retry is armed, and the card keeps the last authorized
+      // answer instead of taking a settled row off a transcript somebody is
+      // reading.
+      //
+      // It is the rule the review-slot reader already carries one seam over, for
+      // the same reason and in the same words, and the held-turn gate is what
+      // asked for it here: a card that settled, was read decided on its own
+      // root, and was gone from the next look onward — permanently, because a
+      // filed answer schedules nothing and the steady state of this card is zero
+      // timers.
+      //
+      // KEYED TO THE RUN, and only to it: a FIRST `none` is still an answer (a
+      // run that was never held draws nothing, which is this card's whole
+      // fail-closed posture), and a later run on the same card inherits no
+      // verdict about an earlier one.
+      const filed = filedAnswerRef.current;
+      if (
+        state.state === "none" &&
+        filed !== null &&
+        filed.runId === requestRunId &&
+        filed.state.state !== "none"
+      ) {
+        return false;
+      }
+      filedAnswerRef.current = { runId: requestRunId, state };
       setResolved({ runId: requestRunId, state });
       return true;
     } catch {
