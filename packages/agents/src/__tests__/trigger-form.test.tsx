@@ -11,8 +11,8 @@
  *   6. Submitting calls setRunTrigger with the immediate-trigger args shape.
  *   7. Server failure renders inline destructive error below submit.
  *   8. Server success calls router.push with /agents/{agentId}/{runId}.
- *   9. History-tier estimate prop renders the history copy.
- *  10. Null estimate prop renders the "unavailable" copy.
+ *   9. History-tier estimate prop renders the drawing's own populated copy.
+ *  10. Null estimate prop draws no duration line at all (cinatra#3182 item 5).
  *
  *    cd packages/agent-builder && pnpm exec vitest run src/__tests__/trigger-form.test.tsx
  */
@@ -157,8 +157,10 @@ describe("TriggerScreenClient — defaults & type switching", () => {
 
   it("clicking Schedule for later makes Run at label accessible", () => {
     renderForm();
+    // Unchosen rows carry no fields (cinatra#3182 item 3), so Run at arrives
+    // with the row: the click both selects the row and reveals its field.
+    expect(screen.queryByLabelText("Run at")).toBeNull();
     fireEvent.click(screen.getByText("Schedule for later"));
-    // The scheduled section always contains Run at — clicking the card selects it.
     expect(screen.getByLabelText("Run at")).toBeTruthy();
   });
 
@@ -256,15 +258,18 @@ describe("TriggerScreenClient — duration estimate banner", () => {
       computedAt: new Date().toISOString(),
     };
     renderForm({ durationEstimate: estimate });
-    // durationCopy returns "{min}–{max}." — 7260s min, 14520s max → "2.0 hr–4.0 hr."
-    const banner = screen.getByText("2.0 hr–4.0 hr.");
+    // durationCopy returns the drawing's own sentence — "About {min} – {max}."
+    // — for 7260s min and 14520s max (cinatra#3182 item 5).
+    const banner = screen.getByText("About 2.0 hr – 4.0 hr.");
     expect(banner).toBeTruthy();
   });
 
-  it("renders Unavailable. when prop is null", () => {
+  it("draws no duration line when there is no estimate", () => {
+    // The drawing gives the line only populated, and no wording for an empty
+    // one; "Unavailable." was this form's own invention (cinatra#3182 item 5).
     renderForm({ durationEstimate: null });
-    const banner = screen.getByText("Unavailable.");
-    expect(banner).toBeTruthy();
+    expect(screen.queryByText("Unavailable.")).toBeNull();
+    expect(screen.queryByText("Estimated run duration")).toBeNull();
   });
 });
 
@@ -289,7 +294,22 @@ describe("TriggerScreenClient — the read-only reading of a fired one-off", () 
   });
 
   it("still draws the same form — the rows and the duration line", () => {
-    renderForm({ readOnly: true });
+    renderForm({
+      readOnly: true,
+      // The line is drawn where there IS an estimate to draw (cinatra#3182
+      // item 5); this case is about the READING, not about the estimate.
+      durationEstimate: {
+        source: "history",
+        runCount: 3,
+        prepMinSeconds: 60,
+        prepMaxSeconds: 120,
+        gatedMinSeconds: 0,
+        gatedMaxSeconds: 0,
+        confidence: "high",
+        notes: "",
+        computedAt: new Date().toISOString(),
+      },
+    });
     expect(screen.getByText("When should this run?")).toBeTruthy();
     expect(screen.getByText("Run right after setup")).toBeTruthy();
     expect(screen.getByText("Schedule for later")).toBeTruthy();
