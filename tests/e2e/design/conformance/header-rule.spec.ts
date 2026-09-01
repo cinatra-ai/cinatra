@@ -15,11 +15,40 @@
  * A wrong rule (grey / single line / two-tone / invisible) fails HERE,
  * mechanically, before it can reach a review.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 import { classifyEtchedRule, SPEC_NAVY, type RuleComputed } from "./etched-rule";
 
 const FIXTURE = "/design-fixtures/header-rule";
+
+/**
+ * Land on the fixture IN one palette.
+ *
+ * The two palettes are EXCLUSIVE classes on the root element — `cinatra` and
+ * `dark` — and `next-themes` owns that class: it writes the persisted theme
+ * onto the root when it mounts. A test that merely ADDS `dark` beside the
+ * mounted `cinatra` is overwritten the moment hydration lands, so it measures
+ * the LIGHT palette while calling itself dark — which is why the dark-ink
+ * assertion below could not fail whatever the token said. The theme is
+ * therefore switched the way the pixel harness beside this one switches it,
+ * and the way a reader switches it: the persisted `next-themes` key, then a
+ * reload so the anti-flicker script settles the root class before paint — and
+ * the root class is READ BACK, so a palette that did not take is a red here
+ * rather than a silent pass.
+ */
+async function visitInTheme(page: Page, theme: "light" | "dark"): Promise<void> {
+  await page.goto(FIXTURE, { waitUntil: "domcontentloaded" });
+  await page.evaluate((t) => {
+    window.localStorage.setItem("theme", t === "dark" ? "dark" : "cinatra");
+  }, theme);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
+  const root = await page.evaluate(() => document.documentElement.className);
+  expect(
+    root.split(/\s+/),
+    `the root carries "${root}" rather than the ${theme} palette's own class`,
+  ).toContain(theme === "dark" ? "dark" : "cinatra");
+}
 
 /** Pull the computed-style subset the predicate needs from a live element. */
 async function ruleComputed(
@@ -109,10 +138,7 @@ test.describe("tab-row rule position — the rule closes the row on its baseline
     test(`the trailing rule sits on the tab row's baseline (${theme} theme)`, async ({
       page,
     }) => {
-      await page.goto(FIXTURE);
-      await page.evaluate((t) => {
-        document.documentElement.classList.toggle("dark", t === "dark");
-      }, theme);
+      await visitInTheme(page, theme);
 
       const row = page.getByTestId("fixture-tabs-row");
       const rule = row.locator('[data-slot="separator"][data-major]');
@@ -179,10 +205,7 @@ test.describe("tab-row rule — the paired etched band in both palettes", () => 
     test(`the trailing rule is the paired etched band in one palette ink (${theme} theme)`, async ({
       page,
     }) => {
-      await page.goto(FIXTURE);
-      await page.evaluate((t) => {
-        document.documentElement.classList.toggle("dark", t === "dark");
-      }, theme);
+      await visitInTheme(page, theme);
 
       const row = page.getByTestId("fixture-tabs-row");
       const rule = row.locator('[data-slot="separator"][data-major]');
@@ -230,10 +253,7 @@ test.describe("tab-row rule — the paired etched band in both palettes", () => 
     test(`the trailing rule reaches the content gutter (${theme} theme)`, async ({
       page,
     }) => {
-      await page.goto(FIXTURE);
-      await page.evaluate((t) => {
-        document.documentElement.classList.toggle("dark", t === "dark");
-      }, theme);
+      await visitInTheme(page, theme);
 
       const row = page.getByTestId("fixture-tabs-row");
       const rule = row.locator('[data-slot="separator"][data-major]');
