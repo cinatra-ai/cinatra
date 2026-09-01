@@ -49,6 +49,7 @@ import {
   resolveInstalledSkillSourcePath,
   resolveDeclaredSkillEdgeForExtensionDir,
   resolveDeclaredSkillEdgeForPackage,
+  resolveDeclaredSkillEdgeForPackageWithReason,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
@@ -968,6 +969,97 @@ describe("declared skill edge — ROLE selection", () => {
       await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/nope-artifact", "matcher"),
     ).toBeNull();
     expect(await resolveDeclaredSkillEdgeForPackage("", "matcher")).toBeNull();
+  });
+
+  // THE EMPTINESS TOKENS, MEASURED AGAINST THE REAL RESOLVER (cinatra#3091).
+  //
+  // The token set exists so a refusal on a booted instance can be read back to
+  // a cause. Pinning it only through the runtime's mocks would prove the
+  // PRINTING and not the CHOOSING: a mock that answers one hard-coded token for
+  // every empty resolution stays green no matter which step actually produced
+  // the emptiness. These rungs walk the real resolver over the real fixture
+  // tree, one per step that can return nothing, so the tokens are pinned to the
+  // steps they name.
+  //
+  // Read `consumer-not-found-or-ambiguous` and `provider-not-found-or-ambiguous`
+  // as "absent OR unreadable": the scan under them is fail-soft, which the
+  // resolver's own doc comment states out loud.
+  describe("the named emptiness a declared-edge resolution carries", () => {
+    it("names the step, and a resolution carries no reason at all", async () => {
+      await writeArtifactWithBothRoles();
+      expect(
+        await resolveDeclaredSkillEdgeForPackageWithReason(
+          "@cinatra-ai/blog-idea-artifact",
+          "matcher",
+        ),
+      ).toEqual({
+        resolution: expect.objectContaining({
+          skillId: "@cinatra-ai/blog-idea-matcher-skill:blog-idea-matcher",
+        }),
+        reason: null,
+      });
+    });
+
+    it("an empty package name is named as such, before any scan is even attempted", async () => {
+      await writeArtifactWithBothRoles();
+      expect(await resolveDeclaredSkillEdgeForPackageWithReason("", "matcher")).toEqual({
+        resolution: null,
+        reason: "consumer-name-missing",
+      });
+    });
+
+    it("a consumer the scan never saw is NOT reported as an undeclared edge", async () => {
+      await writeArtifactWithBothRoles();
+      expect(
+        await resolveDeclaredSkillEdgeForPackageWithReason("@cinatra-ai/nope-artifact", "matcher"),
+      ).toEqual({ resolution: null, reason: "consumer-not-found-or-ambiguous" });
+    });
+
+    it("a role the consumer declares no edge for is the DECLARATION token, not a lookup token", async () => {
+      await writeArtifactWithBothRoles({
+        deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+      });
+      expect(
+        await resolveDeclaredSkillEdgeForPackageWithReason(
+          "@cinatra-ai/blog-idea-artifact",
+          "authoring",
+        ),
+      ).toEqual({ resolution: null, reason: "no-single-declared-edge-for-role" });
+    });
+
+    it("a provider kind:\"skill\" package is not an edge consumer, and says so", async () => {
+      await writeExtension({
+        vendor: "cinatra-ai",
+        pkgDir: "chaining-skill",
+        name: "@cinatra-ai/chaining-skill",
+        kind: "skill",
+        dependencies: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+        slugs: ["chaining"],
+      });
+      await writeExtension({
+        vendor: "cinatra-ai",
+        pkgDir: "blog-idea-matcher-skill",
+        name: "@cinatra-ai/blog-idea-matcher-skill",
+        kind: "skill",
+        slugs: ["blog-idea-matcher"],
+      });
+      expect(
+        await resolveDeclaredSkillEdgeForPackageWithReason("@cinatra-ai/chaining-skill", "matcher"),
+      ).toEqual({ resolution: null, reason: "consumer-kind-is-not-an-edge-consumer" });
+    });
+
+    it("a tombstoned provider is a PROVIDER-side emptiness, never a missing declaration", async () => {
+      await writeArtifactWithBothRoles();
+      readEffectiveStatusMock.mockResolvedValue(
+        new Map([["@cinatra-ai/blog-idea-matcher-skill", "archived"]]),
+      );
+      expect(
+        await resolveDeclaredSkillEdgeForPackageWithReason(
+          "@cinatra-ai/blog-idea-artifact",
+          "matcher",
+        ),
+      ).toEqual({ resolution: null, reason: "provider-not-found-or-ambiguous" });
+    });
   });
 });
 

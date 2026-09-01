@@ -17,6 +17,14 @@
 // a namespace no installed package owns is registered by nobody, so no row can
 // ever carry it and the pack owns no type at all — which is also what makes the
 // typed promotion road refuse, by name, instead of silently doing nothing.
+//
+// RE-MEASURED AT THE RE-PINNED HEADS. The one pack that failed that rule was
+// the deck's, and it was named here as the measured break with its own
+// repository owed the fix. That repository renamed the type to its own
+// namespace and this branch re-pinned it, so the rungs below now measure a
+// wave with NO orphaned display — while the host rule that produced the
+// refusal is asserted directly, on the pure planner, so it stays pinned
+// without depending on any pack shipping a violation for it to catch.
 import { afterEach, describe, expect, it } from "vitest";
 
 import { resolve } from "node:path";
@@ -43,7 +51,7 @@ const ORG = "org_w3_reachability";
 // object type a row of the kind carries, and a form the pack accepts.
 const KINDS = [
   ["screenshot-artifact", "@cinatra-ai/screenshot-artifact:screenshot", "image/png"],
-  ["slide-deck-artifact", "@cinatra-ai/slide-deck:deck", "application/pdf"],
+  ["slide-deck-artifact", "@cinatra-ai/slide-deck-artifact:deck", "application/pdf"],
   ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:artifact", "application/vnd.cinatra.cms-fields+json"],
   ["pdf-artifact", "@cinatra-ai/pdf-artifact:document", "application/pdf"],
   ["json-artifact", "@cinatra-ai/json-artifact:artifact", "application/json"],
@@ -113,20 +121,33 @@ describe("a display is reachable only through a type some package registers (#30
     ).toEqual(["@cinatra-ai/screenshot-artifact:screenshot"]);
   });
 
-  it("the deck kind's declared type is registered by NOBODY — the measured break", () => {
+  it("the deck kind now owns its own type too — the break the diagnosis leg named is closed", () => {
     registerFleet();
-    // The pack is @cinatra-ai/slide-deck-artifact; the type it declares is
-    // @cinatra-ai/slide-deck:deck. Ownership is by namespace and no installed
-    // package is @cinatra-ai/slide-deck, so the registrar refuses the claim.
-    expect(objectTypeRegistry.getRegisteringPackage("@cinatra-ai/slide-deck:deck")).toBeNull();
-    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/slide-deck-artifact")).toEqual([]);
+    // The pack is @cinatra-ai/slide-deck-artifact and the type it declares is
+    // now @cinatra-ai/slide-deck-artifact:deck, so the namespace rule that
+    // refused the old claim is SATISFIED rather than relaxed: ownership is
+    // read off the registry, which is the only thing that decides it.
+    expect(objectTypeRegistry.getRegisteringPackage("@cinatra-ai/slide-deck-artifact:deck")).toBe(
+      "@cinatra-ai/slide-deck-artifact",
+    );
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/slide-deck-artifact")).toEqual([
+      "@cinatra-ai/slide-deck-artifact:deck",
+    ]);
   });
 
-  it("and the pack still ships a display for that orphaned type", () => {
+  it("a type under a namespace NO installed package owns is still registered by nobody", () => {
+    registerFleet();
+    // The rule, not the pack: the deck pack's former declaration is used here
+    // only as a known-foreign id. Nothing installed is @cinatra-ai/slide-deck,
+    // so the registrar refuses the claim exactly as it always did.
+    expect(objectTypeRegistry.getRegisteringPackage("@cinatra-ai/slide-deck:deck")).toBeNull();
+  });
+
+  it("and the display the deck pack ships is for the type it now owns", () => {
     registerFleet();
     expect(semanticRendererRegistry.listByPackage("@cinatra-ai/slide-deck-artifact")).toEqual([
       {
-        objectTypeId: "@cinatra-ai/slide-deck:deck",
+        objectTypeId: "@cinatra-ai/slide-deck-artifact:deck",
         packageName: "@cinatra-ai/slide-deck-artifact",
         slot: "detail",
         generatedKey: "@cinatra-ai/slide-deck-artifact::detail",
@@ -134,20 +155,34 @@ describe("a display is reachable only through a type some package registers (#30
     ]);
   });
 
-  it("so the road refuses the confirmation BY NAME instead of reporting nothing", () => {
+  it("so the promotion road now RUNS for the deck pack, on the type it owns", () => {
     registerFleet();
     const packageName = "@cinatra-ai/slide-deck-artifact";
     const owned = objectTypeRegistry.getTypesForPackage(packageName);
     const orphaned = semanticRendererRegistry
       .listByPackage(packageName)
       .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null);
-    expect(planPromotionEntry({
-      ownedRegisteredTypes: owned,
-      shipsDisplayForUnregisteredType: orphaned,
-    })).toEqual({ kind: "refuse", reason: "extension-owns-no-type" });
+    expect(orphaned).toBe(false);
+    expect(
+      planPromotionEntry({
+        ownedRegisteredTypes: owned,
+        shipsDisplayForUnregisteredType: orphaned,
+      }),
+    ).toEqual({ kind: "run", typeId: "@cinatra-ai/slide-deck-artifact:deck" });
   });
 
-  it("no OTHER kind in the wave ships a display for a type nobody registers", () => {
+  it("and the road STILL refuses BY NAME for a pack that owns no type but ships a display", () => {
+    // The host rule that produced the diagnosis leg's refusal, asserted on the
+    // planner itself. No pack in the wave is in that state any more, so
+    // measuring it through a pack would have measured nothing — and a rule
+    // that stops being asserted the moment nothing violates it is a rule that
+    // quietly stops holding.
+    expect(
+      planPromotionEntry({ ownedRegisteredTypes: [], shipsDisplayForUnregisteredType: true }),
+    ).toEqual({ kind: "refuse", reason: "extension-owns-no-type" });
+  });
+
+  it("NO kind in the wave ships a display for a type nobody registers", () => {
     registerFleet();
     const orphaned: string[] = [];
     for (const [slug] of KINDS) {
@@ -158,8 +193,8 @@ describe("a display is reachable only through a type some package registers (#30
         }
       }
     }
-    // The one known orphan is the deck's, tracked for its own repository's fix
-    // plus a re-pin here; anything else appearing in this list is new.
-    expect(orphaned).toEqual(["@cinatra-ai/slide-deck-artifact -> @cinatra-ai/slide-deck:deck"]);
+    // The wave's one known orphan was the deck's and the re-pin closed it.
+    // Anything appearing in this list now is new.
+    expect(orphaned).toEqual([]);
   });
 });
