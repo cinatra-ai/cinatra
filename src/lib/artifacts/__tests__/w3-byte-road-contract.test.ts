@@ -19,6 +19,17 @@
 // their content host-served, reach for no byte address, and so have no road to
 // name. They mark the props version they negotiated instead.
 //
+// WHERE THE BEHAVIOUR IS PROVED, AND WHERE IT IS NOT. Rendering is proved by
+// each pack's OWN suite, which mounts the display and reads the DOM — the image
+// pack asserts `data-byte-road="island"`, `"session"` and `"none"` on rendered
+// output across the props versions, and the content-channel packs carry their
+// own `no-browser-load` and content-channel display suites proving they reach
+// for no byte address. This file deliberately proves something those cannot:
+// the PARTITION ACROSS PACKS, which no single pack's suite can see. It is a
+// drift pin over the wave's list, not the behavioural proof, and it matches the
+// attribute in stamping position rather than anywhere in the text so a mention
+// in prose cannot satisfy it.
+//
 // SO: the pdf reading is not an absence in the product — the pdf display stamps
 // the attribute on its shell, its preview and its never-blank download floor —
 // and the json and text readings are correct-per-contract absences. Nothing here
@@ -56,14 +67,18 @@ function detailRendererSource(slug: string): string {
 }
 
 describe("the byte road's own attribute (#3091)", () => {
+  /** The attribute in STAMPING position — `data-byte-road=` — so a mention in a
+   *  comment or a prose string cannot pass for a stamp. */
+  const STAMPED = /data-byte-road\s*=/;
+
   it.each(BYTE_ROAD_KINDS)("%s stamps data-byte-road on the display it draws", (slug) => {
-    expect(detailRendererSource(slug)).toContain("data-byte-road");
+    expect(detailRendererSource(slug)).toMatch(STAMPED);
   });
 
   it("the pdf display stamps it on every panel it can draw, floor included", () => {
     const dir = resolve(REPO_ROOT, "extensions/cinatra-ai/pdf-artifact/src/renderers");
     for (const file of ["pdf-detail.tsx", "pdf-preview.tsx", "pdf-download-floor.tsx"]) {
-      expect(readFileSync(join(dir, file), "utf8"), file).toContain("data-byte-road");
+      expect(readFileSync(join(dir, file), "utf8"), file).toMatch(STAMPED);
     }
   });
 
@@ -71,7 +86,7 @@ describe("the byte road's own attribute (#3091)", () => {
     "%s stamps no byte road — it reaches for no byte address at all",
     (slug) => {
       const source = detailRendererSource(slug);
-      expect(source).not.toContain("data-byte-road");
+      expect(source).not.toMatch(STAMPED);
       // It is not silent about the contract it negotiated; it names the props
       // version instead, which is what a reading of a content-channel kind has
       // to look for.

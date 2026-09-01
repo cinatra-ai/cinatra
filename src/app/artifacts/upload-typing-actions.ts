@@ -369,9 +369,14 @@ async function promoteOnConfirmedMeaning(input: {
     // worlds both register zero types:
     //
     //   a PURE MATCHER PACK declares none, so the road does not apply; and
-    //   a PACK WHOSE DECLARED TYPE NEVER REGISTERED — ownership is by namespace
-    //   and its declared id sits in a namespace no installed package owns — is a
-    //   broken installation whose display can never be reached at all.
+    //   a PACK CARRYING AN UNREACHABLE DISPLAY — it registered a display whose
+    //   target object type no installed package registers — is a broken
+    //   installation whose display can never be reached at all.
+    //
+    // The second condition is read from the registries alone, so it names the
+    // BREAKAGE and not its cause: a refused self-claim (the deck pack's own
+    // shape, its declared id sitting outside its namespace) and an absent
+    // owning package both present this way, and both are owed the same answer.
     //
     // The second is what the wave-3 proof leg measured (cinatra#3091): a deck
     // confirmation that retyped nothing and reported nothing. It is separated

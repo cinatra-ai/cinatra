@@ -128,12 +128,16 @@ export interface MatcherAssociation {
  *     matcher pack. There is nothing to promote INTO and nothing worth
  *     reporting — the road does not apply.
  *   - NONE, and the pack DOES ship a display for a type no package registers:
- *     the pack declared a type that never registered, because ownership is by
- *     namespace and the declared id sits in a namespace no installed package
- *     owns. That is a broken installation, not an inapplicable road: no row can
- *     ever carry the type, the display can never be reached, and the person who
- *     confirmed the meaning is owed the road's own named refusal —
- *     `extension-owns-no-type` — instead of silence.
+ *     the pack owns nothing to promote into AND carries an UNREACHABLE display
+ *     — its target type is registered by no installed package, so no row can
+ *     ever carry it. This is deliberately stated as the CONDITION and not as a
+ *     diagnosis of intent: a cross-namespace display target is a supported
+ *     shape, so this reading cannot tell "the pack meant to own the type and
+ *     used the wrong namespace" apart from "the package that owns the target
+ *     type is not installed". Both are broken installations from the road's
+ *     seat and both earn the same answer — the road's own named refusal,
+ *     `extension-owns-no-type`, instead of silence. Naming WHICH of the two it
+ *     is needs manifest and dependency evidence this leaf is not handed.
  *
  * The last case is the one the wave-3 proof leg measured: a deck confirmation that
  * retyped nothing and reported nothing.
@@ -147,8 +151,9 @@ export function planPromotionEntry(input: {
   /** The artifact types this package actually registered, read from the
    *  object-type registry. */
   ownedRegisteredTypes: readonly string[];
-  /** True when the package registered a semantic display for an object type no
-   *  package registers — a declaration the registrar refused. */
+  /** True when the package registered a semantic display whose target object
+   *  type NO installed package registers — an unreachable display, whether the
+   *  target was a refused self-claim or an absent owner's type. */
   shipsDisplayForUnregisteredType: boolean;
 }): PromotionEntryPlan {
   if (input.ownedRegisteredTypes.length === 1) {

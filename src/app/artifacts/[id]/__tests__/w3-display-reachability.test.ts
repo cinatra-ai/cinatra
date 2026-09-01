@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 
 import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import {
   semanticRendererRegistry,
   representationProviderRegistry,
@@ -30,6 +30,7 @@ import {
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
 import { planPromotionEntry } from "@/lib/artifacts/typed-promotion";
+import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
 
 import { resolveArtifactDispatchInputs, _resetFirstPartySeedForTests } from "../renderer-resolution";
 import { pickArtifactRenderer } from "../renderer-dispatch";
@@ -63,15 +64,28 @@ afterEach(() => {
   for (const [slug] of KINDS) {
     objectTypeRegistry.removeByPackage("@cinatra-ai/" + slug);
     semanticRendererRegistry.removeByPackage("@cinatra-ai/" + slug);
+    // Registering an extension dir writes THREE process-global registries, so
+    // the teardown drops all three — a matcher manifest left behind would
+    // travel to whatever test this worker runs next.
+    matcherManifestRegistry.removeByPackage("@cinatra-ai/" + slug);
   }
   representationProviderRegistry._clearForTests(true);
   _resetFirstPartySeedForTests();
 });
 
-describe("the page resolves every kind to its OWN display, given a row of that kind (#3091)", () => {
+// WHAT THIS DESCRIBE MEASURES, EXACTLY. The resolver is handed the two facts
+// the page hands it: the row's object type, and the effective identity the
+// presentation road already picked. It therefore measures the RESOLUTION leaf —
+// given a row of the kind and that kind's pack as the winner, does the page
+// reach the kind's own display at the props version the wave pinned. It does
+// NOT measure how a pack becomes the winner, and it is not evidence that a deck
+// row can exist: the ownership describe below is where that is answered, and
+// the answer there is that it cannot.
+describe("the resolver reaches every kind's OWN display at props version 2, given a row of that kind and that kind's pack as the winner (#3091)", () => {
   it.each(KINDS)("%s", (slug, objectType, mime) => {
     registerFleet();
     const packageName = "@cinatra-ai/" + slug;
+    const generatedKey = packageName + "::detail";
     const dispatch = pickArtifactRenderer(
       resolveArtifactDispatchInputs({
         orgId: ORG,
@@ -80,11 +94,11 @@ describe("the page resolves every kind to its OWN display, given a row of that k
         mime,
       }),
     );
-    expect(dispatch).toEqual({
-      kind: "semantic",
-      packageName,
-      generatedKey: packageName + "::detail",
-    });
+    expect(dispatch).toEqual({ kind: "semantic", packageName, generatedKey });
+    // The key alone only says a module is loadable. The wave's claim is about
+    // the CONTRACT the page mounts it under, so read the version off the
+    // generated entry the key names rather than asserting it in prose.
+    expect(GENERATED_ARTIFACT_RENDERERS[generatedKey]?.propsApiVersion).toBe(2);
   });
 });
 
