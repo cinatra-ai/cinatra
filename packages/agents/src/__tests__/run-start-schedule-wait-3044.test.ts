@@ -67,10 +67,16 @@ describe("the start's own sentence for a run that parks at its schedule", () => 
     expect(parked).toContain(RUN.runId);
   });
 
-  it("a run that TRULY starts still says so — the fix does not lie the other way", () => {
+  it("a run that is NOT waiting keeps the sentence its own status earns", () => {
+    // THE FIX DOES NOT LIE THE OTHER WAY. Every status outside the wait keeps
+    // the clause the status table gives it -- the three that really did start
+    // say so, and the rest say what is true of them. What none of them may
+    // carry is the schedule wait, which belongs to a run standing at the card.
+    for (const status of ["running", "completed", "waiting_trigger"]) {
+      expect(describeStartedRun({ ...RUN, status })).toContain(RUN_START_STARTED_CLAUSE);
+    }
     for (const status of ["queued", "running", "completed", "failed", "stopped"]) {
       const report = describeStartedRun({ ...RUN, status });
-      expect(report).toContain(RUN_START_STARTED_CLAUSE);
       expect(report).toContain(`status: \`${status}\``);
       expect(report).not.toContain(RUN_START_SCHEDULE_WAIT_CLAUSE);
     }
@@ -93,8 +99,13 @@ describe("the start's own sentence for a run that parks at its schedule", () => 
     // lifecycle moment at all; there is no card beneath that turn, and the
     // sentence it already had is the true one.
     expect(runIsWaitingForItsSchedule({ status: "pending_trigger", moment: null })).toBe(false);
+    // No wait clause: the status table's own sentence for `pending_trigger`
+    // stands, and it is the true one for a run with no card beneath its turn.
+    expect(describeStartedRun({ ...RUN, status: "pending_trigger" })).not.toContain(
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    );
     expect(describeStartedRun({ ...RUN, status: "pending_trigger" })).toContain(
-      RUN_START_STARTED_CLAUSE,
+      "status: `pending_trigger`",
     );
     // A run that has moved PAST its schedule is not waiting at one either.
     expect(runIsWaitingForItsSchedule({ status: "running", moment: "schedule" })).toBe(false);
@@ -109,8 +120,10 @@ describe("the frozen sentence, corrected at the card", () => {
       runId: RUN.runId,
     });
 
+    // The sentence in the pictures is whatever the start minted for `queued`.
+    // Which clause that is belongs to the status table, not to this file; what
+    // this file measures is that the correction reaches it.
     expect(THE_SENTENCE_IN_THE_PICTURES).toContain("status: `queued`");
-    expect(THE_SENTENCE_IN_THE_PICTURES).toContain(RUN_START_STARTED_CLAUSE);
     expect(corrected).not.toContain("The run started.");
     expect(corrected).not.toContain("queued");
     expect(corrected).toContain(RUN_START_SCHEDULE_WAIT_CLAUSE);

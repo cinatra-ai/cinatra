@@ -31,6 +31,7 @@ configure({ asyncUtilTimeout: 15_000 });
 import type { UiMessage } from "../types";
 import {
   RUN_START_SCHEDULE_WAIT_CLAUSE,
+  RUN_START_QUEUED_CLAUSE,
   RUN_START_STARTED_CLAUSE,
   describeStartedRun,
 } from "@cinatra-ai/agents/run-status";
@@ -295,7 +296,11 @@ describe.each(["chat", "widget"] as const)(
           throw new Error("the run's own reading did not come back");
         }
       });
-      expect(container.textContent).toContain(RUN_START_STARTED_CLAUSE);
+      // LEFT ALONE means the sentence still carries the clause it was minted
+      // with -- the status table's own answer for `queued` -- and not the
+      // schedule wait's. The correction reaches only a run standing at its
+      // schedule moment.
+      expect(container.textContent).toContain(RUN_START_QUEUED_CLAUSE);
       expect(container.textContent).not.toContain(RUN_START_SCHEDULE_WAIT_CLAUSE);
     }, 30_000);
   },
@@ -368,7 +373,8 @@ describe("the turn whose prose is flat content beside the card — the Slack lay
         throw new Error("the run's own reading did not come back");
       }
     });
-    expect(container.textContent).toContain(RUN_START_STARTED_CLAUSE);
+    // As above: the frozen sentence is untouched, clause and all.
+    expect(container.textContent).toContain(RUN_START_QUEUED_CLAUSE);
     expect(container.textContent).not.toContain(RUN_START_SCHEDULE_WAIT_CLAUSE);
   }, 30_000);
 });

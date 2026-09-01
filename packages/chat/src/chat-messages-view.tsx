@@ -268,6 +268,7 @@ function AgentRunTurnSlot({
   views,
   onActiveGateChange,
   onScheduleWaitChange,
+  onApplyIntent,
   children,
 }: {
   runId: string;
@@ -289,6 +290,11 @@ function AgentRunTurnSlot({
    *  reading the card itself is drawn from — never from a second poller and
    *  never from the frozen text. */
   onScheduleWaitChange?: (runId: string, waiting: boolean) => void;
+  /** The §6e apply-intent seam, threaded to the settled reading this container
+   *  draws for exactly the reason the ordinary slotted views get it: the card is
+   *  the same card, drawn through the same registry, and the gesture the widget
+   *  owns must not depend on which mount drew it. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
   /** The renderable views this same step produced, drawn under the run card. */
   children?: ReactNode;
 }) {
@@ -385,6 +391,48 @@ function AgentRunTurnSlot({
     : stillLooking
       ? (carriedMoment?.ref ?? null)
       : null;
+
+  // THE SPENT SCHEDULE KEEPS ITS OWN READING (cinatra#3044). The ratified
+  // drawing's section VI, fifth reading:
+  //
+  //   "Once it has fired, the card is a reading. A one-off that has fired
+  //    cannot be changed, so the rows go read-only - the values still legible,
+  //    the pickers gone - and the card carries no floor at all: no hairline, no
+  //    button, nothing to press. A spent schedule is still worth reading, so
+  //    nothing is hidden; it simply asks nothing."
+  //
+  // The selection above answers ONE question: which card is the run's CURRENT
+  // reading. It is not an answer to "what did this run already settle", and
+  // reading it as one is what took the fired card off the conversation
+  // altogether: the run moved on to its next screen, the row stopped naming the
+  // schedule, and the part the turn still carries drew nothing at all.
+  //
+  // So a carried moment card the row does NOT name is not withdrawn - it is a
+  // reading of its own, at its own place in this container, and the run's next
+  // screen takes its own place beside it. Neither displaces the other, which is
+  // the whole of what the drawing asks for.
+  //
+  // ONLY ONCE THE ROW HAS ANSWERED. Before the answer the placeholder above is
+  // already holding this very part's place, and drawing it a second time as a
+  // settled reading is the "once, never twice" defect the slot partition exists
+  // to prevent. A read that never lands therefore changes nothing here: the
+  // turn keeps exactly the reading it drew before this rule existed.
+  //
+  // AND THE CARD SAYS WHAT IT IS, never this container. The reading is drawn
+  // through the SAME registry every other view goes through and resolves its own
+  // state, so a schedule that has fired draws the read-only rows with no floor
+  // and one that has not draws whatever it honestly is. This states only WHERE.
+  const settledMomentViews = useMemo(
+    () =>
+      momentAnswered
+        ? views.filter(
+            (view) =>
+              view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE &&
+              !(view.viewType === momentKind && view.ref === momentRef),
+          )
+        : [],
+    [views, momentAnswered, momentKind, momentRef],
+  );
 
   // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
   // slot. It also WAITS on a turn that carries the moment's card until the run
@@ -528,6 +576,23 @@ function AgentRunTurnSlot({
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
       <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      {/* THE SETTLED MOMENT'S OWN READING (cinatra#3044). Drawn here, in the
+          producing part's own container, ABOVE the reading the run has now:
+          the schedule was settled before the run moved on, and a conversation
+          reads downwards. Its own marked container, so the reading has a place
+          of its own rather than sharing the run's - "the fired part keeps its
+          own slot; a later run's screens take their own". See the selection
+          above for which views reach this line and why none of them can be the
+          run's current reading. */}
+      {settledMomentViews.map((view) => (
+        <div
+          key={`settled-moment-${String(view.viewType)}-${String(view.ref)}`}
+          data-transcript-slot={slot}
+          data-settled-moment-reading={String(view.ref)}
+        >
+          <RenderableViewCard data={view} {...(onApplyIntent ? { onApplyIntent } : {})} />
+        </div>
+      ))}
       {/* THE HITL SCREEN, ON THE CONVERSATION HOSTS (cinatra#2930, lifecycle-b
           W3). The second kind whose carriage is a typed INTERRUPT, mounted for
           exactly the same reasons as the §V card above it and in exactly the
@@ -583,6 +648,19 @@ function AgentRunTurnSlot({
     </div>
   );
 }
+
+/**
+ * THE ONE MOMENT CARD A CONVERSATION KEEPS AFTER ITS MOMENT HAS CLOSED
+ * (cinatra#3044).
+ *
+ * Named rather than spelled inline, and deliberately ONE kind: the ratified
+ * drawing's section VI is the sentence that gives a spent card a standing
+ * reading -- "A spent schedule is still worth reading, so nothing is hidden; it
+ * simply asks nothing" -- and no other moment has one. A kind added to the
+ * conversation's moment map does NOT join this rule by default; it joins when a
+ * drawing sentence says what its closed moment reads as.
+ */
+const SPENT_MOMENT_CARD_VIEW_TYPE = "trigger_schedule_proposal";
 
 /**
  * IS THIS PRODUCED VIEW A MOMENT'S CARD THIS COLUMN CAN ADDRESS (cinatra#3044)?
@@ -753,6 +831,7 @@ function OrderedPartsSection({
               views={momentViews}
               onActiveGateChange={onActiveGateChange}
               onScheduleWaitChange={onScheduleWaitChange}
+              {...(onApplyIntent ? { onApplyIntent } : {})}
             >
               {slottedViews}
             </AgentRunTurnSlot>

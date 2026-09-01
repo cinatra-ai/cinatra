@@ -163,12 +163,22 @@ export function ReviewGateLoading() {
  *
  * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
  * of the review screen's states — the one before the gate exists — and it is
- * built from the two pieces the review screen is already built from: the same
- * 30px header tile the gate header draws its clipboard mark in, and the shipped
- * `ReviewGateLoading` bar motif. Keeping it here is what makes the swap read as
- * one card changing rather than two cards trading places, and it is why the
- * replacement needs no new geometry: the placeholder and the screen that
- * replaces it are the same box.
+ * built from the piece the review screen is already built from: the same 30px
+ * header tile the gate header draws its clipboard mark in. Keeping it here is
+ * what makes the swap read as one card changing rather than two cards trading
+ * places, and it is why the replacement needs no new geometry: the placeholder
+ * and the screen that replaces it are the same box.
+ *
+ * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
+ * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif
+ * beneath the tile as well — two bars in a header band over three in a body
+ * band — and a graded set measured them. No sentence gives them: the drawing
+ * says the placeholder is "the card frame, and a spinning icon, the indigo arc
+ * of Components § Skeleton / Spinner", and its own placeholder example draws
+ * the card box with one arc in it and nothing else. Bars beside the arc are a
+ * third thing, and one that reads as content arriving when nothing has. The bar
+ * motif keeps its own job — it is the GATE's loading state, drawn in the target
+ * slots while the host prepares them — and that use is untouched.
  *
  * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
  * — the same component the orchestrator stepper's executing card spins — not a
@@ -205,7 +215,6 @@ export function ReviewGatePlaceholder() {
           <LoadingSpinner className="size-4" />
         </span>
       </div>
-      <ReviewGateLoading />
     </div>
   );
 }

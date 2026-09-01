@@ -167,6 +167,46 @@ function scheduleEnvelope() {
 }
 
 /**
+ * SECTION VI'S FIFTH READING, as the resolver answers it once the one-off has
+ * fired: the settled body, released and spent, with nothing left to press.
+ *
+ *   "Once it has fired, the card is a reading. A one-off that has fired cannot
+ *    be changed, so the rows go read-only -- the values still legible, the
+ *    pickers gone -- and the card carries no floor at all: no hairline, no
+ *    button, nothing to press. A spent schedule is still worth reading, so
+ *    nothing is hidden; it simply asks nothing."
+ */
+const FIRED_BODY = {
+  phase: "settled",
+  version: 1,
+  agentName: "Blog Draft Writer",
+  runId: RUN_ID,
+  triggerType: "immediate",
+  schedule: { kind: "immediate" },
+  scheduleCopy: "Runs right after setup",
+  timezone: "UTC",
+  gatedSteps: [],
+  released: true,
+  arming: false,
+  canSave: false,
+  canCancel: false,
+};
+
+function firedEnvelope() {
+  return {
+    kind: "trigger_schedule_proposal",
+    // `.strict()` on the wire: the settled state carries NO decision flags.
+    state: { state: "settled" },
+    body: FIRED_BODY,
+  };
+}
+
+/** WHAT THE RESOLVER ANSWERS RIGHT NOW. Mutated in place beside `runReading`,
+ *  so a test can move the schedule from pending to spent without remounting
+ *  anything -- the two readings travel together, exactly as they do live. */
+const cardReading = { current: scheduleEnvelope() as Record<string, unknown> };
+
+/**
  * The assistant turn a chat dispatch really produces.
  *
  * `carriesPart` is the difference between the two roads this file measures: the
@@ -228,7 +268,7 @@ function installChatFetchStub() {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/agents/runs/")) return json(runReading.current);
-    if (url === "/api/lifecycle-views/resolve") return json(scheduleEnvelope());
+    if (url === "/api/lifecycle-views/resolve") return json(cardReading.current);
     return json({}, 404);
   }) as unknown as typeof fetch;
   return { restore: () => { globalThis.fetch = original; } };
@@ -236,6 +276,7 @@ function installChatFetchStub() {
 
 beforeEach(() => {
   runReading.current = RUN_WORKING;
+  cardReading.current = scheduleEnvelope();
   widgetStub = null;
 });
 afterEach(() => {
@@ -250,7 +291,7 @@ async function mountOn(
 ) {
   if (surface === "widget") {
     widgetStub = installWidgetServiceStub({
-      lifecycle: () => scheduleEnvelope(),
+      lifecycle: () => cardReading.current,
       runSeed: () => runReading.current,
     });
   } else {
@@ -283,14 +324,60 @@ describe.each(["chat", "widget"] as const)(
       expect(container.textContent).not.toContain("Agentic Run Progress");
     }, 30_000);
 
-    it("carries the run's next reading again once the run leaves the moment — and NOTHING beside it", async () => {
-      // The "run right after setup" road. The turn still carries the injected
-      // part — it is durable, and it will carry it for ever — but the run has
-      // moved on, so the slot is the run's own reading again and the moment's
-      // card is not drawn beside it. This is the half a test that only counted
-      // the progress card would miss: two readings in one slot, the other way
-      // round.
+    it(
+      "Once it has fired, the card is a reading. A one-off that has fired cannot be changed, " +
+        "so the rows go read-only -- the values still legible, the pickers gone -- and the card " +
+        "carries no floor at all",
+      async () => {
+        // THE FIRED ONE-OFF, ON THE ROAD THE NINTH GRADED SET PHOTOGRAPHED. The
+        // reader confirmed the card's own default row, the one-off fired, and
+        // the run moved on to its next screen. The turn still carries the
+        // platform-injected part -- it is durable and it will carry it for ever
+        // -- and the run's row now names no moment at all.
+        //
+        // The drawing quoted in this name says what the conversation owes then:
+        // the spent schedule KEEPS its reading. It is not the run's current
+        // reading any more, so it does not take the run's place -- it stands on
+        // its own, beside the reading the run has now.
+        runReading.current = RUN_PAST_SCHEDULE;
+        cardReading.current = firedEnvelope();
+        const { container } = await mountOn(surface, { carriesPart: true });
+
+        await waitFor(() => {
+          if (!container.querySelector(RUN_PROGRESS)) {
+            throw new Error("the run's own reading did not come back");
+          }
+        });
+        await waitFor(() => {
+          if (!container.querySelector(CARD)) {
+            throw new Error("the fired one-off's reading is not in the conversation");
+          }
+        });
+        // ONE reading of it, never two: the settled card is drawn once, at its
+        // own place, and the run's slot did not draw a second copy.
+        expect(container.querySelectorAll(CARD).length).toBe(1);
+        const card = container.querySelector(CARD) as HTMLElement;
+        // "the rows go read-only -- the values still legible, the pickers gone
+        //  -- and the card carries no floor at all"
+        expect(card.getAttribute("data-lifecycle-card-phase")).toBe("settled");
+        expect(card.querySelectorAll("select").length).toBe(0);
+        expect(card.querySelectorAll('[data-action="confirm-schedule-proposal"]').length).toBe(0);
+        // "the values still legible" -- the option rows stay readable, and
+        // the row the person chose is one of them.
+        expect(card.textContent).toContain("Run right after setup");
+        // The registry drew the real card, not its fallback.
+        expect(container.querySelector(FALLBACK)).toBeNull();
+      },
+      30_000,
+    );
+
+    it("draws the run's own next reading beside it, and no SECOND moment card", async () => {
+      // The other half of the rule this replaces, kept: the run's slot draws
+      // exactly one moment card. A settled reading standing on its own is not a
+      // licence for the slot to draw the same card again beneath the run's own
+      // reading.
       runReading.current = RUN_PAST_SCHEDULE;
+      cardReading.current = firedEnvelope();
       const { container } = await mountOn(surface, { carriesPart: true });
 
       await waitFor(() => {
@@ -298,11 +385,13 @@ describe.each(["chat", "widget"] as const)(
           throw new Error("the run's own reading did not come back");
         }
       });
-      expect(container.querySelector(CARD)).toBeNull();
-      expect(
-        container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')
-          .length,
-      ).toBe(0);
+      await waitFor(() => {
+        if (!container.querySelector(CARD)) {
+          throw new Error("the fired one-off's reading is not in the conversation");
+        }
+      });
+      expect(container.querySelectorAll(CARD).length).toBe(1);
+      expect(container.textContent).toContain("Agentic Run Progress");
     }, 30_000);
   },
 );
@@ -368,6 +457,7 @@ describe.each(["chat", "widget"] as const)(
       expect(container.querySelector(RUN_PROGRESS)).toBeNull();
 
       runReading.current = RUN_PAST_SCHEDULE;
+      cardReading.current = firedEnvelope();
 
       await waitFor(
         () => {
@@ -377,9 +467,24 @@ describe.each(["chat", "widget"] as const)(
         },
         { timeout: 20_000 },
       );
-      // And the moment's card is gone in the same reading — not left standing
-      // beside the run's next one.
-      expect(container.querySelector(CARD)).toBeNull();
+      // AND THE CARD IS STILL THERE — it stops being the run's reading and
+      // becomes its OWN. "A spent schedule is still worth reading, so nothing
+      // is hidden; it simply asks nothing." What the press takes away is the
+      // floor, never the card.
+      await waitFor(
+        () => {
+          const card = container.querySelector(CARD);
+          if (!card) throw new Error("the card was withdrawn when the run moved on");
+          if (card.getAttribute("data-lifecycle-card-phase") !== "settled") {
+            throw new Error("the card did not settle into its reading");
+          }
+        },
+        { timeout: 20_000 },
+      );
+      expect(container.querySelectorAll(CARD).length).toBe(1);
+      expect(
+        container.querySelectorAll('[data-action="confirm-schedule-proposal"]').length,
+      ).toBe(0);
     }, 40_000);
   },
 );

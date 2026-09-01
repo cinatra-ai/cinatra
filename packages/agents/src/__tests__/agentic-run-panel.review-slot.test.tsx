@@ -247,8 +247,15 @@ describe("while the agent works, the card is the placeholder", () => {
       // The spinning icon: the design system's own spinner, by its animation
       // class, inside the placeholder.
       expect(placeholder.querySelector("svg.animate-spin")).not.toBeNull();
-      // The empty review screen it stands in for.
-      expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).not.toBeNull();
+      // THE EMPTY REVIEW SCREEN IS EMPTY (cinatra#3044). The ratified drawing's
+      // section II enumerates what the placeholder is: "the card frame, and a
+      // spinning icon, the indigo arc of Components section Skeleton / Spinner.
+      // It names no status, reports no result and draws nothing to press." Its
+      // own placeholder example draws the card box with one arc in it and
+      // nothing else, so the frame stands empty behind the arc rather than
+      // carrying the gate's bar motif. A graded set measured those bars beside
+      // the arc; this is where they were pinned in.
+      expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).toBeNull();
       // A card, and it is the WORKING reading of the one slot.
       expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
         "working",

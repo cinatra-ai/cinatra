@@ -735,14 +735,29 @@ export function correctRunStartSentenceForScheduleWait(input: {
   runId: string;
 }): string {
   const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
+  // status table itself rather than listed by hand, so a status given its own
+  // sentence is correctable the day it is added: a platform sentence the
+  // corrector does not recognise is a sentence left claiming a tense the run's
+  // row does not support, which is the whole defect this function answers, and
+  // a hand-kept list is how one gets missed.
+  //
   // THE WAIT CLAUSE IS IN THE SET TOO, which is what makes this idempotent: a
   // turn that has already been corrected matches WHOLE and is replaced by the
   // identical bytes, rather than matching its head and growing a second clause.
+  //
+  // LONGEST FIRST. Alternation is ordered, and three of these clauses share the
+  // head "The run has not started"; a shorter one placed first would match that
+  // head and leave the rest of a longer clause standing beside the replacement.
   const clauses = [
-    RUN_START_STARTED_CLAUSE,
-    RUN_START_PARKED_CLAUSE,
-    RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ...new Set([
+      ...Object.values(RUN_START_CLAUSES),
+      RUN_START_NOT_STARTED_CLAUSE,
+      RUN_START_PARKED_CLAUSE,
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ]),
   ]
+    .sort((a, b) => b.length - a.length)
     .map(escape)
     .join("|");
   const pattern = new RegExp(

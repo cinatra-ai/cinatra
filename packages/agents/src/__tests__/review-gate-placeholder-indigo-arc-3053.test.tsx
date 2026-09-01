@@ -105,3 +105,50 @@ describe("the token the arc now takes", () => {
     expect(registersColourToken("mustard-ink")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// WHAT THE PLACEHOLDER IS ALLOWED TO DRAW
+// ---------------------------------------------------------------------------
+//
+// The ratified drawing's section II, verbatim:
+//
+//   "Before the card, the slot holds its placeholder. A run that will ask for a
+//    review carries, in the slot the review card will fill, the run progress
+//    card - and while the run is working that card is a placeholder for the
+//    review screen: the card frame, and a spinning icon, the indigo arc of
+//    Components section Skeleton / Spinner. It names no status, reports no
+//    result and draws nothing to press."
+//
+// TWO THINGS, and the sentence enumerates them: the card frame, and a spinning
+// icon. The drawing's own placeholder example draws exactly that - the card box
+// with one centred arc in it - and nothing more. A ninth graded set measured a
+// block of bars beside the arc, two in a header band over three in a body band,
+// which is a third thing no sentence and no drawing gives.
+
+describe("the placeholder draws the card frame and a spinning icon, and nothing else", () => {
+  it("carries no skeleton bars beside the arc", () => {
+    const { container } = render(<ReviewGatePlaceholder />);
+    const placeholder = container.querySelector<HTMLElement>(
+      '[data-conformance-id="review-gate-placeholder"]',
+    );
+    expect(placeholder).not.toBeNull();
+    // The bar motif is the gate's own LOADING state, drawn in the target slots
+    // while the host prepares them. It is not part of this placeholder.
+    expect(
+      placeholder!.querySelector('[data-conformance-id="review-gate-loading"]'),
+    ).toBeNull();
+    // And no bar by any other route: a rounded muted block with a bar's height.
+    expect(placeholder!.querySelectorAll("div.rounded.bg-surface-muted").length).toBe(0);
+  });
+
+  it("draws exactly one graphic - the arc", () => {
+    const { container } = render(<ReviewGatePlaceholder />);
+    const placeholder = container.querySelector<HTMLElement>(
+      '[data-conformance-id="review-gate-placeholder"]',
+    );
+    expect(placeholder!.querySelectorAll("svg").length).toBe(1);
+    // "It names no status, reports no result and draws nothing to press."
+    expect(placeholder!.querySelectorAll("button").length).toBe(0);
+    expect(placeholder!.textContent?.trim()).toBe("");
+  });
+});
