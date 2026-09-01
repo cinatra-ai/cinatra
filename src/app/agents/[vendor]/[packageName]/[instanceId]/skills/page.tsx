@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 import { listSkillsUsedForRun } from "@/lib/agent-run-skills-used";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { Main } from "@/components/layout/main";
@@ -38,7 +39,12 @@ type Props = {
  * run's LLM steps receive via the sessionless llm-bridge resolution.
  */
 export default async function AgentPackageInstanceSkillsPage({ params }: Props) {
-  const { instanceId } = await params;
+  const { instanceId: instanceIdSegment } = await params;
+  // cinatra#3080 — the router hands this segment over still percent-encoded.
+  // A repair run's id carries a colon, so the raw segment is no run's id and
+  // the screen answered 404 for a run that was right there. Every ordinary run
+  // id is a uuid and reads back byte-identical.
+  const instanceId = readAgentInstanceIdFromSegment(instanceIdSegment);
   const skills = listSkillsUsedForRun({ runId: instanceId });
   // Join the telemetry ledger against the authoritative per-run selection set so
   // each ledger row can be labeled by its selection source (cinatra#2067 item 6).

@@ -42,6 +42,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 
 import {
   loadPinnedCapturePair,
@@ -116,8 +117,11 @@ async function loadRunStepsContext(
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
   const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
-  const runId = decodeURIComponent(rawInstanceId);
-  const reviewTaskId = decodeURIComponent(rawTaskId);
+  // cinatra#3080 — read back through the one reader the whole route family
+  // uses, so a malformed segment answers this page's own missing-run answer
+  // rather than raising out of the route.
+  const runId = readAgentInstanceIdFromSegment(rawInstanceId);
+  const reviewTaskId = readAgentInstanceIdFromSegment(rawTaskId);
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
 

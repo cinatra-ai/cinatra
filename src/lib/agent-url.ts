@@ -24,3 +24,22 @@ export function buildAgentPackageBasePath(agentPackageName: string): string {
   if (match) return `/agents/${match[1]}/${match[2]}`;
   return `/agents/${agentPackageName}`;
 }
+
+// cinatra#3080 — AND A PATH SEGMENT IS READ BACK THE WAY IT WAS WRITTEN.
+// The router hands a dynamic segment to a page still percent-encoded, so the
+// value a page reads out of `params` is the SEGMENT, not the id. Every ordinary
+// run id is a uuid, which is byte-identical either way, so the difference was
+// invisible until a repair run — whose id carries a colon — opened its own page
+// and the run row was looked up under `lifecycle-repair-run%3A…`, which is no
+// run at all. This is the inverse of `buildAgentInstancePath`: what that writes
+// into a link, this reads back out of the route.
+//
+// A malformed sequence is NOT an error to raise from a page: it is simply not
+// an id any run has, and the caller's own missing-run answer is the right one.
+export function readAgentInstanceIdFromSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
