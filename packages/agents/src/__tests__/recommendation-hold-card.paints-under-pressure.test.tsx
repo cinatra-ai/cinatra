@@ -213,6 +213,51 @@ describe("a rebuilt card redraws the answer it already had (cinatra#3007, fix le
     ).toHaveLength(0);
   });
 
+  it("DROPS an inherited answer when this card's own reads all refuse", async () => {
+    // The other half of keeping an answer across a rebuild. Keeping it is right
+    // while the read is merely SLOW — that is the failure this leg closes. It is
+    // wrong when this document cannot obtain the answer at all any more, which is
+    // what a shared browser looks like after the next person signs in: the reads
+    // refuse, and a summary nobody present may read must not go on being redrawn
+    // from memory. The failure budget is spent only on real refusals, so a slow
+    // read that is still on the wire never reaches this rule.
+    holdStateMock.mockImplementation(async () => SKIPPED);
+    const first = await mountCard("run-3007-inherited-then-refused");
+    await waitFor(() => {
+      expect(document.querySelectorAll(`${CARD_ROOT}${CARD_DECIDED}`)).toHaveLength(1);
+    });
+    first.unmount();
+    cleanup();
+
+    // Every read this rebuilt card makes REFUSES.
+    holdStateMock.mockImplementation(async () => null as unknown as HoldState);
+    vi.useFakeTimers();
+    const view = await mountCard("run-3007-inherited-then-refused");
+    await flush();
+    expect(
+      view.container.querySelectorAll(`${CARD_ROOT}${CARD_DECIDED}`),
+      "the inherited answer is still drawn while this card is asking",
+    ).toHaveLength(1);
+
+    // Spend the whole failure budget on refusals.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400 + 1_500 + 4_000 + 8_000 + 200);
+    });
+
+    expect(
+      view.container.querySelectorAll(CARD_ROOT),
+      "an inherited answer this card could never confirm fails closed",
+    ).toHaveLength(0);
+    vi.useRealTimers();
+
+    // And it is gone from the memory too, so the next mount does not redraw it.
+    holdStateMock.mockImplementation(() => new Promise<HoldState>(() => {}));
+    cleanup();
+    const again = await mountCard("run-3007-inherited-then-refused");
+    await flush();
+    expect(again.container.querySelectorAll(CARD_ROOT)).toHaveLength(0);
+  });
+
   it("carries no verdict from ONE run to ANOTHER", async () => {
     holdStateMock.mockImplementation(async () => SKIPPED);
     const first = await mountCard("run-3007-answered-run");

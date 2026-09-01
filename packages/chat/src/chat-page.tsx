@@ -151,7 +151,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
-  const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(initialThreadId) as Message[]);
+  const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(userId ?? null, initialThreadId) as Message[]);
   // Streaming registry: one AbortController per in-flight streamResponse call.
   // Replaces the single boolean flag so N concurrent streams can coexist.
   const [streamingCount, setStreamingCount] = useState(0);
@@ -226,7 +226,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // opened/loaded the thread". Only the former advances `updatedAt` and the
   // sidebar position (issue #283). Empty string == nothing loaded yet (a
   // brand-new thread starts empty, so its first user message reads as activity).
-  const loadedFingerprintRef = useRef<string>(recalledThreadFingerprint(initialThreadId));
+  const loadedFingerprintRef = useRef<string>(recalledThreadFingerprint(userId ?? null, initialThreadId));
   // The active thread's immutable createdAt as read from the loaded thread
   // data. Used as the createdAt fallback when persisting so the payload's
   // createdAt does not drift to `now`/updatedAt if the local `threads` summary
@@ -574,7 +574,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Keep this thread's turns where a REBUILT page can redraw them (./thread-activity).
   useEffect(() => {
-    rememberThreadTranscript(activeThreadId, loadedThreadIdRef.current, messages);
+    rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
   }, [activeThreadId, messages]);
 
   // Emit active thread title so AppShell can show it in the breadcrumb.

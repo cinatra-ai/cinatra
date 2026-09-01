@@ -1171,6 +1171,19 @@ function recallAuthorizedAnswer(runId: string): RunRecommendationHoldState | nul
 }
 
 /**
+ * Drop this run's remembered answer.
+ *
+ * Called where a card that INHERITED an answer could never confirm it with a
+ * read of its own — see the failure budget below. The answer was kept so a
+ * rebuilt card would not blank while a slow read was on the wire; a card whose
+ * every read REFUSES is not that case, and an answer no reader of this document
+ * can obtain any more must not go on being redrawn from memory.
+ */
+function forgetAuthorizedAnswer(runId: string): void {
+  AUTHORIZED_ANSWERS.delete(runId);
+}
+
+/**
  * FORGET EVERY RUN'S LAST ANSWER.
  *
  * A browser drops this by closing the tab. A test file that mounts many cards for
@@ -1307,6 +1320,13 @@ function useRecommendationHoldState(params: {
     runId: string;
     state: RunRecommendationHoldState;
   } | null>(seedAnswer());
+  // THE RUN WHOSE ANSWER THIS INSTANCE ONLY INHERITED, and has not yet confirmed
+  // with a read of its own. Cleared the moment this card files an answer itself.
+  // The failure budget below reads it: an inherited answer must fail CLOSED when
+  // this card's own reads never land, or a run whose reader has changed (a
+  // shared browser signs a new person in without reloading the document) would
+  // keep redrawing a summary from memory that nobody present may read.
+  const seededAnswerRunIdRef = useRef<string | null>(seedAnswer() === null ? null : runId);
   // CONSECUTIVE EMPTY LOOKS AT THE RUN ON SCREEN, so the rule below can be
   // BOUNDED. Reset by any answer that is filed, and keyed to the run, so it
   // counts one run's unanswered stretch and nothing else.
@@ -1408,6 +1428,8 @@ function useRecommendationHoldState(params: {
       }
       emptyLooksRef.current = null;
       latestFiledRequestRef.current = requestId;
+      // This card has now been told the answer itself; nothing here is inherited.
+      seededAnswerRunIdRef.current = null;
       filedAnswerRef.current = { runId: requestRunId, state };
       // The one write. An answer, and only an answer, outlives this instance.
       rememberAuthorizedAnswer(requestRunId, state);
@@ -1468,6 +1490,23 @@ function useRecommendationHoldState(params: {
         return;
       }
       if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) {
+        // AN INHERITED ANSWER FAILS CLOSED WHEN THIS CARD'S OWN READS DO.
+        //
+        // The budget is spent only after real REFUSALS — a slow read that is
+        // still on the wire is still awaited, which is the whole point of
+        // keeping the answer — so reaching here means this document could not
+        // obtain the answer it is drawing even once. It is then dropped, from
+        // the card and from the memory both, and the card returns to drawing
+        // nothing. An answer this instance obtained ITSELF is untouched: it
+        // still outranks a later failure, as it always has.
+        if (seededAnswerRunIdRef.current === requestRunIdForBudget) {
+          seededAnswerRunIdRef.current = null;
+          filedAnswerRef.current = null;
+          forgetAuthorizedAnswer(requestRunIdForBudget);
+          setResolved((prev) =>
+            prev !== null && prev.runId === requestRunIdForBudget ? null : prev,
+          );
+        }
         // The budget is spent and nothing more is scheduled. Say so, rather than
         // leaving the caller waiting for an answer that will not arrive: a host
         // that withholds a card until this read lands must be able to stop

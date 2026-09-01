@@ -158,6 +158,26 @@ const REMEMBERED_TRANSCRIPTS = new Map<string, readonly ActivityMessage[]>();
 const REMEMBERED_THREADS = 8;
 
 /**
+ * THE KEY IS THE VIEWER AND THE THREAD, NEVER THE THREAD ALONE.
+ *
+ * Signing out of this product is a CLIENT-SIDE route change — the account menu
+ * awaits `signOut()` and then pushes `/sign-in` — so the document, and every
+ * module-scope value in it, outlives the person who was signed in. Keyed by
+ * thread id alone this record would therefore be handed to WHOEVER is signed in
+ * next on a shared browser: one press of the back button after the next person
+ * signs in reaches the previous person's thread URL, and the page would paint
+ * that transcript on its first frame, before the server's refusal for the new
+ * reader has even been asked for. Keyed by the viewer as well, the next person
+ * recalls nothing at all and sees the empty conversation they are entitled to.
+ *
+ * The viewer id is the one the page is already rendered for. `null` is a viewer
+ * in its own right (a surface with no signed-in reader) and matches only itself.
+ */
+function transcriptKey(viewerId: string | null | undefined, threadId: string): string {
+  return `${viewerId ?? ""}\u0000${threadId}`;
+}
+
+/**
  * Record the list the page currently has for `threadId`.
  *
  * `loadedThreadId` is the page's own "whose data is on screen" gate, passed in
@@ -165,16 +185,20 @@ const REMEMBERED_THREADS = 8;
  * left, and recording it under the new one would remember the wrong conversation.
  * An EMPTY list is not recorded either — a page mid-rebuild legitimately holds
  * one, and it would replace the transcript this exists to keep.
+ *
+ * `viewerId` is the reader the page is drawn for — see `transcriptKey`.
  */
 export function rememberThreadTranscript(
+  viewerId: string | null | undefined,
   threadId: string | null,
   loadedThreadId: string | null,
   messages: readonly ActivityMessage[],
 ): void {
   if (!threadId || loadedThreadId !== threadId || messages.length === 0) return;
+  const key = transcriptKey(viewerId, threadId);
   // Re-insert so the eviction below is genuinely least-recently-seen.
-  REMEMBERED_TRANSCRIPTS.delete(threadId);
-  REMEMBERED_TRANSCRIPTS.set(threadId, messages);
+  REMEMBERED_TRANSCRIPTS.delete(key);
+  REMEMBERED_TRANSCRIPTS.set(key, messages);
   while (REMEMBERED_TRANSCRIPTS.size > REMEMBERED_THREADS) {
     const oldest = REMEMBERED_TRANSCRIPTS.keys().next();
     if (oldest.done) break;
@@ -187,8 +211,11 @@ export function rememberThreadTranscript(
  * which is the cold open and is exactly what the page started from before this
  * rule existed.
  */
-export function recallThreadTranscript(threadId: string | null | undefined): ActivityMessage[] {
-  const remembered = threadId ? REMEMBERED_TRANSCRIPTS.get(threadId) : undefined;
+export function recallThreadTranscript(
+  viewerId: string | null | undefined,
+  threadId: string | null | undefined,
+): ActivityMessage[] {
+  const remembered = threadId ? REMEMBERED_TRANSCRIPTS.get(transcriptKey(viewerId, threadId)) : undefined;
   return remembered ? [...remembered] : [];
 }
 
@@ -200,8 +227,11 @@ export function recallThreadTranscript(threadId: string | null | undefined): Act
  * on a page that did nothing (issue #283). Empty string when nothing is
  * remembered, which is the pre-existing "nothing loaded yet" reading.
  */
-export function recalledThreadFingerprint(threadId: string | null | undefined): string {
-  const remembered = threadId ? REMEMBERED_TRANSCRIPTS.get(threadId) : undefined;
+export function recalledThreadFingerprint(
+  viewerId: string | null | undefined,
+  threadId: string | null | undefined,
+): string {
+  const remembered = threadId ? REMEMBERED_TRANSCRIPTS.get(transcriptKey(viewerId, threadId)) : undefined;
   return remembered ? fingerprintMessages(remembered) : "";
 }
 
