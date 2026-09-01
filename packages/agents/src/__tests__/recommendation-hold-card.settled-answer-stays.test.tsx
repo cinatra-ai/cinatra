@@ -132,6 +132,7 @@ const CARD_HELD = '[data-lifecycle-card-state="held"]';
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 beforeEach(() => {
@@ -178,8 +179,16 @@ describe("the settled card survives an empty answer (cinatra#3007, fix leg 10)",
     // The stumbled read: every unreadable run and every unreadable park collapses
     // to the SAME word the honest empty answer uses.
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    const looksBefore = holdStateMock.mock.calls.length;
     await wakeAndSettle();
 
+    // THE EMPTY ANSWER WAS ACTUALLY DELIVERED. Without this the assertion below
+    // would also pass for a reader that never woke at all, which is a different
+    // card and a different bug.
+    expect(
+      holdStateMock.mock.calls.length,
+      "the wake really did ask the authority again",
+    ).toBeGreaterThan(looksBefore);
     expect(
       document.querySelectorAll(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}`),
       "the decided card is still in the transcript after an empty answer",
@@ -194,12 +203,56 @@ describe("the settled card survives an empty answer (cinatra#3007, fix leg 10)",
     });
 
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    const looksBefore = holdStateMock.mock.calls.length;
     await wakeAndSettle();
 
+    expect(
+      holdStateMock.mock.calls.length,
+      "the wake really did ask the authority again",
+    ).toBeGreaterThan(looksBefore);
     expect(
       document.querySelectorAll(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_HELD}`),
       "a run the authority said was parked keeps its card",
     ).toHaveLength(1);
+  });
+
+  it("BELIEVES the empty answer once the run's whole failure budget is spent", async () => {
+    // The other half of the rule, and the reason it is a delay rather than a
+    // veto: a run really can lose its hold — the reader can lose access to it,
+    // and a park can be released carrying neither a selection nor a skip. The
+    // card must disbelieve the empty answer only while the retry chain is still
+    // asking, and then take the row down.
+    vi.useFakeTimers();
+    holdStateMock.mockImplementation(async () => CONFIRMED);
+    await mountCard("run-3007-really-withdrawn");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(
+      document.querySelectorAll(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}`),
+      "the decided row is on screen before the withdrawal",
+    ).toHaveLength(1);
+
+    holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Still there while the budget is being spent — the retry chain is asking.
+    expect(
+      document.querySelectorAll(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}`),
+      "the row is held while the chain is still asking",
+    ).toHaveLength(1);
+
+    // Run the chain out: 400ms, 1.5s, 4s.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400 + 1_500 + 4_000 + 10);
+    });
+
+    expect(
+      document.querySelectorAll(CARD_ROOT),
+      "a `none` that outlives the failure budget is an answer, and the row goes",
+    ).toHaveLength(0);
   });
 
   it("still draws nothing when the FIRST answer is `none` — a run that was never held", async () => {

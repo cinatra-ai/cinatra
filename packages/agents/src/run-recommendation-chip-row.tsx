@@ -1211,6 +1211,10 @@ function useRecommendationHoldState(params: {
     runId: string;
     state: RunRecommendationHoldState;
   } | null>(null);
+  // CONSECUTIVE EMPTY LOOKS AT THE RUN ON SCREEN, so the rule below can be
+  // BOUNDED. Reset by any answer that is filed, and keyed to the run, so it
+  // counts one run's unanswered stretch and nothing else.
+  const emptyLooksRef = useRef<{ runId: string; count: number } | null>(null);
 
   /**
    * One resolve attempt. `true` means "this trigger is done" — either an answer
@@ -1257,6 +1261,19 @@ function useRecommendationHoldState(params: {
       // run that was never held draws nothing, which is this card's whole
       // fail-closed posture), and a later run on the same card inherits no
       // verdict about an earlier one.
+      //
+      // AND IT IS BOUNDED BY THE RUN'S OWN FAILURE BUDGET, never permanent. A
+      // run really can move from a positive answer to `none` — the reader can
+      // lose access to it, and a park can be released carrying neither a
+      // selection nor a skip — and a rule that suppressed every `none` would
+      // leave that card on the transcript for the life of the mount, still
+      // offering a decision on a run that no longer has one. So the empty answer
+      // is disbelieved only while the retry chain is still asking: the initial
+      // look and every retry in `RESOLVE_RETRY_DELAYS_MS` may be withheld, and
+      // the next one is BELIEVED and filed. A stumble under load is absorbed
+      // across the whole budget; a genuine withdrawal costs the sum of those
+      // delays and then lands. The rule also disarms itself once it fires,
+      // because the answer it files is the `none` it was suppressing.
       const filed = filedAnswerRef.current;
       if (
         state.state === "none" &&
@@ -1264,8 +1281,14 @@ function useRecommendationHoldState(params: {
         filed.runId === requestRunId &&
         filed.state.state !== "none"
       ) {
-        return false;
+        const consecutive =
+          emptyLooksRef.current !== null && emptyLooksRef.current.runId === requestRunId
+            ? emptyLooksRef.current.count + 1
+            : 1;
+        emptyLooksRef.current = { runId: requestRunId, count: consecutive };
+        if (consecutive <= RESOLVE_RETRY_DELAYS_MS.length) return false;
       }
+      emptyLooksRef.current = null;
       filedAnswerRef.current = { runId: requestRunId, state };
       setResolved({ runId: requestRunId, state });
       return true;
