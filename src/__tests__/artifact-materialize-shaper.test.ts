@@ -119,4 +119,48 @@ describe("shapeArtifactMaterializeInput", () => {
       shapeArtifactMaterializeInput(validRaw({ contentJsonField: "" })),
     ).toThrow("contentJsonField");
   });
+
+  // -------------------------------------------------------------------------
+  // THE MID-RUN REVISION (cinatra#3030, epic #3023 W6; plan (C) item 0.30):
+  // "a mid-run write may name an existing artifact and append its next revision
+  //  instead of creating a new one — a compare-and-set against the revision the
+  //  caller read".
+  // -------------------------------------------------------------------------
+
+  it("shapes an APPEND: the artifact, the revision it was read at, and the gate the run declared", () => {
+    const shaped = shapeArtifactMaterializeInput(
+      validRaw({
+        title: undefined,
+        artifactId: "art-1",
+        baseRepresentationRevisionId: "rev-1",
+        reviewTaskId: "wayflow-review-7",
+      }),
+    );
+    expect(shaped.artifactId).toBe("art-1");
+    expect(shaped.baseRepresentationRevisionId).toBe("rev-1");
+    expect(shaped.reviewTaskId).toBe("wayflow-review-7");
+    // An append does not RENAME what it revises.
+    expect(shaped.title).toBeUndefined();
+  });
+
+  it("refuses an artifact named WITHOUT the revision it was read at", () => {
+    // A write that cannot say what it built on cannot be compare-and-set;
+    // letting it through would make it a blind overwrite of whatever landed in
+    // between — exactly the lost update item 0.30 exists to refuse.
+    expect(() =>
+      shapeArtifactMaterializeInput(validRaw({ title: undefined, artifactId: "art-1" })),
+    ).toThrow("are a pair");
+  });
+
+  it("refuses a base revision named WITHOUT the artifact it belongs to", () => {
+    expect(() =>
+      shapeArtifactMaterializeInput(validRaw({ baseRepresentationRevisionId: "rev-1" })),
+    ).toThrow("are a pair");
+  });
+
+  it("still REQUIRES a title on a creation, which names no artifact", () => {
+    expect(() => shapeArtifactMaterializeInput(validRaw({ title: undefined }))).toThrow(
+      "input.title",
+    );
+  });
 });

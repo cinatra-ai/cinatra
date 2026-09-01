@@ -40,9 +40,75 @@ export function defaultRoadLedgerOutputId(outputName: string): string {
   return `${DEFAULT_ROAD_LEDGER_OUTPUT_ID_PREFIX}${outputName}`;
 }
 
-/** Whether a ledger output id belongs to the default road's reserved family. */
+/**
+ * The reserved ledger `output_id` prefix for ONE EMITTED FILE (cinatra#3030,
+ * item 0.22: "records one ledger row per file"). A sibling of the end-node
+ * family's prefix and, like it, illegal as an OAS node id or an EndNode output
+ * name, so a file's row can never collide with a node's.
+ */
+export const RUN_FILE_LEDGER_OUTPUT_ID_PREFIX = "cinatra:run-file:";
+
+/** The reserved ledger output id for one file of the run's outputs folder. */
+export function runFileLedgerOutputId(relPath: string): string {
+  return `${RUN_FILE_LEDGER_OUTPUT_ID_PREFIX}${relPath}`;
+}
+
+/** Whether a ledger output id belongs to the default road's reserved family —
+ *  either half of it, the end-node outputs and the emitted files. */
 export function isDefaultRoadLedgerOutputId(outputId: string): boolean {
-  return outputId.startsWith(DEFAULT_ROAD_LEDGER_OUTPUT_ID_PREFIX);
+  return (
+    outputId.startsWith(DEFAULT_ROAD_LEDGER_OUTPUT_ID_PREFIX) ||
+    outputId.startsWith(RUN_FILE_LEDGER_OUTPUT_ID_PREFIX)
+  );
+}
+
+/** One file of the run's outputs folder, as the terminal capture reads it. */
+export type RunOutputFileListing = {
+  /** Path relative to the outputs folder, with `/` separators. */
+  relPath: string;
+  byteLength: number;
+};
+
+/**
+ * One item the pickup will drain: a FILE the agent emitted (item 0.22).
+ *
+ * The item carries the file BY REFERENCE, never its bytes: "the pickup streams
+ * the bytes once into the store", and an item family that carried file contents
+ * would put every emitted file through the outbox row as text first.
+ */
+export type RunFilePickupItem = {
+  outputId: string;
+  /** The file's path relative to the outputs folder — its title seed. */
+  outputName: string;
+  relPath: string;
+  source: "file";
+  byteLength: number;
+};
+
+/**
+ * Select the run's emitted FILES as pickup items.
+ *
+ * "at terminal success every file in the run's `outputs` folder is an output"
+ * (item 0.22). Every file except an EMPTY one: zero bytes is not a document by
+ * any rung of the ladder, and the document floor of item 0.17 does not apply to
+ * a file — a file the agent deliberately wrote IS the output, whatever its size.
+ * The order is the folder's stable order, so a re-drive claims the ledger family
+ * in the same sequence.
+ */
+export function selectRunFilePickupItems(
+  files: readonly RunOutputFileListing[],
+): RunFilePickupItem[] {
+  const items = files
+    .filter((f) => f.byteLength > 0)
+    .map((f) => ({
+      outputId: runFileLedgerOutputId(f.relPath),
+      outputName: f.relPath,
+      relPath: f.relPath,
+      source: "file" as const,
+      byteLength: f.byteLength,
+    }));
+  items.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+  return items;
 }
 
 /** One item the pickup will drain: an end-node output at or above the floor. */

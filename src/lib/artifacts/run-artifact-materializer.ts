@@ -2,6 +2,8 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  firstLineTitle,
+  isFileSourcedBinding,
   collectArtifactBindingsFromOasDocument,
   producesObjectTypeIdForExtension,
   type CollectedArtifactBinding,
@@ -260,6 +262,19 @@ export function __resetRunPackageBindingsCacheForTests(): void {
   pinnedBindingsCache.clear();
 }
 
+/** What the post-terminal pickup needs to know about the run's package. */
+export type RunDerivationContext = {
+  producesRefs: SemanticArtifactProducesRef[];
+  hasBindings: boolean;
+  /** The COLLECTED bindings themselves (cinatra#3030, item 0.22). The file half
+   *  of the pickup needs the grammar, not just the fact that one exists: a
+   *  binding may name a file of the run folder as its content source, and only
+   *  the pickup — which runs where the folder is — can resolve that. OPTIONAL,
+   *  so a caller that only ever supplies end-node outputs states nothing about
+   *  files rather than an empty claim about them. */
+  bindings?: CollectedArtifactBinding[];
+};
+
 /**
  * cinatra#1893 (epic #1883 A5): the run-derivation context the post-terminal
  * unbound-output job needs — the run agent's validated typed `produces` refs and
@@ -271,14 +286,18 @@ export function __resetRunPackageBindingsCacheForTests(): void {
 export async function loadRunDerivationContext(input: {
   templateId: string;
   packageVersion: string | null;
-}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; hasBindings: boolean }> {
+}): Promise<RunDerivationContext> {
   const packageName = await resolveTemplatePackageName(input.templateId);
-  if (packageName === null) return { producesRefs: [], hasBindings: false };
+  if (packageName === null) return { producesRefs: [], hasBindings: false, bindings: [] };
   const loaded = await loadRunPackageBindings({
     packageName,
     packageVersion: input.packageVersion,
   });
-  return { producesRefs: loaded.producesRefs, hasBindings: loaded.bindings.length > 0 };
+  return {
+    producesRefs: loaded.producesRefs,
+    hasBindings: loaded.bindings.length > 0,
+    bindings: loaded.bindings,
+  };
 }
 
 async function resolveTemplatePackageName(
@@ -769,19 +788,27 @@ export async function materializeRunArtifacts(input: {
   });
 
   for (const { nodeId, outputId, binding } of bindings) {
-    const fail = (error: string): void => {
+    const failAt = (failedOutputId: string, error: string): void => {
       outcomes.push({
         ok: false,
-        outputId,
+        outputId: failedOutputId,
         nodeId,
         extension: binding.extension,
         error,
       });
     };
+    const fail = (error: string): void => failAt(outputId, error);
     try {
       // ------------------------------------------------------------------
       // Resolve content / title / mime from the sentinel-declared outputs.
       // ------------------------------------------------------------------
+      // A FILE-SOURCED binding belongs to the PICKUP, not to this pass
+      // (item 0.22): the file it names lives in the run folder, which is read at
+      // terminal success by the process the folder lives with. Skipping it here
+      // is not dropping it — `pickUpDefaultRoadItems` writes it, under this same
+      // binding, with `path: "end_node_binding"`.
+      if (isFileSourcedBinding(binding)) continue;
+
       const outputs = input.endNodeOutputs;
       if (outputs === null) {
         fail(
@@ -789,14 +816,6 @@ export async function materializeRunArtifacts(input: {
         );
         continue;
       }
-      const titleRaw = outputs[binding.titleFrom];
-      if (typeof titleRaw !== "string" || titleRaw.trim().length === 0) {
-        fail(
-          `titleFrom output "${binding.titleFrom}" did not resolve to a non-empty string`,
-        );
-        continue;
-      }
-      const title = titleRaw.trim();
 
       let mime: string;
       if (binding.declaredMime !== undefined) {
@@ -818,33 +837,9 @@ export async function materializeRunArtifacts(input: {
         continue;
       }
 
-      const contentRaw = outputs[binding.contentFrom];
-      let content: string;
-      if (typeof contentRaw === "string") {
-        content = contentRaw;
-      } else if (
-        contentRaw !== undefined &&
-        contentRaw !== null &&
-        mime === "application/json"
-      ) {
-        // Structured EndNode output bound as application/json — serialize
-        // deterministically. Never applied to non-JSON MIMEs (no value
-        // invention).
-        content = JSON.stringify(contentRaw);
-      } else {
-        fail(
-          `contentFrom output "${binding.contentFrom}" did not resolve to a string` +
-            (contentRaw === undefined || contentRaw === null
-              ? " (output missing from the run's declared outputs)"
-              : ` (got ${Array.isArray(contentRaw) ? "array" : typeof contentRaw}; structured values are only accepted for application/json bindings)`),
-        );
-        continue;
-      }
-      const contentBytes = new TextEncoder().encode(content).byteLength;
-      if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
-        fail(
-          `resolved content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
-        );
+      const contentSource = binding.contentFrom;
+      if (contentSource === undefined) {
+        fail("the binding names no end-node output as its content source");
         continue;
       }
 
@@ -867,39 +862,171 @@ export async function materializeRunArtifacts(input: {
         continue;
       }
 
+      /** One artifact of this binding — the shared tail of the single write and
+       *  of every member of a fan-out. */
+      const writeOne = async (member: {
+        memberOutputId: string;
+        title: string;
+        content: string;
+      }): Promise<void> => {
+        const contentBytes = new TextEncoder().encode(member.content).byteLength;
+        if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
+          failAt(
+            member.memberOutputId,
+            `resolved content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+          );
+          return;
+        }
+        const result = await writeClaimedArtifact({
+          runId: input.runId,
+          orgId: input.orgId,
+          createdBy: input.createdBy,
+          outputId: member.memberOutputId,
+          nodeId,
+          path: "end_node_binding",
+          extension: binding.extension,
+          title: member.title,
+          mime,
+          content: member.content,
+          ownership,
+          resolvedTarget: resolved.target,
+          mimeDescription: "the binding resolved MIME",
+        });
+        if (!result.ok) {
+          failAt(member.memberOutputId, result.error);
+          return;
+        }
+        outcomes.push({
+          ok: true,
+          outputId: member.memberOutputId,
+          nodeId,
+          extension: binding.extension,
+          artifactId: result.artifactId,
+          representationRevisionId: result.representationRevisionId,
+          deduped: result.deduped,
+        });
+      };
+
+      /** One member of a list output, as bytes the write path stores. */
+      const memberContent = (value: unknown): string | null => {
+        if (typeof value === "string") return value;
+        if (value === undefined || value === null) return null;
+        if (mime === "application/json") return JSON.stringify(value);
+        return null;
+      };
+
       // ------------------------------------------------------------------
-      // Accepts/write-gate validation + ledger claim → write-through (finalize
-      // atomic with the write) — the shared core (writeClaimedArtifact, also
-      // driving the #925 tool path).
+      // THE FAN-OUT (item 0.27): "a binding may declare that its output is a
+      // list whose members are each an artifact [...] the materializer writes
+      // one artifact per member [...] a member's ledger identity is the list
+      // output's id with the member's position, so the ledger's key of run,
+      // output, extension and content still holds; every member is its own
+      // artifact, duplicates included — two identical members are two artifacts
+      // over one blob, as the content-addressed store already works".
+      //
+      // Two identical members therefore need NO special case here: distinct
+      // ledger identities give two claims, two writes and two artifacts, while
+      // the store's substance key gives them one resource and one blob.
       // ------------------------------------------------------------------
-      const result = await writeClaimedArtifact({
-        runId: input.runId,
-        orgId: input.orgId,
-        createdBy: input.createdBy,
-        outputId,
-        nodeId,
-        path: "end_node_binding",
-        extension: binding.extension,
-        title,
-        mime,
-        content,
-        ownership,
-        resolvedTarget: resolved.target,
-        mimeDescription: "the binding resolved MIME",
-      });
-      if (!result.ok) {
-        fail(result.error);
+      if (binding.membersAreArtifacts === true) {
+        const list = outputs[contentSource];
+        if (!Array.isArray(list)) {
+          fail(
+            `contentFrom output "${contentSource}" is declared a list of artifacts ` +
+              `(membersAreArtifacts) but did not resolve to an array` +
+              (list === undefined || list === null
+                ? " (output missing from the run's declared outputs)"
+                : ` (got ${typeof list})`),
+          );
+          continue;
+        }
+        for (let index = 0; index < list.length; index += 1) {
+          const memberOutputId = `${outputId}#${index}`;
+          const member = list[index];
+          const content = memberContent(member);
+          if (content === null) {
+            failAt(
+              memberOutputId,
+              `member ${index} of "${contentSource}" did not resolve to a string` +
+                ` (structured members are only accepted for application/json bindings)`,
+            );
+            continue;
+          }
+          let title: string;
+          if (binding.titleFromMemberField !== undefined) {
+            const field = binding.titleFromMemberField;
+            const raw =
+              typeof member === "object" && member !== null && !Array.isArray(member)
+                ? (member as Record<string, unknown>)[field]
+                : undefined;
+            if (typeof raw !== "string" || raw.trim().length === 0) {
+              failAt(
+                memberOutputId,
+                `titleFromMemberField "${field}" did not resolve to a non-empty string on ` +
+                  `member ${index} of "${contentSource}"`,
+              );
+              continue;
+            }
+            title = raw.trim();
+          } else {
+            title = firstLineTitle(content);
+            if (title.length === 0) {
+              failAt(
+                memberOutputId,
+                `titleFromFirstLine found no first line on member ${index} of "${contentSource}"`,
+              );
+              continue;
+            }
+          }
+          await writeOne({ memberOutputId, title, content });
+        }
         continue;
       }
-      outcomes.push({
-        ok: true,
-        outputId,
-        nodeId,
-        extension: binding.extension,
-        artifactId: result.artifactId,
-        representationRevisionId: result.representationRevisionId,
-        deduped: result.deduped,
-      });
+
+      // ---- the single artifact -------------------------------------------
+      const contentRaw = outputs[contentSource];
+      let content: string;
+      if (typeof contentRaw === "string") {
+        content = contentRaw;
+      } else if (
+        contentRaw !== undefined &&
+        contentRaw !== null &&
+        mime === "application/json"
+      ) {
+        // Structured EndNode output bound as application/json — serialize
+        // deterministically. Never applied to non-JSON MIMEs (no value
+        // invention).
+        content = JSON.stringify(contentRaw);
+      } else {
+        fail(
+          `contentFrom output "${contentSource}" did not resolve to a string` +
+            (contentRaw === undefined || contentRaw === null
+              ? " (output missing from the run's declared outputs)"
+              : ` (got ${Array.isArray(contentRaw) ? "array" : typeof contentRaw}; structured values are only accepted for application/json bindings)`),
+        );
+        continue;
+      }
+
+      let title: string;
+      if (binding.titleFrom !== undefined) {
+        const titleRaw = outputs[binding.titleFrom];
+        if (typeof titleRaw !== "string" || titleRaw.trim().length === 0) {
+          fail(
+            `titleFrom output "${binding.titleFrom}" did not resolve to a non-empty string`,
+          );
+          continue;
+        }
+        title = titleRaw.trim();
+      } else {
+        // The new title source of item 0.27, on a single artifact too.
+        title = firstLineTitle(content);
+        if (title.length === 0) {
+          fail(`titleFromFirstLine found no first line in "${contentSource}"`);
+          continue;
+        }
+      }
+
+      await writeOne({ memberOutputId: outputId, title, content });
     } catch (err) {
       fail(
         `materialization failed: ${err instanceof Error ? err.message : String(err)}`,

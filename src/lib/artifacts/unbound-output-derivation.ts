@@ -319,6 +319,10 @@ async function driveClaimedRow(
       templateName,
       items: row.items,
       producesRefs: ctx.producesRefs,
+      // The FILE half of item 0.22 needs the grammar itself: a binding may name
+      // a file of the run folder as its content source, and the folder is only
+      // readable here.
+      bindings: ctx.bindings,
     },
     deps,
   );

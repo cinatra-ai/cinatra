@@ -1,9 +1,14 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { isPackageRequiredInProd } from "@cinatra-ai/extensions/required-in-prod";
 import {
+  fileMatchesBindingPattern,
+  fileNameTitle,
+  firstLineTitle,
   producesObjectTypeIdForExtension,
+  type CollectedArtifactBinding,
   type SemanticArtifactProducesRef,
 } from "@cinatra-ai/agents/artifact-binding";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
@@ -13,6 +18,12 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { resolveBoundArtifactTarget } from "./resolve-bound-artifact-type";
+import {
+  RunFolderRefusal,
+  decodeUtf8Exact,
+  markRunFolderPickedUp,
+  readRunOutputFile,
+} from "./run-folder";
 import { writeClaimedArtifact, resolveRunScopeOwnership } from "./run-artifact-materializer";
 import type { ScopeDerivedOwnership } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
@@ -73,15 +84,29 @@ function schema(): string {
 /** One item the pickup drains — structurally `EndNodeOutputPickupItem` from
  *  `@cinatra-ai/agents/end-node-output-pickup`, restated here so the host module
  *  does not depend on the agents package's shape at the type level. */
-export type DefaultRoadItem = {
+export type DefaultRoadOutputItem = {
   outputId: string;
   outputName: string;
-  source: "end_node_output" | "file";
+  source: "end_node_output";
   content: string;
   contentIsJson: boolean;
   contentHash: string;
   byteLength: number;
 };
+
+/** One EMITTED FILE, carried BY REFERENCE (cinatra#3030, item 0.22). The outbox
+ *  row never holds a file's bytes: "the pickup streams the bytes once into the
+ *  store", and the folder the path names is read where the pickup runs. */
+export type DefaultRoadFileItem = {
+  outputId: string;
+  outputName: string;
+  source: "file";
+  /** Path relative to the run's `outputs` folder, with `/` separators. */
+  relPath: string;
+  byteLength: number;
+};
+
+export type DefaultRoadItem = DefaultRoadOutputItem | DefaultRoadFileItem;
 
 /** What the pickup did with ONE item. Every outcome carries the ladder's
  *  verdict, so "took no road" is as readable as "became this artifact". */
@@ -298,6 +323,10 @@ export async function pickUpDefaultRoadItems(
     templateName: string | null;
     items: readonly DefaultRoadItem[];
     producesRefs: readonly SemanticArtifactProducesRef[];
+    /** The run package's collected bindings (cinatra#3030, item 0.22). A
+     *  binding whose content source is a FILE — one path, or a pattern — is
+     *  resolved HERE, because only this process can see the run folder. */
+    bindings?: readonly CollectedArtifactBinding[];
   },
   deps?: DefaultRoadPickupDeps,
 ): Promise<DefaultRoadItemOutcome[]> {
@@ -326,8 +355,240 @@ export async function pickUpDefaultRoadItems(
     { artifactId: string; representationRevisionId: string; extension: string }
   >();
 
+  // ------------------------------------------------------------------
+  // THE FILE BINDINGS (item 0.22) and THE FILE PATTERNS (item 0.27).
+  //
+  //   "bound, when a binding names it as its content source (bindings gain a
+  //    file source beside the output source, so an explicit dependency covers
+  //    files too), or on the default road otherwise"
+  //
+  // The first rung of the per-output ladder, for a file. `fileFrom` names ONE
+  // file; `filePattern` fans out, one artifact per matching file, and a member's
+  // ledger identity is the list output's id with the member's position — here
+  // the file's own path, which is what identifies a member of a pattern.
+  // ------------------------------------------------------------------
+  const bindings = input.bindings ?? [];
+  const bindingForFile = (
+    relPath: string,
+  ): { binding: CollectedArtifactBinding; outputId: string } | null => {
+    for (const collected of bindings) {
+      if (collected.binding.fileFrom === relPath) {
+        return { binding: collected, outputId: collected.outputId };
+      }
+    }
+    for (const collected of bindings) {
+      const pattern = collected.binding.filePattern;
+      if (pattern !== undefined && fileMatchesBindingPattern(pattern, relPath)) {
+        return { binding: collected, outputId: `${collected.outputId}#${relPath}` };
+      }
+    }
+    return null;
+  };
+
+  /** The bytes of one emitted file, or the refusal that they are not there. */
+  const readFileItem = async (
+    item: DefaultRoadFileItem,
+  ): Promise<
+    | { ok: true; content: string }
+    | { ok: false; reason: string; detail: string; verdictReason: string }
+  > => {
+    try {
+      const read = await readRunOutputFile({
+        orgId: input.orgId,
+        runId: input.runId,
+        relPath: item.relPath,
+      });
+      // NOT UTF-8 IS A REFUSAL, NEVER A LOSSY WRITE (convergence round, adopted).
+      // `Buffer.toString("utf8")` substitutes U+FFFD for every byte it cannot
+      // decode and never fails, so a picture left in the outputs folder would
+      // become an artifact holding bytes the agent did not write. This slice
+      // deliberately stops short of pictures (W8 brings them), so the honest
+      // answer here is a RECORDED verdict on the row rather than a corrupted
+      // artifact nobody can tell from a good one.
+      const text = decodeUtf8Exact(read.bytes);
+      if (text === null) {
+        return {
+          ok: false,
+          reason: "not_utf8",
+          detail:
+            `run-folder file "${item.relPath}" is ${read.byteLength} bytes that are not UTF-8 text; ` +
+            `this road carries text, and a non-text file is refused rather than transcoded`,
+          verdictReason:
+            "the file the run emitted is not UTF-8 text, and the pickup refuses to transcode it",
+        };
+      }
+      return { ok: true, content: text };
+    } catch (err) {
+      if (err instanceof RunFolderRefusal) {
+        // A file that is gone by the time the pickup reads is a RECORDED
+        // VERDICT, not a failure: the run is not re-driven for it, and the
+        // reason is on the row.
+        return {
+          ok: false,
+          reason: err.reason === "not_found" ? "file_missing" : err.reason,
+          detail: err.message,
+          verdictReason:
+            err.reason === "not_found"
+              ? "the file the run emitted was not there when the pickup read the folder"
+              : `the pickup refused the file the run emitted (${err.reason})`,
+        };
+      }
+      throw err;
+    }
+  };
+
+  /**
+   * Write ONE file its binding named — item 0.22's bound half, and item 0.27's
+   * per-matching-file fan-out. The road differs from the default one in exactly
+   * what the binding DECLARES: the extension and the declared type come from the
+   * binding rather than from the ladder's rungs, so the file "lands under its
+   * declared extension"; the form is the binding's when it declared one and the
+   * ladder's when it left it open; and the ledger row carries the binding's own
+   * path and identity. Everything else — the one write path, the ledger, the
+   * produced event — is shared with every other artifact this run writes.
+   */
+  const writeBoundFile = async (args: {
+    item: DefaultRoadFileItem;
+    bound: { binding: CollectedArtifactBinding; outputId: string };
+    content: string;
+    contentHash: string;
+  }): Promise<DefaultRoadItemOutcome> => {
+    const { binding, nodeId } = args.bound.binding;
+    const outputId = args.bound.outputId;
+    const bytes = new TextEncoder().encode(args.content);
+    const verdict = await withActorContext(buildDefaultRoadActorContext(input.orgId), () =>
+      detectOutputForm(
+        { bytes, contentHash: args.contentHash, name: args.item.relPath },
+        { ask, modelRungEnabled, cache },
+      ),
+    );
+    const resolved = await resolveBoundArtifactTarget({
+      orgId: input.orgId,
+      extension: binding.extension,
+      bindingObjectTypeId: binding.objectTypeId,
+      producesObjectTypeId:
+        producesObjectTypeIdForExtension(input.producesRefs, binding.extension) ?? undefined,
+    });
+    if (!resolved.ok) {
+      return {
+        outputId,
+        outputName: args.item.outputName,
+        status: "no_target",
+        verdict,
+        targetRung: null,
+        extension: binding.extension,
+        refusal: { reason: "binding_unresolved", detail: resolved.error },
+      };
+    }
+    // "A file source may leave the form to the ladder": the declared MIME wins
+    // when the binding states one, and the ladder's verdict stands when it does
+    // not. Either way the write path RE-VALIDATES it against the target's
+    // accepted forms (item 0.22), so a declaration cannot force a wrong form in.
+    const mime = binding.declaredMime ?? verdict.form;
+    const title =
+      binding.titleFromFirstLine === true
+        ? firstLineTitle(args.content) || fileNameTitle(args.item.relPath)
+        : fileNameTitle(args.item.relPath);
+    const write = await writeClaimedArtifact({
+      runId: input.runId,
+      orgId: input.orgId,
+      createdBy: input.createdBy,
+      outputId,
+      nodeId,
+      path: "end_node_binding",
+      extension: binding.extension,
+      extensionVersion: null,
+      title,
+      mime,
+      content: args.content,
+      ownership,
+      resolvedTarget: resolved.target,
+      mimeDescription: "the bound file's form",
+      decidedRung: verdict.rung,
+      decidedVerdict: verdict,
+    });
+    if (!write.ok) {
+      // The same posture the default road takes: only a fact about the WORK is
+      // settled; a fact about the moment is thrown so the lease re-drives.
+      if (write.reason !== "accepts_mismatch") {
+        throw new Error(
+          `[default-road] bound-file write refused for run ${input.runId} file ` +
+            `"${args.item.relPath}" (${write.reason}) — retryable: ${write.error}`,
+        );
+      }
+      return {
+        outputId,
+        outputName: args.item.outputName,
+        status: "no_target",
+        verdict,
+        targetRung: null,
+        extension: binding.extension,
+        objectTypeId: resolved.target.objectTypeId,
+        refusal: { reason: "write_refused", detail: write.error },
+      };
+    }
+    return {
+      outputId,
+      outputName: args.item.outputName,
+      status: write.deduped ? "deduped" : "written",
+      verdict,
+      targetRung: null,
+      extension: binding.extension,
+      objectTypeId: resolved.target.objectTypeId,
+      artifactId: write.artifactId,
+      representationRevisionId: write.representationRevisionId,
+    };
+  };
+
+  let filesRead = 0;
   const outcomes: DefaultRoadItemOutcome[] = [];
   for (const item of input.items) {
+    // ---- the file half: the bytes, and the binding that may claim them ----
+    let itemContent: string;
+    let itemContentHash: string;
+    let boundFile: {
+      item: DefaultRoadFileItem;
+      bound: { binding: CollectedArtifactBinding; outputId: string };
+    } | null = null;
+    if (item.source === "file") {
+      const read = await readFileItem(item);
+      if (!read.ok) {
+        outcomes.push({
+          outputId: item.outputId,
+          outputName: item.outputName,
+          status: "no_target",
+          verdict: {
+            form: "",
+            rung: "explicit",
+            reason: read.verdictReason,
+          },
+          targetRung: null,
+          refusal: { reason: read.reason, detail: read.detail },
+        });
+        continue;
+      }
+      filesRead += 1;
+      itemContent = read.content;
+      itemContentHash = createHash("sha256").update(itemContent, "utf8").digest("hex");
+      const bound = bindingForFile(item.relPath);
+      if (bound !== null) boundFile = { item, bound };
+    } else {
+      itemContent = item.content;
+      itemContentHash = item.contentHash;
+    }
+
+    if (boundFile !== null) {
+      outcomes.push(
+        await writeBoundFile({
+          item: boundFile.item,
+          bound: boundFile.bound,
+          content: itemContent,
+          contentHash: itemContentHash,
+        }),
+      );
+      continue;
+    }
+
     // ---- the per-output idempotence guard (convergence) ------------------
     // The ledger's 4-part key includes the EXTENSION, which the ladder derives;
     // a verdict can legitimately differ between drives (the model rung's switch
@@ -354,7 +615,7 @@ export async function pickUpDefaultRoadItems(
         artifactId: settled.artifactId,
         representationRevisionId: settled.representationRevisionId,
       });
-      writtenByHash.set(item.contentHash, {
+      writtenByHash.set(itemContentHash, {
         artifactId: settled.artifactId,
         representationRevisionId: settled.representationRevisionId,
         extension: settled.extension,
@@ -362,12 +623,12 @@ export async function pickUpDefaultRoadItems(
       continue;
     }
 
-    const bytes = new TextEncoder().encode(item.content);
+    const bytes = new TextEncoder().encode(itemContent);
     const verdict = await withActorContext(
       buildDefaultRoadActorContext(input.orgId),
       () =>
         detectOutputForm(
-          { bytes, contentHash: item.contentHash, name: item.outputName },
+          { bytes, contentHash: itemContentHash, name: item.outputName },
           { ask, modelRungEnabled, cache },
         ),
     );
@@ -390,7 +651,7 @@ export async function pickUpDefaultRoadItems(
     }
 
     // ---- the same-bytes case: one artifact, a ledger row per item ---------
-    const already = writtenByHash.get(item.contentHash);
+    const already = writtenByHash.get(itemContentHash);
     if (already && already.extension === target.extension) {
       const claim = await claimMaterialization({
         orgId: input.orgId,
@@ -399,7 +660,7 @@ export async function pickUpDefaultRoadItems(
         nodeId: null,
         path: "default_road",
         extension: target.extension,
-        contentHash: item.contentHash,
+        contentHash: itemContentHash,
         decidedRung: verdict.rung,
         decidedVerdict: verdict,
       });
@@ -441,9 +702,16 @@ export async function pickUpDefaultRoadItems(
       // extension's version. The column is nullable and NULL reads as "the
       // emitter did not record one" — an honest absence, never a wrong value.
       extensionVersion: null,
-      title: `${input.templateName ?? "Agent"} — ${item.outputName}`,
+      // An END-NODE OUTPUT is named by the run and its output; an EMITTED
+      // FILE is named by ITSELF — "a title comes from [...] the file name"
+      // (item 0.27), and a file the agent named is already the agent's word for
+      // what it is.
+      title:
+        item.source === "file"
+          ? fileNameTitle(item.relPath)
+          : `${input.templateName ?? "Agent"} — ${item.outputName}`,
       mime: verdict.form,
-      content: item.content,
+      content: itemContent,
       ownership,
       resolvedTarget: {
         objectTypeId: target.objectTypeId,
@@ -478,7 +746,7 @@ export async function pickUpDefaultRoadItems(
       });
       continue;
     }
-    writtenByHash.set(item.contentHash, {
+    writtenByHash.set(itemContentHash, {
       artifactId: write.artifactId,
       representationRevisionId: write.representationRevisionId,
       extension: target.extension,
@@ -494,6 +762,20 @@ export async function pickUpDefaultRoadItems(
       artifactId: write.artifactId,
       representationRevisionId: write.representationRevisionId,
     });
+  }
+
+  // THE PICKUP RECEIPT (item 0.21: "deleted after pickup plus a grace period").
+  // It is written when the pickup has READ the folder, whatever each file's
+  // verdict was: the grace period runs from the reading, not from the writing,
+  // so a file nothing could type is still collected on time. The folder itself
+  // is left alone — the retention tier deletes it, never the pickup.
+  if (filesRead > 0) {
+    await markRunFolderPickedUp({
+      orgId: input.orgId,
+      runId: input.runId,
+      at: new Date(),
+      files: filesRead,
+    }).catch(() => undefined);
   }
   return outcomes;
 }

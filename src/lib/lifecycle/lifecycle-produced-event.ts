@@ -61,13 +61,23 @@ export type ProducedEventEmitter =
    * the closed set is the audit surface, and one emitter standing for both
    * would make "which road produced this" unanswerable.
    */
-  | "object_snapshot_mint";
+  | "object_snapshot_mint"
+  /**
+   * THE MID-RUN REVISION APPEND (cinatra#3030, item 0.30). A choke point of its
+   * own — the enumerated set is what makes the choke points auditable, so a new
+   * one is DECLARED here rather than smuggled under an existing name.
+   */
+  | "artifact_revision_append";
 
 export const PRODUCED_EVENT_EMITTERS: readonly ProducedEventEmitter[] = [
   "createSemanticArtifact",
   "dashboard_twin_writer",
   "object_cms_snapshot_capture",
   "object_snapshot_mint",
+  // cinatra#3030 (item 0.30): the mid-run revision append. A choke point of its
+  // own — the enumerated set is what makes the choke points auditable, so a new
+  // one is DECLARED here rather than smuggled under an existing name.
+  "artifact_revision_append",
 ] as const;
 
 const EMITTER_SET: ReadonlySet<string> = new Set(PRODUCED_EVENT_EMITTERS);

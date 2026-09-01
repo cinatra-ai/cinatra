@@ -32,6 +32,7 @@ import {
   enforceAnsweredGateProvenance,
 } from "./answered-gate-provenance";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
+import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -105,6 +106,13 @@ const ALLOWED_TOOLS = new Set([
   // Admitted by name and by scope, never by wildcard, and audited with the
   // calling extension (plan §8.7).
   ...EXTENSION_SCOPED_TOOLS,
+  // W6's run-folder file tools (cinatra#3030, epic #3023; plan (C) item 0.21,
+  // §8.4: "the file tools (write, list, read) to the run's folder"). NOT MCP
+  // primitives: each is dispatched below under the RUN PROVEN by bindBridgeRunId,
+  // so the folder a call reaches is the folder of the run actually executing the
+  // callback, never one the body named. Admitted by name and by scope, never by
+  // wildcard.
+  ...RUN_FOLDER_TOOLS,
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -432,6 +440,44 @@ export async function POST(req: Request): Promise<Response> {
         "@/lib/artifacts/run-artifact-materializer"
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
+      // THE MID-RUN REVISION (cinatra#3030, item 0.30). A write that names an
+      // existing artifact AND the revision it read appends the next revision
+      // instead of creating a new artifact — the compare-and-set. It rides its
+      // own module because what differs is a whole transaction: the append
+      // against the named base, its ledger row, its produced event (live
+      // generator) and the satisfaction row naming this run's declared gate.
+      if (shaped.artifactId !== undefined && shaped.baseRepresentationRevisionId !== undefined) {
+        const { appendArtifactRevision } = await import(
+          "@/lib/artifacts/artifact-revision-append"
+        );
+        const appended = await appendArtifactRevision({
+          orgId: run.orgId,
+          runId: run.id,
+          nodeId: shaped.nodeId,
+          artifactId: shaped.artifactId,
+          baseRepresentationRevisionId: shaped.baseRepresentationRevisionId,
+          content: shaped.content,
+          mime: shaped.declaredMime,
+          createdBy: run.runBy,
+          extension: shaped.extension,
+          extensionVersion: run.packageVersion,
+          declaredReviewTaskId: shaped.reviewTaskId ?? null,
+        });
+        if (!appended.ok) {
+          // A stale base is the caller's to resolve: read the current revision
+          // and append again. Every refusal fails the calling node visibly.
+          return NextResponse.json(
+            { error: appended.error, reason: appended.reason },
+            { status: 409 },
+          );
+        }
+        return NextResponse.json({
+          artifactId: appended.artifactId,
+          representationRevisionId: appended.representationRevisionId,
+          revision: appended.revision,
+          deduped: appended.deduped,
+        });
+      }
       const outcome = await materializeToolArtifact({
         runId: run.id,
         orgId: run.orgId,
@@ -441,7 +487,7 @@ export async function POST(req: Request): Promise<Response> {
         nodeId: shaped.nodeId,
         extension: shaped.extension,
         objectTypeId: shaped.objectTypeId,
-        title: shaped.title,
+        title: shaped.title ?? "",
         mime: shaped.declaredMime,
         content: shaped.content,
       });
@@ -455,6 +501,23 @@ export async function POST(req: Request): Promise<Response> {
         representationRevisionId: outcome.representationRevisionId,
         deduped: outcome.deduped,
       };
+    } else if (RUN_FOLDER_TOOLS.has(tool)) {
+      // cinatra#3030 (epic #3023 W6, item 0.21). The scope is the run PROVEN
+      // above, so `write`, `list` and `read` reach exactly one folder — the
+      // run's own `outputs` — and the folder itself refuses a path that leaves
+      // it or a link that points out of it. Dynamic import keeps the host's
+      // artifact stack out of this route's static module graph (the same posture
+      // artifact_materialize takes).
+      const { dispatchRunFolderTool } = await import("@/lib/run-folder-tools");
+      const outcome = await dispatchRunFolderTool({
+        tool,
+        input: input as Record<string, unknown>,
+        run: { id: run.id, orgId: run.orgId },
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+      }
+      result = outcome.result;
     } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
       // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
       // bindBridgeRunId above — its template package and the version the run is

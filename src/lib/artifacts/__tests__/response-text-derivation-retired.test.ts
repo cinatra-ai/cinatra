@@ -41,9 +41,13 @@ describe("the response-text derivation retires", () => {
 
   it("the terminal capture no longer captures the final response text", () => {
     const src = read(CAPTURE);
-    // The capture's payload is the item family, not `finalText`.
+    // The capture's payload is the item family, not `finalText`. cinatra#3030
+    // (item 0.22) added the FILE half of that family, so the captured list is
+    // the two halves together — still the family, never the response text.
     expect(src).toContain("selectEndNodeOutputPickupItems");
-    expect(src).toContain("items: defaultRoadSelection.items");
+    expect(src).toContain("selectRunFilePickupItems");
+    expect(src).toContain("items: pickupItems");
+    expect(src).toContain("[...defaultRoadSelection.items, ...runFileItems]");
     expect(src).not.toMatch(/content:\s*finalText/);
     expect(src).not.toMatch(/contentIsJson:\s*finalOutputIsJson/);
   });

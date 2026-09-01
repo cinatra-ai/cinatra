@@ -228,7 +228,7 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   -- contract's mint (enabler 0.13 of PLAN: Agents Lifecycle (C),
   -- cinatra#3028); the operator-upgrade twin of this widen is core__0099.
   emitter                    text NOT NULL
-                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint')),
+                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint','artifact_revision_append')),
   producer_run_id            text,
   producer_agent_id          text,
   origin_kind                text NOT NULL CHECK (origin_kind IN ('agent_produced','user_provided','intermediate')),
@@ -1158,5 +1158,28 @@ export function materializationLedgerSchemaQueries(
   model_rung_enabled boolean NOT NULL DEFAULT true,
   updated_at         timestamptz NOT NULL DEFAULT now()
 )` },
+    // ---- artifact_revision_review_satisfaction (cinatra#3030, epic #3023 W6)
+    //
+    // Item 0.30: "the caller's own declared gate is recorded as the review of
+    // those revisions, and the produced-output road, when it fires, resolves to
+    // that gate instead of opening a second — a satisfaction rule keyed on the
+    // artifact revision and the run, new machinery this item names."
+    //
+    // ONE REVISION NAMES EXACTLY ONE SATISFYING GATE — "one review per artifact,
+    // one reference per gate" (section 6 and item 0.9): the key is the
+    // organisation, the artifact and the revision, so a second gate cannot be
+    // recorded against a revision that already names one. Nothing is
+    // backfilled: a revision written before this table names no gate, which
+    // reads correctly as "the produced-output road decides on its own".
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_revision_review_satisfaction" (
+  org_id                     text NOT NULL,
+  artifact_id                text NOT NULL,
+  representation_revision_id text NOT NULL,
+  run_id                     text NOT NULL,
+  review_task_id             text NOT NULL,
+  created_at                 timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, artifact_id, representation_revision_id)
+)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_revision_review_satisfaction_run_idx ON "${q}"."artifact_revision_review_satisfaction" (org_id, run_id)` },
   ];
 }

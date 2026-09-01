@@ -481,6 +481,141 @@ async function settleAlreadyLinkedEvent(row: ProducedEventRow): Promise<void> {
 // The per-event orchestration (idempotent).
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// THE SATISFACTION RULE (cinatra#3030, epic #3023 W6; plan (C) item 0.30).
+//
+//   "The append's produced event carries the live-generator origin, which the
+//    review policy maps to intermediate and skips by default; because an
+//    organisation-required review or a per-run elevation can still fire it, the
+//    caller's own declared gate is recorded as the review of those revisions,
+//    and the produced-output road, when it fires, resolves to that gate instead
+//    of opening a second — a satisfaction rule keyed on the artifact revision
+//    and the run."
+//
+// The WRITE side is the mid-run append itself, which records (organisation,
+// artifact, revision) -> (run, review task) inside its own transaction. This is
+// the READ side: when the produced-output road fires for such a revision it
+// LINKS the event to the gate that run declared and opens no second gate — "one
+// review per artifact, one reference per gate: a satisfied gate never carries a
+// second target", so the gate is linked, never re-targeted.
+//
+// The table is declared as a LOCAL ref rather than imported from the host, for
+// the same reason every other cross-boundary read in this module is: no host
+// module may enter this package.
+// ---------------------------------------------------------------------------
+const revisionGateSatisfactionRef = appSchema.table("artifact_revision_review_satisfaction", {
+  orgId: text("org_id").notNull(),
+  artifactId: text("artifact_id").notNull(),
+  representationRevisionId: text("representation_revision_id").notNull(),
+  runId: text("run_id").notNull(),
+  reviewTaskId: text("review_task_id").notNull(),
+});
+
+/**
+ * The gate the revision's own append declared — resolved and VALIDATED.
+ *
+ * Three answers, and the middle one is the load-bearing one:
+ *
+ *   `none`      — no satisfaction row: this revision gates normally.
+ *   `unemitted` — a row whose gate has not been emitted yet. The event is left
+ *                 PENDING (never marked processed), exactly as the repair seam's
+ *                 `awaiting-response` leaves one: a declared gate that is not
+ *                 there yet must never cause a SECOND gate to open, and must
+ *                 never silently drop the revision either. A later sweep
+ *                 re-plans it and converges.
+ *   `gate`      — the declared gate, and only when it belongs to the SAME
+ *                 organisation. The review task id is caller-supplied at the
+ *                 append, so it is never trusted on its own: the lookup is
+ *                 pinned to the RUN the append recorded (the gate store's unique
+ *                 index is exactly (run, task)), so a caller can only ever name
+ *                 a gate of its own run, and a gate outside the event's
+ *                 organisation is refused loudly rather than honoured.
+ */
+export type DeclaredRevisionGate =
+  | { kind: "none" }
+  | { kind: "unemitted" }
+  | { kind: "gate"; gateId: string };
+
+export async function resolveDeclaredRevisionGate(row: ProducedEventRow): Promise<DeclaredRevisionGate> {
+  let satisfaction: { runId: string; reviewTaskId: string } | undefined;
+  try {
+    const rows = await db
+      .select({
+        runId: revisionGateSatisfactionRef.runId,
+        reviewTaskId: revisionGateSatisfactionRef.reviewTaskId,
+      })
+      .from(revisionGateSatisfactionRef)
+      .where(
+        and(
+          eq(revisionGateSatisfactionRef.orgId, row.orgId),
+          eq(revisionGateSatisfactionRef.artifactId, row.artifactId),
+          eq(revisionGateSatisfactionRef.representationRevisionId, row.representationRevisionId),
+        ),
+      )
+      .limit(1);
+    satisfaction = rows[0];
+  } catch (err) {
+    // The table arrives with core__0101. A deployment carrying this code and not
+    // yet that migration has NO declared gates, which is exactly "none" — never
+    // a failed sweep.
+    if ((err as { code?: string } | null)?.code === "42P01") return { kind: "none" };
+    throw err;
+  }
+  if (!satisfaction) return { kind: "none" };
+
+  const gates = await db
+    .select({ id: artifactReviewGates.id, orgId: artifactReviewGates.orgId })
+    .from(artifactReviewGates)
+    .where(
+      and(
+        eq(artifactReviewGates.runId, satisfaction.runId),
+        eq(artifactReviewGates.reviewTaskId, satisfaction.reviewTaskId),
+      ),
+    )
+    .limit(1);
+  const gate = gates[0];
+  if (!gate) return { kind: "unemitted" };
+  if (gate.orgId !== row.orgId) {
+    console.error(
+      `[lifecycle-review-orchestration] declared review gate ${gate.id} is not in organisation ` +
+        `${row.orgId} — refusing to satisfy revision ${row.representationRevisionId} with it`,
+    );
+    return { kind: "none" };
+  }
+  return { kind: "gate", gateId: gate.id };
+}
+
+/**
+ * Settle one event against the gate its append declared: park a checkpointed
+ * producing run on THAT gate, link the event to it, mark it processed. The same
+ * three effects the create-gate road applies, minus the emit — which is the
+ * whole point of the rule.
+ */
+async function settleAgainstDeclaredGate(
+  row: ProducedEventRow,
+  plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }>,
+  gateId: string,
+): Promise<void> {
+  if (plan.continuationMode === "checkpointed" && plan.park) {
+    await maybeParkCheckpoint(plan.park, {
+      runId: row.producerRunId ?? orphanRunId(row.eventId),
+      eventId: row.eventId,
+      policyDecisionId: gateId,
+    });
+  }
+  await db
+    .update(artifactProducedOutbox)
+    .set({ continuationAddress: gateId })
+    .where(
+      and(
+        eq(artifactProducedOutbox.eventId, row.eventId),
+        isNull(artifactProducedOutbox.continuationAddress),
+      ),
+    );
+  await markProducedEventProcessed(row.eventId);
+}
+
 export type OrchestrateOutcome =
   | "gate-created"
   | "no-gate"
@@ -655,6 +790,22 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
 
   if (plan.action === "no-gate") {
     await markProducedEventProcessed(row.eventId);
+    return "no-gate";
+  }
+
+  // item 0.30 — THE SATISFACTION RULE. A revision an in-run append wrote and
+  // declared a gate for is reviewed BY THAT GATE; the road resolves to it and
+  // opens no second one. Asked AFTER the plan fired, because a plan that says
+  // no-gate needs no satisfying and must not be given one.
+  const declared = await resolveDeclaredRevisionGate(row);
+  if (declared.kind === "unemitted") {
+    // Left PENDING on purpose (see resolveDeclaredRevisionGate).
+    return "no-gate";
+  }
+  if (declared.kind === "gate") {
+    await settleAgainstDeclaredGate(row, plan, declared.gateId);
+    // No gate was CREATED — the declared one governs — so the sweep counts this
+    // where it belongs: not as a new gate.
     return "no-gate";
   }
 
@@ -1096,6 +1247,17 @@ async function orchestrateProducedBatch(
     const plan = planReviewForEvent(toAxes(row), context.ctx);
     if (plan.action === "no-gate") {
       await markProducedEventProcessed(row.eventId);
+      summary.noGate += 1;
+      continue;
+    }
+    // item 0.30 — the same satisfaction rule on the BATCH road: a member whose
+    // own append declared its gate is settled against that gate and is never
+    // sealed into a partition gate (which would be the second gate the item
+    // forbids, with this revision as its target).
+    const declaredForMember = await resolveDeclaredRevisionGate(row);
+    if (declaredForMember.kind === "unemitted") continue; // left PENDING
+    if (declaredForMember.kind === "gate") {
+      await settleAgainstDeclaredGate(row, plan, declaredForMember.gateId);
       summary.noGate += 1;
       continue;
     }

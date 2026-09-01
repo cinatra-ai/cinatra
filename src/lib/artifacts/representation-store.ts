@@ -153,3 +153,100 @@ export function listArtifactsForResource(orgId: string, resourceId: string): str
   });
   return ((r?.[0]?.rows ?? []) as Row[]).map((x) => String(x.artifact_id));
 }
+
+// ---------------------------------------------------------------------------
+// THE COMPARE-AND-SET APPEND (cinatra#3030, epic #3023 W6; plan (C) item 0.30,
+// technical notes §8.3).
+//
+//   §8.3: "the caller names the revision it read, and the append inserts the
+//   next number under the unique index on organisation, artifact and revision
+//   that the append-only `representation` table already carries — a save that
+//   names a base another save has already built on fails on that index, which is
+//   the compare-and-set; the append is one transaction with its ledger row and
+//   produced event."
+//
+// So the primitive is NOT a new lock and NOT a new column: it is the existing
+// `representation_artifact_rev_idx` (UNIQUE on org, artifact, revision) plus a
+// revision that is DERIVED FROM THE NAMED BASE rather than from MAX+1.
+// `appendRepresentation` above allocates MAX+1 under an advisory lock, which is
+// the right primitive for a writer that has no base to name; a mid-run write
+// DOES name one, and taking MAX+1 there would silently build on somebody else's
+// revision — exactly the lost update the item forbids.
+//
+// TWO REFUSALS, TWO DISTINCT DATABASE ERRORS, no string sniffing of the happy
+// path:
+//   - the named base is not a revision of that artifact ⇒ the scalar subquery
+//     yields NULL ⇒ `revision` (NOT NULL) is violated ⇒ 23502;
+//   - the next revision is already taken ⇒ the unique index is violated ⇒ 23505.
+// Both abort the transaction they ride in, so a refused append leaves no ledger
+// row and no produced event behind.
+//
+// Returned as QUERIES rather than executed here: the append is "one transaction
+// with its ledger row and produced event", and only the caller knows what else
+// rides in it. `@/lib/artifacts/artifact-revision-append` composes them; W2's
+// editor reuses this same builder rather than writing a second one.
+// ---------------------------------------------------------------------------
+
+/** The compare-and-set append, as queries for the caller's own transaction. */
+export function buildRepresentationAppendWithBaseQueries(input: {
+  /** The app schema, UNESCAPED (this builder quotes it). */
+  schema: string;
+  newRepresentationRevisionId: string;
+  orgId: string;
+  artifactId: string;
+  resourceId: string;
+  form: RepresentationForm;
+  /** The revision the caller READ — the compare half of the compare-and-set. */
+  baseRepresentationRevisionId: string;
+  createdBy: string | null;
+  createdByRunId: string | null;
+}): Array<{ text: string; values: unknown[] }> {
+  const s = input.schema.replaceAll('"', '""');
+  return [
+    {
+      text: `INSERT INTO "${s}"."representation"
+  (id, org_id, artifact_id, resource_id, revision, form, created_by, created_by_run_id)
+VALUES ($1::text, $2::text, $3::text, $4::text,
+  (SELECT base.revision + 1 FROM "${s}"."representation" base
+    WHERE base.id = $8::text AND base.org_id = $2::text AND base.artifact_id = $3::text),
+  $5::text, $6::text, $7::text)`,
+      values: [
+        input.newRepresentationRevisionId,
+        input.orgId,
+        input.artifactId,
+        input.resourceId,
+        input.form,
+        input.createdBy,
+        input.createdByRunId,
+        input.baseRepresentationRevisionId,
+      ],
+    },
+  ];
+}
+
+function errorCode(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : null;
+}
+
+/** The named base is not a revision of that artifact in this organisation: the
+ *  derived revision was NULL and the NOT NULL column refused it. */
+export function isUnknownRepresentationBase(err: unknown): boolean {
+  if (errorCode(err) === "23502") return true;
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return message.includes('null value in column "revision"');
+}
+
+/** Another save has already built on the named base: the next revision is taken
+ *  and the unique index refused the append. THIS IS THE COMPARE-AND-SET. */
+export function isStaleRepresentationBase(err: unknown): boolean {
+  if (errorCode(err) === "23505") {
+    const constraint = (err as { constraint?: unknown }).constraint;
+    if (typeof constraint === "string") {
+      return constraint.includes("representation_artifact_rev_idx");
+    }
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return message.includes("representation_artifact_rev_idx");
+}

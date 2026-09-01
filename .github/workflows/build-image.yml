@@ -3495,6 +3495,16 @@ jobs:
         shell: bash
         run: pnpm test:default-road
 
+      # cinatra#3030 (epic #3023 W6). The run folder, the file pickup, the
+      # fan-out and the mid-run revision: four claims about what Postgres and a
+      # real disk AGREE happened, which a stubbed store would confirm whatever
+      # the code said. Same harness and same convention as the tiers above, so
+      # it cannot join the class of root tiers that run nowhere.
+      - name: The run folder and the mid-run revision — real-DB tier (cinatra#3030, epic #3023 W6)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:run-folder
+
       # cinatra#3031 (epic #3023 W7). Same reasoning as the four tiers above,
       # and the same harness: this tier's three suites need the postgres:18 this
       # job already runs, because everything W7 claims is a claim about what the
