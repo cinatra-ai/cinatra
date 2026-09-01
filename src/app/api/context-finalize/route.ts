@@ -108,6 +108,9 @@ export async function POST(req: Request): Promise<Response> {
       parentPackageName: ctx.trustedPackageName,
       candidates,
       slotMinItems: typeof slot.minItems === "number" ? slot.minItems : 0,
+      // The slot's own declared mode, so an inherited EMPTY answer records the
+      // provenance it actually had rather than asserting a person.
+      declaredSelectionMode: slot.selectionMode,
     });
     const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
     if (body.selectionMode !== selectionMode) {

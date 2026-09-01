@@ -110,6 +110,7 @@ function inheritedFor(input: {
   slotId?: string;
   parentPackageName?: string;
   slotMinItems?: number;
+  declaredSelectionMode?: "interactive" | "autonomous";
 }) {
   return inheritance.resolveInheritedContextSelection({
     run: input.run,
@@ -117,6 +118,7 @@ function inheritedFor(input: {
     parentPackageName: input.parentPackageName ?? PACKAGE,
     candidates: input.candidates,
     slotMinItems: input.slotMinItems ?? 1,
+    declaredSelectionMode: input.declaredSelectionMode ?? "interactive",
   });
 }
 
@@ -450,6 +452,35 @@ describe.skipIf(!HAS_DB)(
       expect(
         inheritedFor({ run: repairRun(byAResolver), candidates: [machinesPick] })!.selectedBy,
       ).toBe("autonomous");
+    });
+
+    it("reads the EMPTY answer's provenance off the road the producing run ran, not off an assertion", async () => {
+      // No row exists for an empty answer, so nothing can travel verbatim. The
+      // producing run ran this slot on its DECLARED road, and that road is who
+      // gave the empty answer.
+      const producedNothingOnAScreen = `run-empty-interactive-${Date.now()}`;
+      expect(
+        inheritedFor({
+          run: repairRun(producedNothingOnAScreen),
+          candidates: [],
+          slotMinItems: 0,
+          declaredSelectionMode: "interactive",
+        }),
+      ).toEqual({ refs: [], selectedBy: "user" });
+    });
+
+    it("never puts a person's name on an empty answer an AUTONOMOUS slot gave", async () => {
+      const producedNothingByResolver = `run-empty-autonomous-${Date.now()}`;
+      const answer = inheritedFor({
+        run: repairRun(producedNothingByResolver),
+        candidates: [],
+        slotMinItems: 0,
+        declaredSelectionMode: "autonomous",
+      });
+      expect(answer).toEqual({ refs: [], selectedBy: "autonomous" });
+      // The doctrine this guards: the audit row the repair writes must not
+      // claim a human pick for a pick no human made.
+      expect(answer!.selectedBy).not.toBe("user");
     });
   },
 );

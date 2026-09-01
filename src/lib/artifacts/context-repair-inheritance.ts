@@ -71,6 +71,25 @@ import { refTripleKey, type ContextCandidate } from "./context-route-support";
 // The fail-closed side is still there and still real: a delivered request that
 // names no base target at all inherits nothing, and so does a slot that
 // REQUIRES items. Only a slot that admits emptiness is ever answered with it.
+//
+// AND THE EMPTY ANSWER CARRIES ITS OWN TRUTHFUL PROVENANCE. Every other
+// inherited answer copies `selected_by` verbatim off the producing run's row;
+// an empty answer HAS no row, so there is nothing to copy, and writing `user`
+// regardless would assert a person for a pick that may have been a resolver's.
+// It is read instead from the mode the producing run ran the slot in, which is
+// server-read from the trusted slot beside `minItems`: a person passing an
+// empty INTERACTIVE screen is `user`, an AUTONOMOUS slot that resolved to
+// nothing is `autonomous`.
+//
+// RESIDUAL, NAMED RATHER THAN HIDDEN. The base-revision reading proves the
+// delivery names a revision, and the drain writes that revision from the
+// repair row's own `base_representation_revision_id`; it does NOT re-prove
+// that the run in `parent_run_id` is the run that FILED it. The durable
+// linkage exists (`artifact_produced_outbox` is unique per artifact+revision
+// and carries `producer_run_id`) and reading it here would close the gap, but
+// that read is a NEW gate on the very decision that parked the measured
+// repair, so it is not added blind: it is owed the same live press-to-
+// successor measurement as the fix itself.
 // ---------------------------------------------------------------------------
 
 /** The `source_type` the dispatch drain mints a repair run under. */
@@ -170,8 +189,22 @@ export function resolveInheritedContextSelection(input: {
   /** The trusted slot's `minItems`. A slot that admits an empty selection can
    *  have been answered with nothing, which writes no audit row. */
   slotMinItems: number;
+  /** The slot's OWN declared mode, server-read from the trusted slot exactly
+   *  as `slotMinItems` is. An answer of nothing leaves NO row behind, so there
+   *  is no row for provenance to travel verbatim from; the honest reading is
+   *  the mode the producing run ran this slot in, because that is who gave the
+   *  empty answer — a person passing an empty interactive screen, or a
+   *  resolver that found nothing on the slot's own autonomous road. */
+  declaredSelectionMode: "interactive" | "autonomous";
 }): InheritedContextAnswer | null {
-  const { run, slotId, parentPackageName, candidates, slotMinItems } = input;
+  const {
+    run,
+    slotId,
+    parentPackageName,
+    candidates,
+    slotMinItems,
+    declaredSelectionMode,
+  } = input;
   if (!run.orgId) return null;
   const producingRunId = producingRunOfRepair(run);
   if (!producingRunId) return null;
@@ -198,7 +231,16 @@ export function resolveInheritedContextSelection(input: {
     const ranTheContextFlow =
       auditedForRun.length > 0 || deliveredRepairBaseRevisionId(run) !== null;
     if (slotMinItems === 0 && ranTheContextFlow) {
-      return { refs: [], selectedBy: "user" };
+      // PROVENANCE IS READ, NEVER ASSERTED — an empty answer included. There
+      // is no row here to copy it from, so it is taken from the road the
+      // producing run actually ran this slot on: an interactive slot's empty
+      // answer is a person's (they were shown the screen and passed it), an
+      // autonomous slot's is the resolver's. Claiming `user` for the second
+      // would put a person's name on a pick no person made.
+      return {
+        refs: [],
+        selectedBy: declaredSelectionMode === "interactive" ? "user" : "autonomous",
+      };
     }
     return null;
   }
