@@ -13,8 +13,13 @@
 //   2. "1px line border" — the primitive drew a 1px box-shadow RING at
 //      foreground/10, so its computed border-width was 0 and consumers that
 //      passed a `border-*` colour got no stroke at all;
-//   3. "10–12px radius" — the primitive drew rounded-xl, which this palette
-//      resolves to 14px.
+//
+// Its "10-12px radius" clause was graded too and PASSES unchanged: under the
+// palette the app actually runs, the card's corner computes to 12px, the top of
+// the band. The assertion below is therefore a guard, not a fix — it pins that
+// the card and the parts that round with it keep ONE corner token, so a change
+// to the card's corner cannot leave its header, footer or images behind. The
+// band itself is measured in the browser, where a token can be read.
 //
 // jsdom applies no stylesheet, so this asserts the class contract each clause
 // produces; the computed background, border width and corner radius are
@@ -80,15 +85,22 @@ describe("Card — components drawing, Card section", () => {
     ).toEqual([]);
   });
 
-  it("keeps every corner inside the drawing's 10-12px band", () => {
-    // --radius is 0.625rem here, so rounded-lg is the 10px the section's own
-    // example draws; rounded-xl (radius + 4px) is 14px and outside the band.
+  it("rounds the card and every part that rounds with it on one corner token", () => {
     const { el, container } = renderCard();
-    expect(Array.from(el.classList)).toContain("rounded-lg");
-    expect(el.className).not.toContain("rounded-xl");
+    const corner = Array.from(el.classList).find((c) => /^rounded-/.test(c));
+    expect(corner, "the card must carry exactly one corner token").toBeDefined();
+    const step = corner!.replace(/^rounded-/, "");
     for (const slot of ["card-header", "card-footer"]) {
       const part = container.querySelector(`[data-slot="${slot}"]`);
-      expect(part?.className ?? "").not.toContain("-xl");
+      const parts = Array.from(part?.classList ?? []).filter((c) =>
+        /^rounded-[tb]-/.test(c),
+      );
+      for (const p of parts) {
+        expect(
+          p.replace(/^rounded-[tb]-/, ""),
+          `${slot} rounds on ${p} while the card rounds on ${corner}`,
+        ).toBe(step);
+      }
     }
   });
 });

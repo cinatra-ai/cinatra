@@ -32,7 +32,12 @@ const SURFACE_STRONG = "rgb(255, 255, 255)";
 const INDIGO = "rgb(54, 78, 129)";
 /** "1px line border" — --line, rgba(21,33,58,0.14) over the card's ground. */
 const CARD_BORDER_WIDTH = "1px";
-/** "10–12px radius" — the section's own example draws 10px. */
+/**
+ * "10–12px radius". Measured, not assumed: under the palette the app actually
+ * runs this computes to 12px, the top of the band. This clause was already
+ * conforming and the primitive's corner is unchanged — the band is pinned here
+ * so a later change to the corner token cannot drift out of it unnoticed.
+ */
 const CARD_RADIUS_BAND: [number, number] = [10, 12];
 
 async function styles(target: Locator, props: string[]) {
@@ -187,8 +192,15 @@ test.describe("Button — the drawing's seven variants", () => {
     );
     const drawn = await styles(destructive, ["background-color", "color"]);
     // The ground is a TINT: it carries an alpha, so it composites over the page
-    // rather than painting a solid block of the label's own colour.
-    expect(drawn["background-color"]).toMatch(/^rgba\(/);
-    expect(drawn["background-color"]).not.toBe(drawn["color"]);
+    // rather than painting a solid block of the label's own colour. The colour
+    // space the browser serialises it in is not the claim — a tint reads as
+    // `rgba(...)` or as a `.../ 0.1` alpha on a wide-gamut colour — so the
+    // assertion is on the alpha, not on the notation.
+    const ground = drawn["background-color"]!;
+    expect(
+      /^rgba\(/.test(ground) || /\/\s*(0?\.\d+|0)\s*\)$/.test(ground),
+      `destructive must draw a tint that composites; measured ${ground}`,
+    ).toBe(true);
+    expect(ground).not.toBe(drawn["color"]);
   });
 });
