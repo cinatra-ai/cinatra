@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { PrimitiveChromeFixtures } from "./primitive-chrome-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -122,6 +123,17 @@ export default function ConformanceHarnessPage() {
                 </Button>
               ))}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Shared-primitive chrome (surface: primitive-chrome)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PrimitiveChromeFixtures />
           </CardContent>
         </Card>
 

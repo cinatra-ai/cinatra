@@ -15,6 +15,15 @@ const buttonVariants = cva(
         // `border-transparent` + variant overrides chain below.
         default:
           "border-line-strong bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        // The components drawing's Button section names SEVEN variants —
+        // "Primary, default, outline, secondary, destructive, ghost, link" —
+        // and pins the indigo fill to the first word ("Indigo primary").
+        // `default` already DREW that fill, but `primary` had no spelling in
+        // this recipe, so a call site could not ask for it by the drawing's own
+        // name. It is the same recipe as `default`, named: nothing that asks
+        // for `default` changes.
+        primary:
+          "border-line-strong bg-primary text-primary-foreground [a]:hover:bg-primary/80",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
         secondary:
