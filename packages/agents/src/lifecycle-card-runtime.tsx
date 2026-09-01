@@ -988,7 +988,38 @@ const SLOT_READ_TIMEOUT_MS = 8000;
 const PARK_READ_LIMIT = 360;
 const PARK_READ_FAILURE_LIMIT = 5;
 
-function slotReadDelay(reads: number): number {
+/**
+ * AND THE FAILURE BELT BOUNDS THE DRAWING, NEVER THE READING (cinatra#3007,
+ * fix leg 9).
+ *
+ * Leg 7 made exactly this correction to the CEILING and gave the reason in the
+ * effect below: "Stopping the READER as well does not improve the drawing by one
+ * pixel, and it costs the only thing that can still put the review on the
+ * screen." Every word of it is true of the failure belt too, and the belt was
+ * left as it was.
+ *
+ * What that cost looked like, measured on the eighth graded reading: NO untouched
+ * surface of one run swapped its review card in across 315 s, while another
+ * run's conversations swapped at 14 s — never-or-late PER RUN rather than per
+ * surface, which is the signature of a bound that is spent on the run's own
+ * transport rather than on anything the surface did. Five consecutive failed
+ * looks inside a park that lasts ten to eighteen minutes ended that run's only
+ * reading for the life of every tab watching it, and the one way back is a
+ * caller signal one caller cannot always supply and the other supplies not at
+ * all.
+ *
+ * So the belt keeps its whole job — `stillReading` and `mayStillOpen` below
+ * still fall the moment it trips, so the surface stops holding a wordless
+ * spinner and falls back to the run's own rendering — and the reader goes on
+ * asking BEHIND that drawing, at a spacing wide enough that a dead transport
+ * costs two looks a minute rather than six. One answer clears the count and the
+ * ordinary cadence returns with it, so a transport that comes back brings the
+ * card with it in place, with nothing pressed.
+ */
+const PARK_READ_RECOVERY_SPACING_MS = 30_000;
+
+function slotReadDelay(reads: number, failures = 0): number {
+  if (failures >= PARK_READ_FAILURE_LIMIT) return PARK_READ_RECOVERY_SPACING_MS;
   if (reads < 5) return 2000;
   if (reads < 15) return 5000;
   return 10_000;
@@ -1317,6 +1348,26 @@ export function useRunReviewSlot({
   // WITH a slot has been told a review is expected here and holds through a few
   // transport failures, while a mount that arrived with nothing holds for its
   // one immediate first look and no longer.
+  // AND THE HOLD UNDER `completed` IS LEFT EXACTLY AS IT SHIPPED (cinatra#3007,
+  // fix leg 9). It was narrowed here to mounts whose seed actually NAMED a
+  // review, on the reading that this five-look hold is what keeps the
+  // placeholder's arc turning on a run whose row already reads completed. Two
+  // properties this reader is under say otherwise, and both are measured.
+  //
+  // It is this hold that keeps a page which was ALREADY OPEN when its run parked
+  // drawing the quiet box for the few looks it needs to learn the park — the
+  // seed of such a page names no review, because there was none when it was
+  // served — so narrowing it put the run's own arm back on exactly the standing
+  // page the eighth graded reading asked about. It is also what keeps the reader
+  // LOOKING through a transport that is failing, which is the one way a late
+  // card still arrives at all.
+  //
+  // THE ARC WAS NEVER THIS READING'S TO STOP. `mayStillOpen` answers whether the
+  // box may still be HELD; whether the box still claims to be waiting is
+  // answered where the box is DRAWN, from the facts that surface holds in hand.
+  // That is where the spinner is corrected — see the `settled` reading at the
+  // placeholder's call site — and correcting it there costs neither property
+  // above.
   const unheardUnderThisStatus =
     !probe.answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1);
   // AND THE WAITING STATUS HOLDS ONLY ITS FIRST LOOK, whatever the mount was
@@ -1433,7 +1484,11 @@ export function useRunReviewSlot({
     // seconds until it leaves the status. That is the cadence the surface
     // mounting this reader is already polling the same run on, so it is not a
     // new class of load, and the run LEAVING the status still ends it.
-    if (parkedStatus && probe.failures >= PARK_READ_FAILURE_LIMIT) return;
+    // AND THE BELT DOES NOT RETURN HERE (fix leg 9). It used to, and that is the
+    // defect the eighth graded reading measured as a whole run whose every surface
+    // stayed silent. See `PARK_READ_RECOVERY_SPACING_MS`: past the belt the
+    // reading continues at the recovery spacing, and the DRAWING still falls
+    // back, which is the whole of what the belt was written for.
     // ONE LOOK AT A TIME, AND THE ONE ALREADY ASKING IS THE ONE THAT COUNTS
     // (convergence over fix leg 8). See `inFlightRef` above. This effect is
     // rebuilt on every liveness bump; a rebuild must not schedule a second read
@@ -1473,8 +1528,11 @@ export function useRunReviewSlot({
       // is answering; the park's third fact rides that transport's schedule
       // instead of the backed-off one. See `SLOT_LIVE_LOOK_SPACING_MS`.
       (liveSignal !== undefined && liveSignal !== lastLookSignalRef.current
-        ? Math.min(slotReadDelay(probe.reads), SLOT_LIVE_LOOK_SPACING_MS)
-        : slotReadDelay(probe.reads));
+        ? Math.min(
+            slotReadDelay(probe.reads, probe.failures),
+            SLOT_LIVE_LOOK_SPACING_MS,
+          )
+        : slotReadDelay(probe.reads, probe.failures));
     const timer = window.setTimeout(
       () => {
         void (async () => {
@@ -1502,13 +1560,53 @@ export function useRunReviewSlot({
               // is live and this reader is the one watching it — so it re-arms
               // the ceiling below without any caller having to say so.
               const last = lastAnswerRef.current;
-              changed =
-                next.ref !== last.ref ||
-                next.awaiting !== last.awaiting ||
-                next.producedReviewPark !== last.producedReviewPark;
-              lastAnswerRef.current = next;
-              setSlot(next);
-              landed = true;
+              // AND AN EMPTY ANSWER NEVER WITHDRAWS A POSITIVE ONE INSIDE ONE
+              // WAIT (cinatra#3007, fix leg 9).
+              //
+              // The route that answers this reader is FAIL-SOFT by design and
+              // says so in its own words: a slot read that throws is served as
+              // `{ ref: null, awaiting: false }` beside a row that is still
+              // parked, "which is exactly the seed this route served before the
+              // field existed". This reader wrote that straight over an answer
+              // it had already delivered, so one stumbled read took the review
+              // card off a thread nobody had touched and left it off until the
+              // next look landed — at the widened cadence, ten to eighteen
+              // seconds. The eighth graded reading counted it on pixels: after the
+              // card arrived it left and returned 59 times in one palette and 49
+              // in the other, over 885 s, on a page with zero navigations.
+              //
+              // A REGRESSION TO NOTHING IS NOT AN ANSWER ABOUT THE WAIT. Inside
+              // one wait it cannot be a true one either: the park is cleared by
+              // the release, and the release moves the run's status, which
+              // re-keys this reader in render and empties the slot there. So an
+              // empty answer over a positive one is counted as a read — the
+              // transport answered, the cadence and the belts move — and the
+              // answer the surface is drawing is left exactly where it was. The
+              // reader's own rule elsewhere is the same one, written for the
+              // same reason: never take a review off a screen somebody is
+              // reading.
+              const nextSaysNothing =
+                next.ref === null &&
+                next.awaiting !== true &&
+                next.producedReviewPark !== true;
+              const lastSaidSomething =
+                last.ref !== null ||
+                last.awaiting === true ||
+                last.producedReviewPark === true;
+              if (nextSaysNothing && lastSaidSomething) {
+                // The transport answered, so this is a landed look and the
+                // failure belt is cleared by it; it said nothing new, so the
+                // ceiling spends one.
+                landed = true;
+              } else {
+                changed =
+                  next.ref !== last.ref ||
+                  next.awaiting !== last.awaiting ||
+                  next.producedReviewPark !== last.producedReviewPark;
+                lastAnswerRef.current = next;
+                setSlot(next);
+                landed = true;
+              }
             }
           } catch {
             // Transport failure or the deadline: `landed` stays false, so this

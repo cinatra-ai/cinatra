@@ -211,10 +211,25 @@ describe("useRunReviewSlot: the park's own belts", () => {
     await letItLook(120_000);
     const afterTheFailures = looks.length;
     await letItLook(600_000);
+    // AND WHAT THE BELT BOUNDS IS THE DRAWING (cinatra#3007, fix leg 9). This
+    // case first required the READING to stop too, and the eighth graded reading
+    // measured what that costs: a run whose slot route stumbled five times
+    // inside a park never delivered its review to ANY of the four untouched
+    // surfaces watching it, across 315 s, while a run that did not stumble
+    // swapped in 14 s. Leg 7 made this same correction to the park's read
+    // ceiling and gave the reason in the reader: stopping the reader "does not
+    // improve the drawing by one pixel, and it costs the only thing that can
+    // still put the review on the screen". So the requirement is the LOAD, which
+    // is what the belt's own note is about — a dead transport is asked twice a
+    // minute rather than six times — and the drawing below is unchanged.
     expect(
       looks.length,
-      "a dead transport is still being asked every ten seconds",
-    ).toBe(afterTheFailures);
+      "a dead transport is being asked at the park's ordinary cadence",
+    ).toBeLessThanOrEqual(afterTheFailures + 600_000 / 30_000 + 1);
+    expect(
+      looks.length,
+      "the reader stopped asking, so a transport that comes back is never found",
+    ).toBeGreaterThan(afterTheFailures);
     expect(
       result.current.mayStillOpen,
       "the placeholder is held in front of a park nothing can confirm",

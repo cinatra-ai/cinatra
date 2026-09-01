@@ -75,6 +75,7 @@ import {
   applyJustSubmittedSuppression,
   mapInterruptToHitlContext,
   resolveRunSurfaceStatus,
+  runSurfaceKeepsPolling,
   resolveStreamFirst,
   runStatusBadgeLabel,
   statusBadgeVariant,
@@ -1378,8 +1379,16 @@ export function AgenticRunPanel({
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
   }, [runId, taskId, streamEnabled]);
 
+  // AND THE TICK FIRES WHILE THE RUN HAS NOT FINISHED BY EITHER READING
+  // (cinatra#3007, fix leg 9). See `runSurfaceKeepsPolling`: the two readings
+  // above are the SEED's, frozen for the life of this mount, and this tick is
+  // the only carrier of the row that the park's whole reading depends on.
+  const keepPolling = runSurfaceKeepsPolling({ pollStatus, status });
   useEffect(() => {
-    if (!isPollLive && !isPollPendingApproval) return;
+    if (!keepPolling) return;
+    // The cadence is EXACTLY the one this tick shipped with. Only the firing
+    // guard above is widened; a surface that was already ticking ticks no
+    // faster, so nothing here is a new class of load.
     const intervalMs = isPollLive ? 2000 : 5000;
     // NO leading tick on purpose. A run that is already paused when its surface
     // mounts is handed its gate as a seed (`initialHitlContext`), so the first
@@ -1390,7 +1399,7 @@ export function AgenticRunPanel({
       void refetchDerivedContext();
     }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [isPollLive, isPollPendingApproval, refetchDerivedContext]);
+  }, [keepPolling, isPollLive, refetchDerivedContext]);
 
   // The recovery state's explicit re-check. Runs the same refetch the tick
   // runs, and additionally DROPS the just-submitted suppression: that guard
@@ -2067,12 +2076,28 @@ export function AgenticRunPanel({
               // card. So the two readings are taken together: the run has left
               // every state this box waits in, AND nothing here may still bring
               // a card into it.
+              // AND IT IS THE FACTS IN HAND, NEVER A GUESS THAT HAS NOT
+              // EXPIRED YET (fix leg 9). `reviewMayStillOpen` is the reading
+              // that HOLDS this box up, and most of it is a guess with a budget
+              // on it - "this surface has not heard back yet under the current
+              // status". Spending that budget is the right way to decide whether
+              // to keep the box; it is the wrong way to decide whether the arc
+              // may still claim that something is being waited for, because the
+              // guess outlives the fact by however many looks are left in it.
+              // The eighth graded reading photographed the difference on three
+              // untouched surfaces at once: the run's own row read `completed`
+              // and the placeholder was still spinning with no settled reading
+              // on it. So the box may still stand while the arc stops: the run
+              // has left every state this box waits in, and nothing this surface
+              // HOLDS - an open review question in the outbox, a park on the row
+              // - says a review is still coming.
               settled={
                 status !== "queued" &&
                 status !== "running" &&
                 !isPendingApproval &&
-                !reviewMayStillOpen &&
-                !pausePlaceholder
+                !pausePlaceholder &&
+                !reviewSlot.awaiting &&
+                !parkedOnProducedReview
               }
             />
           )}

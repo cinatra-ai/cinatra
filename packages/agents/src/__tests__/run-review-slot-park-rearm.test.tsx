@@ -191,9 +191,12 @@ describe("useRunReviewSlot: a park outlives a hiccup in the transport", () => {
     ).toBe(false);
   });
 
-  it("leaves a caller that passes no evidence exactly as it was", async () => {
+  it("leaves a caller that passes no evidence with the drawing the belt gives it", async () => {
     // The control the freshness suite's dead-transport case is: a surface with
-    // nothing to offer keeps the terminal belt, unchanged.
+    // nothing to offer still falls back to the run's own rendering the moment
+    // the belt trips, and its reader drops to the recovery spacing behind that
+    // drawing rather than stopping dead (cinatra#3007, fix leg 9 — see the
+    // freshness suite's own case for the reading that changed and why).
     const looks: number[] = [];
     const read = async () => {
       looks.push(1);
@@ -207,7 +210,10 @@ describe("useRunReviewSlot: a park outlives a hiccup in the transport", () => {
     await letItLook(180_000);
     const afterTheBelt = looks.length;
     await letItLook(600_000);
-    expect(looks.length, "a dead transport is still being asked").toBe(afterTheBelt);
+    expect(
+      looks.length,
+      "a dead transport is being asked at the park's ordinary cadence",
+    ).toBeLessThanOrEqual(afterTheBelt + 600_000 / 30_000 + 1);
     expect(result.current.stillReading).toBe(false);
     expect(result.current.mayStillOpen).toBe(false);
   });

@@ -110,7 +110,13 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { runStatusBadgeLabel, statusBadgeVariant } from "./run-surface-status";
+import {
+  resolveRunSurfaceStatus,
+  runStatusBadgeLabel,
+  runStreamMayBeMute,
+  statusBadgeVariant,
+} from "./run-surface-status";
+import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -1659,7 +1665,36 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     enabled: streamEnabled,
     initialStatus,
   });
-  const status = stream.status;
+  // THE STATUS THIS PAGE DRAWS (cinatra#3007, fix leg 9).
+  //
+  // It was `stream.status`, raw. cinatra#3046 established why that is wrong for
+  // exactly one shape and wrote the rule that corrects it — a run parked on its
+  // produced output's review announces nothing, so the stream's last word stays
+  // `running` for the whole park — and gave the rule to the conversation's
+  // panel, which had a tick of its own to read the row with. This surface had
+  // none, so it kept the raw reading: it drew a working run through the whole of
+  // a park, and the ONE shared review-slot reader below never took a single
+  // look, because that reader looks only under `completed` or the parked status
+  // and this page reported neither. The eighth graded reading measured it as an
+  // absence with its own window: no run page swapped its review card in, in
+  // either run, across 899 s, while the page followed the run onto its next step.
+  //
+  // So the row is read for exactly the window in which the stream cannot speak,
+  // and the same pure resolver both surfaces already share decides when it may
+  // overrule. Nothing else about this panel's reading of the stream changes.
+  const streamedStatus = stream.status;
+  const { rowStatus, heardFromRun } = useRunRowWatch(runId, {
+    enabled: runStreamMayBeMute(streamEnabled, streamedStatus),
+  });
+  const status = resolveRunSurfaceStatus({
+    streamEnabled,
+    streamedStatus,
+    // This surface has no poll-derived status of its own: the stream IS its
+    // fallback, so `resolveStreamFirst` inside the resolver returns exactly the
+    // reading this line had before.
+    polledStatus: streamedStatus,
+    rowStatus,
+  });
   const interruptContext = stream.interruptContext;
   const runError = stream.error ?? _initialError;
 
@@ -1975,14 +2010,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     status,
     initial: initialReviewGate,
     read: slotReader,
-    // NO LIVENESS EVIDENCE IS PASSED HERE, and that is a statement rather than
-    // an omission (cinatra#3007, fix leg 6). The reader's re-arm takes a fact a
-    // surface already has: a read of this run, on this surface, that ANSWERED.
-    // This panel has none to offer — it is driven by a server-sent stream that
-    // is legitimately mute for the whole of a park, and a frame that never
-    // arrives is not evidence that the transport is alive. So this reader keeps
-    // the belt exactly as it shipped, and the panel that does have such a read
-    // (the agentic panel's own tick) passes it.
+    // AND NOW THERE IS LIVENESS EVIDENCE TO PASS (cinatra#3007, fix leg 9).
+    //
+    // Leg 6 stated the omission rather than leaving it silent: this panel had no
+    // read of its own to offer, because a frame that never arrives is not
+    // evidence that anything is alive. The row watch above is that read — a look
+    // at this run, on this surface, that ANSWERED — so the reader's failure belt
+    // gets the same way back here that the conversation's panel has always had.
+    liveSignal: heardFromRun,
+    // AND THE EDGE THE STATUS COLUMN CANNOT SHOW, on this surface too. The run
+    // shape this defect was measured on parks onto a row that is already in the
+    // waiting status, so the only edge is the step the person was answering
+    // going away — which on this page is the stream's own interrupt being
+    // retired by its RESUME. Reading it raw, exactly as the conversation's panel
+    // reads its own.
+    stepOnFile: effectiveInterruptContext !== null,
   });
 
   // IS THIS RUN HELD ON THE REVIEW OF WHAT IT PRODUCED (cinatra#3007, fix leg

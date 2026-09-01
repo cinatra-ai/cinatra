@@ -84,6 +84,72 @@ const RUN_STATUS_ROW_MAY_OVERRULE: ReadonlySet<string> = new Set([
   "stopped",
 ]);
 
+/**
+ * CAN THE STREAM STILL SAY WHAT THIS RUN IS DOING (cinatra#3007, fix leg 9)?
+ *
+ * The window in which the rule above matters, named so a surface can act on it
+ * rather than only resolve through it. While the stream's last word is one of
+ * the two it cannot leave on its own, a park is invisible to the stream and the
+ * ROW is the only thing that can say the run stopped — so a surface with no
+ * transport of its own has to open one for exactly this window and no longer.
+ */
+export function runStreamMayBeMute(
+  streamEnabled: boolean,
+  streamedStatus: string | null,
+): boolean {
+  return (
+    streamEnabled &&
+    streamedStatus !== null &&
+    RUN_STATUS_STREAM_CANNOT_LEAVE.has(streamedStatus)
+  );
+}
+
+/** The three statuses a run never leaves. */
+const RUN_STATUS_TERMINAL: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * SHOULD THIS SURFACE'S OWN TICK BE RUNNING (cinatra#3007, fix leg 9)?
+ *
+ * The panel's tick is the ONLY carrier of the run ROW on a first-party surface:
+ * it is what `resolveRunSurfaceStatus` above needs to overrule a mute stream,
+ * what records the park beside it, and what the shared review-slot reader takes
+ * as its evidence that this surface's transport answers at all. Whether it runs
+ * was decided by `pollStatus`, which is deliberately NOT written while the
+ * stream is enabled — so the answer was fixed once, by the status the run
+ * happened to be in when the surface was SERVED, and could never be revisited.
+ *
+ * A conversation card served while its run is `pending_input` (the status the
+ * chat's own insert creates a run in), or on its trigger step, therefore never
+ * ticked at all: its row was never read, the row could never overrule the mute
+ * stream, and the park the run reached minutes later was invisible on every
+ * surface served in that window — never, and for the whole RUN rather than for
+ * one surface, which is the shape the eighth graded reading measured.
+ *
+ * So the tick fires while EITHER reading says the run has not finished. It only
+ * ever widens: a surface whose seed said `running` keeps the tick it already had
+ * after the stream has moved on, which is the property the seed-frozen guard was
+ * written for.
+ */
+export function runSurfaceKeepsPolling({
+  pollStatus,
+  status,
+}: {
+  /** The seed-frozen poll status — this surface's original firing guard. */
+  pollStatus: string;
+  /** The status this surface currently draws, as resolved above. */
+  status: string;
+}): boolean {
+  const pollSaysLive =
+    pollStatus === "running" ||
+    pollStatus === "queued" ||
+    pollStatus === "pending_approval";
+  return pollSaysLive || !RUN_STATUS_TERMINAL.has(status);
+}
+
 export function resolveRunSurfaceStatus({
   streamEnabled,
   streamedStatus,
