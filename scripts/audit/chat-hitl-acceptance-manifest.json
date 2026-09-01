@@ -797,8 +797,8 @@
   "priorPins": [
    "design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html (until 2026-08-15)",
    "design@92c1be7c6f864dec6382a9ef01e7b2e1c38aa871 specs/app-lifecycle-cards.html (until 2026-08-22)",
-   "design@fe2182547d4a98125a0968824ffb0d45fb25a8e5 specs/app-lifecycle-cards.html (until 2026-08-26)",
-   "design@71398a49c1f8adfe6176ab0dda25486920fac958 specs/app-lifecycle-cards.html (until 2026-08-25)"
+   "design@71398a49c1f8adfe6176ab0dda25486920fac958 specs/app-lifecycle-cards.html (until 2026-08-25)",
+   "design@fe2182547d4a98125a0968824ffb0d45fb25a8e5 specs/app-lifecycle-cards.html (until 2026-08-26)"
   ],
   "movedOn": "2026-09-01",
   "why": "cinatra#3175. The pin above moved to the revision the drawings' main line stands at on 2026-09-01, adopting the three ratifications it had not adopted (design#136, design#138 and design#141). It could not move earlier for a mechanical reason rather than an editorial one: the resolution check refused two of the selector forms the anchor contract records \u2014 a class selector and a compound attribute predicate \u2014 so the adoption transaction rolled back before it could record what resolves at the new revision, and that refusal is repaired in the same pull request. The pin is an IMMUTABLE commit, never a moving head: a pin that follows the head proves nothing, because the document can change under a green claim.",

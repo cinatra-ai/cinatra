@@ -322,6 +322,20 @@ describe("the REAL manifest", () => {
     const trail = [m.specCommit, m.specCommitDrift.previousPin, ...m.specCommitDrift.priorPins];
     const commits = trail.map((entry) => entry.slice("design@".length, "design@".length + 40));
     expect(new Set(commits).size, trail.join("\n")).toBe(commits.length);
+    // The trail is a TRAIL: the entries stand in the order they stood in, oldest
+    // first, each labelled with the date it stopped standing. A membership check
+    // alone would pass a record that put a displaced pin in front of a pin it
+    // outlived, and a reader walking such a trail would read the moves in the
+    // wrong order.
+    const untilDates = m.specCommitDrift.priorPins.map((entry) => {
+      const match = /\(until (\d{4}-\d{2}-\d{2})\)$/.exec(entry);
+      expect(match, entry).not.toBeNull();
+      return match[1];
+    });
+    expect(untilDates, m.specCommitDrift.priorPins.join("\n")).toStrictEqual([...untilDates].sort());
+    // The pin this move displaced is the one that stood LAST, so it is the tail
+    // of the trail and not an insertion into the middle of it.
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
