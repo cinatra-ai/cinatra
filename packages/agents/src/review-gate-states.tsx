@@ -166,8 +166,12 @@ export function ReviewGateLoading() {
  * built from the piece the review screen is already built from: the same 30px
  * header tile the gate header draws its clipboard mark in. Keeping it here is
  * what makes the swap read as one card changing rather than two cards trading
- * places, and it is why the replacement needs no new geometry: the placeholder
- * and the screen that replaces it are the same box.
+ * places, and it is why the replacement needs no new geometry of its own: the
+ * placeholder and the screen that replaces it stand in the SAME BOX, the one
+ * the enclosing surface draws. They are not the same HEIGHT and nothing here
+ * claims they are -- no minimum-height contract exists on this slot, and a
+ * placeholder that reserved the finished screen's height would be reporting a
+ * result it does not have.
  *
  * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
  * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif

@@ -422,17 +422,25 @@ function AgentRunTurnSlot({
   // through the SAME registry every other view goes through and resolves its own
   // state, so a schedule that has fired draws the read-only rows with no floor
   // and one that has not draws whatever it honestly is. This states only WHERE.
-  const settledMomentViews = useMemo(
-    () =>
-      momentAnswered
-        ? views.filter(
-            (view) =>
-              view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE &&
-              !(view.viewType === momentKind && view.ref === momentRef),
-          )
-        : [],
-    [views, momentAnswered, momentKind, momentRef],
-  );
+  //
+  // ONE READING, ADDRESSED BY KIND AND NOT BY REFERENCE. A card reference is
+  // MINTED, not derived: every encoding draws a fresh initialisation vector, so
+  // the same run's same schedule has as many distinct references as the number
+  // of times it was minted, and a run that re-enters its moment mints another.
+  // Comparing the row's reference to the carried part's bytes therefore answers
+  // "is this the same MINTING", which is not the question - two mintings of one
+  // run's schedule would leave the older one standing beside the newer as a
+  // second card for one schedule. This container is already scoped to ONE run,
+  // and this kind's reference carries nothing but that run, so every carried
+  // schedule part in it is a reading of the SAME schedule: the question is only
+  // whether the row still names one, and the answer is one reading either way.
+  const settledMomentViews = useMemo(() => {
+    // The row still names this run's schedule: it is the run's CURRENT reading
+    // and the mount below draws it. Nothing settled to draw here.
+    if (!momentAnswered || momentKind === SPENT_MOMENT_CARD_VIEW_TYPE) return [];
+    const carried = views.find((view) => view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE);
+    return carried ? [carried] : [];
+  }, [views, momentAnswered, momentKind]);
 
   // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
   // slot. It also WAITS on a turn that carries the moment's card until the run
@@ -583,11 +591,16 @@ function AgentRunTurnSlot({
           of its own rather than sharing the run's - "the fired part keeps its
           own slot; a later run's screens take their own". See the selection
           above for which views reach this line and why none of them can be the
-          run's current reading. */}
+          run's current reading.
+
+          IT CARRIES NO SLOT MARK OF ITS OWN. The producing part's container
+          already carries `data-transcript-slot`, and the positional rule asks
+          which marked container a card is inside -- an answer that has to stay
+          single. A second mark with the same index nested inside the first
+          would give `closest` a container that names no run. */}
       {settledMomentViews.map((view) => (
         <div
           key={`settled-moment-${String(view.viewType)}-${String(view.ref)}`}
-          data-transcript-slot={slot}
           data-settled-moment-reading={String(view.ref)}
         >
           <RenderableViewCard data={view} {...(onApplyIntent ? { onApplyIntent } : {})} />
@@ -660,7 +673,7 @@ function AgentRunTurnSlot({
  * conversation's moment map does NOT join this rule by default; it joins when a
  * drawing sentence says what its closed moment reads as.
  */
-const SPENT_MOMENT_CARD_VIEW_TYPE = "trigger_schedule_proposal";
+export const SPENT_MOMENT_CARD_VIEW_TYPE = "trigger_schedule_proposal";
 
 /**
  * IS THIS PRODUCED VIEW A MOMENT'S CARD THIS COLUMN CAN ADDRESS (cinatra#3044)?
