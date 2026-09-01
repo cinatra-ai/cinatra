@@ -6,6 +6,7 @@
  * success). No React / DB — every seam is plain data.
  */
 import { REVIEW_FLOOR_ACTIONS } from "@/lib/artifacts/review-surface-model";
+import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { describe, expect, it } from "vitest";
 
 import type { ReviewTargetMount } from "@/lib/artifacts/artifact-review-preparation";
@@ -20,6 +21,10 @@ import {
   reviewDecideDisabledReason,
   reviewSettledCopy,
   reviewSettledWord,
+  reviewSettledAct,
+  reviewSettledActForOutcome,
+  REVIEW_SETTLED_ACT_STORAGE,
+  REVIEW_SETTLED_ACT_TITLE,
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
@@ -439,5 +444,59 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
     const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
     expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
+  });
+});
+
+describe("cinatra#3080 — the settled act, and the schema gap it is stored across", () => {
+  const ACTS = ["continued", "superseded", "rejected"] as const;
+
+  it("THE SCHEMA GAP IS REAL: the gate table admits no `superseded` disposition", () => {
+    // Regenerate's act is SUPERSEDED and the column cannot hold that word. This
+    // reads the shipped DDL rather than asserting a remembered fact, so the day
+    // a migration widens the constraint this test says so and the encoding table
+    // above is revisited instead of quietly lying.
+    const ddl = artifactReviewGateSchemaQueries("any_schema")
+      .map((query) => query.text)
+      .join("\n");
+    expect(ddl).toContain("disposition IN ('approve','reject','changes_requested')");
+    expect(ddl).not.toContain("superseded");
+    // …so the act SUPERSEDED is written as `changes_requested`, and that relation
+    // lives in exactly one place.
+    expect(REVIEW_SETTLED_ACT_STORAGE.superseded).toBe("changes_requested");
+  });
+
+  it("the stored disposition and the surface name the SAME act, in both directions", () => {
+    for (const act of ACTS) {
+      const stored = REVIEW_SETTLED_ACT_STORAGE[act];
+      expect(reviewSettledAct(stored)).toBe(act);
+      expect(reviewSettledWord(stored)).toBe(REVIEW_SETTLED_ACT_TITLE[act]);
+    }
+  });
+
+  it("the CARD and the RAIL cannot drift: one act, one word", () => {
+    // The card reads the wire outcome, the rail reads the stored column. Both
+    // resolve to the same act and read its one title.
+    const pairs: Array<[Parameters<typeof reviewSettledCopy>[0], (typeof ACTS)[number]]> = [
+      ["approved", "continued"],
+      ["changes_requested", "superseded"],
+      ["rejected", "rejected"],
+    ];
+    for (const [outcome, act] of pairs) {
+      expect(reviewSettledActForOutcome(outcome)).toBe(act);
+      expect(reviewSettledCopy(outcome).title).toBe(REVIEW_SETTLED_ACT_TITLE[act]);
+      expect(reviewSettledWord(REVIEW_SETTLED_ACT_STORAGE[act])).toBe(
+        reviewSettledCopy(outcome).title,
+      );
+    }
+  });
+
+  it("a decider's name rides the same word", () => {
+    expect(reviewSettledCopy("changes_requested", "Ada").title).toBe("Superseded by Ada");
+  });
+
+  it("a value this build cannot read says Settled, and never a raw column", () => {
+    expect(reviewSettledAct("comment")).toBeNull();
+    expect(reviewSettledWord("comment")).toBe("Settled");
+    expect(reviewSettledWord(null)).toBe("Settled");
   });
 });

@@ -140,9 +140,7 @@ import {
   Check,
   CircleX,
   ClipboardCheck,
-  Maximize2,
   MessageSquare,
-  Minimize2,
   RotateCcw,
 } from "lucide-react";
 
@@ -298,9 +296,9 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** Clamped island height (§ the issue's clamp + internal scroll + expand). */
+/** The island's ONE height. The representation scrolls inside it — the
+ *  drawing's own answer to a tall or wide target, and it draws no expand. */
 const ISLAND_HEIGHT_CLAMPED = 380;
-const ISLAND_HEIGHT_EXPANDED = 760;
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -486,7 +484,6 @@ export function ReviewGateCard({
   // same-origin iframe would be recorded against whoever else uses the browser.
   const auth = useLifecycleCardAuth();
   const [reloadToken, setReloadToken] = useState(0);
-  const [expanded, setExpanded] = useState(false);
   // §VIII — the reviewer's LOCAL dismissals, keyed by suggestion id, and BOUND
   // to the surface that offered them. A surfaced suggestion is ACCEPTED unless it
   // is named here (§VIII: "a suggestion arrives accepted"), so this is the whole
@@ -753,8 +750,6 @@ export function ReviewGateCard({
     state,
     islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
     islandCredentialed: heldCredential !== null,
-    expanded,
-    onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,
     onRefresh: refresh,
     dismissed,
@@ -801,8 +796,6 @@ function renderState(args: {
   state: LifecycleCardState;
   islandSrc: string;
   islandCredentialed: boolean;
-  expanded: boolean;
-  onToggleExpanded: () => void;
   submit: SubmitReviewDecisionAction;
   onRefresh: () => void;
   dismissed: Readonly<Record<string, true>>;
@@ -816,8 +809,6 @@ function renderState(args: {
     state,
     islandSrc,
     islandCredentialed,
-    expanded,
-    onToggleExpanded,
     submit,
     onRefresh,
     dismissed,
@@ -890,8 +881,6 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
-            expanded={expanded}
-            onToggleExpanded={onToggleExpanded}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -937,8 +926,6 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
-            expanded={expanded}
-            onToggleExpanded={onToggleExpanded}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1523,15 +1510,11 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 function ReviewTargetIsland({
   src,
   credentialed,
-  expanded,
-  onToggleExpanded,
   onRetryResolve,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
-  expanded: boolean;
-  onToggleExpanded: () => void;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
 }): ReactElement {
@@ -1553,7 +1536,15 @@ function ReviewTargetIsland({
   }, [load.src, load.attempt, load.loaded]);
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = expanded ? ISLAND_HEIGHT_EXPANDED : ISLAND_HEIGHT_CLAMPED;
+  // ONE CLAMPED BOX, AND IT SCROLLS INSIDE ITSELF (cinatra#3080, the fourth
+  // reproduction of the real road). The drawing's answer to a representation
+  // taller or wider than the box is the box's own scroll — §III, "a wide
+  // representation scrolls inside its own container rather than widening the
+  // page" — not a control. It enumerates this gate's frame as "a gate header
+  // …, then the review target, then the decision bar and the conversational
+  // prompt window", and the word Expand does not appear anywhere in it. The
+  // toggle and the footer strip it sat on are gone.
+  const height = ISLAND_HEIGHT_CLAMPED;
 
   return (
     <div
@@ -1618,23 +1609,6 @@ function ReviewTargetIsland({
           )}
         </div>
       ) : null}
-      <div className="flex items-center justify-end border-t border-line px-2 py-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-action="toggle-review-target-height"
-          aria-expanded={expanded}
-          onClick={onToggleExpanded}
-        >
-          {expanded ? (
-            <Minimize2 aria-hidden="true" className="size-3.5" />
-          ) : (
-            <Maximize2 aria-hidden="true" className="size-3.5" />
-          )}
-          {expanded ? "Collapse" : "Expand"}
-        </Button>
-      </div>
     </div>
   );
 }

@@ -377,7 +377,7 @@ describe("one renderer, four first-party hosts", () => {
 // ---------------------------------------------------------------------------
 
 describe("§III the target island", () => {
-  it("is a same-origin frame with the documented sandbox tokens, clamped with an expand", async () => {
+  it("is a same-origin frame with the documented sandbox tokens, clamped, and it draws NO expand", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
@@ -386,11 +386,19 @@ describe("§III the target island", () => {
     // The src is a RELATIVE first-party path — the island is never fetched from
     // another origin, and the ref is the only thing in the query.
     expect(frame.getAttribute("src")?.startsWith("/")).toBe(true);
-    const clamped = frame.style.height;
-    fireEvent.click(screen.getByRole("button", { name: /expand/i }));
-    await waitFor(() =>
-      expect(container.querySelector("iframe")!.style.height).not.toBe(clamped),
-    );
+    expect(frame.style.height).toBe("380px");
+
+    // NO EXPAND, AND NO FOOTER STRIP TO PUT ONE ON (cinatra#3080, the fourth
+    // reproduction of the real road). The word Expand appears nowhere in the
+    // ratified drawing; §III enumerates this gate's frame as "a gate header …,
+    // then the review target, then the decision bar and the conversational
+    // prompt window", and its answer to a target bigger than the box is the
+    // box's own scroll: "a wide representation scrolls inside its own container
+    // rather than widening the page". An independent grade charged the control
+    // as an unspecified element on the target strip.
+    expect(screen.queryByRole("button", { name: /expand/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
+    expect(container.querySelector('[data-action="toggle-review-target-height"]')).toBeNull();
   });
 
   it("carries NO decision chrome inside the frame — the floor is the card's", async () => {

@@ -58,6 +58,11 @@
 //   decision time (then event id).
 // ---------------------------------------------------------------------------
 
+import {
+  reviewSettledAct,
+  type ReviewSettledAct,
+} from "@/lib/artifacts/review-surface-model";
+
 /** Which of the merge sources contributed to a rail entry. */
 export type RailSource =
   | "template"
@@ -91,6 +96,13 @@ export interface RunStepRailEntry {
     gateId: string;
     reviewTaskId: string;
     disposition: string | null;
+    /** WHAT THE GATE RECORDS (cinatra#3080). The stored `disposition` above is
+     * the column, and the column cannot say `superseded` — the CHECK constraint
+     * admits no such value. The ACT is derived here, once, at the boundary where
+     * a store row becomes a surface model, so no component ever reads the raw
+     * column and names it itself. `null` on a pending gate, and on a value this
+     * build does not know. */
+    settledAct: ReviewSettledAct | null;
     /** resolved ⇒ read-only history; a completed gate submission replays inert. */
     resolved: boolean;
   };
@@ -372,6 +384,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
           gateId: g.gateId,
           reviewTaskId: g.reviewTaskId,
           disposition: g.disposition,
+          settledAct: reviewSettledAct(g.disposition),
           resolved: g.status === "resolved",
         },
       }),
@@ -383,6 +396,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
           gateId: g.gateId,
           reviewTaskId: g.reviewTaskId,
           disposition: g.disposition,
+          settledAct: reviewSettledAct(g.disposition),
           resolved: g.status === "resolved",
         };
       },

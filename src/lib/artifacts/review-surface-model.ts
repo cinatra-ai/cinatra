@@ -98,6 +98,75 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
+/**
+ * THE SETTLED ACT — what a settled gate RECORDS, as one closed axis
+ * (cinatra#3080, the fourth reproduction of the real road).
+ *
+ * The surface used to name a settled gate in two independent switch statements —
+ * one over the wire outcome for the card, one over the stored column for the
+ * rail — each choosing a display string of its own. That is how the running
+ * application could read "Superseded by {person}" on the card while the store
+ * held `changes_requested` for the same act, with nothing in the product saying
+ * the two were the same thing. The act is now modelled once, the storage
+ * encoding is named as data, and every reading is derived from it, so the two
+ * cannot say different things about one decision.
+ *
+ * THE SCHEMA GAP, STATED PLAINLY, because it is the reason the words differ at
+ * all. `artifact_review_gates.disposition` is CHECK-constrained to
+ * `('approve','reject','changes_requested')` and the audit table to those plus
+ * `'comment'` (`artifact-review-gate-schema.ts`). There is NO `superseded` value
+ * to write, so a Regenerate stores `changes_requested` and the act it performed
+ * is SUPERSEDED. Closing the gap needs a migration widening both constraints and
+ * every reader of the terminal disposition with it; until that lands
+ * `REVIEW_SETTLED_ACT_STORAGE` below IS the relation between the two, in one
+ * place, readable by a person and pinned by a test — not a display string
+ * chosen twice.
+ */
+export type ReviewSettledAct = "continued" | "superseded" | "rejected";
+
+/**
+ * The stored `disposition` each act is written as. The ONE place the schema gap
+ * is crossed; a reader that wants to know what a stored row means asks here.
+ */
+export const REVIEW_SETTLED_ACT_STORAGE: Readonly<Record<ReviewSettledAct, string>> = {
+  continued: "approve",
+  superseded: "changes_requested",
+  rejected: "reject",
+};
+
+/** The word each act reads as. One table, so the card and the rail cannot drift. */
+export const REVIEW_SETTLED_ACT_TITLE: Readonly<Record<ReviewSettledAct, string>> = {
+  continued: "Continued",
+  superseded: "Superseded",
+  rejected: "Rejected",
+};
+
+/**
+ * The act a STORED disposition records, or null where this build cannot say.
+ * The inverse of `REVIEW_SETTLED_ACT_STORAGE`, derived from it rather than
+ * written out a second time.
+ */
+export function reviewSettledAct(disposition: string | null | undefined): ReviewSettledAct | null {
+  if (disposition == null || disposition === "") return null;
+  for (const act of Object.keys(REVIEW_SETTLED_ACT_STORAGE) as ReviewSettledAct[]) {
+    if (REVIEW_SETTLED_ACT_STORAGE[act] === disposition) return act;
+  }
+  return null;
+}
+
+/** The act a WIRE outcome records. The card reads the outcome off the wire; the
+ *  rail reads the stored column — both arrive at the same act. */
+export function reviewSettledActForOutcome(outcome: ReviewSettledOutcome): ReviewSettledAct {
+  switch (outcome) {
+    case "approved":
+      return "continued";
+    case "rejected":
+      return "rejected";
+    case "changes_requested":
+      return "superseded";
+  }
+}
+
 /** The user-facing copy for a settled gate whose outcome is recorded. Title +
  *  one line; NO refresh (the component draws none) — the reading is final. */
 export function reviewSettledCopy(
@@ -113,7 +182,7 @@ export function reviewSettledCopy(
       // nothing else: a gate decided before the floor was redrawn and one
       // decided after it are the same row and read the same way.
       return {
-        title: `Continued${by}`,
+        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
         body: "The gate is resolved and the run has been released to continue.",
       };
     case "rejected":
@@ -121,7 +190,7 @@ export function reviewSettledCopy(
       // decision operation refuses one — but rows decided before the retirement
       // must still read as what they were, so the copy stays.
       return {
-        title: `Rejected${by}`,
+        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
@@ -134,7 +203,7 @@ export function reviewSettledCopy(
       // reviewed revision is kept and displayed, and its successor opens beneath
       // it on the next revision. Nothing was turned back and nothing was lost.
       return {
-        title: `Superseded${by}`,
+        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
         body: "The gate is settled as superseded. The reviewed revision is kept as it was, and the review has moved on from it.",
       };
   }
@@ -155,16 +224,8 @@ export function reviewSettledCopy(
  * this build does not know reads "Settled" — true, and never a raw column.
  */
 export function reviewSettledWord(disposition: string | null | undefined): string {
-  switch (disposition) {
-    case "approve":
-      return "Continued";
-    case "changes_requested":
-      return "Superseded";
-    case "reject":
-      return "Rejected";
-    default:
-      return "Settled";
-  }
+  const act = reviewSettledAct(disposition);
+  return act === null ? "Settled" : REVIEW_SETTLED_ACT_TITLE[act];
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/age
 import {
   readReviewGate,
   enforceReviewRunAccess,
+  listReviewGatesForRun,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
 
@@ -50,6 +51,7 @@ import {
 } from "@/app/artifacts/[id]/review-gate-ports";
 import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
 import type { ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
+import { reviewSettledAct } from "@/lib/artifacts/review-surface-model";
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -95,6 +97,7 @@ type PageProps = {
  */
 async function loadRunStepsContext(
   runId: string,
+  reviewTaskId: string,
 ): Promise<{ steps: ReviewRunStep[]; activeStep: number; templateId: string | null }> {
   let runSteps: ReviewRunStep[] = [];
   let templateId: string | null = null;
@@ -109,9 +112,57 @@ async function loadRunStepsContext(
   } catch {
     runSteps = [];
   }
-  const reviewIndex = runSteps.length + 1;
-  const steps: ReviewRunStep[] = [...runSteps, { index: reviewIndex, label: "Review" }];
-  return { steps, activeStep: reviewIndex, templateId };
+
+  // ONE RAIL ENTRY PER REVIEW, AND THE RAIL GROWS (cinatra#3080, the fourth
+  // reproduction of the real road). This rail used to append exactly ONE
+  // synthetic "Review" row, whatever the run held — so a Regenerate that
+  // settled its gate and minted a successor changed nothing on the left of the
+  // screen, measured on the running application and graded a defect twice. The
+  // drawing: "when a review is decided the rail keeps it as read-only history
+  // and moves to the next review beneath it"; "Regenerate settles the gate it
+  // was pressed on as superseded and mints a successor gate for that same
+  // artifact — a fresh review entry beneath the settled one"; "a new review
+  // gate entry on the rail, beneath the one just resolved".
+  //
+  // The gates are read in creation order, each settled one carrying the ACT it
+  // records (the one vocabulary, never the stored token), and the entry for the
+  // gate THIS route addresses is the active one. A plain read: this page has
+  // already cleared the review READ door for this run inside
+  // `loadReviewGateSurface`, which is the door this reader's own contract names.
+  //
+  // FAIL-SOFT, like the steps above it: a run whose gates cannot be read keeps
+  // the single synthetic Review row rather than losing the rail.
+  let gateSteps: ReviewRunStep[] = [];
+  let activeOffset = 0;
+  try {
+    const gates = await listReviewGatesForRun(runId);
+    gateSteps = gates.map((gate, i) => {
+      const act = reviewSettledAct(gate.disposition);
+      const settled = gate.status === "resolved" && act !== null;
+      return {
+        index: runSteps.length + 1 + i,
+        label: settled ? `Review · ${act}` : "Review",
+      };
+    });
+    const here = gates.findIndex((gate) => gate.reviewTaskId === reviewTaskId);
+    activeOffset = here >= 0 ? here : Math.max(gates.length - 1, 0);
+  } catch {
+    gateSteps = [];
+  }
+
+  if (gateSteps.length === 0) {
+    const reviewIndex = runSteps.length + 1;
+    return {
+      steps: [...runSteps, { index: reviewIndex, label: "Review" }],
+      activeStep: reviewIndex,
+      templateId,
+    };
+  }
+  return {
+    steps: [...runSteps, ...gateSteps],
+    activeStep: runSteps.length + 1 + activeOffset,
+    templateId,
+  };
 }
 
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
@@ -216,7 +267,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
   // gate is the prompt window at the foot — see below.
 
-  const { steps, activeStep, templateId } = await loadRunStepsContext(runId);
+  const { steps, activeStep, templateId } = await loadRunStepsContext(runId, reviewTaskId);
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
@@ -401,18 +452,33 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   );
 }
 
-/** The canonical review-document shell (§I) — inherits the app's single light
- * treatment + the shared shell (Main + PageHeader + PageContent). */
+/**
+ * The canonical review shell (§III) — the app's single light treatment and the
+ * shared shell, and NOTHING the drawing does not draw.
+ *
+ * NO EYEBROW, NO HEADING, NO INSTRUCTIONAL SENTENCE (cinatra#3080, the fourth
+ * reproduction of the real road). This shell used to open with "Agent run" over
+ * "Review" over "Comment on what an agent produced, Regenerate it, or Continue
+ * the run." — a page-title block that appears nowhere in the ratified drawing
+ * and that an independent grade charged as an unspecified element. The drawing
+ * is explicit about what this route is: "When a run pauses on a review gate, the
+ * reviewer opens it at /agents/[vendor]/[package]/[runId]/review/[reviewTaskId]
+ * — a route WITHIN the run. The run's step rail stays on the left with the gated
+ * step highlighted and resolved gates above it as history; the gate itself —
+ * header, the one review target, decision bar and the run's prompt window —
+ * fills the run detail on the right. There is no standalone review document; the
+ * reviewer decides in the run, with its steps in view." The gate's own header
+ * ("Review requested" over "Awaiting your decision") is the reading at the top
+ * of the detail column, and the card draws it. A second heading above it was the
+ * page announcing itself, which is the one thing this surface must not do.
+ *
+ * The refusal readings below KEEP their header: a viewer who may not see the run
+ * is owed a page that names itself, and no gate is drawn there to do it.
+ */
 function ReviewShell({ children }: { children: React.ReactNode }) {
   return (
     <Main className="min-h-screen">
-      <PageHeader
-        label="Agent run"
-        title="Review"
-        description="Comment on what an agent produced, Regenerate it, or Continue the run."
-        divider={false}
-      />
-      <PageContent className="flex flex-col gap-4 pb-10" data-surface="artifact-review">
+      <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
         {children}
       </PageContent>
     </Main>

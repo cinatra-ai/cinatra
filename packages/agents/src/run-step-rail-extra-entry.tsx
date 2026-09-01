@@ -5,7 +5,7 @@ import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 import { cn } from "@/lib/utils";
-import { reviewSettledWord } from "@/lib/artifacts/review-surface-model";
+import { REVIEW_SETTLED_ACT_TITLE } from "@/lib/artifacts/review-surface-model";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 
@@ -52,6 +52,8 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
+  const settledAct = entry.gate?.settledAct ?? null;
+  const settledWord = settledAct === null ? "Settled" : REVIEW_SETTLED_ACT_TITLE[settledAct];
 
   const titleNode = (
     <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
@@ -66,11 +68,17 @@ export function RailExtraEntry({
         // regeneration, changes requested)", so the word comes from the floor's
         // one vocabulary and keeps its sentence case: a settled reading is a
         // word a person reads, not a token they decode.
+        //
+        // IT READS THE ACT, NOT THE COLUMN (the fourth reproduction of the real
+        // road). The act is derived once where the store row becomes a rail
+        // entry (`run-step-rail.ts`); this component never sees the raw
+        // disposition, so it cannot name it a second way. An act this build
+        // cannot read says "Settled" — true, and never a raw column.
         <span
           className="ms-1.5 text-badge-2xs tracking-wide text-muted-foreground"
-          data-rail-gate-settled={reviewSettledWord(entry.gate?.disposition)}
+          data-rail-gate-settled={settledWord}
         >
-          {reviewSettledWord(entry.gate?.disposition)}
+          {settledWord}
         </span>
       ) : null}
       {isVerification ? (
