@@ -1458,25 +1458,16 @@ describe("the generated display map imports through package exports, never a hos
     // dependency edge a bare specifier needs; its alias goes when it joins the
     // required set (or the guarded road gets its own resolution). The list
     // grows only when a pinned guarded-optional pack starts declaring its own
-    // display: the pins that carry the wave-5 display packs' renderers each
-    // need their resolution road, and every one of them is named here.
+    // display: this wave advances exactly the screenshot and slide-deck display
+    // packs plus cms-snapshot, so the remainder is the two pre-existing guarded
+    // packs plus those three, and nothing else.
     const buildConfig = buildConfigAliases();
     const aliased = emittedRendererSpecifiers().filter(
       (s) => tsconfigResolves(s) || buildConfig.has(s),
     );
     expect(aliased).toEqual([
-      "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
-      "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
-      "@cinatra-ai/blog-image-artifact/src/renderers/detail",
-      "@cinatra-ai/blog-image-artifact/src/renderers/list-row",
-      "@cinatra-ai/blog-image-artifact/src/renderers/preview",
-      "@cinatra-ai/blog-post-artifact/src/renderers/detail",
-      "@cinatra-ai/blog-post-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
-      "@cinatra-ai/email-artifacts/src/renderers/list-row",
-      "@cinatra-ai/linkedin-artifacts/src/renderers/detail",
-      "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
       "@cinatra-ai/screenshot-artifact/src/renderers/detail",
