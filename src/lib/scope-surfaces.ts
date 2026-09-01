@@ -101,3 +101,27 @@ export const SCOPE_SURFACE_TAB_LABEL: Record<ScopeSurfaceTab | "dashboards", str
 export function scopeSurfaceEmptyTestId(tab: ScopeSurfaceTab | "dashboards"): string {
   return `scope-${tab}-empty`;
 }
+
+/**
+ * The ONE primary action each tab's empty state carries.
+ *
+ * The system's Empty state pattern rules that an empty surface always includes
+ * a single primary action button and never just empty text. None of the five
+ * corresponding top-level surfaces carries an embedded empty-state action of
+ * its own today (their add affordances live in a page toolbar or a dialog), so
+ * each tab takes the pattern's neutral action instead of an invented one: the
+ * existing top-level surface that lists that domain today, named and addressed
+ * exactly as the sidebar already names and addresses it. The Dashboards tab has
+ * no top-level listing route in the product at all, so its neutral action leads
+ * to the scopes whose Dashboards tab is already live.
+ */
+export const SCOPE_SURFACE_TAB_ACTION: Record<
+  ScopeSurfaceTab | "dashboards",
+  { label: string; href: string }
+> = {
+  dashboards: { label: "Go to Organizations", href: "/organizations" },
+  assistants: { label: "Go to Assistants", href: "/assistants" },
+  agents: { label: "Go to Agents", href: "/agents" },
+  artifacts: { label: "Go to Artifacts", href: "/artifacts" },
+  skills: { label: "Go to Skills", href: "/skills" },
+};

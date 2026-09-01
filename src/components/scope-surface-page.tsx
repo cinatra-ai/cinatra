@@ -1,15 +1,21 @@
+import Link from "next/link";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
+  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Button } from "@/components/ui/button";
+import { domainIcons, type DomainIcon } from "@/components/domain-icons";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import {
   SCOPE_SURFACE_KIND_LABEL,
+  SCOPE_SURFACE_TAB_ACTION,
   SCOPE_SURFACE_TAB_LABEL,
   scopeSurfaceEmptyTestId,
   scopeSurfaceSettingsHref,
@@ -49,6 +55,19 @@ const TAB_PROMISE: Record<ScopeSurfaceTab | "dashboards", string> = {
   skills: "The skills this scope owns appear here.",
 };
 
+/**
+ * The empty state's icon, taken from the app's OWN domain-icon vocabulary — the
+ * same mark the sidebar draws for that domain, set in the Empty pattern's
+ * dashed circle (`EmptyMedia variant="icon"`).
+ */
+const TAB_ICON: Record<ScopeSurfaceTab | "dashboards", DomainIcon> = {
+  dashboards: domainIcons.desk,
+  assistants: domainIcons.assistants,
+  agents: domainIcons.agents,
+  artifacts: domainIcons.artifacts,
+  skills: domainIcons.skills,
+};
+
 export function ScopeSurfacePage({
   scope,
   tab,
@@ -63,6 +82,8 @@ export function ScopeSurfacePage({
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
+  const TabIcon = TAB_ICON[tab];
+  const action = SCOPE_SURFACE_TAB_ACTION[tab];
 
   return (
     <Main className="min-h-screen">
@@ -74,11 +95,27 @@ export function ScopeSurfacePage({
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
-        <Empty data-testid={scopeSurfaceEmptyTestId(tab)} className="border">
+        {/*
+          The system's Empty state pattern, exactly as the ratified drawing
+          gives it — centred, a dashed-circle icon, the headline, the one-line
+          helper, and a single primary action ("never just empty text"). The
+          pattern draws no container of its own, so the shell adds no border
+          either: the earlier `className="border"` turned the pattern into a
+          full-stage dashed rectangle the drawing does not give.
+        */}
+        <Empty data-testid={scopeSurfaceEmptyTestId(tab)}>
           <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <TabIcon aria-hidden />
+            </EmptyMedia>
             <EmptyTitle>{PLACEHOLDER_TITLE}</EmptyTitle>
             <EmptyDescription>{TAB_PROMISE[tab]}</EmptyDescription>
           </EmptyHeader>
+          <EmptyContent>
+            <Button asChild>
+              <Link href={action.href}>{action.label}</Link>
+            </Button>
+          </EmptyContent>
         </Empty>
       </PageContent>
     </Main>
