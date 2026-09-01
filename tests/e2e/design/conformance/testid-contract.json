@@ -27,6 +27,7 @@
     "extension-listing-card-restore": { "$ref": "extension-listing-card" },
     "extension-listing-card-installing": { "$ref": "extension-listing-card" },
     "extension-listing-card-incompatible": { "$ref": "extension-listing-card" },
+    "review-decision-floor-in-thread": { "$ref": "review-decision-floor" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -527,6 +528,28 @@
     }
   },
   "shared": {
+    "review-decision-floor": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"review-decision-bar\"] — the REAL ReviewDecisionBar, the one decision floor every first-party host draws at the foot of a review gate, mounted on the conformance harness route inside a chat-thread host declaration. Its affordances are addressed by the MANIFEST'S OWN action names, because the shipped attribute is written that way: [data-action=\"comment-review -> annotated\"], [data-action=\"reject-review -> resolved\"], [data-action=\"approve-review -> resolved\"]. Subordinate rationale field: [data-conformance-id=\"review-note-field-subordinate\"], input [data-testid=\"review-rationale\"]. Landed outcomes carry data-review-outcome (annotated is role=\"status\" and leaves the gate open). The ONLY substitution the harness makes is the BOUND decision action the floor already takes as a prop, exactly as the extension listing-card fixtures substitute their install action; the outcome the floor draws is derived by the product's own mapSubmitResultToOutcome, so nothing the driver asserts is named by the harness.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-decision-bar.tsx",
+          "literals": [
+            "data-conformance-id=\"review-decision-bar\"",
+            "data-conformance-id=\"review-note-field-subordinate\"",
+            "data-testid=\"review-rationale\"",
+            "data-action=\"comment-review -> annotated\"",
+            "data-action=\"reject-review -> resolved\"",
+            "data-action=\"approve-review -> resolved\"",
+            "data-review-outcome=\"annotated\""
+          ]
+        },
+        {
+          "file": "src/lib/artifacts/review-surface-model.ts",
+          "literals": ["export function mapSubmitResultToOutcome"]
+        }
+      ]
+    },
     "extension-listing-card": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-listing-card\"] (idle-face root, carries data-kind); name field: [data-slot=\"extension-card-name\"]; CTA: [data-testid=\"extension-card-cta\"][data-cta-state]. The card's `install` action opens the in-card INSTALL FACE, whose own contract is the sibling `extension-install-panel` surface entry (access-target kinds only — the card swaps its body in place instead of opening a dialog).",

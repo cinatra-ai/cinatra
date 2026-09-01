@@ -49,6 +49,10 @@ import {
   BREADCRUMB_ENTITY_PLACEHOLDER,
 } from "../../../../src/app/design-fixtures/conformance/breadcrumb-conformance-seed";
 import {
+  LIFECYCLE_REVIEW_FLOOR_FIXTURES,
+  type LifecycleReviewFloorFixture,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -321,6 +325,112 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
   }
 
   return driver;
+}
+
+// ---------------------------------------------------------------------------
+// The IN-CONVERSATION REVIEW DECISION FLOOR family (cinatra#3156, epic #3155 W0)
+// ---------------------------------------------------------------------------
+//
+// The in-conversation lifecycle drawing draws ONE decision floor at the foot of
+// every pending review gate, on more than one surface. The surfaces differ in
+// what the gate is and in the reader's standing on it, never in the floor — so
+// they are driven by one family factory over one fixture list, the same shape
+// `cardDriver` + CONFORMANCE_CARD_FIXTURES already give the six extension
+// listing cards. W0 lands the factory and proves it on one surface; the waves
+// after it add fixture rows and nothing else.
+//
+// EVERY ASPECT DRIVEN HERE IS SHIPPED ON THE DEFAULT BRANCH. The floor's three
+// affordances (`comment-review -> annotated`, `reject-review -> resolved`,
+// `approve-review -> resolved`) are literal `data-action` values in
+// packages/agents/src/review-decision-bar.tsx, and testid-contract.json requires
+// each of those literals in that file — so a driver that named an action the
+// product does not ship would be RED in
+// scripts/design/check-conformance-testids.mjs before any browser opened.
+//
+// The manifest's other two actions on these surfaces (`regenerate-review` and
+// `continue-review`) are NOT driven, and are not approximated through a
+// different control either: neither exists in shipped code today. They are on
+// this wave's surface-readiness list, and the wave that drives them is the wave
+// after their control lands.
+
+/** The decision floor of one mounted fixture row. */
+function reviewFloor(root: Locator): Locator {
+  return root.locator('[data-conformance-id="review-decision-bar"]');
+}
+
+/**
+ * One affordance of the floor, addressed by the MANIFEST'S OWN action name.
+ *
+ * The shipped attribute is written `"<action> -> <outcome>"`, so this locator
+ * cannot resolve at all unless the product ships a control for exactly the
+ * action-and-outcome pair the manifest declares. That is deliberate: it is what
+ * stops a driver from pressing one control and reporting another one's outcome.
+ */
+function floorAction(root: Locator, action: string, outcome: string): Locator {
+  return reviewFloor(root).locator(`[data-action="${action} -> ${outcome}"]`);
+}
+
+/**
+ * Press until the reaction is observed. Same hydration retry as
+ * `clickCtaUntil`: a click that lands before React hydration is silently
+ * swallowed on the production standalone build.
+ */
+async function pressFloorUntil(target: Locator, reacted: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await target.click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+export function reviewFloorDriver(fixture: LifecycleReviewFloorFixture): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.surfaceId}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const floor = reviewFloor(root);
+      await expect(floor).toBeVisible();
+      // The subordinate rationale field, drawn INSIDE the floor it belongs to
+      // rather than beside it — the drawing's input-hierarchy rule.
+      await expect(
+        floor.locator('[data-conformance-id="review-note-field-subordinate"]'),
+      ).toBeVisible();
+      // The gate is open and this reader may respond: the shipped Comment
+      // affordance is live, not a disabled control that fails on press.
+      await expect(floorAction(root, "comment-review", "annotated")).toBeEnabled();
+    },
+    fields: {},
+    actions: {
+      // The one action on these surfaces the product ships today. The press is
+      // the REAL Comment control, the submit runs through the REAL floor, and
+      // the outcome is derived by the product's own `mapSubmitResultToOutcome`
+      // from the decision core's committed result — the harness names none of it.
+      "comment-review": {
+        outcome: "annotated",
+        run: async (_page, root) => {
+          const floor = reviewFloor(root);
+          const annotated = floor.locator('[data-review-outcome="annotated"]');
+          await pressFloorUntil(floorAction(root, "comment-review", "annotated"), async () => {
+            await expect(annotated).toBeVisible({ timeout: 5_000 });
+          });
+          // ANNOTATED is a non-terminal outcome, and that is the whole of what
+          // the name means: the comment is recorded and the gate is NOT
+          // resolved. Asserted as three separate facts, because a floor that
+          // merely drew the notice while settling would satisfy the first alone.
+          await expect(annotated).toHaveAttribute("role", "status");
+          await expect(floor.locator('[data-review-outcome="decided"]')).toHaveCount(0);
+          await expect(floor.locator('[data-review-outcome="changes-requested"]')).toHaveCount(0);
+          // The gate stays open, so the terminal affordances stay live and the
+          // rationale field stays writable.
+          await expect(floorAction(root, "approve-review", "resolved")).toBeEnabled();
+          await expect(floorAction(root, "reject-review", "resolved")).toBeEnabled();
+          await expect(floor.getByTestId("review-rationale")).toBeEnabled();
+        },
+      },
+    },
+    states: {},
+  };
 }
 
 const STATUS_PILLS_DRIVER: SurfaceDriver = {
@@ -2858,5 +2968,13 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
+  ),
+  // The in-conversation review decision floor (cinatra#3156, epic #3155). One
+  // family factory over one fixture list — the later waves add rows, not drivers.
+  ...Object.fromEntries(
+    LIFECYCLE_REVIEW_FLOOR_FIXTURES.map((fixture) => [
+      fixture.surfaceId,
+      reviewFloorDriver(fixture),
+    ]),
   ),
 };

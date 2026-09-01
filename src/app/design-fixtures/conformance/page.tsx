@@ -23,6 +23,7 @@ import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-f
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
+import { LifecycleReviewFloorFixtures } from "./lifecycle-card-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -217,6 +218,21 @@ export default function ConformanceHarnessPage() {
             notifications-filter-rail, notifications-bell, notifications-empty,
             notifications-vendor-gate, notifications-degraded. */}
         <NotificationsConformanceFixtures />
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation review decision floor (surface:
+              review-decision-floor-in-thread)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3156, epic #3155: the REAL ReviewDecisionBar under the
+                REAL chat-thread host declaration. The only substitution is the
+                bound decision action the floor already takes as a prop. */}
+            <LifecycleReviewFloorFixtures />
+          </CardContent>
+        </Card>
       </PageContent>
     </Main>
   );
