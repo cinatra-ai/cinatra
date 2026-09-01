@@ -123,7 +123,7 @@ function Combobox({
           // placeholder ink the select family already uses for that state.
           data-placeholder={label === undefined ? "" : undefined}
           className={cn(
-            "flex h-9 w-fit items-center justify-between gap-2 rounded-md border border-input bg-surface-strong px-3 py-2 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
+            "flex h-9 w-fit items-center justify-between gap-2 rounded-md border border-input bg-surface-strong px-3 py-2 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[state=open]:rounded-b-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
             className,
           )}
         >
@@ -139,9 +139,39 @@ function Combobox({
       <PopoverContent
         id={listId}
         align="start"
+        // THE OPEN LIST IS JOINED TO ITS TRIGGER.
+        //
+        // The drawing draws the pair as ONE control: the trigger takes
+        // `border-radius: 7px 7px 0 0` over a list taking
+        // `border-radius: 0 0 7px 7px` with `border-top: 0`, both carrying the
+        // same 1px outline, and nothing at all between them — the seam IS the
+        // trigger's own bottom edge. The shared popover floats its content 4px
+        // clear on the section hairline, which is right for a popover belonging
+        // to nothing in particular and wrong for this one, whose whole reading
+        // is the trigger continuing downward. So the offset and the joined edge
+        // are set HERE, per call site: tooltips, dialogs and every other
+        // popover keep the detached default they are drawn with.
+        //
+        // The outline is `border-input` — the boundary this palette hands its
+        // CONTROLS, which the light palette resolves to the very
+        // `var(--line-strong)` the drawing names. The dark palette hands
+        // controls a different one on purpose (full navy is invisible on a dark
+        // ground; cinatra#3107 measured the replacement and
+        // control-border-contrast pins it), so taking the control boundary
+        // rather than the literal token is what keeps the pair reading as one
+        // control in BOTH palettes. Either way it is no longer the divider
+        // hairline, which is what made the list read as a separate object.
+        sideOffset={0}
         data-slot="combobox-content"
         className={cn(
-          "w-(--radix-popover-trigger-width) min-w-[12rem] p-0",
+          "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0",
+          // The seam, drawn only on the side the drawing draws. A list with no
+          // room beneath its trigger still flips above it — that is the
+          // collision fallback rather than the drawing, so it keeps a whole
+          // outline and its own gap instead of pretending to join an edge it
+          // meets from the other side.
+          "data-[side=bottom]:rounded-t-none data-[side=bottom]:border-t-0",
+          "data-[side=top]:mb-1",
           contentClassName,
         )}
       >
@@ -163,9 +193,19 @@ function Combobox({
             about the value in the field. Typing, arrow navigation and the
             filter are untouched: the key only moves when the bound value
             does. */}
-        <Command key={value ?? ""} defaultValue={value}>
-          <CommandInput placeholder={searchPlaceholder} />
-          <CommandList>
+        <Command
+          key={value ?? ""}
+          defaultValue={value}
+          // The list IS the popover's body here, so it draws no ground, no
+          // radius and no inset of its own — the popover already draws all
+          // three, and a second ground inside it would be a second surface. The
+          // drawing's own `padding: 5px` around the rows moves onto the list
+          // below, which is what lets the search row's rule run edge to edge
+          // above them.
+          className="rounded-none! bg-transparent p-0"
+        >
+          <CommandInput chrome="flush" placeholder={searchPlaceholder} />
+          <CommandList className="p-[5px]">
             <CommandEmpty>{emptyText}</CommandEmpty>
             {options.map((option) => {
               const text = option.label ?? option.value

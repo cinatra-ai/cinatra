@@ -224,3 +224,386 @@ for (const theme of ["light", "dark"] as const) {
     });
   });
 }
+
+/**
+ * THE OPEN LIST AGAINST ITS TRIGGER, AND THE ROW THAT FILTERS IT (cinatra#3142).
+ *
+ * The four claims above measure the list's COLOURS. These two measure the shape
+ * the drawing draws around them — the second thing a reader sees, and the two
+ * sentences the second proof round read off the render as departing.
+ *
+ * The drawing's own Combobox picture draws the trigger and its open list as ONE
+ * control. The trigger takes `border-radius: 7px 7px 0 0`; the list beneath it
+ * takes `border-radius: 0 0 7px 7px` with `border-top: 0`; both are outlined
+ * `1px solid var(--line-strong)`; and nothing separates them — the seam IS the
+ * trigger's own bottom edge. A list floating clear of its trigger on a
+ * different, lighter line is two controls, which is what the render drew.
+ *
+ * Inside it, the type-to-filter row is a flat row on the list's own ground:
+ * `display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+ * border-bottom: 1px solid var(--line)`, holding a 13px search glyph in
+ * `var(--muted)` and its placeholder text in `var(--muted)`. It is not a
+ * separately-filled, separately-bordered field pill floating inside the list.
+ *
+ * One palette note the drawing cannot carry on its own: `--line-strong` is the
+ * LIGHT palette's control boundary, reached through `--input`. The dark palette
+ * deliberately hands controls a different boundary (cinatra#3107 measured it, and
+ * control-border-contrast pins it) because full-navy is invisible on a dark
+ * ground. So the claim under test is the one the drawing is actually making —
+ * the list is outlined in THE TRIGGER'S OWN boundary, whatever the palette hands
+ * it — checked against the strong line by name in the palette that has it.
+ */
+
+const SEARCH_ROW = '[data-slot="command-input-wrapper"]';
+const SEARCH_INPUT = '[data-slot="command-input"]';
+const SEARCH_GLYPH = '[data-slot="command-input-icon"]';
+
+/** Computed properties of one element (or one of its pseudo-elements). */
+async function styles(
+  page: Page,
+  selector: string,
+  properties: string[],
+  pseudo?: string,
+): Promise<Record<string, string>> {
+  return page.evaluate(
+    ({ s, props, pe }) => {
+      const el = document.querySelector(s);
+      if (!el) throw new Error(`no element for ${s}`);
+      const computed = getComputedStyle(el, pe ?? undefined);
+      return Object.fromEntries(
+        props.map((name) => [name, computed.getPropertyValue(name).trim()]),
+      );
+    },
+    { s: selector, props: properties, pe: pseudo ?? null },
+  );
+}
+
+/**
+ * The ink the cascade gives an input's PLACEHOLDER, normalised so it can be
+ * compared with an ordinary computed colour.
+ *
+ * Not `getComputedStyle(el, "::placeholder")`: Chromium answers that read with
+ * a value that does not reflect the cascade at all — measured on this very
+ * fixture, it returns fully transparent black in one palette and an almost
+ * fully transparent colour in the other, for a placeholder that is plainly
+ * painted on screen in both. So the ink is read where it is actually declared:
+ * the `::placeholder` rules that MATCH this element, last one winning, then
+ * resolved through the element's own custom properties and normalised by
+ * letting the browser compute it on a scratch node. Every step happens in the
+ * page, in the palette under test, so what comes back is still a measurement
+ * and never a literal from the test.
+ */
+async function placeholderInk(page: Page, selector: string): Promise<string> {
+  return page.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) throw new Error(`no element for ${s}`);
+
+    // The utility that carries this ink is emitted as a NESTED rule —
+    // `.placeholder\:text-muted-foreground { &::placeholder { color: … } }` —
+    // so the walk has to resolve `&` against the rule it is nested in before it
+    // can ask whether the selector matches this input.
+    let declared = "";
+    const visit = (rules: CSSRuleList, parent: string) => {
+      for (const rule of Array.from(rules)) {
+        const selectorText = (rule as CSSStyleRule).selectorText;
+        const nested = (rule as CSSGroupingRule).cssRules;
+
+        if (typeof selectorText !== "string") {
+          // A grouping rule: `@layer`, `@media`, `@supports`. It selects
+          // nothing itself, so the nesting context passes straight through.
+          if (nested) visit(nested, parent);
+          continue;
+        }
+
+        const resolved = selectorText.split(",").map((one) => {
+          const selector = one.trim();
+          if (!parent) return selector;
+          return selector.includes("&")
+            ? selector.replace(/&/g, parent)
+            : `${parent} ${selector}`;
+        });
+
+        for (const selector of resolved) {
+          if (!selector.includes("::placeholder")) continue;
+          // The app hides a placeholder while its field HAS focus, on purpose
+          // and everywhere ("so it doesn't fight with the user's cursor"), and
+          // an open list always holds focus in this row — so the rule that
+          // matches at this instant paints the prompt transparent rather than
+          // in any ink. What is under test is the ink the ROW gives its prompt,
+          // which is the rule that applies whenever the prompt is drawn at all.
+          if (selector.includes(":focus")) continue;
+          const base = selector.replace("::placeholder", "").trim();
+          if (!base) continue;
+          try {
+            if (!el.matches(base)) continue;
+          } catch {
+            continue;
+          }
+          const color = (rule as CSSStyleRule).style.getPropertyValue("color");
+          if (color) declared = color.trim();
+        }
+
+        if (nested) visit(nested, resolved[0] ?? parent);
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        visit(sheet.cssRules, "");
+      } catch {
+        // A cross-origin sheet cannot be read; none of ours are.
+      }
+    }
+    if (!declared) return "";
+
+    const variable = declared.match(/^var\((--[\w-]+)\)$/);
+    const resolved = variable
+      ? getComputedStyle(el).getPropertyValue(variable[1]).trim()
+      : declared;
+    if (!resolved) return "";
+
+    // Normalise: the token may serialise as `oklch(...)` where an ordinary
+    // computed colour serialises as `rgb(...)`. Letting the browser compute
+    // both puts them in the same vocabulary.
+    const scratch = document.createElement("span");
+    scratch.style.color = resolved;
+    document.body.appendChild(scratch);
+    const normalised = getComputedStyle(scratch).color;
+    scratch.remove();
+    return normalised;
+  }, selector);
+}
+
+/** One computed property of one element. */
+async function style(
+  page: Page,
+  selector: string,
+  property: string,
+): Promise<string> {
+  return (await styles(page, selector, [property]))[property];
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`the Combobox's open list against its trigger — ${theme} theme`, () => {
+    test("the list is JOINED to its trigger — no gap, one outline, the corners meeting", async ({
+      page,
+    }) => {
+      // Room below the control, so the list opens where the drawing draws it.
+      // The fixture stacks its probes above the combobox, and a viewport short
+      // enough to leave no room under the trigger sends the list up the other
+      // side of it — the collision fallback, which is a different picture.
+      await page.setViewportSize({ width: 1280, height: 1240 });
+      await open(page, theme);
+      await page.locator(TRIGGER).click();
+      await expect(page.locator(LIST)).toBeVisible();
+
+      // The fixture leaves room below the control, so the list opens where the
+      // drawing draws it. A collision-flipped list is a picture the drawing
+      // does not draw, and measuring one would measure the fallback instead.
+      await expect(page.locator(CONTENT)).toHaveAttribute("data-side", "bottom");
+
+      const geometry = await page.evaluate(
+        ({ t, c }) => {
+          const trigger = document.querySelector(t)!.getBoundingClientRect();
+          const content = document.querySelector(c)!.getBoundingClientRect();
+          return {
+            gap: content.top - trigger.bottom,
+            inset: content.left - trigger.left,
+          };
+        },
+        { t: TRIGGER, c: CONTENT },
+      );
+
+      expect(
+        Math.abs(geometry.gap),
+        `the open list floats ${geometry.gap}px clear of its trigger — the ` +
+          "drawing sets the list's top edge ON the trigger's bottom edge and " +
+          "drops the list's own top border, so the pair reads as one control",
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs(geometry.inset),
+        `the list starts ${geometry.inset}px off the trigger's own left edge, so ` +
+          "the two outlines do not line up",
+      ).toBeLessThanOrEqual(0.5);
+
+      const outline = await styles(page, CONTENT, [
+        "border-top-width",
+        "border-left-width",
+        "border-right-width",
+        "border-bottom-width",
+        "border-left-color",
+        "border-top-left-radius",
+        "border-top-right-radius",
+        "border-bottom-left-radius",
+      ]);
+      const trigger = await styles(page, TRIGGER, [
+        "border-left-color",
+        "border-top-left-radius",
+        "border-bottom-left-radius",
+      ]);
+      const hairline = await style(
+        page,
+        '[data-testid="line-hairline"]',
+        "border-top-color",
+      );
+      const strong = await style(
+        page,
+        '[data-testid="line-strong"]',
+        "border-top-color",
+      );
+      const boundary = await style(
+        page,
+        '[data-testid="control-boundary"]',
+        "border-top-color",
+      );
+
+      expect(
+        outline["border-top-width"],
+        "the list draws a top border of its own along the seam, so the joined " +
+          "edge reads as two stacked lines rather than the trigger's own edge",
+      ).toBe("0px");
+      for (const side of [
+        "border-left-width",
+        "border-right-width",
+        "border-bottom-width",
+      ] as const) {
+        expect(
+          outline[side],
+          `the drawing outlines the pair in a 1px line; ${side} draws ${outline[side]}`,
+        ).toBe("1px");
+      }
+
+      expect(
+        outline["border-left-color"],
+        `the list is outlined in ${outline["border-left-color"]} while its own ` +
+          `trigger is outlined in ${trigger["border-left-color"]} — the drawing ` +
+          "gives the joined pair ONE continuous outline",
+      ).toBe(trigger["border-left-color"]);
+      expect(
+        outline["border-left-color"],
+        "the list is outlined in something other than the boundary this palette " +
+          "hands its controls",
+      ).toBe(boundary);
+      expect(
+        outline["border-left-color"],
+        "the list is outlined in the section hairline — the low-alpha line the " +
+          "drawing reserves for dividers — so the pair reads as two controls, " +
+          "not one",
+      ).not.toBe(hairline);
+      if (theme === "light") {
+        expect(
+          outline["border-left-color"],
+          "in the palette the drawing is drawn in, the pair's outline IS the " +
+            "strong line the drawing names",
+        ).toBe(strong);
+      }
+
+      expect(
+        outline["border-top-left-radius"],
+        "the list rounds the corners it meets the trigger at, so a notch opens " +
+          "at the seam",
+      ).toBe("0px");
+      expect(outline["border-top-right-radius"]).toBe("0px");
+      expect(
+        outline["border-bottom-left-radius"],
+        "the list's far corners are square, so the pair has no outer radius at all",
+      ).not.toBe("0px");
+      expect(
+        trigger["border-bottom-left-radius"],
+        "the OPEN trigger keeps its bottom corners rounded while the list under " +
+          "it is square, so the seam draws a notch on both sides",
+      ).toBe("0px");
+      expect(
+        trigger["border-top-left-radius"],
+        "the open trigger squared its outer corners too — the drawing keeps the " +
+          "pair's outer corners rounded and squares only the seam",
+      ).not.toBe("0px");
+    });
+
+    test("the type-to-filter row is the drawing's flat row — ground, glyph, placeholder, closing rule", async ({
+      page,
+    }) => {
+      await open(page, theme);
+      await page.locator(TRIGGER).click();
+      await expect(page.locator(LIST)).toBeVisible();
+
+      // Its ground: the drawing gives the row no fill of its own, so the list's
+      // white shows through it. A fill of its own makes the row a second
+      // surface inside a popover the surfaces section allows only one of.
+      expect(
+        await style(page, SEARCH_ROW, "background-color"),
+        "the search row fills with a ground of its own, so the list opens onto " +
+          "two surfaces stacked on each other",
+      ).toBe("rgba(0, 0, 0, 0)");
+
+      // And no pill around it: the drawing draws a row, not a bordered field
+      // dropped inside the list.
+      await expect(
+        page.locator(`${CONTENT} [data-slot="input-group"]`),
+        "the search row is drawn as a bordered field pill inside the list — the " +
+          "drawing draws a flat row with a rule under it",
+      ).toHaveCount(0);
+
+      // Its closing rule: a 1px hairline under the row, in the divider ink —
+      // NOT the stronger boundary the pair's own outline is drawn in.
+      const rule = await styles(page, SEARCH_ROW, [
+        "border-bottom-width",
+        "border-bottom-color",
+      ]);
+      const hairline = await style(
+        page,
+        '[data-testid="line-hairline"]',
+        "border-top-color",
+      );
+      expect(
+        rule["border-bottom-width"],
+        "no rule closes the search row, so the filter and the rows it filters " +
+          "run together",
+      ).toBe("1px");
+      expect(
+        rule["border-bottom-color"],
+        `the row's closing rule draws ${rule["border-bottom-color"]} rather than ` +
+          "the divider hairline the drawing rules it with",
+      ).toBe(hairline);
+
+      // Its glyph and its placeholder: both in the muted ink, both measured
+      // against a probe drawn by the same palette.
+      const muted = await style(page, '[data-testid="muted-ink"]', "color");
+      expect(
+        await style(page, SEARCH_GLYPH, "color"),
+        "the search glyph is drawn in an ink other than the muted one the " +
+          "drawing gives it",
+      ).toBe(muted);
+
+      const glyph = await page.locator(SEARCH_GLYPH).boundingBox();
+      expect(glyph, "the drawing puts a search glyph in the row").not.toBeNull();
+      expect(
+        Math.round(glyph!.width),
+        `the glyph is ${glyph!.width}px wide where the drawing draws it at 13px`,
+      ).toBe(13);
+
+      await expect(
+        page.locator(SEARCH_INPUT),
+        "the row's placeholder is not the wording the drawing types into it",
+      ).toHaveAttribute("placeholder", "Search connectors…");
+      expect(
+        await style(page, SEARCH_INPUT, "color"),
+        "the row's own type is drawn in the muted ink, so what a reader TYPES " +
+          "reads no darker than the prompt it replaces",
+      ).not.toBe(muted);
+      // The ink the row gives its prompt. (The prompt itself is hidden for as
+      // long as the row holds focus — an app-wide behaviour, not this
+      // control's; see the reader in `placeholderInk`.)
+      const placeholder = await placeholderInk(page, SEARCH_INPUT);
+      expect(
+        placeholder,
+        "no rule gives the row's placeholder an ink of its own, so the prompt " +
+          "reads in whatever the input inherits",
+      ).not.toBe("");
+      expect(
+        placeholder,
+        `the placeholder is drawn in ${placeholder} rather than the muted ink ` +
+          "the drawing gives it",
+      ).toBe(muted);
+    });
+  });
+}

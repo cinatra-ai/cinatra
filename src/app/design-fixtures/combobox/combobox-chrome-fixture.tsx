@@ -14,7 +14,10 @@
  * this file compares two MEASURED colours rather than a colour against a
  * literal. The five surface probes are the drawing's whole surface vocabulary
  * ("5 tokens · paper to white"), so the popover's ground can be tested for
- * membership of that set and not only against one expected token.
+ * membership of that set and not only against one expected token. The line and
+ * ink probes below them serve the second pair of claims — the outline the
+ * drawing draws around the joined trigger-and-list pair, and the ink its
+ * type-to-filter row is drawn in.
  */
 
 import { useState } from "react";
@@ -69,6 +72,29 @@ export function ComboboxChromeFixture() {
         sidebar
       </span>
 
+      {/* The two line weights the drawing draws with. The joined
+          trigger-and-list pair takes the CONTROL boundary — the drawing outlines
+          both halves of its own picture in `1px solid var(--line-strong)`, which
+          is the token this palette hands controls through `--input` — while the
+          rule that closes the search row INSIDE the list takes the section
+          hairline, `border-bottom: 1px solid var(--line)`. Two different weights
+          in one picture, so the test needs both to tell them apart. */}
+      <span data-testid="line-hairline" className="border border-line">
+        hairline
+      </span>
+      <span data-testid="line-strong" className="border border-line-strong">
+        strong line
+      </span>
+      <span data-testid="control-boundary" className="border border-input">
+        control boundary
+      </span>
+
+      {/* The muted ink the drawing's search row draws BOTH its glyph and its
+          placeholder in — `color: var(--muted)` on each. */}
+      <span data-testid="muted-ink" className="text-muted-foreground">
+        muted
+      </span>
+
       <div className="flex flex-col gap-1">
         <Label htmlFor="combobox-chrome" className="font-normal">
           Connector
@@ -78,6 +104,10 @@ export function ComboboxChromeFixture() {
           value={value}
           onValueChange={setValue}
           options={OPTIONS}
+          // The drawing's own picture types this row's placeholder out in full,
+          // so the fixture draws the list the drawing draws rather than the
+          // component's generic default.
+          searchPlaceholder="Search connectors…"
           className="w-64"
         />
       </div>
