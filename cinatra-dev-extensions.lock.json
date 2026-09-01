@@ -45,7 +45,7 @@
     {
       "packageName": "@cinatra-ai/blog-idea-generator-agent",
       "repo": "cinatra-ai/blog-idea-generator-agent",
-      "resolvedSha": "80ad646c175076164987afe8dabe1420a6443fdc"
+      "resolvedSha": "921e125a3820b753619c85fd9f3d83e2c984e3dd"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-matcher-skill",
