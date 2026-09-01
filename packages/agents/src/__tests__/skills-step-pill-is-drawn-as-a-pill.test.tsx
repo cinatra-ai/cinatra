@@ -74,13 +74,45 @@ import {
 // below that leaves a straight run of edge and reads as a rectangle.
 const MEASURED_PILL_HEIGHT_PX = 26;
 
-// The two utilities' OWN declarations, mirrored into the document so the arms
-// below measure a radius rather than compare a class string. `.rounded-chip` is
-// the design package's shared chip radius (`--r-chip: 0.5rem` = 8px);
-// `.rounded-full` is the full-round utility the app's other pills carry, and it
-// resolves to the drawing's own 9999px.
+// THE DESIGN PACKAGE'S OWN SOURCES, READ OFF DISK. The shared chip radius is
+// taken from the token that declares it rather than transcribed into this file,
+// so the arms below measure the radius the app actually ships for
+// `.rounded-chip` and cannot pass against a stale literal copied in here.
+const DESIGN_SRC = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../design/src",
+);
+const DESIGN_TOKENS_CSS = readFileSync(path.join(DESIGN_SRC, "tokens.css"), "utf8");
+const DESIGN_UTILITIES_CSS = readFileSync(path.join(DESIGN_SRC, "utilities.css"), "utf8");
+
+function rChipDeclarations(): string[] {
+  return [...DESIGN_TOKENS_CSS.matchAll(/--r-chip\s*:\s*([^;]+);/g)].map((m) =>
+    m[1]!.trim().replace(/\s+/g, " "),
+  );
+}
+
+// `--r-chip` in pixels, resolved from the token's own declared value.
+const R_CHIP_PX = (() => {
+  const declared = new Set(rChipDeclarations());
+  if (declared.size !== 1) {
+    throw new Error(`--r-chip is declared ${declared.size} different ways: ${[...declared].join(", ")}`);
+  }
+  const value = [...declared][0]!;
+  const n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) throw new Error(`--r-chip is not a length: ${value}`);
+  return value.endsWith("rem") ? n * 16 : n;
+})();
+
+// The two utilities' declarations, mirrored into the document so the arms below
+// measure a radius rather than compare a class string. The chip side is the
+// design package's own value, resolved above. The full-round side is the
+// FRAMEWORK's stock utility, which this repo never redefines (pinned below) —
+// jsdom cannot resolve the infinite-length form a framework build can emit for
+// it, so a finite full-round stand-in stands here, and the PAINTED radius is
+// read in a real browser engine against the app's compiled stylesheet, on the
+// graded pictures on this pull request.
 const UTILITY_CSS = `
-  .rounded-chip { border-radius: 8px; }
+  .rounded-chip { border-radius: ${R_CHIP_PX}px; }
   .rounded-full { border-radius: 9999px; }
 `;
 
@@ -187,9 +219,9 @@ describe.each(READINGS)("the Skills step's pill, %s", (_reading, decision) => {
       );
       // The stadium test.
       expect(px).toBeGreaterThanOrEqual(MEASURED_PILL_HEIGHT_PX / 2);
-      // And explicitly not the rounded rectangle that was measured: 8px on a
-      // 26 pixel box leaves 10 pixels of straight edge on each side.
-      expect(px).toBeGreaterThan(8);
+      // And explicitly not the rounded rectangle that was measured: the shared
+      // chip radius on a 26 pixel box leaves a straight run of edge on each side.
+      expect(px).toBeGreaterThan(R_CHIP_PX);
     }
   });
 });
@@ -199,22 +231,31 @@ describe("the shared chip radius is left where it is", () => {
   // this drawing says nothing about. The departure was THIS pill reaching for
   // that token, not the token's value — so the fix moves the pill, never the
   // token.
-  const designSrc = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../../design/src",
-  );
-
   it("keeps --r-chip at 0.5rem in the design tokens", () => {
-    const tokens = readFileSync(path.join(designSrc, "tokens.css"), "utf8");
-    const declarations = tokens.match(/--r-chip:\s*[^;]+;/g) ?? [];
-    expect(declarations.length).toBeGreaterThan(0);
-    for (const d of declarations) expect(d).toBe("--r-chip: 0.5rem;");
+    // Read as a VALUE and normalised, so a reformatting of the stylesheet cannot
+    // fail this arm and a changed radius cannot pass it.
+    const declared = rChipDeclarations();
+    expect(declared.length).toBeGreaterThan(0);
+    for (const value of declared) expect(value).toBe("0.5rem");
   });
 
-  it("keeps .rounded-chip declared for the chips that still want it", () => {
-    const utilities = readFileSync(path.join(designSrc, "utilities.css"), "utf8");
-    expect(utilities).toContain(".rounded-chip");
-    expect(utilities).toContain("var(--r-chip)");
+  it("keeps .rounded-chip declared over the shared token", () => {
+    // Matched INSIDE the rule's own body, so an unrelated mention of either
+    // string elsewhere in the file cannot satisfy it.
+    const rule = DESIGN_UTILITIES_CSS.match(/\.rounded-chip\s*\{([^}]*)\}/);
+    expect(rule, ".rounded-chip is no longer declared in the design utilities").not.toBeNull();
+    expect(rule![1]!.replace(/\s+/g, " ").trim()).toMatch(
+      /^border-radius:\s*var\(--r-chip\);?$/,
+    );
+  });
+
+  it("leaves .rounded-full to the framework, so the class keeps its full-round meaning", () => {
+    // The pill's new radius utility is the framework's stock full round. If this
+    // repo ever declared a `.rounded-full` rule of its own, the pill's shape
+    // would stop being the drawing's 9999px and this file's stand-in
+    // declaration would stop standing for anything.
+    expect(DESIGN_UTILITIES_CSS).not.toMatch(/\.rounded-full\s*\{/);
+    expect(DESIGN_TOKENS_CSS).not.toMatch(/\.rounded-full\s*\{/);
   });
 });
 
@@ -275,6 +316,23 @@ describe("the pill stands on ONE ground, set or clear", () => {
     // The state IS drawn — on the box, and read there.
     expect(box(set).getAttribute("aria-checked")).toBe("true");
     expect(box(clear).getAttribute("aria-checked")).toBe("false");
+    expect(box(set).getAttribute("data-state")).toBe("checked");
+    expect(box(clear).getAttribute("data-state")).toBe("unchecked");
+    // THE ACCENT ITSELF, not merely the state that would carry it. The box
+    // declares a checked GROUND and a checked BORDER as state-conditional
+    // utilities of its own — the drawing's `.skchip .cbx.on { background:
+    // var(--blue); border-color: var(--blue) }` — so the colour arrives on the
+    // box, and only when the box is set.
+    for (const b of [box(set), box(clear)]) {
+      expect(b.className).toMatch(/data-\[state=checked\]:bg-/);
+      expect(b.className).toMatch(/data-\[state=checked\]:border-/);
+    }
+    // …and the pill's own root declares NO conditional ground or border at all,
+    // in any variant form, bracketed ones included: nothing on the pill can turn
+    // a colour on when its box is set.
+    for (const pill of [set, clear]) {
+      expect(pill.className).not.toMatch(/(^|\s)\S*:(bg|border)-/);
+    }
     // …and it is stated on the pill's own root as data, not as a colour.
     expect(set.getAttribute("data-skill-applied")).toBe("true");
     expect(clear.getAttribute("data-skill-applied")).toBe("false");
