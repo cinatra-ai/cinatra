@@ -4,6 +4,7 @@ import {
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   connectorCanonicalCrumbHref,
+  documentTitleLabelFromTrail,
   idSegmentPlaceholder,
   isIdLikeSegment,
   isPagelessContainerCrumb,
@@ -653,5 +654,94 @@ describe("buildBreadcrumbTrail — the refused reading names no run id (cinatra#
       "Teams",
       idSegmentPlaceholder(RUN_ID),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, the SEVENTH graded proof set).
+//
+// The trail above a refused reading was made honest in the previous leg — it
+// reads "Agents > Agent run > Schedule" and carries no part of the run id. The
+// browser tab did not follow it. It kept the route file's own static literal,
+// because a refusal short-circuits BEFORE the screen's dynamic metadata ever
+// runs, so nothing downstream was left to write a truthful tab title.
+//
+// The ratified drawing binds the two together in one sentence: the browser-tab
+// title mirrors the resolved trail under the same rules, and an id-bearing
+// route never shows a raw id in the tab. So the tab is derived from the trail
+// that is already resolved, and from nothing else — one reading, one source,
+// and no second rule that can drift away from the first.
+//
+// It answers NULL rather than guessing whenever the trail's own leaf is still
+// unresolved (the short-id placeholder, an id-like label, an empty trail). A
+// null means "do not write" — the route's own server-rendered title stands —
+// which is strictly safer than putting an identifier in the tab.
+// ---------------------------------------------------------------------------
+describe("documentTitleLabelFromTrail — the tab mirrors the resolved trail", () => {
+  const RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+  const RUN_PAGE = `/agents/vendor/pkg/${RUN_ID}`;
+  const SCHEDULE = `${RUN_PAGE}/trigger`;
+  /** The refused reading: the path the reader typed, contributions cleared. */
+  const refused = (pathname: string) =>
+    buildBreadcrumbTrail(pathname, { contributions: [] });
+
+  it("takes the schedule refusal's trail leaf — the same word the trail ends on", () => {
+    expect(refused(SCHEDULE).map((c) => c.label)).toEqual([
+      "Agents",
+      "Agent run",
+      "Schedule",
+    ]);
+    expect(documentTitleLabelFromTrail(refused(SCHEDULE))).toBe("Schedule");
+  });
+
+  it("takes the run page refusal's trail leaf — the kind, never the run", () => {
+    expect(refused(RUN_PAGE).map((c) => c.label)).toEqual(["Agents", "Agent run"]);
+    expect(documentTitleLabelFromTrail(refused(RUN_PAGE))).toBe("Agent run");
+  });
+
+  it("carries no substring of the run id, on either refused reading", () => {
+    for (const pathname of [RUN_PAGE, SCHEDULE]) {
+      const label = documentTitleLabelFromTrail(refused(pathname)) ?? "";
+      for (let start = 0; start < RUN_ID.length; start++) {
+        for (let end = start + 3; end <= RUN_ID.length; end++) {
+          expect(label).not.toContain(RUN_ID.slice(start, end));
+        }
+      }
+    }
+  });
+
+  it("refuses to write when the trail's leaf is the short-id placeholder", () => {
+    const trail: BreadcrumbCrumb[] = [
+      { label: "Agents", href: "/agents" },
+      { label: idSegmentPlaceholder(RUN_ID), href: "/agents/x" },
+    ];
+    expect(documentTitleLabelFromTrail(trail)).toBeNull();
+  });
+
+  it("refuses to write when the trail's leaf is an id-like label", () => {
+    const trail: BreadcrumbCrumb[] = [
+      { label: "Agents", href: "/agents" },
+      { label: RUN_ID, href: "/agents/x" },
+    ];
+    expect(documentTitleLabelFromTrail(trail)).toBeNull();
+  });
+
+  it("steps over an ellipsis crumb and over an empty label", () => {
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "…", href: "/agents", ellipsis: true },
+      ]),
+    ).toBe("Agents");
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "   ", href: "/agents/x" },
+      ]),
+    ).toBe("Agents");
+  });
+
+  it("answers null on an empty trail, so nothing is written", () => {
+    expect(documentTitleLabelFromTrail([])).toBeNull();
   });
 });

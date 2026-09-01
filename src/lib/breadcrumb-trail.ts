@@ -58,6 +58,41 @@ export function idSegmentPlaceholder(segment: string): string {
   return `${safelyDecodePathSegment(segment).slice(0, 8)}…`;
 }
 
+// A label of the shape `idSegmentPlaceholder` produces — eight characters of an
+// id and an ellipsis. It is a crumb the trail could not resolve, so it is never
+// allowed to become a tab title: a truncated identifier is still an identifier.
+const ID_PLACEHOLDER_LABEL_RE = /^\S{1,8}…$/;
+
+/**
+ * THE TAB TITLE MIRRORS THE RESOLVED TRAIL (cinatra#2934).
+ *
+ * The ratified drawing binds the two in one sentence: the browser-tab title
+ * mirrors the resolved trail under the same rules, and an id-bearing route
+ * never shows a raw id in the tab. So the tab is derived HERE, from the trail
+ * that has already been resolved, and from nothing else — one reading and one
+ * source, so the tab cannot drift away from the words above the page the way
+ * it had (the trail read "Agents > Agent run > Schedule" while the tab still
+ * read the route file's static "Agent").
+ *
+ * Answers the trail's last resolved crumb, or `null` when there is nothing
+ * safe to say — an empty trail, or a leaf that is still an id or the id
+ * placeholder. `null` means "do not write": the route's own server-rendered
+ * title stands, which is always safer than putting an identifier in the tab.
+ */
+export function documentTitleLabelFromTrail(
+  trail: readonly BreadcrumbCrumb[],
+): string | null {
+  for (let i = trail.length - 1; i >= 0; i--) {
+    const crumb = trail[i];
+    if (!crumb || crumb.ellipsis) continue;
+    const label = crumb.label?.trim();
+    if (!label) continue;
+    if (isIdLikeSegment(label) || ID_PLACEHOLDER_LABEL_RE.test(label)) return null;
+    return label;
+  }
+  return null;
+}
+
 // Configuration grouping segments that exist only as routing containers — no
 // `page.tsx` at `/configuration/<seg>`, so a breadcrumb link there 404s.
 export const PAGELESS_CONFIG_GROUPS = new Set([

@@ -44,7 +44,10 @@ import { enforceRunAccess } from "../auth-policy";
 import type { ActorRoleHints, AgentAuthPolicy } from "../auth-policy";
 import { runScreenAccessAnswer } from "../instance-screens";
 import { RunNotAuthorizedPanel } from "../run-not-authorized-panel";
-import { buildBreadcrumbTrail } from "@/lib/breadcrumb-trail";
+import {
+  buildBreadcrumbTrail,
+  documentTitleLabelFromTrail,
+} from "@/lib/breadcrumb-trail";
 
 const RUN = { id: "run-1", runBy: "user-owner", orgId: "org-A" };
 
@@ -202,6 +205,20 @@ function runIdPartsIn(text: string): string[] {
 const refusedTrail = (pathname: string): string[] =>
   buildBreadcrumbTrail(pathname, { contributions: [] }).map((c) => c.label);
 
+/** The BROWSER TAB for the same refused reading. The ratified drawing binds it
+ *  to the trail in one sentence - the tab title mirrors the resolved trail
+ *  under the same rules, and an id-bearing route never shows a raw id in the
+ *  tab - so the same id-substring assertion is made of both. The tab was the
+ *  half that still read the route file's own static literal: a refusal
+ *  short-circuits before the screen's own metadata runs, so nothing downstream
+ *  was left to write a truthful one. */
+const refusedTitle = (pathname: string): string => {
+  const label = documentTitleLabelFromTrail(
+    buildBreadcrumbTrail(pathname, { contributions: [] }),
+  );
+  return label ? `${label} | Cinatra` : "";
+};
+
 describe("the trail above the refusal carries no run identifier either", () => {
   it("ORGANIZATION MEMBER: the run page's not-authorized reading draws a trail with no substring of the run id", async () => {
     const verdict = await readAs("user-colleague", ORG_MEMBER);
@@ -219,6 +236,10 @@ describe("the trail above the refusal carries no run identifier either", () => {
     const labels = refusedTrail(RUN_PAGE_PATH);
     expect(runIdPartsIn(labels.join(" "))).toEqual([]);
     expect(labels).toEqual(["Agents", "Agent run"]);
+    // AND THE TAB, under the same rule and from the same resolved trail.
+    const title = refusedTitle(RUN_PAGE_PATH);
+    expect(runIdPartsIn(title)).toEqual([]);
+    expect(title).toBe("Agent run | Cinatra");
   });
 
   it("ORGANIZATION MEMBER: the schedule URL's not-authorized reading draws a trail with no substring of the run id", async () => {
@@ -231,6 +252,9 @@ describe("the trail above the refusal carries no run identifier either", () => {
     const labels = refusedTrail(SCHEDULE_PATH);
     expect(runIdPartsIn(labels.join(" "))).toEqual([]);
     expect(labels).toEqual(["Agents", "Agent run", "Schedule"]);
+    const title = refusedTitle(SCHEDULE_PATH);
+    expect(runIdPartsIn(title)).toEqual([]);
+    expect(title).toBe("Schedule | Cinatra");
   });
 
   it("OUTSIDER: the not-found reading of both surfaces draws a trail with no substring of the run id", async () => {
@@ -246,6 +270,10 @@ describe("the trail above the refusal carries no run identifier either", () => {
       const labels = refusedTrail(pathname);
       expect(runIdPartsIn(labels.join(" "))).toEqual([]);
       expect(labels[1]).toBe("Agent run");
+      const title = refusedTitle(pathname);
+      expect(runIdPartsIn(title)).toEqual([]);
+      expect(title).not.toBe("Agent | Cinatra");
+      expect(title).toBe(`${labels[labels.length - 1]} | Cinatra`);
     }
   });
 });
