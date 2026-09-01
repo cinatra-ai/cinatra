@@ -32,7 +32,13 @@ export type Action =
   | "publish"
   | "fire"
   | "share"
-  | "archive";
+  | "archive"
+  // Configuring WHICH skills and context artifacts an agent carries at a
+  // scope (cinatra#2813 S1, epic #2812). A distinct action rather than
+  // `update`, because the thing being changed is not the agent — it is the
+  // scope's configuration OF the agent, and the two have different
+  // authorities: an agent author is not automatically an organization admin.
+  | "configure_assignments";
 
 /**
  * Effect class - domain risk tier. Used by the audit envelope and the
@@ -76,6 +82,7 @@ export const CLASSIFICATION_ENTRIES: readonly ClassificationEntry[] = [
   { resourceType: "agent", action: "delete",  effect: "admin",   requiredAccess: { requiredPermission: "agent.delete" } },
   { resourceType: "agent", action: "share",   effect: "admin",   requiredAccess: { requiredPermission: "agent.share" } },
   { resourceType: "agent", action: "create",  effect: "write",   requiredAccess: { requiredPermission: "agent.update" } },
+  { resourceType: "agent", action: "configure_assignments", effect: "admin", requiredAccess: { requiredPermission: "agent.assignments.manage" } },
   // ----- agent_run / run -----
   { resourceType: "agent_run", action: "read",    effect: "read",    requiredAccess: { requiredPermission: "run.read" } },
   { resourceType: "agent_run", action: "list",    effect: "read",    requiredAccess: { requiredPermission: "run.list" } },
@@ -151,6 +158,7 @@ export const CLASSIFICATION_ENTRIES: readonly ClassificationEntry[] = [
   { resourceType: "artifact", action: "create", effect: "write", requiredAccess: { requiredPermission: "artifact.create" } },
   { resourceType: "artifact", action: "update", effect: "write", requiredAccess: { requiredPermission: "artifact.update" } },
   { resourceType: "artifact", action: "delete", effect: "admin", requiredAccess: { requiredPermission: "artifact.delete" } },
+  { resourceType: "artifact", action: "configure_assignments", effect: "admin", requiredAccess: { requiredPermission: "context.assign" } },
   // ----- workflow_template / workflow / workflow_draft / workflow_run / workflow_extension -----
   { resourceType: "workflow_template",  action: "read",    effect: "read",    requiredAccess: { requiredPermission: "workflow_template.read" } },
   { resourceType: "workflow_template",  action: "list",    effect: "read",    requiredAccess: { requiredPermission: "workflow_template.list" } },

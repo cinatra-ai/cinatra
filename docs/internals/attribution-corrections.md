@@ -1084,3 +1084,27 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: dd736768963bc418907337d52f5ce1dc9ecf597b
 ```
+
+## Correction for `afd10ed984dea46d8ed2e4491c56e7228f68b805`
+
+ci: wire the design-pin-freshness gate beside design-pin-drift (PR #3148).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval
+stood on pull request #3148 at that exact head at merge time - but the merge was
+executed through a raw API call whose default squash message omitted the
+verification trailer, so the record carried no verification arm. The change is
+untouched. The human arm this correction records is that standing approval,
+verifiable on the pull request; the trailer is composed by the merge of this
+correction on the maintainer's approval, by the merge tooling.
+
+## Correction for `15958ddd12ef6d06af1b7980d5e3ae624786f80d`
+
+per-scope-assignment S1: stores + authorization substrate + run-scope snapshot (PR #3167).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval
+stood on pull request #3167 at that exact head at merge time - but the merge was
+executed by the forwarding tooling's machine arm, whose message carries the gate
+line and the accountable line and no verification line, so the record of a
+high-risk change carried no verification arm. The change is untouched. The human
+arm this correction records is that standing approval, verifiable on the pull
+request; the correction itself is merged by the maintainer with this message kept.
