@@ -31,8 +31,11 @@ describe("chat auto-scroll lock across thread switches", () => {
     const resetIdx = src.search(
       /userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
     );
+    // The pin's dependency list carries the composer reservation too now
+    // (cinatra#3044): a reservation that moves moves the bottom the stream is
+    // pinned to, so the pin has to re-fire on it.
     const scrollEffectIdx = src.search(
-      /scrollToBottom\(\);\s*\}, \[messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom\]\);/,
+      /scrollToBottom\(\);\s*\}, \[\s*messages,\s*streamingCount,\s*pendingExternalHandle,\s*typingIndicators,\s*scrollToBottom,\s*composerReservedSpace,\s*\]\);/,
     );
     expect(resetIdx).toBeGreaterThan(-1);
     expect(scrollEffectIdx).toBeGreaterThan(-1);

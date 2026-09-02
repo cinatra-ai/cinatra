@@ -1096,3 +1096,252 @@ verification trailer, so the record carried no verification arm. The change is
 untouched. The human arm this correction records is that standing approval,
 verifiable on the pull request; the trailer is composed by the merge of this
 correction on the maintainer's approval, by the merge tooling.
+
+## Correction for `15958ddd12ef6d06af1b7980d5e3ae624786f80d`
+
+per-scope-assignment S1: stores + authorization substrate + run-scope snapshot (PR #3167).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval
+stood on pull request #3167 at that exact head at merge time - but the merge was
+executed by the forwarding tooling's machine arm, whose message carries the gate
+line and the accountable line and no verification line, so the record of a
+high-risk change carried no verification arm. The change is untouched. The human
+arm this correction records is that standing approval, verifiable on the pull
+request; the correction itself is merged by the maintainer with this message kept.
+
+---
+
+## Correction for `79e5daf7191e8df4f25cca0308c394a964d498d7`
+
+correction: verification record for afd10ed98 (PR #3154).
+
+The message that landed ends in three paragraphs — `Assisted-by: none`, then the `Correction-for`
+line, then the squash machinery's `Co-authored-by:` identity line — each separated from the next by
+a blank line. The parser peels the terminal identity paragraph and folds in exactly ONE preceding
+paragraph, so the record paragraph it folds in is the `Correction-for` line alone: the record
+carries no `Assisted-by` and no verification arm, and the post-merge gate red-flagged it twice over
+(no-record for the missing `Assisted-by`, no-record again for the absent arm). Because that commit
+is itself a correction and its own record is invalid, it does not govern afd10ed98 either; that
+target is repaired by a correction naming afd10ed98 directly. This entry repairs 79e5daf71's OWN
+verdict and nothing else. The change is untouched — this repairs the RECORD only.
+
+The commit is documentation only: it appends one entry to this file and touches nothing else, so
+the gate's own classifier reports it not high-risk and the machine arm is the arm it needs. Both
+required contexts concluded success at its reviewed head
+`723d9f11173eb37b7f51de2c8307fffe1aedd47e`: `truthful-attribution-gate` at 2026-08-31T21:51:39Z and
+`source-leak-gate` at 2026-08-31T21:51:50Z. No human arm belongs on this record and none is
+asserted: PR #3154 carries no review of any kind, so a maintainer verification line naming anyone
+would be fabricated.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 79e5daf7191e8df4f25cca0308c394a964d498d7
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the live gate suite, and a later mirror commit
+appends the merge record's composed arm lines to this entry.
+
+---
+
+## Correction for `4a8fb0ef99f0352fc953cada1277848107088cc7`
+
+correction: verification record for 15958ddd1 (PR #3171).
+
+The message that landed ends in three paragraphs — `Assisted-by: none`, then the `Correction-for`
+line, then the squash machinery's `Co-authored-by:` identity line — each separated from the next by
+a blank line. The parser peels the terminal identity paragraph and folds in exactly ONE preceding
+paragraph, so the record paragraph it folds in is the `Correction-for` line alone: the record
+carries no `Assisted-by` and no verification arm, and the post-merge gate red-flagged it twice over
+(no-record for the missing `Assisted-by`, no-record again for the absent arm). Because that commit
+is itself a correction and its own record is invalid, it does not govern 15958ddd1 either; that
+target is repaired by a correction naming 15958ddd1 directly. This entry repairs 4a8fb0ef9's OWN
+verdict and nothing else. The change is untouched — this repairs the RECORD only.
+
+The commit is documentation only: it appends one entry to this file and touches nothing else, so
+the gate's own classifier reports it not high-risk and the machine arm is the arm it needs. Both
+required contexts concluded success at its reviewed head
+`5a7198382ebd47d612d5baa6976636f0acc44f46`: `truthful-attribution-gate` at 2026-09-01T07:58:11Z and
+`source-leak-gate` at 2026-09-01T07:58:22Z. No human arm belongs on this record and none is
+asserted: the only review on PR #3171 is an automated COMMENTED review, never an approval, so a
+maintainer verification line naming anyone would be fabricated.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 4a8fb0ef99f0352fc953cada1277848107088cc7
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the live gate suite, and a later mirror commit
+appends the merge record's composed arm lines to this entry.
+
+---
+
+## Correction for `15958ddd12ef6d06af1b7980d5e3ae624786f80d`
+
+per-scope-assignment S1: stores + authorization substrate + run-scope snapshot (PR #3167).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval stood on pull
+request #3167 at that exact head at merge time — @groganz approved at
+04ac9cefb56ded77dc5d5ae1e787c3e3ae3ef408 on 2026-09-01T07:10:42Z, the latest non-dismissed review
+by that login, APPROVED at the pull request's head sha, non-self (the author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required
+contexts concluded success at that reviewed head: `truthful-attribution-gate` at
+2026-09-01T07:19:11Z and `source-leak-gate` at 2026-09-01T07:19:21Z. The merge was nonetheless
+executed by the forwarding tooling's machine arm, whose message composes the gate line and the
+accountable line and no maintainer verification line, so the record of a high-risk change carried
+no maintainer arm and the post-merge gate red-flagged it (high-risk-without-maintainer). The change
+is untouched — this repairs the RECORD only.
+
+An earlier repair landed as `4a8fb0ef99f0352fc953cada1277848107088cc7`, and the entry it appended
+above is superseded by this one: that commit's own record is invalid, because a blank line
+separates its `Assisted-by` line from its terminal trailer paragraph, and a correction whose own
+record is invalid does not govern. This entry's correction names 15958ddd1 directly, so the
+latest-valid-direct-correction rule resolves to it.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 15958ddd12ef6d06af1b7980d5e3ae624786f80d
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the maintainer's approval standing on the
+correction pull request, and a later mirror commit appends the merge record's composed arm lines to
+this entry.
+
+---
+
+## Correction for `afd10ed984dea46d8ed2e4491c56e7228f68b805`
+
+ci: wire the design-pin-freshness gate beside design-pin-drift (PR #3148).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval stood on pull
+request #3148 at that exact head at merge time — @groganz approved at
+54535813af5af355226e4f65aa7ed16ae46022ff on 2026-08-31T19:42:32Z, the latest non-dismissed review
+by that login, APPROVED at the pull request's head sha, non-self (the author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required
+contexts concluded success at that reviewed head: `truthful-attribution-gate` at
+2026-08-31T19:55:38Z and `source-leak-gate` at 2026-08-31T18:56:56Z. The merge was nonetheless
+executed through a raw API call whose default squash message carried neither the verification line
+nor the gate lines, so the record carried one `Assisted-by` line and no verification arm at all and
+the post-merge gate red-flagged it (no-record). The change is untouched — this repairs the RECORD
+only.
+
+An earlier repair landed as `79e5daf7191e8df4f25cca0308c394a964d498d7`, and the entry it appended
+above is superseded by this one: that commit's own record is invalid, because a blank line
+separates its `Assisted-by` line from its terminal trailer paragraph, and a correction whose own
+record is invalid does not govern. This entry's correction names afd10ed98 directly, so the
+latest-valid-direct-correction rule resolves to it.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: afd10ed984dea46d8ed2e4491c56e7228f68b805
+```
+
+The correction commit states no verification line of its own: the verification arm is composed at
+the correction's merge, by the merge tooling, from the maintainer's approval standing on the
+correction pull request, and a later mirror commit appends the merge record's composed arm lines to
+this entry.
+
+---
+
+## Correction for `757ab2a91be681cea128dd7058fe469217c94417`
+
+correction: verification record for afd10ed98 (ci: wire the design-pin-freshness gate beside
+design-pin-drift) (PR #3177).
+
+The message that landed carries TWO `Correction-for` lines in one record block —
+`15958ddd12ef6d06af1b7980d5e3ae624786f80d` and `afd10ed984dea46d8ed2e4491c56e7228f68b805` — because
+the merge tooling composed this merge's record from a stacked sibling's trailer block as well as
+this branch's own. The ratified grammar admits exactly ONE `Correction-for` line per record, so a
+second one is a grammar violation and the record is invalid. Because a correction whose own record
+is invalid does not govern, this commit repairs neither of the two commits it names: afd10ed98's
+record is repaired instead by a correction naming afd10ed98 directly, on its own branch, and
+15958ddd1's record already stands repaired by the correction naming it directly. This entry repairs
+757ab2a91's OWN verdict and nothing else. The change is untouched — this repairs the RECORD only.
+
+The commit is documentation only: it appends one entry to this file and touches nothing else, so
+the gate's own classifier reports it not high-risk and the machine arm is the arm it needs. A
+maintainer arm nonetheless stood behind it truthfully and is restated here rather than dropped:
+@groganz approved pull request #3177 at `87933313e967458cfc9dbcb0519bea0717270444` on
+2026-09-01T14:10:45Z, the latest non-dismissed review by that login, APPROVED at the pull request's
+head sha, non-self (the author is @groganz-bot[bot]), and that login's repository permission is
+admin, which meets tier=maintainer. Both required contexts concluded success at that same reviewed
+head: `truthful-attribution-gate` at 2026-09-01T14:02:49Z and `source-leak-gate` at
+2026-09-01T14:02:58Z. The defect in the record is the duplicate `Correction-for` line alone; every
+other line the message carries is truthful.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 757ab2a91be681cea128dd7058fe469217c94417
+```
+
+Every assistant the corrected record named is carried forward and the agent that produced this
+correction is already among them, so nothing is dropped and nothing is invented.
+
+The correction commit states no verification line of its own: the verification arm of this
+correction is composed at its merge, by the merge tooling, from the live gate suite, and a later
+mirror commit appends the merge record's composed arm lines to this entry.
+
+---
+
+## Correction for `afd10ed984dea46d8ed2e4491c56e7228f68b805`
+
+ci: wire the design-pin-freshness gate beside design-pin-drift (PR #3148).
+
+The squash landed the reviewed head's tree exactly, and the maintainer's approval stood on pull
+request #3148 at that exact head at merge time — @groganz approved at
+`54535813af5af355226e4f65aa7ed16ae46022ff` on 2026-08-31T19:42:32Z, the latest non-dismissed review
+by that login, APPROVED at the pull request's head sha, non-self (the author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required contexts
+concluded success at that reviewed head: `truthful-attribution-gate` at 2026-08-31T19:55:38Z and
+`source-leak-gate` at 2026-08-31T18:56:56Z. The merge was nonetheless executed through a raw API
+call whose default squash message carried neither the verification line nor the gate lines, so the
+record carried one `Assisted-by` line and no verification arm at all and the post-merge gate
+red-flagged it (no-record). The change is untouched — this repairs the RECORD only. The change
+itself edits a workflow file and is therefore high-risk under the gate's own classifier, which is
+why a maintainer arm is the arm it needs; this correction, by contrast, touches only this
+documentation file.
+
+Two earlier repairs of this target have now failed in turn, and both entries appended above are
+superseded by this one. `79e5daf7191e8df4f25cca0308c394a964d498d7` is invalid because a blank line
+separates its `Assisted-by` line from its terminal trailer paragraph. Its successor
+`757ab2a91be681cea128dd7058fe469217c94417` is invalid because its message carries two
+`Correction-for` lines in one record block, the second copied in from a stacked sibling by the merge
+tooling; the grammar admits exactly one. A correction whose own record is invalid does not govern,
+so neither of them repairs afd10ed98. This entry's correction names afd10ed98 directly and carries
+exactly one `Correction-for` line, so the latest-valid-direct-correction rule resolves to it.
+
+The trailer block the correction commit carries, verbatim:
+
+```
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: afd10ed984dea46d8ed2e4491c56e7228f68b805
+```
+
+That union is the assistant the corrected record itself named, plus the agents that authored the
+superseded repair, plus the agent that produced this correction; nothing is dropped and nothing is
+invented.
+
+The correction commit states no verification line of its own: the verification arm of this
+correction is composed at its merge, by the merge tooling, from the maintainer's approval standing
+on the correction pull request, and a later mirror commit appends the merge record's composed arm
+lines to this entry.
+||||||| 757ab2a91b

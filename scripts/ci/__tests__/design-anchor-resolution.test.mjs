@@ -45,6 +45,7 @@ import {
   UnsupportedSelectorError,
   attributeIndexOf,
   checkAnchorResolution,
+  drawingIndexOf,
   collectRecordedAnchors,
   decide,
   formatReport,
@@ -134,19 +135,171 @@ describe("matching is exact, over parsed tags", () => {
     );
   });
 
-  it("refuses every selector form beyond one attribute predicate", () => {
+  it("refuses every selector form outside the decidable set", () => {
     for (const bad of [
-      '[data-a="b"][data-c="d"]',
       '[data-a="b"] [data-c="d"]',
       'div[data-a="b"]',
-      ".card",
       "#card",
       '[data-a^="b"]',
       "[data-a=b]",
+      ".card.other",
+      '.card[data-a="b"]',
+      '[data-a="b"].card',
+      "[data-a]junk",
+      "[]",
+      ".",
       "",
     ]) {
       expect(() => parseAnchorSelector(bad), JSON.stringify(bad)).toThrow(UnsupportedSelectorError);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two forms the recorded set carries and this matcher used to refuse
+// ---------------------------------------------------------------------------
+
+describe("a class selector is decided against the elements that carry the class", () => {
+  it("parses as a class form rather than throwing", () => {
+    expect(parseAnchorSelector(".cw-frame")).toMatchObject({ form: "class", className: "cw-frame" });
+  });
+
+  it("resolves against an element whose class list carries the token", () => {
+    expect(resolvesIn(drawingIndexOf('<div class="cw-frame is-open">x</div>'), ".cw-frame")).toBe(
+      true,
+    );
+  });
+
+  it("resolves when the token is one of several, in any position", () => {
+    for (const value of ["cw-frame", "a cw-frame", "cw-frame b", "a  cw-frame\n b"]) {
+      expect(resolvesIn(drawingIndexOf(`<div class="${value}">x</div>`), ".cw-frame"), value).toBe(
+        true,
+      );
+    }
+  });
+
+  it("does NOT resolve on a class whose name merely contains the token", () => {
+    expect(resolvesIn(drawingIndexOf('<div class="cw-frame-outer">x</div>'), ".cw-frame")).toBe(
+      false,
+    );
+  });
+
+  it("does NOT resolve against a drawing that draws no such class", () => {
+    expect(resolvesIn(drawingIndexOf('<div class="card">x</div>'), ".cw-frame")).toBe(false);
+  });
+
+  it("does NOT resolve a class named only in prose, a code sample or a comment", () => {
+    for (const drawing of [
+      "<p>The widget is reached by .cw-frame on the host page.</p>",
+      '<pre><code>&lt;div class="cw-frame"&gt;&lt;/div&gt;</code></pre>',
+      '<pre><div class="cw-frame"></div></pre>',
+      '<!-- <div class="cw-frame"></div> -->',
+    ]) {
+      expect(resolvesIn(drawingIndexOf(drawing), ".cw-frame"), drawing).toBe(false);
+    }
+  });
+
+  it("does NOT resolve a token carried only by a SECOND class attribute", () => {
+    // An HTML parser keeps the first `class` on an element and drops the
+    // rest, so the second one draws nothing and must decide nothing.
+    const index = drawingIndexOf('<div class="other" class="cw-frame">x</div>');
+    expect(resolvesIn(index, ".cw-frame")).toBe(false);
+    expect(resolvesIn(index, ".other")).toBe(true);
+  });
+
+  it("does NOT split a class value on a no-break space", () => {
+    // HTML separates class tokens on ASCII whitespace only. `a\u00a0b` is ONE
+    // token in the DOM, so neither half of it is a class this drawing carries.
+    const index = drawingIndexOf('<div class="other\u00a0cw-frame">x</div>');
+    expect(resolvesIn(index, ".cw-frame")).toBe(false);
+    expect(resolvesIn(index, ".other")).toBe(false);
+  });
+});
+
+describe("a compound attribute predicate is decided against ONE element at a time", () => {
+  const SELECTOR = '[data-embed-assistant][data-phase="active"]';
+
+  it("parses as a compound of every term rather than throwing", () => {
+    expect(parseAnchorSelector(SELECTOR)).toMatchObject({
+      form: "compound",
+      terms: [
+        { attribute: "data-embed-assistant", value: null },
+        { attribute: "data-phase", value: "active" },
+      ],
+    });
+  });
+
+  it("resolves when ONE element satisfies every term", () => {
+    expect(
+      resolvesIn(drawingIndexOf('<div data-embed-assistant data-phase="active">x</div>'), SELECTOR),
+    ).toBe(true);
+  });
+
+  it("does NOT resolve when the terms are scattered over different elements", () => {
+    // This is the whole reason the index had to become per-element: a flat
+    // attribute index answers yes to each term on its own, and a compound that
+    // read it would certify an anchor no single element draws.
+    const index = drawingIndexOf('<div data-embed-assistant>x</div><div data-phase="active">y</div>');
+    expect(resolvesIn(index, SELECTOR)).toBe(false);
+    expect(resolvesIn(index, "[data-embed-assistant]")).toBe(true);
+    expect(resolvesIn(index, '[data-phase="active"]')).toBe(true);
+  });
+
+  it("does NOT resolve when a term's value differs on the element that carries both", () => {
+    expect(
+      resolvesIn(drawingIndexOf('<div data-embed-assistant data-phase="idle">x</div>'), SELECTOR),
+    ).toBe(false);
+  });
+
+  it("does NOT resolve a compound drawn only inside a code sample", () => {
+    expect(
+      resolvesIn(drawingIndexOf('<pre><div data-embed-assistant data-phase="active"></div></pre>'), SELECTOR),
+    ).toBe(false);
+  });
+
+  it("reads a repeated attribute on one element as its FIRST value", () => {
+    // Same parser rule as the class list: the second `data-phase` is dropped,
+    // so an element written `idle` first does not satisfy the `active` term.
+    const index = drawingIndexOf(
+      '<div data-embed-assistant data-phase="idle" data-phase="active">x</div>',
+    );
+    expect(resolvesIn(index, SELECTOR)).toBe(false);
+    expect(resolvesIn(index, '[data-embed-assistant][data-phase="idle"]')).toBe(true);
+  });
+});
+
+describe("the decidable set did not grow beyond those two forms", () => {
+  it("still refuses a descendant compound, and the report still says REFUSED", () => {
+    const report = checkAnchorResolution({
+      pin: pin(),
+      anchors: [anchor('[data-a="b"] [data-c="d"]')],
+      governed: [{ path: "specs/one.html", text: drawingWith('[data-a="b"]') }],
+      others: [],
+    });
+    expect(report.refused).toHaveLength(1);
+    expect(report.unresolved).toHaveLength(0);
+    expect(formatReport(report)).toContain("REFUSED");
+  });
+
+  it("decides both of the recorded forms rather than refusing them", () => {
+    const report = checkAnchorResolution({
+      pin: pin(),
+      anchors: [
+        anchor(".cw-frame", "site_widget", "capture"),
+        anchor('[data-embed-assistant][data-phase="active"]', "site_widget", "capture"),
+      ],
+      governed: [
+        {
+          path: "specs/one.html",
+          text:
+            '<!doctype html><div class="cw-frame">' +
+            '<span data-embed-assistant data-phase="active">x</span></div>',
+        },
+      ],
+      others: [],
+    });
+    expect(report.refused).toHaveLength(0);
+    expect(report.unresolved).toHaveLength(0);
   });
 });
 
@@ -232,7 +385,7 @@ describe("the report", () => {
     }
   });
 
-  it("REFUSES the selector form the live recorder set carries today, and names it", () => {
+  it("DECIDES every selector the live recorded set carries today, refusing none", () => {
     const anchors = collectRecordedAnchors({
       anchorContract: contract(),
       captureAnchors: captureAnchorExpectations(),
@@ -244,14 +397,15 @@ describe("the report", () => {
       others: [],
     });
     // Measured, not assumed: the frame-wide requirements carry a class
-    // selector, which is not one attribute predicate. It is refused BY NAME
-    // rather than counted either way, and the rest of the set is still read.
-    expect(report.refused.length).toBeGreaterThan(0);
-    for (const r of report.refused) expect(r.status).toBe("refused");
+    // selector and a compound attribute predicate, and both are now DECIDED
+    // against the drawing rather than refused. A form outside the decidable
+    // set is still refused by name — the suite above holds that half.
+    expect(report.refused).toHaveLength(0);
     expect(report.unresolved.length).toBeGreaterThan(0);
-    const text = formatReport(report);
-    for (const r of report.refused) expect(text).toContain(r.selector);
-    expect(text).toContain("REFUSED");
+    const selectors = report.unresolved.map((r) => r.selector);
+    expect(selectors).toContain(".cw-frame");
+    expect(selectors).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(formatReport(report)).toContain("UNRESOLVED");
   });
 });
 
@@ -354,7 +508,19 @@ describe("the CLI", () => {
       throw new Error(`unexpected git ${args.join(" ")}`);
     };
 
-  async function run({ argv = [], env = {}, dir, anchors, touched = [], pins }) {
+  // `recordedUnresolved` defaults to null because these runs drive FIXTURE
+  // drawings: reading the repository's own recorded set into them would compare
+  // a record about the real drawings with a finding about a two-line fixture,
+  // and turn a suite about the CHECKER red every time the RECORD moves.
+  async function run({
+    argv = [],
+    env = {},
+    dir,
+    anchors,
+    touched = [],
+    pins,
+    recordedUnresolved = null,
+  }) {
     const out = [];
     const err = [];
     const code = await runCli({
@@ -362,6 +528,7 @@ describe("the CLI", () => {
       env: { DESIGN_DRAWINGS_DIR: dir, DESIGN_PIN_DRIFT_DIFF_BASE: "base", ...env },
       pins,
       anchors,
+      recordedUnresolved,
       runGit: gitStub(touched),
       log: (l) => out.push(String(l)),
       logError: (l) => err.push(String(l)),
@@ -441,7 +608,7 @@ describe("the CLI", () => {
   it("exits 2 on an unsupported selector rather than reporting it unresolved", async () => {
     const dir = drawingsDir();
     write(dir, "one.html", drawingWith('[data-other="x"]'));
-    const r = await run({ dir, pins: [pin()], anchors: [anchor(".card")] });
+    const r = await run({ dir, pins: [pin()], anchors: [anchor('[data-a="b"] [data-c="d"]')] });
     expect(r.code).toBe(2);
     expect(r.all).toContain("could not run");
   });
@@ -468,16 +635,20 @@ describe("the CLI", () => {
 // ---------------------------------------------------------------------------
 
 describe("anchorsUnresolvedAtPin is a fourth digest input", () => {
-  it("leaves today's recorded digest exactly where it stands while it is absent", () => {
+  it("is bound into today's recorded digest, now that the adoption has recorded it", () => {
     expect(auditAnchorContract({ anchorContract: contract(), manifest: manifest() })).toEqual([]);
-    const recomputed = computeAnchorDigest(
-      anchorDigestInputs({
-        specCommit: manifest().specCommit,
-        domExpectations: contract().domExpectations,
-        captureAnchors: captureAnchorExpectations(),
-      }),
+    const three = {
+      specCommit: manifest().specCommit,
+      domExpectations: contract().domExpectations,
+      captureAnchors: captureAnchorExpectations(),
+    };
+    const withRecorded = computeAnchorDigest(
+      anchorDigestInputs({ ...three, anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin }),
     );
-    expect(recomputed).toBe(contract().digest);
+    expect(withRecorded).toBe(contract().digest);
+    // and dropping it moves the digest, which is what makes it an input rather
+    // than a comment beside one.
+    expect(computeAnchorDigest(anchorDigestInputs(three))).not.toBe(contract().digest);
   });
 
   it("moves the digest the moment it is recorded, and again when it is edited", () => {
@@ -576,12 +747,37 @@ describe("the adoption road refuses to answer while a selector is refused", () =
     write(dir, "one.html", drawingWith('[data-other="x"]'));
     const r = await printUnresolved({
       dir,
-      anchors: [anchor('[data-lifecycle-card="verification_summary"]'), anchor(".cw-frame")],
+      anchors: [
+        anchor('[data-lifecycle-card="verification_summary"]'),
+        anchor('[data-a="b"] [data-c="d"]'),
+      ],
     });
     expect(r.code).toBe(2);
     expect(r.out.trim()).toBe("");
     expect(r.err).toContain("could not run");
-    expect(r.err).toContain(".cw-frame");
+    expect(r.err).toContain('[data-a="b"] [data-c="d"]');
+  });
+
+  it("PRINTS the array for a recorded set carrying the two forms it now decides", async () => {
+    // The measured defect: this road refused to answer at all while the two
+    // forms below were undecidable, so the adoption transaction could never
+    // record what the re-examination found. Both are decided here, and the one
+    // the drawing does not draw is reported as unresolved rather than refused.
+    const dir = drawingsDir();
+    write(
+      dir,
+      "one.html",
+      '<!doctype html><div class="cw-frame">x</div><span data-embed-assistant>y</span>',
+    );
+    const r = await printUnresolved({
+      dir,
+      anchors: [
+        anchor(".cw-frame", "site_widget", "capture"),
+        anchor('[data-embed-assistant][data-phase="active"]', "site_widget", "capture"),
+      ],
+    });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toEqual(['[data-embed-assistant][data-phase="active"]']);
   });
 
   it("still prints the array, and exits 0, when nothing is refused", async () => {
@@ -627,6 +823,7 @@ describe("a run that did not read the sibling drawings says so", () => {
       env: {},
       pins: [pin()],
       anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
+      recordedUnresolved: null,
       createReader: remoteReader(drawingWith('[data-other="x"]')),
       runGit: () => "",
       log: (l) => out.push(String(l)),
@@ -703,8 +900,13 @@ describe("a recorded anchorsUnresolvedAtPin is compared with what this check fin
     expect(r.all).not.toContain("is not what this check finds");
   });
 
-  it("is silent while the key is absent, which is this repository's state today", () => {
-    expect(contract().anchorsUnresolvedAtPin).toBeUndefined();
+  it("has a recorded set to compare against, which is this repository's state today", () => {
+    const recorded = contract().anchorsUnresolvedAtPin;
+    expect(Array.isArray(recorded)).toBe(true);
+    expect(recorded.length).toBeGreaterThan(0);
+    // sorted and without a repeat — the shape the contract's own audit refuses
+    // in any other form, because a re-examination may not hide behind an order.
+    expect([...recorded]).toEqual([...new Set(recorded)].sort());
   });
 });
 

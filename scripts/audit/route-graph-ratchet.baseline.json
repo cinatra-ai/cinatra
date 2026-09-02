@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 223,
     "/api/mcp": 1761,
-    "/chat": 1862,
+    "/chat": 1864,
     "/api/a2a": 1769,
     "/api/llm-bridge": 1779
   },
@@ -27,10 +27,10 @@
       "pr": 3048
     },
     "/chat": {
-      "from": 1857,
-      "to": 1862,
-      "reason": "cinatra#3048 (issue #3047, fix/3047-skills-row-one-place) carries this record; it REPLACES the record the branch carried before it was levelled onto main, whose ceiling this raise moves — the one lifecycle the gate allows for an annotation whose ceiling changes. The branch is levelled onto main by a MERGE commit, so `from` is main OWN committed ceiling for this route and `to` is the merged tree measured count. ATTRIBUTED BY MEASUREMENT, not argued and not hand-merged: in ONE environment, with the companion extension fleet cloned PINNED (115/115, missingCount 0) and the merged scripts/route-graph.mjs, the merged tree measures 1761 (/api/mcp), 1862 (/chat), 1769 (/api/a2a) and 1779 (/api/llm-bridge) — each exactly main OWN committed ceiling for that route plus 5, the SAME five first-party modules on each of the four routes: src/lib/artifacts/artifact-content-channel.ts, src/lib/artifacts/artifact-content-substance-reader.ts, src/lib/artifacts/object-backed-contract.ts, src/lib/vendor-presentation.ts and packages/sdk-extensions/src/artifact-content-channel.ts — the versioned artifact content channel this branch binds, entering the artifact-renderer dispatch spine that all four routes share. The growth is ADDITIVE to main OWN growth on these routes: no module leaves any route reachable set (removed = 0 on all five tracked routes), and /sign-in takes no growth from this branch, so it keeps main committed ceiling and its carried-forward record.",
-      "pr": 3048
+      "from": 1862,
+      "to": 1864,
+      "reason": "cinatra#3079 (issue #3062, feat/3062-skills-card-checkboxes-chat-and-widget) carries this record. This is the FORWARD merge that brings origin/main into the branch, so `from` (1862) is the BASE branch's own committed ceiling for this route — fix/3047-skills-row-one-place, which this pull request is stacked on — and `to` (1864) is the merged tree MEASURED. The record it replaces on this branch is the PR #3048 record (1857 to 1862), and that raise is not re-absorbed here: its five artifact-content-channel modules are already inside 1862. WHAT THE RAISE IS, as a module set and not only as a number: exactly TWO modules enter this route's graph and none leaves, and BOTH come from origin/main rather than from this branch — packages/chat/src/run-seed-request.ts and packages/chat/src/composer-reserved-space.ts, the two net-new first-party modules origin/main's own /chat record (PR #3053, cinatra#3044) names and attributes at +1 each, neither of which exists on this branch's pre-merge head 98c7393df1bb22779847bde0de4b780a5df5f210. The branch itself takes NO growth on this route from the merge: it draws the skills row as checkbox pills inside modules this route already reaches. HOW IT WAS MEASURED, the way CI measures, on the MERGED tree itself and not computed: with the companion extension fleet cloned PINNED (115/115, missingCount 0) and the merge's own unmodified scripts/route-graph.mjs, the merged tree measures 1864 on this route and EXACTLY the base branch's committed ceiling on every other tracked route — 1761 /api/mcp, 1769 /api/a2a, 1779 /api/llm-bridge, each at headroom 0 — so the base's own ceilings reproduce here unchanged and the whole +2 on this route is origin/main's. /sign-in measures 163, 60 UNDER its 223 ceiling, and is left exactly where it was committed, record included: a ceiling is a ceiling, and this forward merge does not ratchet an untouched route down. Narrowing is not available for either module: origin/main's record measured each one back into its importers and recorded that folding either back is exactly the duplication the change removes.",
+      "pr": 3079
     },
     "/sign-in": {
       "from": 222,
