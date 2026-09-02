@@ -220,6 +220,52 @@ function parseComposedFloorMessage(error: string): RunFailureFloorEntry[] | null
   return entries;
 }
 
+/** `\s` for exactly ONE character - a fixed-size test, never a scan. */
+const SINGLE_WHITESPACE = /^\s$/;
+
+/**
+ * Split an outcome head of the old shape `outputId [extension]` in ONE linear
+ * pass, and answer null when the head does not have that shape.
+ *
+ * WHY THIS IS NOT A PATTERN. The head is producer text - it arrives from
+ * whatever sentence the pre-floor materializer persisted - so the cost of
+ * taking it apart may depend on its LENGTH and on nothing the producer
+ * chooses. The pattern this replaces, `^(\S+)\s*\[([^\]]*)\]$`, cannot promise
+ * that: `\S` also matches `[`, so the id and the opening bracket compete for
+ * the same characters, and a head that opens brackets and never closes one
+ * makes the engine try the bracket at every position and re-scan the tail from
+ * each - quadratic in the length of a string the producer chose.
+ *
+ * The scan below answers the SAME split. Greedy `\S+` prefers the longest id,
+ * so the bracket that opens right after the head whitespace run wins when
+ * there is one, and otherwise the LAST `[` inside the leading non-space run
+ * does; the bracket content may not contain `]`, so the opening bracket must
+ * also sit after every other `]` in the head. Each of those is one bounded
+ * lookup, so the whole split is linear and its result is character for
+ * character what the pattern answered.
+ */
+function splitBracketedHead(head: string): { outputId: string; extension: string } | null {
+  const closeAt = head.length - 1;
+  // `\[([^\]]*)\]$` needs at least "x[]" - a closing bracket at the end and a
+  // non-empty id before the opening one.
+  if (closeAt < 2 || head[closeAt] !== "]") return null;
+  const lastOtherClose = head.lastIndexOf("]", closeAt - 1);
+  let idEnd = 0;
+  while (idEnd < head.length && !SINGLE_WHITESPACE.test(head[idEnd])) idEnd += 1;
+  if (idEnd === 0) return null; // `\S+` needs at least one non-space character
+  let afterSpace = idEnd;
+  while (afterSpace < head.length && SINGLE_WHITESPACE.test(head[afterSpace])) afterSpace += 1;
+  const openAt =
+    afterSpace > idEnd && head[afterSpace] === "["
+      ? afterSpace
+      : head.lastIndexOf("[", idEnd - 1);
+  if (openAt < 1 || openAt <= lastOtherClose) return null;
+  return {
+    outputId: head.slice(0, openAt === afterSpace ? idEnd : openAt),
+    extension: head.slice(openAt + 1, closeAt),
+  };
+}
+
 /**
  * Reduce a row written BEFORE this change. The old sentence carried the detail
  * as `outputId [extension]: raw reason`, joined by "; ", after the first "): ".
@@ -246,9 +292,9 @@ function parseLegacyMaterializationMessage(error: string): RunFailureFloorEntry[
     if (part.length === 0) continue;
     const colonAt = part.indexOf(": ");
     const head = (colonAt === -1 ? part : part.slice(0, colonAt)).trim();
-    const bracket = /^(\S+)\s*\[([^\]]*)\]$/.exec(head);
-    const outputId = bracket === null ? head : bracket[1];
-    const extension = bracket === null ? null : bracket[2];
+    const bracket = splitBracketedHead(head);
+    const outputId = bracket === null ? head : bracket.outputId;
+    const extension = bracket === null ? null : bracket.extension;
     if (!FLOOR_TOKEN_CHARSET.test(outputId)) continue;
     if (outputId.length > FLOOR_TOKEN_MAX_CHARS) continue;
     entries.push({

@@ -253,3 +253,104 @@ describe("the floor never draws a producer's text as a token", () => {
     expect(runFailureFloorForDisplay(lookalike)).toBeNull();
   });
 });
+
+describe("reducing a legacy row is linear in the length of the text", () => {
+  // The head of a legacy outcome fragment is producer text: it arrives from
+  // whatever sentence the old materializer persisted, so the cost of taking it
+  // apart has to depend on its LENGTH and nothing else. The pattern this suite
+  // pins replaced an ambiguous one whose bracket could also be eaten by the id,
+  // which made a head that never closes its bracket retry at every position and
+  // re-scan the tail from each - quadratic, on a string a producer chooses.
+  it("answers promptly for a head that is a long run of unclosed brackets", () => {
+    const head = "[".repeat(200_000);
+    const legacy =
+      `artifact materialization failed ${DASH} the run declared artifact output(s) it did not produce ` +
+      `(1 of 1 failed): ${head}: unresolved`;
+
+    const startedAt = Date.now();
+    const entries = runFailureFloorForDisplay(legacy);
+    const elapsedMs = Date.now() - startedAt;
+
+    // A DELIBERATELY LOOSE wall clock. The number this test defends is an
+    // ORDER OF GROWTH, not a latency: the replaced pattern took about fifteen
+    // SECONDS on this head and the linear scan takes single-digit
+    // milliseconds, so a budget three orders of magnitude above the linear
+    // cost still fails loudly on a quadratic reduction while leaving a shared
+    // runner all the descheduling and garbage-collection headroom it needs.
+    expect(elapsedMs).toBeLessThan(5_000);
+    // The head is not token-shaped, so it is DROPPED rather than drawn - the
+    // floor still answers, and it never carries the producer text.
+    expect(entries).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    expect((entries ?? []).map(formatRunFailureFloorLine).join("\n")).not.toContain("[");
+  });
+
+  // Parity guard for the linear scan: every one of these heads must split
+  // exactly the way the pattern it replaced did.
+  it("splits every legacy head shape the way the pattern it replaced did", () => {
+    const floorFor = (head: string) =>
+      runFailureFloorForDisplay(
+        `artifact materialization failed ${DASH} the run declared artifact output(s) it did not produce ` +
+          `(1 of 1 failed): ${head}: raw producer sentence`,
+      );
+
+    // id + space + bracketed package
+    expect(floorFor("draft [@acme/writer]")).toEqual([
+      { package: "@acme/writer", slot: "draft", reason: "output-not-produced" },
+    ]);
+    // no space between the id and the bracket
+    expect(floorFor("draft[@acme/writer]")).toEqual([
+      { package: "@acme/writer", slot: "draft", reason: "output-not-produced" },
+    ]);
+    // empty bracket - a known id with no package named
+    expect(floorFor("draft[]")).toEqual([
+      { package: "unknown", slot: "draft", reason: "output-not-produced" },
+    ]);
+    // no bracket at all - the whole head is the id
+    expect(floorFor("draft")).toEqual([
+      { package: "unknown", slot: "draft", reason: "output-not-produced" },
+    ]);
+    // a bracket that never closes: not a bracketed head, and the head that is
+    // left is not token-shaped, so nothing is drawn from it
+    expect(floorFor("draft [@acme/writer")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // a second bracket pair: the id keeps the earlier one and is then not
+    // token-shaped, so the fragment is dropped
+    expect(floorFor("a[b][c]")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // two words before the bracket - the pattern never spanned a second space
+    expect(floorFor("two words [@acme/writer]")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // the separator is any WHITESPACE, not a space: a tab and a no-break space
+    // are both `\s`, so both heads split exactly like the space-separated one
+    expect(floorFor("draft\t[@acme/writer]")).toEqual([
+      { package: "@acme/writer", slot: "draft", reason: "output-not-produced" },
+    ]);
+    expect(floorFor("draft\u00a0[@acme/writer]")).toEqual([
+      { package: "@acme/writer", slot: "draft", reason: "output-not-produced" },
+    ]);
+    // a head that OPENS with the bracket: the id may not be empty, so this is
+    // not a bracketed head at all and the whole text stays the id
+    expect(floorFor("[@acme/writer]")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // text AFTER the closing bracket: the shape is anchored at both ends, so a
+    // trailing word makes the head unbracketed
+    expect(floorFor("draft [@acme/writer] extra")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // a bracket pair INSIDE the id run: the last opening bracket wins and the
+    // id that is left carries brackets, so it is not token-shaped
+    expect(floorFor("draft[inner][@acme/writer]")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+    // a closing bracket inside the id run, with the opening bracket after it
+    expect(floorFor("a]b[c]")).toEqual([
+      { package: "unknown", slot: "unknown", reason: "output-not-produced" },
+    ]);
+  });
+});
