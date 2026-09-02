@@ -13,7 +13,20 @@ export type AgentInstanceNavProps = {
    * `activeTab="overview"`. The prop and its dead branch are removed with it —
    * the agent workspace is Setup / Trigger / Permissions.
    */
-  activeTab: "setup" | "run" | "trigger" | "permissions";
+  /**
+   * `"none"` NAMES NO TRIGGER THE STRIP CARRIES (cinatra#3182 item 8, and with
+   * it cinatra#3168's dangling reference).
+   *
+   * Application Design — Agents, the run view's conditional-tab section: "A step
+   * drawn inside this frame never lights a tab the strip does not carry." A run
+   * standing at its scheduling step is standing at a STEP, not in the body of a
+   * tab, so the frame must be able to say "nothing is selected" — and say it
+   * without pointing at a tab that is not rendered. Radix selects the trigger
+   * whose value matches, so a value no trigger carries lights nothing while the
+   * strip itself is unchanged: the same tabs on every route, which is the
+   * constant frame cinatra#2487 bought.
+   */
+  activeTab: "setup" | "run" | "trigger" | "permissions" | "none";
   /**
    * When true, renders the Trigger tab.
    * Only shown when agent_run_triggers row exists AND triggerType IN ('scheduled','recurring')
