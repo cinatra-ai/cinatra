@@ -379,9 +379,13 @@ function SpinnerCard({
 function ReviewGateStepCard({
   cardRef,
   reviewSurfaceUrl,
+  runId,
 }: {
   cardRef: string | null;
   reviewSurfaceUrl: string | null;
+  /** The run this step belongs to — the gate's prompt window keeps its exchange
+   * with it (cinatra#3141 item 1). */
+  runId: string | null;
 }) {
   if (cardRef) {
     return (
@@ -392,6 +396,7 @@ function ReviewGateStepCard({
             schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
             ref: cardRef,
           }}
+          runId={runId}
         />
       </LifecycleCardSurfaceProvider>
     );
@@ -2040,7 +2045,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         ? reviewValues.reviewSurfaceUrl
         : null;
     stageCard = (
-      <ReviewGateStepCard cardRef={cardRef} reviewSurfaceUrl={reviewSurfaceUrl} />
+      <ReviewGateStepCard cardRef={cardRef} reviewSurfaceUrl={reviewSurfaceUrl} runId={runId} />
     );
   } else if (status === "pending_approval" && effectiveInterruptContext !== null && !awaitingNextStep) {
     // Go directly to approval card — no SkillsPreviewCard interstitial (req 4).
@@ -2126,7 +2131,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard =
       status === "completed" ? (
         reviewSlot.ref ? (
-          <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} />
+          <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
         ) : reviewMayStillOpen ? (
           <Card data-run-review-slot="working">
             <CardContent className="p-6">

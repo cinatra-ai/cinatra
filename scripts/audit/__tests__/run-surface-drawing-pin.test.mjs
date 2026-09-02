@@ -72,7 +72,7 @@ describe("the run surface's drawing pin is recorded", () => {
     );
   });
 
-  it("says why the anchor contract's own pin did not move with it", () => {
+  it("says why this change moves no pin of its own", () => {
     // A pin that moves silently is a claim nobody made. This one is deliberate
     // and the reason is on file, so a reader is never left to infer it from the
     // fact that two pins in one file disagree.
@@ -82,7 +82,43 @@ describe("the run surface's drawing pin is recorded", () => {
     expect(
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
-    // And it did not move: the digest below is still computed over it.
     expect(CONTRACT.specCommit).toMatch(/app-lifecycle-cards\.html$/);
+  });
+});
+
+/**
+ * THE FORWARD KEEPS BOTH RECORDS (the merge-forward with the main line's pin
+ * adoption).
+ *
+ * `specCommit` and this record are two DIFFERENT pins in one file, and a
+ * merge-forward is exactly where one of them quietly wins. The main line adopted
+ * a newer `specCommit` and recorded the anchor set that resolves at it; this
+ * branch recorded the run surface's own drawing pin. Both survive, and the note
+ * beside the run-surface pin reads against the pin the file actually carries
+ * rather than the one it carried before the forward.
+ */
+describe("the merge-forward keeps both of the file's pins", () => {
+  it("carries the adopted anchor set the newer pin was recorded with", () => {
+    expect(Array.isArray(CONTRACT.anchorsUnresolvedAtPin)).toBe(true);
+    expect(CONTRACT.anchorsUnresolvedAtPin.length).toBeGreaterThan(0);
+    // Sorted and unique, which is how the adoption writes it -- a hand-merged
+    // union of two sides would not be either.
+    expect(CONTRACT.anchorsUnresolvedAtPin).toEqual(
+      [...new Set(CONTRACT.anchorsUnresolvedAtPin)].sort(),
+    );
+  });
+
+  it("keeps the run surface's own pin beside it, untouched", () => {
+    expect(CONTRACT.runSurfaceDrawingPin.pin).toBe(RATIFIED_DRAWING_PIN);
+  });
+
+  it("does not claim the anchor pin stands where it stood before the forward", () => {
+    const why = CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved;
+    const recordedPin = CONTRACT.specCommit.match(/design@([0-9a-f]{40})/)[1];
+    // The note must not name a commit other than the one the file carries: that
+    // is the shape a forward that took the older pin's prose would leave.
+    for (const named of why.match(/[0-9a-f]{40}/g) ?? []) {
+      expect(named).toBe(recordedPin);
+    }
   });
 });

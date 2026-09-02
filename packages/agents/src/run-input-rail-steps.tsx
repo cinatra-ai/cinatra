@@ -41,8 +41,8 @@
 //   ratified drawing pin: c73c68f5e39ed5b8da06b4dfd575ccf3692974c8
 //
 // It is recorded in `scripts/audit/chat-hitl-anchor-contract.json`
-// (`runSurfaceDrawingPin`), which also records why that file's own
-// `specCommit` is deliberately not moved with it. Every reading below — the
+// (`runSurfaceDrawingPin`), which also records why this change moves neither
+// that file's own `specCommit` nor any other pin. Every reading below — the
 // entry that keeps its place, the settled row that opens read-only, the steps
 // still to come — is read from section I at that commit.
 // ---------------------------------------------------------------------------

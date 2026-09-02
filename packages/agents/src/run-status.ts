@@ -432,12 +432,18 @@ export function deriveProducedOutputTitle(input: {
 // never derived — so the two clauses cannot both be true of one turn: a run that
 // parked is described as parked, a run that did not is described as running.
 //
-// EVENT TENSE, deliberately, in BOTH clauses: this line is persisted with the
-// turn and re-read long after the card beside it has settled, while the run it
-// names goes on changing under both of them.
-// "The run paused" and "The run started" record what happened; "the run is
-// paused" or "the agent is running" would keep asserting a state that stopped
-// being true the moment somebody decided, or the moment the run finished.
+// EVENT TENSE WHERE THERE IS AN EVENT: this line is persisted with the turn and
+// re-read long after the card beside it has settled, while the run it names goes
+// on changing under it.
+// "The run paused" and "The run started" record what happened; "the agent is
+// running" would keep asserting a state that stopped being true the moment the
+// run finished.
+// A status that has NOT run has no event to record, and that is the one case
+// where a state reading is the honest one (cinatra#3147): the line names the
+// state the answer carried, the status it names is printed in the same
+// sentence, and the card beside it is what a reader follows from there. What is
+// never allowed is the reverse of both — an event sentence for a run that has
+// not had the event.
 //
 // IT NAMES THE RUN. The card carries the run's own link, but the line is what
 // makes the turn readable beside it — and a turn that never names the run it
@@ -503,6 +509,162 @@ export const RUN_START_PARKED_CLAUSE =
 export const RUN_START_STARTED_CLAUSE = "The run started.";
 
 /**
+ * The clause for a start whose run is waiting for its schedule (cinatra#3044).
+ *
+ * THE TURN THAT INTRODUCES THE CARD MAY NOT CONTRADICT IT. A run that reaches
+ * its schedule moment has not started: it stands at a card that is still asking
+ * "When should this run?", and a line above that card reading "The run started."
+ * — with a status token of `queued` beside it — is the one reading in the turn
+ * that is false. This clause says what is true of the run AND points at the
+ * thing that decides it, which is the card itself: where the sentence and the
+ * card could disagree, the card is right, so the sentence defers to it in words.
+ *
+ * IT STAYS TRUE FOR THE WHOLE WAIT. The wait does not end at Confirm — a
+ * confirmed schedule is armed, not started — so the same clause is correct
+ * while the card is pending and after it has settled, and the turn does not
+ * change its wording underneath a person who is reading it.
+ */
+export const RUN_START_SCHEDULE_WAIT_CLAUSE =
+  "The run has not started: it is waiting for its schedule, and the card in " +
+  "this conversation is where that schedule is decided.";
+
+/**
+ * Is this reading of a run one of a run WAITING FOR ITS SCHEDULE?
+ *
+ * ONE definition, so the sentence the start mints and the correction the
+ * conversation applies cannot disagree about which runs are waiting. The
+ * moment must be the schedule's own, and the run must be in one of the statuses
+ * it holds before it has ever run (`PRE_EXECUTION_RUN_STATUSES` above) — which
+ * is what keeps a `pending_trigger` reached for another reason, and a run that
+ * has moved on past its schedule, out of it.
+ */
+export function runIsWaitingForItsSchedule(reading: {
+  status: string | null | undefined;
+  moment: string | null | undefined;
+}): boolean {
+  return (
+    reading.moment === "schedule" &&
+    typeof reading.status === "string" &&
+    PRE_EXECUTION_RUN_STATUSES.has(reading.status)
+  );
+}
+
+/**
+ * The clause for a start whose run was enqueued and has not been picked up.
+ *
+ * `queued` is pre-dispatch: the job is on the queue and no worker has taken it
+ * yet. The line is composed at that instant and said back without a read of the
+ * run, so "The run started." was a claim about something that had not happened.
+ * This says the two things that ARE true then — the run is on the queue, and
+ * nobody has to do anything more for it to run — so a reader is neither misled
+ * nor left wondering whether the start needs chasing.
+ */
+export const RUN_START_QUEUED_CLAUSE = "The run is queued and will start on its own.";
+
+/**
+ * The clause for a start that landed on a human decision before running.
+ *
+ * `pending_approval` has TWO producers in the transition table above —
+ * `queued->pending_approval` (the setup interrupt, nothing has executed) and
+ * `running->pending_approval` (an interrupt raised mid-flight) — and a start
+ * answer can carry either, because the lost-dispatch-race branch re-reads
+ * whatever state the winning writer left. So this clause says only what is
+ * true of BOTH: a decision is outstanding. It does not claim the run has yet
+ * to start, and it does not name who may make the decision — standing is the
+ * approval surface's own answer, not this sentence's.
+ */
+export const RUN_START_AWAITING_APPROVAL_CLAUSE = "The run is waiting for an approval.";
+
+/**
+ * The clause for a start held by a trigger that IS set — `armed`.
+ *
+ * `armed` is the one status where a trigger has actually been established
+ * (`pending_trigger->armed` is its only producer besides `pending_input->armed`,
+ * both of them a submitted trigger), and the release job is what moves it on.
+ * Deliberately GENERIC about WHICH trigger: the schedule's own moment-specific
+ * wording is a separate concern layered above this choice, and this clause has
+ * to stay true of every trigger a run can wait on rather than describe one of
+ * them.
+ */
+export const RUN_START_AWAITING_TRIGGER_CLAUSE =
+  "The run is waiting for its trigger and has not started.";
+
+/**
+ * The clause for a start sitting in the trigger FORM — `pending_trigger`.
+ *
+ * Not the same state as `armed`, and this is why it cannot share its sentence:
+ * `pending_trigger` means the trigger step is open and awaiting the person's
+ * choice (see its own comment on the status union above), so no trigger exists
+ * yet for the run to be waiting on. Saying it were "waiting for its trigger"
+ * would hand a reader the same shape of untruth this whole block answers —
+ * a sentence describing a thing that has not happened.
+ */
+export const RUN_START_TRIGGER_NOT_SET_CLAUSE =
+  "The run has not started: its trigger is not set yet.";
+
+/**
+ * The clauses for a start that answered with a TERMINAL status.
+ *
+ * A start answer reaches these only through the lost-dispatch-race branch,
+ * which re-reads the row a concurrent writer settled — and `failed` and
+ * `stopped` are both reachable WITHOUT the run ever executing
+ * (`queued->failed`, `pending_input->failed`, `armed->failed`,
+ * `pending_trigger->failed`, and the matching `->stopped` cancel edges). So
+ * neither may say "The run started."; each reports the outcome the status
+ * names, which is true whether or not there was an execution. `completed` is
+ * the terminal status that DOES imply one, and it keeps the started clause.
+ */
+export const RUN_START_FAILED_CLAUSE = "The run ended in failure.";
+export const RUN_START_STOPPED_CLAUSE = "The run was stopped.";
+
+/**
+ * The floor for a status outside the vocabulary entirely.
+ *
+ * `describeStartedRun` takes `status: string` because the value crosses a wire,
+ * so a string the union does not name can still arrive. It falls here rather
+ * than back to `RUN_START_STARTED_CLAUSE` — the defect this whole block answers
+ * was exactly a fallback that claimed a start for statuses nobody had
+ * considered — and this clause errs the safe way, toward the card, which the
+ * plan makes right wherever the two could disagree. A status ADDED to
+ * `AgentRunStatus` never reaches this line: the clause table below is
+ * exhaustive and will not compile without it.
+ */
+export const RUN_START_NOT_STARTED_CLAUSE = "The run has not started yet.";
+
+/**
+ * The clause EVERY run status is described with — one entry per status, and
+ * exhaustive by the type checker.
+ *
+ * TYPED `Record<AgentRunStatus, string>` ON PURPOSE. The defect this block
+ * answers was a fallback: a status nobody had considered fell through to a
+ * sentence claiming a start. A lookup table keyed by `string` with a default
+ * would have rebuilt exactly that, one status later. Here a status added to
+ * `AgentRunStatus` fails to compile until somebody writes what is true of it,
+ * which is the only guarantee that scales past this change.
+ *
+ * READ BY THE STATUS ALONE, so the sentence a person is handed cannot disagree
+ * with the status printed beside it in the same line. Note this table is NOT
+ * `PRE_EXECUTION_RUN_STATUSES`: that set answers a different question (which
+ * statuses can never carry an execution record) and is deliberately not
+ * consulted here.
+ */
+const RUN_START_CLAUSES: Readonly<Record<AgentRunStatus, string>> = {
+  queued: RUN_START_QUEUED_CLAUSE,
+  pending_input: RUN_START_PARKED_CLAUSE,
+  pending_approval: RUN_START_AWAITING_APPROVAL_CLAUSE,
+  pending_trigger: RUN_START_TRIGGER_NOT_SET_CLAUSE,
+  armed: RUN_START_AWAITING_TRIGGER_CLAUSE,
+  // These three DID start: `running` by definition, `waiting_trigger` only ever
+  // from `running` (its single producer in the table above), and `completed`
+  // only from `running` or a WayFlow resume that executed.
+  running: RUN_START_STARTED_CLAUSE,
+  waiting_trigger: RUN_START_STARTED_CLAUSE,
+  completed: RUN_START_STARTED_CLAUSE,
+  failed: RUN_START_FAILED_CLAUSE,
+  stopped: RUN_START_STOPPED_CLAUSE,
+};
+
+/**
  * The platform's own report for a started run — the sentence the assistant says
  * back, on every host.
  *
@@ -515,11 +677,220 @@ export function describeStartedRun(input: {
   packageName: string;
   runId: string;
   status: string;
+  /**
+   * The lifecycle moment the run stands at, where the caller already knows it.
+   * Absent means "not known here", which is the ordinary dispatch case: the
+   * schedule moment opens later, and the turn's own correction below is what
+   * reconciles the sentence with the card when it does.
+   */
+  moment?: string | null;
 }): string {
-  const clause =
-    input.status === "pending_input" ? RUN_START_PARKED_CLAUSE : RUN_START_STARTED_CLAUSE;
+  // THE SENTENCE MAY NOT OUTRANK THE CARD BENEATH IT. A run waiting for its
+  // schedule has not started and is not queued, so neither word is said and
+  // the status token — the one that read `queued` over a card still asking
+  // "When should this run?" — is not printed at all.
+  if (runIsWaitingForItsSchedule({ status: input.status, moment: input.moment ?? null })) {
+    return (
+      `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`). ` +
+      RUN_START_SCHEDULE_WAIT_CLAUSE
+    );
+  }
+  // The status decides, and every status the vocabulary knows has its own
+  // sentence — no status falls through to another status's claim. `status` is
+  // widened to `string` on this boundary (the answer crosses a wire), so a
+  // value outside the vocabulary lands on the floor rather than on a start it
+  // cannot vouch for: the sentence still prints the status the answer named,
+  // and the card beside the line is right where the two could disagree.
+  const clause = RUN_START_CLAUSES[input.status as AgentRunStatus] ?? RUN_START_NOT_STARTED_CLAUSE;
   return (
     `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
     `status: \`${input.status}\`). ${clause}`
   );
+}
+
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A FIRED ONE-OFF'S READING
+ * (cinatra#3044).
+ *
+ * Section VI's fifth reading gives the card its own words, and its example
+ * draws them as the assistant's whole line above the read-only rows:
+ *
+ *   "It ran at the time you set. A one-time schedule is spent once it fires, so
+ *    the rows below are the record of it and cannot be changed."
+ *
+ * IT REPLACES THE PLATFORM'S SENTENCE RATHER THAN CLAUSING IT. Every other
+ * correction in this module swaps the CLAUSE after a head that names the
+ * package and the run, because in each of those readings the run is still the
+ * subject: it is queued, waiting, parked. Over a spent one-off the subject is
+ * the schedule, and the drawing writes it as one standing sentence with no
+ * dispatch head at all -- so the head goes with the clause. A line that kept
+ * "Dispatched `pkg` (runId: `...`, status: `queued`)." over a schedule that has
+ * already run would be the same untruth this module exists to answer, said in
+ * the tense the drawing explicitly retires.
+ *
+ * ONLY A ONE-OFF EVER REACHES IT. "Only a one-off -- Run right after setup or
+ * Schedule for later -- reaches this reading. A recurring schedule is never
+ * spent by firing." The decision is not taken here: this leaf is pure and the
+ * one thing that knows a schedule was spent is the CARD's own resolved reading,
+ * which is what asks for this sentence.
+ */
+export const RUN_START_SCHEDULE_FIRED_SENTENCE =
+  "It ran at the time you set. A one-time schedule is spent once it fires, " +
+  "so the rows below are the record of it and cannot be changed.";
+
+/** Regex-escape a literal. */
+function escapeLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * THE PLATFORM'S OWN SENTENCE FOR ONE RUN, as a pattern.
+ *
+ * EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
+ * status table itself rather than listed by hand, so a status given its own
+ * sentence is correctable the day it is added: a platform sentence a corrector
+ * does not recognise is a sentence left claiming a tense the run's row does not
+ * support, which is the whole defect these functions answer, and a hand-kept
+ * list is how one gets missed.
+ *
+ * THE CORRECTED CLAUSES ARE IN THE SET TOO, which is what makes the corrections
+ * idempotent: a turn that has already been corrected matches WHOLE and is
+ * replaced by the identical bytes, rather than matching its head and growing a
+ * second clause.
+ *
+ * LONGEST FIRST. Alternation is ordered, and three of these clauses share the
+ * head "The run has not started"; a shorter one placed first would match that
+ * head and leave the rest of a longer clause standing beside the replacement.
+ *
+ * ONE definition, so the two corrections below cannot come to disagree about
+ * which sentences are the platform's to rewrite.
+ */
+function platformStartSentencePattern(runId: string): RegExp {
+  const clauses = [
+    ...new Set([
+      ...Object.values(RUN_START_CLAUSES),
+      RUN_START_NOT_STARTED_CLAUSE,
+      RUN_START_PARKED_CLAUSE,
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ]),
+  ]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeLiteral)
+    .join("|");
+  return new RegExp(
+    "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
+      escapeLiteral(runId) +
+      "`(?:,\\s*status:\\s*`[^`\\n]*`)?\\)\\.(?:[ \\t]*(" +
+      clauses +
+      "))?",
+    "g",
+  );
+}
+
+/**
+ * Rewrite the platform's own start sentence for ONE run, wherever it stands in
+ * a turn's text, and leave everything else byte-identical.
+ *
+ * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
+ * mints the head with no clause after it, and that door writes the sentence as
+ * the whole line. The same characters INSIDE prose are a quotation of the line,
+ * not the line, and a corrector that rewrote a quotation would be a second
+ * author of the turn -- so a clause-less match is taken only when nothing but
+ * whitespace shares its line.
+ */
+function rewritePlatformStartSentence(input: {
+  text: string;
+  runId: string;
+  replace: (packageName: string) => string;
+}): string {
+  return input.text.replace(
+    platformStartSentencePattern(input.runId),
+    (
+      match: string,
+      packageName: string,
+      clause: string | undefined,
+      offset: number,
+    ) => {
+      if (clause === undefined) {
+        const before = input.text.slice(0, offset);
+        const after = input.text.slice(offset + match.length);
+        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+        if (!ownsTheLine) return match;
+      }
+      return input.replace(packageName);
+    },
+  );
+}
+
+/**
+ * THE SENTENCE THE PLATFORM ALREADY MINTED, CORRECTED AT THE CARD
+ * (cinatra#3044).
+ *
+ * WHY A CORRECTION AND NOT A BETTER CHOICE AT THE START. The start answers the
+ * instant the run is dispatched, and the schedule moment opens later — after
+ * the setup card's own Continue, in the executor. The sentence is frozen into
+ * the turn before the park exists, so no clause chosen at that instant can know
+ * about it. What the conversation CAN know, at the moment it draws the card, is
+ * that this very run is standing at its schedule moment; so the turn's line is
+ * re-read against the run's own row there, and a line that claims a tense the
+ * row does not support is replaced with the one it does.
+ *
+ * NARROW BY CONSTRUCTION. It rewrites only the platform's OWN sentence, only
+ * for the run named in it, and only where that sentence carries one of the
+ * clauses this module mints. Prose the model wrote, another run's sentence, and
+ * a sentence already corrected are all returned untouched — a correction that
+ * could reach arbitrary text would be a second author of the turn.
+ *
+ * PURE, and in this leaf, so the surface that draws the card and the primitive
+ * that mints the sentence say the same words without either pulling a graph.
+ */
+export function correctRunStartSentenceForScheduleWait(input: {
+  text: string;
+  runId: string;
+}): string {
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: (packageName) =>
+      describeStartedRun({
+        packageName,
+        runId: input.runId,
+        status: "pending_trigger",
+        moment: "schedule",
+      }),
+  });
+}
+
+/**
+ * THE SAME SENTENCE, OVER A ONE-OFF THAT HAS ALREADY FIRED (cinatra#3044).
+ *
+ * The wait correction above answers a run standing AT its schedule. This one
+ * answers the reading after it: the one-off fired, the run moved on, and the
+ * card beneath the line settled into the record of a schedule that is spent.
+ * The line frozen into the turn at dispatch still said the run was queued and
+ * would start on its own, which is now false in both halves — it has started,
+ * and nothing is waiting to start it.
+ *
+ * IT IS THE DRAWING'S SENTENCE, WHOLE. See
+ * `RUN_START_SCHEDULE_FIRED_SENTENCE` for why the dispatch head goes with the
+ * clause rather than staying above it.
+ *
+ * IDEMPOTENT AND NARROW, on exactly the same terms as the wait correction: the
+ * replacement carries no dispatch head, so a corrected line no longer matches
+ * the platform's own pattern and a second pass changes nothing at all.
+ *
+ * THE TWO CORRECTIONS CANNOT BOTH APPLY TO ONE RUN. A run is either standing at
+ * its schedule or past it, and the container that reports these two answers
+ * reads both off the same reading — so whichever runs first, the other finds no
+ * platform sentence left for that run to rewrite.
+ */
+export function correctRunStartSentenceForFiredSchedule(input: {
+  text: string;
+  runId: string;
+}): string {
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: () => RUN_START_SCHEDULE_FIRED_SENTENCE,
+  });
 }

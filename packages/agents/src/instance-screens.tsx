@@ -589,12 +589,65 @@ export function upcomingRunRailStepKeys(params: {
  * STEP, and the drawing gives that reading no lit tab. Outside that span --
  * every moment this branch did not add -- the page lights Setup exactly as it
  * always has, so the gate steps tracked elsewhere are left as they are.
+ *
+ * AND THE SCHEDULE STEP IS A STEP IN THIS FRAME TOO (the merge-forward with
+ * cinatra#3182 item 8). Both readings answer the SAME prop -- the run page draws
+ * one tab strip -- so the page cannot ask them one at a time. It asks this one,
+ * which owns the run's own input span and hands the schedule span to
+ * `runPageScheduleStepActiveTab` below, so neither reading is restated here and
+ * a step drawn inside the frame lights no tab whichever step it is.
  */
 export function runPageActiveTab(params: {
   inputStepIsOpen: boolean;
   inputStepsInRail: boolean;
+  scheduleStepInFrame: boolean;
 }): "setup" | "none" {
-  return params.inputStepIsOpen || params.inputStepsInRail ? "none" : "setup";
+  if (params.inputStepIsOpen || params.inputStepsInRail) return "none";
+  return runPageScheduleStepActiveTab({
+    scheduleStepInFrame: params.scheduleStepInFrame,
+  });
+}
+
+/**
+ * NO TAB IS LIT WHILE THE SCHEDULE STEP STANDS IN THE FRAME (cinatra#3182
+ * item 8).
+ *
+ * Application Design — Agents, the run view's conditional-tab section: "Then the
+ * strip is the two-tab reading — Setup and Permissions — and no tab is drawn
+ * selected: what sits under the strip is that step, not the body of a tab, so
+ * none of the tabs is lit for it. ... A step drawn inside this frame never
+ * lights a tab the strip does not carry."
+ *
+ * The run page drew that step and lit Setup under it, so the strip told the
+ * reader they were in the body of the Setup tab while what stood there was the
+ * scheduling step. `"none"` names no trigger the strip carries, so nothing is
+ * drawn selected and the strip itself is unchanged. Every other moment on this
+ * path keeps the Setup tab it has always lit.
+ *
+ * Exported so the regression test can read the rule without a DB or a render.
+ */
+export function runPageScheduleStepActiveTab(params: {
+  scheduleStepInFrame: boolean;
+}): "setup" | "none" {
+  return params.scheduleStepInFrame ? "none" : "setup";
+}
+
+/**
+ * AND THE SAME ANSWER ON THE SCHEDULE ROUTE (cinatra#3182 item 8; this is also
+ * the residual cinatra#3168 names).
+ *
+ * The route mounted the frame on the schedule tab unconditionally. While
+ * the run carries a persisted scheduled/recurring row the strip DOES draw that
+ * tab and lighting it is right. While it does not — the transient first-step
+ * scheduling gate — the route was naming a tab the strip does not render at
+ * all: a reference to an absent tab, and a step lighting a tab either way.
+ *
+ * Exported for the same reason as the reading above.
+ */
+export function scheduleRouteActiveTab(params: {
+  persistentScheduleTab: boolean;
+}): "trigger" | "none" {
+  return params.persistentScheduleTab ? "trigger" : "none";
 }
 
 /**
@@ -1285,8 +1338,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // The scheduling step's duration banner, computed ONLY on the branch that
   // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
   // analysis when a template has too little run history, so the ordinary run
-  // page must never pay for it. Best-effort: the form states "Unavailable."
-  // for a null estimate, which is a better page than a failed render.
+  // page must never pay for it. Best-effort: the form draws NO duration line at
+  // all for a null estimate (cinatra#3182 item 5), which is a better page than
+  // a failed render.
   const triggerStepDurationEstimate =
     runDetailPanel === "trigger"
       ? await estimateRunDuration({
@@ -1301,7 +1355,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab={runPageActiveTab({ inputStepIsOpen, inputStepsInRail })}
+        activeTab={runPageActiveTab({
+          inputStepIsOpen,
+          inputStepsInRail,
+          scheduleStepInFrame: runDetailPanel === "trigger",
+        })}
         // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
         // schedule step is named in the page header because it answers at its
         // own sub-route; the run's first step answers on the run's own path, so
@@ -2389,6 +2447,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
                 schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
                 ref: gateRef,
               }}
+              // §VI — the gate's conversational prompt window keeps its exchange
+              // with the RUN (cinatra#3141 item 1), so the mount that names the
+              // gate names the run it opened on too.
+              runId={run.id}
             />
           </LifecycleCardSurfaceProvider>
         ) : (
@@ -2529,7 +2591,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab="trigger"
+        activeTab={scheduleRouteActiveTab({ persistentScheduleTab: showPersistentTab })}
         templateName={template.name}
         initialRunName={run?.title ?? ""}
         runId={run?.id ?? null}
@@ -2544,8 +2606,9 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         // strip carries no Trigger tab, so no tab renders selected. That form is
         // a step in the run-start flow rather than a persistent tab, and the
         // documented product rule for the tab is unchanged: it appears only for
-        // a scheduled/recurring trigger. Hoisting that transient step out of the
-        // tab frame entirely is the cleaner end state and is left as follow-up.
+        // a scheduled/recurring trigger. The frame says so now too: see
+        // `scheduleRouteActiveTab` above, which stops this route naming a tab
+        // the strip does not carry.
         showTriggerTab={showPersistentTab}
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
