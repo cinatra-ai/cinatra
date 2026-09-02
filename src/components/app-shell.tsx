@@ -841,7 +841,20 @@ export function AppShell({
           data-testid="app-shell-topbar"
           style={{ top: "var(--banner-height, 0px)" }}
           className={cn(
-            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background/90 backdrop-blur-xl transition-shadow",
+            // cinatra#3142 — THE BAND IS OPAQUE. The drawing: "The top-bar is chrome,
+            // not content", and chrome takes an opaque ground. Drawn
+            // `bg-background/90` this band composited ten per cent of whatever
+            // scrolled beneath it into the chrome by construction, and
+            // `backdrop-blur-xl` blurred that remainder rather than removing it —
+            // which is why the page's own agent-name line was photographed ghosted
+            // across the breadcrumb row on every scrolled frame. The stacking was
+            // never the problem (the band is already above the content at
+            // z-[140], which is why the text read as BEHIND it); the alpha was.
+            // The blur goes with it: over an opaque ground it draws nothing and
+            // costs a compositing layer. Pinned by
+            // src/components/__tests__/app-shell-topbar-opaque.test.ts and, on
+            // pixels, by tests/e2e/design/conformance/header-band-opacity.spec.ts.
+            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background transition-shadow",
             scrollOffset > 10 ? "shadow-sm" : "shadow-none",
           )}
         >

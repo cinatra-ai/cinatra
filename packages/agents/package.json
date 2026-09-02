@@ -50,6 +50,8 @@
     "./run-recommendation-core": "./src/run-recommendation-core.ts",
     "./run-recommendation-chip-row": "./src/run-recommendation-chip-row.tsx",
     "./run-actions": "./src/run-actions.ts",
+    "./trigger-timezone": "./src/trigger-timezone.ts",
+    "./timezone-field": "./src/timezone-field.tsx",
     "./run-dispatch-core": "./src/run-dispatch-core.ts",
     "./review-gate-card": "./src/review-gate-card.tsx",
     "./run-recommendation-card": "./src/run-recommendation-chip-row.tsx",
