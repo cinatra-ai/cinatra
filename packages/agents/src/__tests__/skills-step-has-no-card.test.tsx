@@ -89,18 +89,40 @@ const READ_ONLY: RunRecommendationDecision = {
 
 const row = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-run-recommendation-chip-row]")!;
 
-/** Every element from the row's root down to (but not including) a pill. */
+/**
+ * Every element from the row's root down to (but not including) a pill.
+ *
+ * THE STEP'S OWN FLOOR IS NOT A CARD, and it is excluded here rather than
+ * silently matched (cinatra#3047, leg 7). The drawing draws the Continue row on
+ * a rule of its own — `justify-content:flex-end; padding-top:12px; border-top:
+ * 1px solid var(--line)` — which is a FLOOR under the list, not a frame around
+ * it: one hairline on one edge, no ground, no radius, no shadow and no padding
+ * that could box the pills. This scan reads "card chrome" off class names
+ * alone, so a one-edge rule reads to it exactly like a four-edge border; the
+ * exclusion is by the floor's own anchor, and the rule it must carry is
+ * asserted positively in `skills-step-chrome-per-drawing.test.tsx` — so nothing
+ * this scan stops looking at goes unwatched.
+ */
 function frameElements(c: HTMLElement): HTMLElement[] {
   const root = row(c);
   const out: HTMLElement[] = [root];
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
     if (el.closest("[data-skills-step-pill]")) continue;
     if (el.hasAttribute("data-skills-step-pill")) continue;
+    if (el.hasAttribute("data-skills-step-floor")) continue;
     if (el.closest("button") || el.tagName === "BUTTON") continue;
     out.push(el);
   }
   return out;
 }
+
+/**
+ * THE FLOOR CARRIES A RULE AND NOTHING ELSE. The exclusion above is bounded
+ * here: the one element this scan skips may draw a top border and the space
+ * around it, and may draw no ground, no radius, no shadow and no box padding.
+ */
+const FLOOR_CHROME_FORBIDDEN =
+  /(^|\s)(border-[bxlr](-|$)|border-\d|rounded(-|$)|bg-(?!transparent)|shadow(-|$)|p-|px-|py-|pb-)/;
 
 afterEach(() => {
   cleanup();
@@ -118,6 +140,13 @@ describe("the live Skills step", () => {
     for (const el of frameElements(container)) {
       expect(`${el.tagName} ${el.className}`).not.toMatch(CARD_CHROME);
     }
+  });
+
+  it("keeps the step's own floor a RULE and never lets it become a frame", () => {
+    const { container } = mount(HELD);
+    const floor = row(container).querySelector<HTMLElement>("[data-skills-step-floor]");
+    expect(floor).not.toBeNull();
+    expect(floor!.className).not.toMatch(FLOOR_CHROME_FORBIDDEN);
   });
 
   it("is the row itself, not a card containing a row — the root IS the card root", () => {

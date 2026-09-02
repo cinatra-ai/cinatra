@@ -10,7 +10,7 @@ import {
   type ReactElement,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, Check, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -593,10 +593,25 @@ function SkillsStepPill({
       data-skill-applied={checked ? "true" : "false"}
       data-skills-step-pill-editable={editable ? "true" : "false"}
       data-forced={forced ? "true" : undefined}
-      className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${
-        checked
-          ? "border-success/45 bg-success/10 text-foreground"
-          : "border-line bg-surface-strong text-foreground"
+      // ONE GROUND FOR EVERY PILL, AND A STADIUM (cinatra#3047, leg 7). The
+      // drawing's `.skchip` is a single rule — `border-radius: 9999px`, `border:
+      // 1px solid var(--line)`, `background: var(--surface-strong)` — with no
+      // second rule anywhere giving a ticked pill a ground of its own: the
+      // value is stated in the BOX, which the drawing paints blue when it is on
+      // and leaves on the muted ground when it is off. The sixth proof round
+      // measured a tinted ground on the ticked pill (#DEE3E0 light, #04171B
+      // dark) against the clear pill's white, and a corner radius of roughly 6
+      // CSS px, so the pill read as a rounded box with two faces where the
+      // drawing gives one shape with one face.
+      //
+      // THE READ-ONLY READING IS SAID OUT LOUD. `.skchip[aria-disabled="true"]
+      // { color: var(--muted); }` is the drawing's own reading for a run that
+      // has started, and its examples carry the attribute on every pill; the
+      // box keeps its `disabled`, so a reader on assistive technology is told
+      // by the pill AND by the control it holds.
+      {...(editable ? {} : { "aria-disabled": "true" })}
+      className={`inline-flex items-center gap-2 rounded-full border border-line bg-surface-strong py-[5px] pr-[11px] pl-[7px] text-xs ${
+        editable ? "text-foreground" : "text-muted-foreground"
       }`}
       {...(title ? { title } : {})}
     >
@@ -614,13 +629,16 @@ function SkillsStepPill({
         {...(onCheckedChange ? { onCheckedChange: (next) => onCheckedChange(next === true) } : {})}
       />
       <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-        <span id={labelId} className="font-medium">
+        {/* TWO WEIGHTS, ONE LINE. The drawing writes the name at 600 and the
+            byline that follows it at 500 in the muted ink, so the skill is what
+            a reader meets first and its vendor is the qualifier. */}
+        <span id={labelId} className="font-semibold">
           {name}
         </span>
         <span
           data-skills-step-vendor=""
           data-vendor-state={vendor.kind}
-          className="text-muted-foreground"
+          className="font-medium text-muted-foreground"
         >
           {`${VENDOR_BY_CONNECTIVE} ${vendorLabel}`}
         </span>
@@ -1185,7 +1203,14 @@ export function RunRecommendationChipRow({
           and NOT drawn at all once the run has started, because there is then
           nothing a press could change. */}
       {opts.control ? (
-        <div className="flex">
+        // THE FLOOR THE DRAWING GIVES THIS ROW (cinatra#3047, leg 7):
+        // `display:flex; justify-content:flex-end; padding-top:12px;
+        // border-top:1px solid var(--line)`, with the 12px of air above the rule
+        // supplied by this row's own `gap-3` rather than a second margin. The
+        // sixth proof round measured the control left-aligned, with no rule
+        // above it and no glyph in it — three departures at once, on every
+        // frame of both palettes.
+        <div data-skills-step-floor="" className="flex justify-end border-t border-line pt-3">
           <Button
             type="button"
             size="sm"
@@ -1206,6 +1231,17 @@ export function RunRecommendationChipRow({
             onClick={onContinue}
           >
             Continue
+            {/* THE ANCHOR IS THE SPAN, NOT THE ICON — the same rule the rail's
+                own glyph follows: a suite that stubs `lucide-react` renders no
+                icon element, and an anchor carried by the icon would vanish
+                with it. */}
+            <span
+              aria-hidden="true"
+              data-skills-step-continue-glyph=""
+              className="flex items-center justify-center"
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
           </Button>
         </div>
       ) : null}
