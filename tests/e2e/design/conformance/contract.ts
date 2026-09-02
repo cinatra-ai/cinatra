@@ -54,6 +54,10 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  LIFECYCLE_SCHEDULE_CARD_FIXTURES,
+  type LifecycleScheduleCardFixture,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-schedule-card-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -440,6 +444,343 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
     },
     states: {},
   };
+}
+
+// ---------------------------------------------------------------------------
+// The SCHEDULE-CARD family (cinatra#3161, epic #3155 W5)
+// ---------------------------------------------------------------------------
+//
+// "One card, five readings, and never a second card": what changes across the
+// schedule card's life is the floor beneath the rows and whether the rows still
+// take a change. The drawing annotates each reading TWICE — once for the card,
+// once for the floor beneath it — so nine manifest surfaces stand for five
+// readings, and one family factory over one fixture list drives all nine, the
+// same shape `cardDriver` and `suggestionChipDriver` already give.
+//
+// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule-proposal`,
+// `save-schedule-changes` and `cancel-trigger-schedule` are literals of
+// packages/agents/src/schedule-proposal-card.tsx and testid-contract.json
+// requires each of them in that file, so a driver naming a control the product
+// does not ship is RED in scripts/design/check-conformance-testids.mjs before a
+// browser opens. This is the same binding the PINNED `scheduling-step-configured`
+// surface already uses for the same two operations: the driver keys on the
+// manifest's action name (`save-schedule` / `cancel-schedule`), the shipped
+// attribute value is pinned in the contract, and the two are reconciled by the
+// suite rather than by a rename — the shipped values are addressed by a ratified
+// capture record and by the one-card gate's anchor set, and a record of what was
+// counted on a screen is not a thing a driver wave may rewrite.
+//
+// WHAT A STATE VARIANT MEANS ON THIS CARD. The drawing gives these surfaces no
+// fields and no kinds; the two variants it annotates are the two things the card
+// draws AROUND a decision, and both are the component's own: `loading` is the
+// in-flight floor between a press and an answer ("Confirming…" / "Saving…", the
+// control dead), and `error` is the refusal line the card draws when the answer
+// refuses. One annotated variant has no counterpart in the product and is NOT
+// approximated through another one — see the wave's readiness list.
+
+/** The drawn card of one mounted fixture row. */
+function scheduleCard(root: Locator): Locator {
+  return root.locator('[data-conformance-id="schedule-proposal-card"]');
+}
+
+/** The floor beneath the rows — absent by design on a spent one-off. */
+function scheduleFloor(root: Locator): Locator {
+  return scheduleCard(root).locator('[data-conformance-id="schedule-proposal-floor"]');
+}
+
+/**
+ * What the SHIPPED card asked the decision endpoint for, in order.
+ *
+ * A card's own part of an outcome is the request it composes: a proposal is
+ * single-use, so an unedited Confirm spends the ref it was drawn from while an
+ * edited one re-proposes first, and an expired token can never take a bare
+ * confirm at all. The harness records what the component asked for under
+ * `data-harness-id` — deliberately not a `data-conformance-id`, because it is
+ * the checker's instrument and not an anchor of the drawing.
+ */
+function decisionRoads(root: Locator): Locator {
+  return root.locator('[data-harness-id="schedule-decision-log"] [data-harness-road]');
+}
+
+/**
+ * Press until the reaction is observed. Same hydration retry as
+ * `clickCtaUntil`: a click that lands before React hydration is silently
+ * swallowed on the production standalone build.
+ */
+async function pressScheduleUntil(control: Locator, reacted: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await control.click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/** Change a row, so the settled floor has something to save. The rows are
+ *  editable as they stand — there is no step to press before they take a
+ *  change. */
+async function changeARow(root: Locator): Promise<void> {
+  const immediate = scheduleCard(root).locator('[data-schedule-option="immediate"]');
+  // THE SAME HYDRATION RETRY THE PRESSES TAKE, and for a worse failure. A click
+  // that lands before React hydration is silently swallowed, and a swallowed
+  // row click is INVISIBLE: the rows keep drawing, the draft never moves, and
+  // the floor stays correctly quiet — so the next assertion reads as the
+  // product refusing to enable Save when nothing ever reached it. The
+  // post-condition is the PRODUCT's own mark of the chosen row, never a wait,
+  // and pressing an already-chosen row is idempotent.
+  await expect(async () => {
+    await immediate.getByRole("button").click();
+    await expect(immediate).toHaveAttribute("data-chosen", "true", { timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
+/** What the reader's rows ARE after `changeARow` — the whole payload, so a
+ *  regression that carries some other non-null schedule cannot pass for
+ *  carrying the reader's. */
+const EDITED_ROWS = JSON.stringify({ kind: "immediate" });
+
+const CONFIRM_CONTROL = '[data-action="confirm-schedule-proposal"]';
+const SAVE_CONTROL = '[data-action="save-schedule-changes"]';
+
+export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.surfaceId}"]`;
+  const reading = fixture.reading;
+
+  const driver: SurfaceDriver = {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const card = scheduleCard(root);
+      await expect(card).toBeVisible();
+      // ONE card, drawn on the host that declared itself, in the phase the
+      // resolved body selects — never a second card and never a summary box.
+      await expect(card).toHaveAttribute("data-lifecycle-card", "trigger_schedule_proposal");
+      await expect(card).toHaveAttribute("data-lifecycle-card-host", "chat_thread");
+      await expect(card).toHaveAttribute("data-lifecycle-card-phase", fixture.body.phase);
+      // "the rows are the reading": every reading draws the standard scheduling
+      // step and its estimated-duration line, and nothing stands above them.
+      await expect(card.locator('[data-conformance-id="schedule-option-rows"]')).toBeVisible();
+      await expect(card.getByText("When should this run?")).toBeVisible();
+
+      // "The line is the only thing the expired reading adds."
+      const expiredLine = card.locator('[data-conformance-id="schedule-proposal-expired"]');
+      await expect(expiredLine).toHaveCount(reading === "expired" ? 1 : 0);
+
+      if (reading === "fired") {
+        // "the card carries no floor at all: no hairline, no button, nothing to
+        // press" — the rows go read-only and simply stand.
+        await expect(scheduleFloor(root)).toHaveCount(0);
+        await expect(card.locator(SAVE_CONTROL)).toHaveCount(0);
+        await expect(card.locator(CONFIRM_CONTROL)).toHaveCount(0);
+        for (const control of await card.getByRole("button").all()) {
+          await expect(control).toBeDisabled();
+        }
+        // "read-only" is the WHOLE row, not only the things that look like
+        // buttons: the chosen one-off row owns date and time fields, and a
+        // spent card that still took a change there would be offering an edit
+        // it can never save.
+        for (const field of await card.locator('input, [role="combobox"]').all()) {
+          await expect(field).toBeDisabled();
+        }
+        return;
+      }
+
+      await expect(scheduleFloor(root)).toBeVisible();
+      if (reading === "first-shown" || reading === "expired") {
+        // "the floor is Confirm. It is the only control: there is no Adjust".
+        await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toBeVisible();
+        await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toHaveCount(0);
+      } else {
+        // "the floor becomes Save changes — quiet until a row is actually
+        // changed, because there is nothing to save until then."
+        await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeVisible();
+        await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeDisabled();
+        await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toHaveCount(0);
+      }
+      // "It is the only control." The floor carries exactly ONE thing to press
+      // on every drawn reading — this is also what pins the deferral named
+      // below: Cancel schedule is absent in the conversation rather than
+      // disabled, on the fired-recurring floor as much as anywhere else.
+      await expect(scheduleFloor(root).getByRole("button")).toHaveCount(1);
+      await expect(
+        scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
+      ).toHaveCount(0);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+
+  switch (fixture.surfaceId) {
+    case "schedule-card-first-shown":
+      // The in-flight floor: the word and the dead control are both computed by
+      // the component while its answer is outstanding.
+      driver.states.loading = async (_page, root) => {
+        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        await pressScheduleUntil(confirm, async () => {
+          await expect(confirm).toContainText("Confirming…", { timeout: 2_000 });
+        });
+        await expect(confirm).toBeDisabled();
+      };
+      // The refusal, said on the card rather than swallowed. It never reveals
+      // whether a token was expired, foreign or forged.
+      driver.states.error = async (_page, root) => {
+        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        const refusal = scheduleFloor(root).locator(
+          '[data-conformance-id="schedule-proposal-refusal"]',
+        );
+        await pressScheduleUntil(confirm, async () => {
+          await expect(refusal).toBeVisible({ timeout: 5_000 });
+        });
+        await expect(refusal).toHaveAttribute("role", "status");
+        // The card stays exactly where it is: a refused decision is not an
+        // absent card, and the rows still take a change.
+        await expect(scheduleCard(root)).toBeVisible();
+        await expect(confirm).toBeEnabled();
+      };
+      break;
+
+    case "schedule-card-confirm-floor":
+      driver.actions["confirm-schedule"] = {
+        outcome: "scheduled",
+        run: async (_page, root) => {
+          const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+          await pressScheduleUntil(confirm, async () => {
+            await expect(decisionRoads(root)).toHaveCount(1, { timeout: 5_000 });
+          });
+          // "On this card nothing exists until the reader confirms": the press
+          // asks for exactly one confirm, on the ref the card was drawn from,
+          // and an UNEDITED proposal carries no rows with it.
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-road", "confirm");
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-carried-rows", "none");
+          // The floor was in flight and the answer landed on the card, not on a
+          // refusal: the schedule is armed and the card says nothing else.
+          await expect(
+            scheduleFloor(root).locator('[data-conformance-id="schedule-proposal-refusal"]'),
+          ).toHaveCount(0);
+          await expect(confirm).toContainText("Confirm");
+        },
+      };
+      break;
+
+    case "schedule-card-configured":
+    case "schedule-card-fired-recurring":
+      driver.states.loading = async (_page, root) => {
+        await changeARow(root);
+        const save = scheduleFloor(root).locator(SAVE_CONTROL);
+        await expect(save).toBeEnabled();
+        await pressScheduleUntil(save, async () => {
+          await expect(save).toContainText("Saving…", { timeout: 2_000 });
+        });
+        await expect(save).toBeDisabled();
+      };
+      break;
+
+    case "schedule-card-save-floor":
+    case "schedule-card-fired-recurring-floor":
+      // NO `cancel-schedule` DRIVER, AND NOT BECAUSE ONE WAS SKIPPED. The
+      // fired-recurring floor is annotated with a SECOND act, and the shipped
+      // card draws that control only where the plan puts it: Cancel schedule is
+      // the page step's and the run card's, never the conversation's, so on the
+      // in-thread host the card draws no such control at all — absent by rule
+      // rather than disabled. A driver wave cannot settle that: either the
+      // drawing gives the in-conversation floor an act the product deliberately
+      // withholds there, or the product withholds an act the drawing grants. It
+      // is named on the wave's readiness list for the drawing to answer, and it
+      // is NOT approximated through the run-card host — these nine surfaces are
+      // the conversation's readings, and asserting one of them on another host
+      // would prove something the drawing never said.
+      driver.actions["save-schedule"] = {
+        outcome: "rearmed",
+        run: async (_page, root) => {
+          const save = scheduleFloor(root).locator(SAVE_CONTROL);
+          // Quiet until a row is actually changed.
+          await expect(save).toBeDisabled();
+          await changeARow(root);
+          await expect(save).toBeEnabled();
+          await pressScheduleUntil(save, async () => {
+            await expect(decisionRoads(root)).toHaveCount(1, { timeout: 5_000 });
+          });
+          // The card carries the READER'S rows on a save — nothing is guessed
+          // server-side about what the reader was looking at.
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-road", "save");
+          await expect(decisionRoads(root)).toHaveAttribute(
+            "data-harness-carried-rows",
+            "the-reader-s-rows",
+          );
+          // AND THEY ARE THE ROWS THE READER ACTUALLY LEFT. "Carried something"
+          // is not the claim: a card that posted the schedule it opened on,
+          // rather than the changed one, would still carry a non-null payload.
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-rows", EDITED_ROWS);
+          // "Changing a row and pressing it re-arms the schedule" — and the card
+          // says so in its own words, then goes quiet again because what was
+          // saved is what is armed.
+          await expect(
+            scheduleFloor(root).locator('[data-conformance-id="schedule-saved"]'),
+          ).toContainText("Saved — the trigger is re-armed on these rows.");
+          await expect(save).toBeDisabled();
+        },
+      };
+      break;
+
+    case "schedule-card-expired":
+      driver.states.error = async (_page, root) => {
+        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        const refusal = scheduleFloor(root).locator(
+          '[data-conformance-id="schedule-proposal-refusal"]',
+        );
+        await pressScheduleUntil(confirm, async () => {
+          await expect(refusal).toBeVisible({ timeout: 5_000 });
+        });
+        await expect(refusal).toHaveAttribute("role", "status");
+        // "An expired card stays visible, and stays editable": a refusal does
+        // not grey it out and does not take the line away.
+        await expect(
+          scheduleCard(root).locator('[data-conformance-id="schedule-proposal-expired"]'),
+        ).toBeVisible();
+        await expect(confirm).toBeEnabled();
+      };
+      break;
+
+    case "schedule-card-expired-floor":
+      driver.actions["confirm-schedule"] = {
+        outcome: "scheduled",
+        run: async (_page, root) => {
+          const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+          // "change it if you like, then confirm it again" — the expired card's
+          // rows still take a change, and the change is what the re-propose has
+          // to carry. Confirming an untouched expired card would prove only
+          // that SOMETHING travelled.
+          await changeARow(root);
+          await pressScheduleUntil(confirm, async () => {
+            await expect(decisionRoads(root)).toHaveCount(1, { timeout: 5_000 });
+          });
+          // "Confirm is offered again so the reader can set the schedule from
+          // the same card." The expired token is unspendable, so the one press
+          // takes the RE-PROPOSE road carrying the reader's rows — a bare
+          // confirm on this card could never land.
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-road", "repropose");
+          await expect(decisionRoads(root)).toHaveAttribute(
+            "data-harness-carried-rows",
+            "the-reader-s-rows",
+          );
+          await expect(decisionRoads(root)).toHaveAttribute("data-harness-rows", EDITED_ROWS);
+          await expect(
+            scheduleFloor(root).locator('[data-conformance-id="schedule-proposal-refusal"]'),
+          ).toHaveCount(0);
+          await expect(confirm).toContainText("Confirm");
+        },
+      };
+      break;
+
+    case "schedule-card-fired":
+      // No state driver. The one variant this surface annotates is `error`, and
+      // a spent one-off has no error presentation to assert: it draws no floor
+      // at all, so it has nowhere to draw a refusal line, and it asks nothing
+      // that could be refused. It is named on the wave's readiness list rather
+      // than approximated through another surface's line.
+      break;
+  }
+
+  return driver;
 }
 
 const STATUS_PILLS_DRIVER: SurfaceDriver = {
@@ -3323,6 +3664,16 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
       SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
       suggestionChipDriver(fixture),
+    ]),
+  ),
+  // The in-conversation schedule card (cinatra#3161, epic #3155 W5). Nine
+  // manifest surfaces over the drawing's five readings — the card and the floor
+  // beneath it are annotated separately — driven by one family factory over one
+  // fixture list, which is why a row names its own manifest surface.
+  ...Object.fromEntries(
+    LIFECYCLE_SCHEDULE_CARD_FIXTURES.map((fixture) => [
+      fixture.surfaceId,
+      scheduleCardDriver(fixture),
     ]),
   ),
 };
