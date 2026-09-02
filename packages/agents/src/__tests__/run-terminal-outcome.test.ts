@@ -70,6 +70,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
     });
   });
@@ -84,6 +85,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
     });
   });
@@ -98,11 +100,16 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
     });
   });
 
-  it("counts step results as output", () => {
+  // cinatra#3002 — step results still count as output, but they are REPORTED AS
+  // step results. Folded into one boolean they made a run whose only record was
+  // a step result look exactly like a run with a transcript, and the transcript
+  // host then named a transcript that was never written.
+  it("counts step results as output, and names them as the evidence", () => {
     expect(
       resolveRunTerminalOutcome({
         status: "completed",
@@ -112,6 +119,24 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "step-results",
+      evidenceIndeterminate: false,
+    });
+  });
+
+  // A transcript outranks a step result when a run holds both: it is the
+  // stronger claim, and it is what the transcript host actually renders.
+  it("names the transcript when the run holds both kinds of evidence", () => {
+    expect(
+      resolveRunTerminalOutcome({
+        status: "completed",
+        evidence: { outputs: [], hasTranscript: true, hasStepResults: true },
+      }),
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
     });
   });
@@ -135,6 +160,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
     });
   });
@@ -153,6 +179,7 @@ describe("resolveRunTerminalOutcome", () => {
       // rendered below. The panel suppresses its "No messages yet." line under
       // this card, so that claim pointed the user at blank space.
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
     });
   });
@@ -176,6 +203,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
     });
   });
@@ -201,6 +229,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
     });
   });

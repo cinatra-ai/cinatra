@@ -154,11 +154,27 @@ export function RunStepRailPanel({
                   className="flex items-center gap-1"
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
+                  data-rail-openable={entry.openable === false ? "false" : undefined}
                 >
-                  <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
-                    {indicatorNode}
-                    {titleNode}
-                  </StepperTrigger>
+                  {/* A row that opens nothing is not drawn as a control
+                      (cinatra#3002). The step-result row used to render inside
+                      a StepperTrigger — a button, ticked and numbered like the
+                      rows that DO open — and clicking it did nothing. Same
+                      indicator, same title, same geometry (the trigger's own
+                      spacing is carried here); no button. StepperIndicator and
+                      StepperTitle read the item context, not the trigger, so
+                      both still show this row's real state. */}
+                  {entry.openable === false ? (
+                    <div className="flex items-center gap-2 px-0 py-0.5">
+                      {indicatorNode}
+                      {titleNode}
+                    </div>
+                  ) : (
+                    <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
+                      {indicatorNode}
+                      {titleNode}
+                    </StepperTrigger>
+                  )}
                 </div>
                 {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
               </StepperItem>

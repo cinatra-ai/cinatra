@@ -173,6 +173,13 @@ export function RunCompletionCard({
   // same species of false claim as "produced nothing".
   const evidenceIndeterminate =
     outcome.kind === "completed-with-output" && outcome.evidenceIndeterminate;
+  // WHICH evidence the outcome rests on (cinatra#3002). A run executed on the
+  // agent runtime records its answer in `step_results` and nowhere else, and
+  // this card used to describe that run exactly like a run with a transcript:
+  // "its output is in the run transcript below", above an empty page. The card
+  // names a place only when the evidence is the thing that place renders.
+  const outputEvidence =
+    outcome.kind === "completed-with-output" ? outcome.outputEvidence : "none";
 
   const description = producedNothing
     ? "This run reached the end of its steps but produced no output — nothing was returned and nothing was saved. Start a new run to try again."
@@ -181,7 +188,13 @@ export function RunCompletionCard({
       : evidenceIndeterminate
         ? "This run finished. Its output could not be loaded here — reload the page to try again."
         : outputHint === "transcript"
-          ? "This run finished. Its output is in the run transcript below."
+          ? outputEvidence === "transcript"
+            ? "This run finished. Its output is in the run transcript below."
+            : // Step results only: something WAS recorded, so neither the
+              // transcript pointer (there is no transcript) nor the no-output
+              // reading (the run did not finish empty) is true. Say the true
+              // thing instead of choosing which falsehood to tell.
+              "This run finished. Its output was recorded during the run, but it is not part of this run's transcript."
           : outputHint === "steps"
             ? "This run finished. Its output is recorded on the run's steps — select a completed step to review it."
             : "This run finished. Its output was recorded during the run, but there is no step list here to select from.";

@@ -15,6 +15,8 @@ import {
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
+// cinatra#3002 — the run's transcript receipt (the writer this path skipped).
+import { recordRunFinalResponseMessage } from "./run-final-response-receipt";
 import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
@@ -1921,6 +1923,44 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       } as never),
     ).catch(() => undefined);
     return;
+  }
+
+  // cinatra#3002 — THE RECEIPT.
+  //
+  // Everything above records the response somewhere a reader cannot look: the
+  // AG-UI text frames are ephemeral (nothing persists them for this path), and
+  // the `wayflow_response` step result is JSON no screen renders. The run page
+  // renders the run's TRANSCRIPT, and this path never wrote one — so a reader
+  // who arrived after the stream met a completion card naming a transcript that
+  // was never written. Persist the produced text as the run's own final
+  // transcript message, which is exactly the row the app-side writer would have
+  // written and exactly the row the page reads.
+  //
+  // PLACED HERE, past the materialization-honesty gate and immediately before
+  // the terminal-success transition, for two reasons that pull in opposite
+  // directions and meet exactly at this line:
+  //   * AFTER the #2486 gate, because that gate can route this same handling to
+  //     `failed`. A receipt written before it would leave a success-shaped
+  //     transcript row on a run that lands failed — the very class of lie this
+  //     issue closes, pointed the other way.
+  //   * BEFORE the transition, so the instant a reader can see `completed`, the
+  //     text the completion card names already exists.
+  // The re-entry guard above has already returned for a redelivered terminal
+  // state, so no second copy of the run's answer is written.
+  //
+  // FAIL-SOFT: a receipt that cannot be written must never fail a run that
+  // genuinely succeeded. Without it the card reads the absence honestly (see
+  // `resolveRunTerminalOutcome` — step results no longer stand in for a
+  // transcript) instead of pointing at nothing.
+  if (finalText.length > 0) {
+    try {
+      await recordRunFinalResponseMessage({ runId, text: finalText });
+    } catch (err) {
+      console.warn(
+        `[run-final-response-receipt] run=${runId} could not persist the run's final response as a transcript message:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // Both terminal-success edges are legal:

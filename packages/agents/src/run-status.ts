@@ -302,6 +302,25 @@ export type RunTerminalOutcome =
        */
       outputRenderedBelow: boolean;
       /**
+       * WHICH evidence the outcome rests on (cinatra#3002).
+       *
+       * `hasTranscript` and `hasStepResults` are two independent facts, and this
+       * resolver used to fold them into one boolean — so a run whose only record
+       * of output was a step result was reported exactly like a run with a
+       * transcript, and the card told the reader to look at a transcript that
+       * was never written. The two hosts render DIFFERENT things (one draws the
+       * message thread, the other keeps output behind the step rail), so the
+       * caller has to know which fact it is holding before it names a place.
+       *
+       *   `outputs`      provenance-linked output objects (the card links them)
+       *   `transcript`   message rows / accumulated streamed text exist
+       *   `step-results` `agent_runs.step_results` only — recorded, but not the
+       *                  transcript, and not every host can point at it
+       *   `none`         nothing established (the read is in flight, failed, or
+       *                  returned only unlinkable rows)
+       */
+      outputEvidence: "outputs" | "transcript" | "step-results" | "none";
+      /**
        * True when we could NOT establish what the run left behind: the read is
        * still in flight, it failed, or it returned only rows we cannot link.
        *
@@ -344,6 +363,7 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
     };
   }
@@ -352,17 +372,35 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: evidence.outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
     };
   }
   // Ordered BEFORE the indeterminate branches on purpose: transcript/step
   // evidence is positively known, so "its output is below" is a TRUE statement
   // even if the object read separately came back unusable.
-  if (evidence.hasTranscript || evidence.hasStepResults) {
+  //
+  // The two are reported SEPARATELY (cinatra#3002). A transcript is the thing
+  // the transcript host renders; a step result is not, and a run executed on the
+  // agent runtime leaves exactly one. Folding them into `outputRenderedBelow`
+  // alone let the card name the transcript for a run that never wrote one.
+  // Transcript first: it is the stronger claim, and a run holding both is a run
+  // whose text IS below.
+  if (evidence.hasTranscript) {
     return {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
+      evidenceIndeterminate: false,
+    };
+  }
+  if (evidence.hasStepResults) {
+    return {
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      outputEvidence: "step-results",
       evidenceIndeterminate: false,
     };
   }
@@ -376,6 +414,7 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
     };
   }
