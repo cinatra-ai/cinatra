@@ -5,13 +5,17 @@
 // (cinatra#3164, epic #3155 W8): §VII's verification card, §IV's review-state
 // ladder, and the §VIII decision floor the suggestion chips ride on.
 //
-// THE REAL CARDS, MOUNTED THE WAY A HOST MOUNTS THEM. `VerificationSummaryCard`
-// and `ReviewGateCard` are the shipped components — the same modules the review
-// page, the run panel and the chat registry mount — inside the shipped
-// `LifecycleCardSurfaceProvider` host declaration. Nothing here draws a card, a
-// state, a control or a copy string of its own: this file mounts a card under a
-// host and hands it the opaque ref it was minted with, which is exactly what a
-// host does.
+// MOUNTED THROUGH THE ENUMERATED ADAPTER, NOT BESIDE IT. The cards are NOT
+// composed here. This route hands the raw wire payload to `RenderableViewCard`
+// — the ONE renderable-view dispatch the conversation itself calls, which
+// validates the payload and dispatches it to the one component registered for
+// that kind — inside the shipped `LifecycleCardSurfaceProvider` host
+// declaration. That is deliberate and it is the whole reason this file names no
+// card: the one-card doctrine counts rendered instances, and a harness that
+// composed a card of its own would be exactly the second callsite the gate
+// exists to refuse. Going through the registry also makes the harness more
+// faithful, not less: it is the same parse, the same dispatch and the same card
+// the chat thread draws.
 //
 // THE ONE SUBSTITUTION, DOCUMENTED AT ITS MOUNT. These cards render NO DOM until
 // an authorized resolve answers, and the harness has no session. So the suite's
@@ -33,15 +37,12 @@
 
 import { type ReactElement } from "react";
 
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { RenderableViewCard } from "@cinatra-ai/chat/renderer";
 import {
   LIFECYCLE_VIEW_RESOLVE_PATH,
   LifecycleCardSurfaceProvider,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
-import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
-import {
-  LIFECYCLE_VIEW_SCHEMA_VERSION,
-  VerificationSummaryCard,
-} from "@cinatra-ai/agents/verification-summary-card";
 
 import {
   LIFECYCLE_RESOLVE_FIXTURES,
@@ -78,23 +79,16 @@ function LifecycleResolveFixtureMount({
       className="flex flex-col gap-4"
     >
       <LifecycleCardSurfaceProvider host={fixture.host}>
-        {fixture.kind === "verification_summary" ? (
-          <VerificationSummaryCard
-            view={{
-              viewType: "verification_summary",
-              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-              ref: fixture.ref,
-            }}
-          />
-        ) : (
-          <ReviewGateCard
-            view={{
-              viewType: "artifact_review_gate",
-              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-              ref: fixture.ref,
-            }}
-          />
-        )}
+        {/* The raw wire payload, exactly as a turn carries it: a kind, a version
+            and an opaque ref, and nothing else. Validation and dispatch are the
+            registry's. */}
+        <RenderableViewCard
+          data={{
+            viewType: fixture.kind,
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: fixture.ref,
+          }}
+        />
       </LifecycleCardSurfaceProvider>
     </div>
   );
@@ -102,8 +96,8 @@ function LifecycleResolveFixtureMount({
 
 /**
  * One mount per manifest surface this wave covers on the resolve seam: the three
- * verification outcomes and the same card in a conversation, §IV's four review
- * states, and the decision floor of §VIII.
+ * verification outcomes and the same card read in a conversation, §IV's four
+ * review states, and the decision floor of §VIII.
  */
 export function LifecycleResolveFixtures(): ReactElement {
   return (

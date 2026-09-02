@@ -3409,7 +3409,10 @@ function verificationDriver(fixture: LifecycleResolveFixture): SurfaceDriver {
     present: async (page, root) => {
       await openWithSeededResolve(page);
       const card = verificationCard(root);
-      await expect(card).toBeVisible();
+      // The card draws only once its own resolve has answered, so the FIRST
+      // assertion after opening the harness waits the way the other
+      // hydration-sensitive drivers on this route wait.
+      await expect(card).toBeVisible({ timeout: 30_000 });
       await expect(card).toHaveAttribute("data-lifecycle-card", "verification_summary");
       // §VII resolves ADVISORY — a reading, never a decision.
       await expect(card).toHaveAttribute("data-lifecycle-card-state", "advisory");
@@ -3470,6 +3473,13 @@ function verificationDriver(fixture: LifecycleResolveFixture): SurfaceDriver {
         await expect(panel).toContainText(comment.body);
       }
 
+      // §VII's own callout: "the bordered panel is the card treatment for a
+      // CONVERSATION, where the reading has to separate itself from the turns
+      // around it". The reading drawn in a turn is asserted to carry it.
+      if (fixture.mount === "verification-in-thread") {
+        await expect(card).toHaveCSS("border-top-width", "1px");
+      }
+
       // "IT CARRIES NO FLOOR AT ALL … it asks nothing, so it draws nothing to
       // press." Not a disabled floor, not a link — nothing pressable.
       await expect(card.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
@@ -3502,7 +3512,9 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
   const drawnCard = async (page: Page, root: Locator): Promise<Locator> => {
     await openWithSeededResolve(page);
     const drawn = card(root);
-    await expect(drawn).toBeVisible();
+    // First assertion after opening the harness — see the note on the
+    // verification factory: the card draws on its answer, not on load.
+    await expect(drawn).toBeVisible({ timeout: 30_000 });
     await expect(drawn).toHaveAttribute("data-lifecycle-card", "artifact_review_gate");
     await expect(drawn).toHaveAttribute("data-lifecycle-card-state", stateName);
     await expect(drawn).toHaveAttribute("data-lifecycle-card-host", fixture.host);
@@ -3590,7 +3602,7 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
       driver.present = async (page, root) => {
         await openWithSeededResolve(page);
         const sibling = page.locator(`[data-surface-id="${LIFECYCLE_DRAWN_CONTROL_MOUNT}"]`);
-        await expect(reviewCard(sibling)).toBeVisible();
+        await expect(reviewCard(sibling)).toBeVisible({ timeout: 30_000 });
         await expect(root).toBeAttached();
         await expect(root.locator("[data-lifecycle-card]")).toHaveCount(0);
         await expect(reviewCard(root)).toHaveCount(0);

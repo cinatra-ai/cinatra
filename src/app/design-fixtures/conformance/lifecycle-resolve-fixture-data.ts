@@ -203,11 +203,14 @@ const FLOOR_SUGGESTIONS: LifecycleSuggestion[] = [
 ];
 
 export const LIFECYCLE_RESOLVE_FIXTURES: readonly LifecycleResolveFixture[] = [
-  // §VII — the three outcomes, on a column host (the run's own surface, where
-  // the same regions sit unframed).
+  // §VII — the three outcomes. Every row is drawn on the CONVERSATION host,
+  // because the enumerated adapter this harness mounts through is the
+  // conversation's own renderable-view dispatch; §IX's rule is that the card is
+  // the same on every host, and the host it was drawn on is read back off the
+  // card rather than assumed.
   {
     mount: "verification-verified",
-    host: "run_card",
+    host: "chat_thread",
     ref: "conformance-verification-verified",
     kind: "verification_summary",
     state: { state: "advisory" },
@@ -215,7 +218,7 @@ export const LIFECYCLE_RESOLVE_FIXTURES: readonly LifecycleResolveFixture[] = [
   },
   {
     mount: "verification-drift",
-    host: "run_card",
+    host: "chat_thread",
     ref: "conformance-verification-drift",
     kind: "verification_summary",
     state: { state: "advisory" },
@@ -223,7 +226,7 @@ export const LIFECYCLE_RESOLVE_FIXTURES: readonly LifecycleResolveFixture[] = [
   },
   {
     mount: "verification-findings-not-met",
-    host: "run_card",
+    host: "chat_thread",
     ref: "conformance-verification-unmet",
     kind: "verification_summary",
     state: { state: "advisory" },
