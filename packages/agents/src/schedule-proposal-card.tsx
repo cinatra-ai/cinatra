@@ -181,6 +181,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS } from "./trigger-recurrence";
@@ -380,6 +381,31 @@ export function ScheduleProposalCard({
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
+
+  // THE CARD TELLS THE TURN WHAT IT IS READING (cinatra#3044).
+  //
+  // The line above this card was minted at dispatch and frozen into the turn,
+  // and the ratified drawing's section VI gives the spent one-off its own
+  // words. Only this card can say the reading is that one: `released` is the
+  // firing (`markTriggerReleased` stamps it and the resolver reads the stamp),
+  // and `triggerType` is what keeps a RECURRING schedule out -- it "is never
+  // spent by firing: its past runs are history and its runs still to come stay
+  // changeable", so its rows still take a change and its line must not say it
+  // was spent. It is the same pair `frozen` is decided by in the settled phase
+  // below, which is what keeps the sentence and the floor from disagreeing.
+  //
+  // REPORTED IN EVERY STATE, including the ones that draw nothing, so the turn
+  // hears the neutral reading rather than keeping a stale one. Called before
+  // this component's own early returns for the ordinary reason: a hook may not
+  // be skipped.
+  useReportScheduleReading(
+    body !== null &&
+      body.phase === "settled" &&
+      body.triggerType !== "recurring" &&
+      body.released
+      ? "spent-one-off"
+      : "other",
+  );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 

@@ -179,7 +179,15 @@ describe("the executor opens the schedule moment WITH the card's reference (cina
     ).toBe(true);
     // …and it is THIS run's, minted by the server, not a handle assembled from
     // ids a client happens to hold.
-    expect(decodeScheduleRunRef(cardRef as string)).toEqual({ runId: RUN_ID });
+    // …AND IT RECORDS WHERE IT WAS MINTED. This is the run's OWN schedule step,
+    // in a conversation, and the resolver reads that stamp to keep drawing the
+    // card once a one-off has fired instead of withdrawing it. Asserted here
+    // rather than only where it is read, because this is the one site that
+    // states it.
+    expect(decodeScheduleRunRef(cardRef as string)).toEqual({
+      runId: RUN_ID,
+      fromScheduleStep: true,
+    });
     expect(cardRef, "the reference must be opaque — it is re-fed to the model").not.toContain(
       RUN_ID,
     );

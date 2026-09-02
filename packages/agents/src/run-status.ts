@@ -709,6 +709,120 @@ export function describeStartedRun(input: {
 }
 
 /**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A FIRED ONE-OFF'S READING
+ * (cinatra#3044).
+ *
+ * Section VI's fifth reading gives the card its own words, and its example
+ * draws them as the assistant's whole line above the read-only rows:
+ *
+ *   "It ran at the time you set. A one-time schedule is spent once it fires, so
+ *    the rows below are the record of it and cannot be changed."
+ *
+ * IT REPLACES THE PLATFORM'S SENTENCE RATHER THAN CLAUSING IT. Every other
+ * correction in this module swaps the CLAUSE after a head that names the
+ * package and the run, because in each of those readings the run is still the
+ * subject: it is queued, waiting, parked. Over a spent one-off the subject is
+ * the schedule, and the drawing writes it as one standing sentence with no
+ * dispatch head at all -- so the head goes with the clause. A line that kept
+ * "Dispatched `pkg` (runId: `...`, status: `queued`)." over a schedule that has
+ * already run would be the same untruth this module exists to answer, said in
+ * the tense the drawing explicitly retires.
+ *
+ * ONLY A ONE-OFF EVER REACHES IT. "Only a one-off -- Run right after setup or
+ * Schedule for later -- reaches this reading. A recurring schedule is never
+ * spent by firing." The decision is not taken here: this leaf is pure and the
+ * one thing that knows a schedule was spent is the CARD's own resolved reading,
+ * which is what asks for this sentence.
+ */
+export const RUN_START_SCHEDULE_FIRED_SENTENCE =
+  "It ran at the time you set. A one-time schedule is spent once it fires, " +
+  "so the rows below are the record of it and cannot be changed.";
+
+/** Regex-escape a literal. */
+function escapeLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * THE PLATFORM'S OWN SENTENCE FOR ONE RUN, as a pattern.
+ *
+ * EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
+ * status table itself rather than listed by hand, so a status given its own
+ * sentence is correctable the day it is added: a platform sentence a corrector
+ * does not recognise is a sentence left claiming a tense the run's row does not
+ * support, which is the whole defect these functions answer, and a hand-kept
+ * list is how one gets missed.
+ *
+ * THE CORRECTED CLAUSES ARE IN THE SET TOO, which is what makes the corrections
+ * idempotent: a turn that has already been corrected matches WHOLE and is
+ * replaced by the identical bytes, rather than matching its head and growing a
+ * second clause.
+ *
+ * LONGEST FIRST. Alternation is ordered, and three of these clauses share the
+ * head "The run has not started"; a shorter one placed first would match that
+ * head and leave the rest of a longer clause standing beside the replacement.
+ *
+ * ONE definition, so the two corrections below cannot come to disagree about
+ * which sentences are the platform's to rewrite.
+ */
+function platformStartSentencePattern(runId: string): RegExp {
+  const clauses = [
+    ...new Set([
+      ...Object.values(RUN_START_CLAUSES),
+      RUN_START_NOT_STARTED_CLAUSE,
+      RUN_START_PARKED_CLAUSE,
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ]),
+  ]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeLiteral)
+    .join("|");
+  return new RegExp(
+    "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
+      escapeLiteral(runId) +
+      "`(?:,\\s*status:\\s*`[^`\\n]*`)?\\)\\.(?:[ \\t]*(" +
+      clauses +
+      "))?",
+    "g",
+  );
+}
+
+/**
+ * Rewrite the platform's own start sentence for ONE run, wherever it stands in
+ * a turn's text, and leave everything else byte-identical.
+ *
+ * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
+ * mints the head with no clause after it, and that door writes the sentence as
+ * the whole line. The same characters INSIDE prose are a quotation of the line,
+ * not the line, and a corrector that rewrote a quotation would be a second
+ * author of the turn -- so a clause-less match is taken only when nothing but
+ * whitespace shares its line.
+ */
+function rewritePlatformStartSentence(input: {
+  text: string;
+  runId: string;
+  replace: (packageName: string) => string;
+}): string {
+  return input.text.replace(
+    platformStartSentencePattern(input.runId),
+    (
+      match: string,
+      packageName: string,
+      clause: string | undefined,
+      offset: number,
+    ) => {
+      if (clause === undefined) {
+        const before = input.text.slice(0, offset);
+        const after = input.text.slice(offset + match.length);
+        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+        if (!ownsTheLine) return match;
+      }
+      return input.replace(packageName);
+    },
+  );
+}
+
+/**
  * THE SENTENCE THE PLATFORM ALREADY MINTED, CORRECTED AT THE CARD
  * (cinatra#3044).
  *
@@ -722,7 +836,7 @@ export function describeStartedRun(input: {
  * row does not support is replaced with the one it does.
  *
  * NARROW BY CONSTRUCTION. It rewrites only the platform's OWN sentence, only
- * for the run named in it, and only where that sentence carries one of the two
+ * for the run named in it, and only where that sentence carries one of the
  * clauses this module mints. Prose the model wrote, another run's sentence, and
  * a sentence already corrected are all returned untouched — a correction that
  * could reach arbitrary text would be a second author of the turn.
@@ -734,66 +848,49 @@ export function correctRunStartSentenceForScheduleWait(input: {
   text: string;
   runId: string;
 }): string {
-  const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
-  // status table itself rather than listed by hand, so a status given its own
-  // sentence is correctable the day it is added: a platform sentence this
-  // corrector does not recognise is a sentence left claiming a tense the run's
-  // row does not support, which is the defect this function answers.
-  //
-  // THE WAIT CLAUSE IS IN THE SET TOO, which is what makes this idempotent: a
-  // turn that has already been corrected matches WHOLE and is replaced by the
-  // identical bytes, rather than matching its head and growing a second clause.
-  //
-  // LONGEST FIRST. Alternation is ordered, and several of these clauses share
-  // the head "The run has not started"; a shorter one placed first would match
-  // that head and leave the rest of a longer clause standing beside the
-  // replacement.
-  const clauses = [
-    ...new Set([
-      ...Object.values(RUN_START_CLAUSES),
-      RUN_START_NOT_STARTED_CLAUSE,
-      RUN_START_PARKED_CLAUSE,
-      RUN_START_SCHEDULE_WAIT_CLAUSE,
-    ]),
-  ]
-    .sort((a, b) => b.length - a.length)
-    .map(escape)
-    .join("|");
-  const pattern = new RegExp(
-    "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
-      escape(input.runId) +
-      "`(?:,\\s*status:\\s*`[^`\\n]*`)?\\)\\.(?:[ \\t]*(" +
-      clauses +
-      "))?",
-    "g",
-  );
-  return input.text.replace(
-    pattern,
-    (
-      match: string,
-      packageName: string,
-      clause: string | undefined,
-      offset: number,
-    ) => {
-      // A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE.
-      // One door mints the head with no clause after it, and that door writes
-      // the sentence as the whole line. The same characters INSIDE prose are a
-      // quotation of the line, not the line, and a corrector that rewrote a
-      // quotation would be a second author of the turn — so a clause-less match
-      // is taken only when nothing but whitespace shares its line.
-      if (clause === undefined) {
-        const before = input.text.slice(0, offset);
-        const after = input.text.slice(offset + match.length);
-        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
-        if (!ownsTheLine) return match;
-      }
-      return describeStartedRun({
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: (packageName) =>
+      describeStartedRun({
         packageName,
         runId: input.runId,
         status: "pending_trigger",
         moment: "schedule",
-      });
-    },
-  );
+      }),
+  });
+}
+
+/**
+ * THE SAME SENTENCE, OVER A ONE-OFF THAT HAS ALREADY FIRED (cinatra#3044).
+ *
+ * The wait correction above answers a run standing AT its schedule. This one
+ * answers the reading after it: the one-off fired, the run moved on, and the
+ * card beneath the line settled into the record of a schedule that is spent.
+ * The line frozen into the turn at dispatch still said the run was queued and
+ * would start on its own, which is now false in both halves — it has started,
+ * and nothing is waiting to start it.
+ *
+ * IT IS THE DRAWING'S SENTENCE, WHOLE. See
+ * `RUN_START_SCHEDULE_FIRED_SENTENCE` for why the dispatch head goes with the
+ * clause rather than staying above it.
+ *
+ * IDEMPOTENT AND NARROW, on exactly the same terms as the wait correction: the
+ * replacement carries no dispatch head, so a corrected line no longer matches
+ * the platform's own pattern and a second pass changes nothing at all.
+ *
+ * THE TWO CORRECTIONS CANNOT BOTH APPLY TO ONE RUN. A run is either standing at
+ * its schedule or past it, and the container that reports these two answers
+ * reads both off the same reading — so whichever runs first, the other finds no
+ * platform sentence left for that run to rewrite.
+ */
+export function correctRunStartSentenceForFiredSchedule(input: {
+  text: string;
+  runId: string;
+}): string {
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: () => RUN_START_SCHEDULE_FIRED_SENTENCE,
+  });
 }

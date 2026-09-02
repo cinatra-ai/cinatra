@@ -2917,7 +2917,15 @@ async function runAgentBuilderExecutionJobInner(
       // one addressed by something the server did not mint.
       await stateRunScheduleMoment({
         run,
-        cardRef: encodeScheduleRunRef({ runId }),
+        // AND IT RECORDS THAT THIS IS THE RUN'S OWN SCHEDULE STEP
+        // (cinatra#3044). This is the ONE minting site where the card in a
+        // conversation IS the schedule step — the rows are chosen on it,
+        // **Run right after setup** included — and the resolver has to keep
+        // drawing that card after the schedule is spent. The stamp is sealed
+        // inside the reference with the run it addresses, so it survives the
+        // moment ending, travels in the turn's durable content, and grants
+        // nothing on its own.
+        cardRef: encodeScheduleRunRef({ runId, fromScheduleStep: true }),
         authority: executionAuthority,
       });
       console.log(

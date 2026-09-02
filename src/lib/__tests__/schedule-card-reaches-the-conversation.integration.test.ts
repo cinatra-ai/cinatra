@@ -213,8 +213,13 @@ describe("the executor is what mints the reference the store half depends on", (
       path.join(repoRoot, "packages/agents/src/execution.ts"),
       "utf8",
     );
+    // AND IT RECORDS WHERE IT WAS MINTED (cinatra#3044, the eighth graded set).
+    // This is the ONE site where the card in a conversation IS the run's own
+    // schedule step, and the resolver reads that stamp to keep drawing the card
+    // once a one-off has fired instead of withdrawing it. The window is wide
+    // because the reason for the stamp is written where it is stated.
     expect(source).toMatch(
-      /await stateRunScheduleMoment\(\{[\s\S]{0,80}cardRef: encodeScheduleRunRef\(\{ runId \}\)/,
+      /await stateRunScheduleMoment\(\{[\s\S]{0,1200}cardRef: encodeScheduleRunRef\(\{ runId, fromScheduleStep: true \}\)/,
     );
   });
 });
@@ -229,7 +234,7 @@ describeDb("a run a person started from a conversation reaches its schedule mome
     // minted on the run path.
     await stateRunScheduleMoment({
       run: { id: runId, orgId: ORG_ID },
-      cardRef: encodeScheduleRunRef({ runId }),
+      cardRef: encodeScheduleRunRef({ runId, fromScheduleStep: true }),
       authority: writeAuthority(),
     });
 
@@ -241,7 +246,10 @@ describeDb("a run a person started from a conversation reaches its schedule mome
       triple?.lifecycle_card_ref,
       "the run row carries no card reference, so the outbox has nothing to write",
     ).not.toBeNull();
-    expect(decodeScheduleRunRef(triple!.lifecycle_card_ref!)).toEqual({ runId });
+    expect(decodeScheduleRunRef(triple!.lifecycle_card_ref!)).toEqual({
+      runId,
+      fromScheduleStep: true,
+    });
 
     // 2. THE CONVERSATION CARRIES THE CARD, durably, at the dispatch it belongs to.
     const content = await readTurnContent(turnId);
@@ -293,7 +301,7 @@ describeDb("a run a person started from a conversation reaches its schedule mome
 
     await stateRunScheduleMoment({
       run: { id: runId, orgId: ORG_ID },
-      cardRef: encodeScheduleRunRef({ runId }),
+      cardRef: encodeScheduleRunRef({ runId, fromScheduleStep: true }),
       authority: writeAuthority(),
     });
 
@@ -313,7 +321,7 @@ describeDb("a run a person started from a conversation reaches its schedule mome
     const { turnId } = await seedConversationTurn(runId);
     const input = {
       run: { id: runId, orgId: ORG_ID },
-      cardRef: encodeScheduleRunRef({ runId }),
+      cardRef: encodeScheduleRunRef({ runId, fromScheduleStep: true }),
       authority: writeAuthority(),
     };
 

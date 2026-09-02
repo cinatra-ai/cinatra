@@ -288,7 +288,11 @@ describe("Confirm on the waiting run's card", () => {
       access,
     });
 
-    expect(resolveProposalForRun).toHaveBeenCalledWith(RUN_ID, READER, access);
+    // …and, beside it, what the reference records (cinatra#3044): this one was
+    // minted plain, so the press asks exactly what the read asked.
+    expect(resolveProposalForRun).toHaveBeenCalledWith(RUN_ID, READER, access, {
+      fromScheduleStep: false,
+    });
   });
 
   it("refuses rows that are not §VI's closed vocabulary, and arms nothing", async () => {

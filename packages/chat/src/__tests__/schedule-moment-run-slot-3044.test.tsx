@@ -62,6 +62,11 @@ if (typeof globalThis.window !== "undefined" &&
 
 const RUN_ID = "1e1c5f00-2202-42cc-987a-40f272e8a29b";
 const CARD_REF = "sched-run-ref-3044";
+/** THE SAME SCHEDULE, MINTED AGAIN. Every encoding of a card reference draws a
+ *  fresh initialisation vector, so one run's one schedule has a different
+ *  reference each time it is minted -- and a run that re-enters its moment
+ *  mints one. Two references, one schedule, one reading. */
+const REMINTED_CARD_REF = "sched-run-ref-3044-reminted";
 const PACKAGE = "@cinatra-ai/blog-draft-writer-agent";
 
 // The transcript's other two run-addressed cards answer "nothing to draw", so
@@ -167,13 +172,56 @@ function scheduleEnvelope() {
 }
 
 /**
+ * SECTION VI'S FIFTH READING, as the resolver answers it once the one-off has
+ * fired: the settled body, released and spent, with nothing left to press.
+ *
+ *   "Once it has fired, the card is a reading. A one-off that has fired cannot
+ *    be changed, so the rows go read-only -- the values still legible, the
+ *    pickers gone -- and the card carries no floor at all: no hairline, no
+ *    button, nothing to press. A spent schedule is still worth reading, so
+ *    nothing is hidden; it simply asks nothing."
+ */
+const FIRED_BODY = {
+  phase: "settled",
+  version: 1,
+  agentName: "Blog Draft Writer",
+  runId: RUN_ID,
+  triggerType: "immediate",
+  schedule: { kind: "immediate" },
+  scheduleCopy: "Runs right after setup",
+  timezone: "UTC",
+  gatedSteps: [],
+  released: true,
+  arming: false,
+  canSave: false,
+  canCancel: false,
+};
+
+function firedEnvelope() {
+  return {
+    kind: "trigger_schedule_proposal",
+    // `.strict()` on the wire: the settled state carries NO decision flags.
+    state: { state: "settled" },
+    body: FIRED_BODY,
+  };
+}
+
+/** WHAT THE RESOLVER ANSWERS RIGHT NOW. Mutated in place beside `runReading`,
+ *  so a test can move the schedule from pending to spent without remounting
+ *  anything -- the two readings travel together, exactly as they do live. */
+const cardReading = { current: scheduleEnvelope() as Record<string, unknown> };
+
+/**
  * The assistant turn a chat dispatch really produces.
  *
  * `carriesPart` is the difference between the two roads this file measures: the
  * RELOADED conversation carries the platform-injected part in the turn's stored
  * content, and the tab that STREAMED the turn never will.
  */
-function dispatchTurn(carriesPart: boolean): UiMessage[] {
+function dispatchTurn(
+  carriesPart: boolean,
+  refs: readonly string[] = [CARD_REF],
+): UiMessage[] {
   return [
     { id: "u1", role: "user", content: "run the blog draft writer for me" },
     {
@@ -190,13 +238,11 @@ function dispatchTurn(carriesPart: boolean): UiMessage[] {
           result: JSON.stringify({ runId: RUN_ID, status: "pending_input" }),
           ...(carriesPart
             ? {
-                views: [
-                  {
-                    viewType: "trigger_schedule_proposal",
-                    schemaVersion: 1,
-                    ref: CARD_REF,
-                  },
-                ],
+                views: refs.map((ref) => ({
+                  viewType: "trigger_schedule_proposal",
+                  schemaVersion: 1,
+                  ref,
+                })),
               }
             : {}),
         },
@@ -228,7 +274,7 @@ function installChatFetchStub() {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/agents/runs/")) return json(runReading.current);
-    if (url === "/api/lifecycle-views/resolve") return json(scheduleEnvelope());
+    if (url === "/api/lifecycle-views/resolve") return json(cardReading.current);
     return json({}, 404);
   }) as unknown as typeof fetch;
   return { restore: () => { globalThis.fetch = original; } };
@@ -236,6 +282,7 @@ function installChatFetchStub() {
 
 beforeEach(() => {
   runReading.current = RUN_WORKING;
+  cardReading.current = scheduleEnvelope();
   widgetStub = null;
 });
 afterEach(() => {
@@ -246,17 +293,19 @@ afterEach(() => {
 
 async function mountOn(
   surface: "chat" | "widget",
-  { carriesPart }: { carriesPart: boolean },
+  { carriesPart, refs }: { carriesPart: boolean; refs?: readonly string[] },
 ) {
   if (surface === "widget") {
     widgetStub = installWidgetServiceStub({
-      lifecycle: () => scheduleEnvelope(),
+      lifecycle: () => cardReading.current,
       runSeed: () => runReading.current,
     });
   } else {
     widgetStub = installChatFetchStub();
   }
-  return mountSurface(surface, { messages: dispatchTurn(carriesPart) });
+  return mountSurface(surface, {
+    messages: dispatchTurn(carriesPart, refs ?? [CARD_REF]),
+  });
 }
 
 const CARD = '[data-lifecycle-card="trigger_schedule_proposal"]';
@@ -283,14 +332,60 @@ describe.each(["chat", "widget"] as const)(
       expect(container.textContent).not.toContain("Agentic Run Progress");
     }, 30_000);
 
-    it("carries the run's next reading again once the run leaves the moment — and NOTHING beside it", async () => {
-      // The "run right after setup" road. The turn still carries the injected
-      // part — it is durable, and it will carry it for ever — but the run has
-      // moved on, so the slot is the run's own reading again and the moment's
-      // card is not drawn beside it. This is the half a test that only counted
-      // the progress card would miss: two readings in one slot, the other way
-      // round.
+    it(
+      "Once it has fired, the card is a reading. A one-off that has fired cannot be changed, " +
+        "so the rows go read-only -- the values still legible, the pickers gone -- and the card " +
+        "carries no floor at all",
+      async () => {
+        // THE FIRED ONE-OFF, ON THE ROAD THE NINTH GRADED SET PHOTOGRAPHED. The
+        // reader confirmed the card's own default row, the one-off fired, and
+        // the run moved on to its next screen. The turn still carries the
+        // platform-injected part -- it is durable and it will carry it for ever
+        // -- and the run's row now names no moment at all.
+        //
+        // The drawing quoted in this name says what the conversation owes then:
+        // the spent schedule KEEPS its reading. It is not the run's current
+        // reading any more, so it does not take the run's place -- it stands on
+        // its own, beside the reading the run has now.
+        runReading.current = RUN_PAST_SCHEDULE;
+        cardReading.current = firedEnvelope();
+        const { container } = await mountOn(surface, { carriesPart: true });
+
+        await waitFor(() => {
+          if (!container.querySelector(RUN_PROGRESS)) {
+            throw new Error("the run's own reading did not come back");
+          }
+        });
+        await waitFor(() => {
+          if (!container.querySelector(CARD)) {
+            throw new Error("the fired one-off's reading is not in the conversation");
+          }
+        });
+        // ONE reading of it, never two: the settled card is drawn once, at its
+        // own place, and the run's slot did not draw a second copy.
+        expect(container.querySelectorAll(CARD).length).toBe(1);
+        const card = container.querySelector(CARD) as HTMLElement;
+        // "the rows go read-only -- the values still legible, the pickers gone
+        //  -- and the card carries no floor at all"
+        expect(card.getAttribute("data-lifecycle-card-phase")).toBe("settled");
+        expect(card.querySelectorAll("select").length).toBe(0);
+        expect(card.querySelectorAll('[data-action="confirm-schedule-proposal"]').length).toBe(0);
+        // "the values still legible" -- the option rows stay readable, and
+        // the row the person chose is one of them.
+        expect(card.textContent).toContain("Run right after setup");
+        // The registry drew the real card, not its fallback.
+        expect(container.querySelector(FALLBACK)).toBeNull();
+      },
+      30_000,
+    );
+
+    it("draws the run's own next reading beside it, and no SECOND moment card", async () => {
+      // The other half of the rule this replaces, kept: the run's slot draws
+      // exactly one moment card. A settled reading standing on its own is not a
+      // licence for the slot to draw the same card again beneath the run's own
+      // reading.
       runReading.current = RUN_PAST_SCHEDULE;
+      cardReading.current = firedEnvelope();
       const { container } = await mountOn(surface, { carriesPart: true });
 
       await waitFor(() => {
@@ -298,11 +393,67 @@ describe.each(["chat", "widget"] as const)(
           throw new Error("the run's own reading did not come back");
         }
       });
-      expect(container.querySelector(CARD)).toBeNull();
-      expect(
-        container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')
-          .length,
-      ).toBe(0);
+      await waitFor(() => {
+        if (!container.querySelector(CARD)) {
+          throw new Error("the fired one-off's reading is not in the conversation");
+        }
+      });
+      expect(container.querySelectorAll(CARD).length).toBe(1);
+      expect(container.textContent).toContain("Agentic Run Progress");
+    }, 30_000);
+
+    // -----------------------------------------------------------------------
+    // ONE SCHEDULE, HOWEVER MANY TIMES ITS REFERENCE WAS MINTED
+    // -----------------------------------------------------------------------
+    //
+    // A card reference is minted with a fresh initialisation vector every time,
+    // and a run that re-enters its schedule moment mints another one, so a turn
+    // can honestly carry TWO parts that are two references to the SAME run's
+    // one schedule. The drawing gives that schedule ONE reading: "Once it has
+    // fired, the card is a reading" -- a reading, singular, of the one thing
+    // that was settled. A container that compared the row's reference to each
+    // part's bytes would draw the older minting as a second card beside the
+    // newer one.
+
+    it("draws ONE reading for one schedule, however many references the turn carries", async () => {
+      runReading.current = RUN_PAST_SCHEDULE;
+      cardReading.current = firedEnvelope();
+      const { container } = await mountOn(surface, {
+        carriesPart: true,
+        refs: [CARD_REF, REMINTED_CARD_REF],
+      });
+
+      // THE READING THIS SETTLES ON, not the first frame it passes through. The
+      // container swaps the part that holds the place for the reading the row
+      // settles on, and a card that changes reference resolves again, so the
+      // measurement is of where it comes to rest.
+      await waitFor(() => {
+        expect(container.querySelectorAll(CARD).length).toBe(1);
+        expect(container.querySelectorAll(RUN_PROGRESS).length).toBe(1);
+      });
+    }, 30_000);
+
+    it("draws ONE reading while the row still names the schedule, whichever minting it names", async () => {
+      // The row names the LATEST minting; the turn also carries the earlier
+      // one. The row's card is the run's current reading and it is the only
+      // reading: an earlier reference to the same schedule is not a settled
+      // second card, it is the same card.
+      runReading.current = {
+        ...RUN_AT_SCHEDULE,
+        lifecycleCard: { kind: "trigger_schedule_proposal", ref: REMINTED_CARD_REF },
+      };
+      const { container } = await mountOn(surface, {
+        carriesPart: true,
+        refs: [CARD_REF, REMINTED_CARD_REF],
+      });
+
+      await waitFor(() => {
+        expect(container.querySelectorAll(CARD).length).toBe(1);
+        // The moment is open, so the run's progress reading stands down.
+        expect(container.querySelector(RUN_PROGRESS)).toBeNull();
+        // Nothing was drawn as a settled reading beside it.
+        expect(container.querySelectorAll("[data-settled-moment-reading]").length).toBe(0);
+      });
     }, 30_000);
   },
 );
@@ -368,6 +519,7 @@ describe.each(["chat", "widget"] as const)(
       expect(container.querySelector(RUN_PROGRESS)).toBeNull();
 
       runReading.current = RUN_PAST_SCHEDULE;
+      cardReading.current = firedEnvelope();
 
       await waitFor(
         () => {
@@ -377,9 +529,24 @@ describe.each(["chat", "widget"] as const)(
         },
         { timeout: 20_000 },
       );
-      // And the moment's card is gone in the same reading — not left standing
-      // beside the run's next one.
-      expect(container.querySelector(CARD)).toBeNull();
+      // AND THE CARD IS STILL THERE — it stops being the run's reading and
+      // becomes its OWN. "A spent schedule is still worth reading, so nothing
+      // is hidden; it simply asks nothing." What the press takes away is the
+      // floor, never the card.
+      await waitFor(
+        () => {
+          const card = container.querySelector(CARD);
+          if (!card) throw new Error("the card was withdrawn when the run moved on");
+          if (card.getAttribute("data-lifecycle-card-phase") !== "settled") {
+            throw new Error("the card did not settle into its reading");
+          }
+        },
+        { timeout: 20_000 },
+      );
+      expect(container.querySelectorAll(CARD).length).toBe(1);
+      expect(
+        container.querySelectorAll('[data-action="confirm-schedule-proposal"]').length,
+      ).toBe(0);
     }, 40_000);
   },
 );
@@ -482,4 +649,25 @@ describe("the run read carries the surface's own credential", () => {
     ).toBe(0);
     expect(container.querySelector(CARD)).toBeNull();
   }, 30_000);
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SPENT-CARD RULE NAMES A KIND THE COLUMN ACTUALLY RECOGNISES
+// ---------------------------------------------------------------------------
+//
+// The rule that keeps a fired schedule in the conversation is scoped to one
+// view type, spelled once as a constant. The column's own moment recognition
+// keeps its own map. If the two drift -- a rename, or a successor kind -- the
+// carried part would still be recognised as a moment card, still be taken out
+// of the ordinary slotted views, and then match no rule at all: the card would
+// vanish from the conversation again, silently, which is the whole defect.
+describe("the kind the spent-card rule names", () => {
+  it("is a kind the conversation recognises as a moment card", async () => {
+    const { SPENT_MOMENT_CARD_VIEW_TYPE } = await import("../chat-messages-view");
+    const { isConversationMomentCardKind } = await import(
+      "@cinatra-ai/agents/lifecycle-card-runtime"
+    );
+    expect(isConversationMomentCardKind(SPENT_MOMENT_CARD_VIEW_TYPE)).toBe(true);
+  });
 });
