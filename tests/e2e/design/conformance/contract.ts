@@ -54,6 +54,10 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  LIFECYCLE_CHAT_COMPOSER_MOUNT,
+  type LifecycleComposerRowMount,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-composer-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -3267,6 +3271,292 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
   states: {},
 };
 
+// ---------------------------------------------------------------------------
+// The REVIEW-COMPOSER family (cinatra#3159, epic #3155 W3)
+// ---------------------------------------------------------------------------
+//
+// §I of the in-conversation drawing puts ONE row above the review floor and
+// gives it THREE readings and ONE control. The manifest surfaces below are the
+// readings of that one row, plus the group the drawing draws the two unbound
+// ones in, plus the chat box the row is about. So they are driven together, over
+// one harness that mounts the SHIPPED row fed by the SHIPPED binding hook inside
+// the SHIPPED focus store.
+//
+// EVERY ASPECT DRIVEN HERE IS SHIPPED ON THE DEFAULT BRANCH after this wave's
+// one first-party change: the row's control now carries the name the drawing
+// gives it in the reading it is drawn in — `release-review-composer -> unbound`
+// while bound, `focus-review-composer -> bound` while not — instead of one name
+// for both readings, which said the opposite of what the press does in one of
+// them. testid-contract.json requires each of those literals in the file that
+// ships them, so a driver naming a control the product does not ship is RED in
+// scripts/design/check-conformance-testids.mjs before any browser opens.
+//
+// THE READING IS NEVER ASSERTED FROM THE HARNESS. Every assertion below reads
+// the shipped row's own attributes and the shipped sentence's own conformance
+// id. The harness holds one thing — which open review the reader chose — and
+// `resolveComposerTarget` turns that into the reading.
+//
+// The manifest's aspects elsewhere in this family that no shipped control
+// carries are NOT driven here, and are not approximated through a different
+// control either. They are on this wave's surface-readiness list.
+
+/** The §I row of one mounted fixture row. */
+function composerRow(root: Locator): Locator {
+  return root.locator('[data-conformance-id="review-composer-focus"]').first();
+}
+
+/**
+ * The row's one control, addressed by the MANIFEST'S OWN action name.
+ *
+ * The shipped attribute is written `"<action> -> <outcome>"`, so this locator
+ * cannot resolve at all unless the product ships a control for exactly the
+ * action-and-outcome pair the manifest declares — which is what stops a driver
+ * from pressing one control and reporting another one's outcome. It is also
+ * exactly the property this wave had to make true: before it, the one toggle
+ * carried a single name in both readings.
+ */
+function composerOffering(root: Locator, action: string, outcome: string): Locator {
+  return composerRow(root).locator(`[data-action="${action} -> ${outcome}"]`);
+}
+
+/**
+ * Press until the reaction is observed. Same hydration retry as
+ * `pressChipUntil`: a click that lands before React hydration is silently
+ * swallowed on the production standalone build.
+ */
+async function pressComposerUntil(control: Locator, reacted: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await control.click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/** The row is drawn, in the reading the shipped resolver put it in. */
+async function expectReading(
+  root: Locator,
+  reading: { bound: boolean; ambiguous: boolean; sentence: string },
+): Promise<void> {
+  const row = composerRow(root);
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-composer-bound", String(reading.bound));
+  await expect(row).toHaveAttribute("data-composer-ambiguous", String(reading.ambiguous));
+  await expect(row.locator(`[data-conformance-id="${reading.sentence}"]`)).toBeVisible();
+}
+
+const COMPOSER_BOUND = { bound: true, ambiguous: false, sentence: "review-composer-bound" };
+const COMPOSER_AMBIGUOUS = {
+  bound: false,
+  ambiguous: true,
+  sentence: "review-composer-ambiguous",
+};
+const COMPOSER_UNBOUND = { bound: false, ambiguous: false, sentence: "review-composer-unbound" };
+
+/**
+ * The `release-review-composer -> unbound` driver: the reader GIVES THE BINDING
+ * BACK.
+ *
+ * §I: "The binding is always refusable … one press gives it back — because a
+ * lone review would otherwise turn every chat message into a comment." So the
+ * outcome is read as the drawing states it: the row leaves the bound reading,
+ * says so in the shipped sentence, and the same one control now offers the way
+ * back — the toggle is its own inverse, exactly as the suggestion chip is.
+ */
+function releaseComposerAction(): {
+  outcome: string;
+  run: (page: Page, root: Locator) => Promise<void>;
+} {
+  return {
+    outcome: "unbound",
+    run: async (_page, root) => {
+      await expectReading(root, COMPOSER_BOUND);
+      await pressComposerUntil(
+        composerOffering(root, "release-review-composer", "unbound"),
+        async () => {
+          await expect(composerRow(root)).toHaveAttribute("data-composer-bound", "false", {
+            timeout: 5_000,
+          });
+        },
+      );
+      await expectReading(root, COMPOSER_UNBOUND);
+      // ONE control per row: the bound reading is gone and the same control now
+      // offers the way back.
+      await expect(
+        composerRow(root).locator('[data-conformance-id="review-composer-bound"]'),
+      ).toHaveCount(0);
+      await expect(composerOffering(root, "focus-review-composer", "bound")).toHaveCount(1);
+    },
+  };
+}
+
+/**
+ * The `focus-review-composer -> bound` driver: the reader TAKES the binding on a
+ * row that does not hold it.
+ */
+function focusComposerAction(from: {
+  bound: boolean;
+  ambiguous: boolean;
+  sentence: string;
+}): { outcome: string; run: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    outcome: "bound",
+    run: async (_page, root) => {
+      await expectReading(root, from);
+      await pressComposerUntil(
+        composerOffering(root, "focus-review-composer", "bound"),
+        async () => {
+          await expect(composerRow(root)).toHaveAttribute("data-composer-bound", "true", {
+            timeout: 5_000,
+          });
+        },
+      );
+      await expectReading(root, COMPOSER_BOUND);
+      await expect(composerOffering(root, "release-review-composer", "unbound")).toHaveCount(1);
+    },
+  };
+}
+
+function composerRowDriver(
+  mount: LifecycleComposerRowMount,
+  reading: { bound: boolean; ambiguous: boolean; sentence: string },
+): SurfaceDriver {
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(`[data-surface-id="${mount}"]`),
+    present: async (_page, root) => {
+      await expectReading(root, reading);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+}
+
+/**
+ * §I's row itself, drawn bound: the reading, and the control that gives the
+ * binding back.
+ */
+const REVIEW_COMPOSER_FOCUS_DRIVER: SurfaceDriver = {
+  ...composerRowDriver("composer-row-bound", COMPOSER_BOUND),
+  actions: { "release-review-composer": releaseComposerAction() },
+};
+
+/**
+ * The same row in the section that draws it while the bound composer's own
+ * message is being acted on. Its own mount, because the drawing draws it in its
+ * own place; the manifest gives it the same one action.
+ */
+const COMPOSER_BOUND_ACTING_DRIVER: SurfaceDriver = {
+  ...composerRowDriver("composer-row-acting", COMPOSER_BOUND),
+  actions: { "release-review-composer": releaseComposerAction() },
+};
+
+/**
+ * The example the drawing captions "waiting to be told which review, or given
+ * back" — BOTH unbound readings drawn together, and the control that ends the
+ * waiting.
+ */
+const REVIEW_COMPOSER_UNBOUND_CARD_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="composer-rows-unbound"]'),
+  present: async (_page, root) => {
+    // Both readings, each in its own row, in the order the drawing shows them.
+    await expectReading(root.locator('[data-surface-id="composer-row-choosing"]'), COMPOSER_AMBIGUOUS);
+    await expectReading(root.locator('[data-surface-id="composer-row-elsewhere"]'), COMPOSER_UNBOUND);
+  },
+  fields: {},
+  actions: {
+    // The press lands on the row that is WAITING to be told which review: that
+    // is the reading whose control takes the binding for the reader.
+    "focus-review-composer": {
+      outcome: "bound",
+      run: async (page, root) => {
+        const choosing = root.locator('[data-surface-id="composer-row-choosing"]');
+        await focusComposerAction(COMPOSER_AMBIGUOUS).run(page, choosing);
+        // And the ambiguity is answered: the prompt is gone from the row that
+        // now holds the binding.
+        await expect(
+          composerRow(choosing).locator('[data-conformance-id="review-composer-ambiguous"]'),
+        ).toHaveCount(0);
+      },
+    },
+  },
+  states: {},
+};
+
+/** §I's ONE primary input: the conversation's chat box. */
+const CHAT_COMPOSER_PRIMARY_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator(`[data-surface-id="${LIFECYCLE_CHAT_COMPOSER_MOUNT}"]`),
+  present: async (_page, root) => {
+    const field = root.locator('[data-conformance-id="chat-composer-primary"]');
+    await expect(field).toBeVisible();
+    // §I: the chat box is the one primary input, and a card's subordinate note
+    // field can never read as its peer. The heavier edge is what draws that
+    // difference, and the shipped field takes it from its own `primary`
+    // declaration.
+    await expect(field).toHaveClass(/border-line-strong/);
+    // It is an input, not a picture of one.
+    await expect(field.locator("[contenteditable]")).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
+/**
+ * The manifest surfaces each harness mount stands for.
+ *
+ * It lives HERE, on the test side, for the reason the fixture-data file gives:
+ * one drawn row stands for several manifest surfaces, so a `data-surface-id` per
+ * surface would have to repeat one row under several names. Keyed by the mount
+ * union, so a new mount with no manifest surface is a typecheck failure rather
+ * than an undefined driver key.
+ */
+const COMPOSER_ROW_MANIFEST_SURFACES: Readonly<
+  Record<LifecycleComposerRowMount, readonly string[]>
+> = {
+  "composer-row-bound": ["review-composer-focus", "review-composer-bound"],
+  "composer-row-acting": ["composer-bound-acting"],
+  "composer-rows-unbound": ["review-composer-unbound-card"],
+  "composer-row-choosing": ["review-composer-ambiguous"],
+  "composer-row-elsewhere": ["review-composer-unbound"],
+  "chat-composer-primary-field": ["chat-composer-primary"],
+};
+
+/** The drivers this family registers, one per manifest surface above. */
+export const COMPOSER_FAMILY_DRIVERS: Readonly<Record<string, SurfaceDriver>> = {
+  "review-composer-focus": REVIEW_COMPOSER_FOCUS_DRIVER,
+  "review-composer-bound": composerRowDriver("composer-row-bound", COMPOSER_BOUND),
+  "composer-bound-acting": COMPOSER_BOUND_ACTING_DRIVER,
+  "review-composer-unbound-card": REVIEW_COMPOSER_UNBOUND_CARD_DRIVER,
+  "review-composer-ambiguous": composerRowDriver("composer-row-choosing", COMPOSER_AMBIGUOUS),
+  "review-composer-unbound": composerRowDriver("composer-row-elsewhere", COMPOSER_UNBOUND),
+  "chat-composer-primary": CHAT_COMPOSER_PRIMARY_DRIVER,
+};
+
+// Every surface the mount table names has a driver, and every driver names a
+// surface the mount table declares. Checked HERE, at import, rather than left to
+// a reader comparing two lists: a wave that adds a mount and forgets its driver
+// would otherwise leave the surface silently unmapped, which on an unpinned
+// manifest generates no test at all.
+for (const [mount, surfaces] of Object.entries(COMPOSER_ROW_MANIFEST_SURFACES)) {
+  for (const surface of surfaces) {
+    if (COMPOSER_FAMILY_DRIVERS[surface] === undefined) {
+      throw new Error(
+        `composer family: mount "${mount}" names manifest surface "${surface}", which has no driver`,
+      );
+    }
+  }
+}
+for (const surface of Object.keys(COMPOSER_FAMILY_DRIVERS)) {
+  const named = Object.values(COMPOSER_ROW_MANIFEST_SURFACES).some((surfaces) =>
+    surfaces.includes(surface),
+  );
+  if (!named) {
+    throw new Error(`composer family: driver "${surface}" is not drawn by any harness mount`);
+  }
+}
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -3325,4 +3615,7 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
       suggestionChipDriver(fixture),
     ]),
   ),
+  // The in-conversation review-composer row (cinatra#3159, epic #3155 W3). One
+  // shipped row with three readings and one control, mounted once per reading.
+  ...COMPOSER_FAMILY_DRIVERS,
 };

@@ -103,6 +103,34 @@ test.describe("conformance manifest consumption", () => {
 
 
 /**
+ * The DISTINCT aspects a manifest surface declares.
+ *
+ * A drawing may annotate the same aspect more than once on one surface, and
+ * legitimately: §I draws the "waiting to be told which review, or given back"
+ * example as TWO rows, and both carry the same `focus-review-composer -> bound`
+ * control, so the generated manifest lists that action twice
+ * (app-lifecycle-cards, `review-composer-unbound-card`). Two identical
+ * declarations are ONE contract — the same act with the same outcome — so they
+ * generate one test. Left as-is they are two tests with the same title, which
+ * Playwright refuses outright, and the whole suite fails to load.
+ *
+ * Only EXACT duplicates collapse. A genuinely polymorphic action (the
+ * notifications spec's whole-card "activate": -> navigated with an href,
+ * -> toggled without) keeps both declarations, because they are two contracts.
+ */
+function distinctBy<T>(items: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    const k = key(item);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
  * The per-surface acceptance battery (cinatra#985), generated for ONE manifest
  * surface.
  *
@@ -165,7 +193,7 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
       await driver.present(page, driver.root(page));
     });
 
-    for (const field of surface.fields) {
+    for (const field of distinctBy(surface.fields, (f) => f.field)) {
       const fieldDriver = driver.fields[field.field];
       if (!fieldDriver && !requireEveryAspect) continue;
       test(`field "${field.field}" renders bound to ${field.source}`, async ({ page }) => {
@@ -187,7 +215,7 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
       });
     }
 
-    for (const action of surface.actions) {
+    for (const action of distinctBy(surface.actions, (a) => `${a.action} -> ${a.outcome}`)) {
       const actionEntry = driver.actions[action.action];
       if (!actionEntry && !requireEveryAspect) continue;
       test(`action "${action.action}" -> ${action.outcome}`, async ({ page }) => {
@@ -217,7 +245,7 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
       });
     }
 
-    for (const state of surface.states) {
+    for (const state of distinctBy(surface.states, (variant) => variant)) {
       const assertState = driver.states[state];
       if (!assertState && !requireEveryAspect) continue;
       test(`state variant "${state}" exists`, async ({ page }) => {

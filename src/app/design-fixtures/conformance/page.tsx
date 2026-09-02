@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,21 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation review composer row (mounts: composer-row-bound,
+              composer-row-acting, composer-rows-unbound, chat-composer-primary-field)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3159, epic #3155 W3: the REAL ComposerFocusRow, fed by the
+                REAL binding hook inside the REAL focus store, plus the REAL
+                primary chat box. The harness holds only which open review the
+                reader chose; the shipped resolver decides every reading. */}
+            <LifecycleComposerFixtures />
           </CardContent>
         </Card>
       </PageContent>
