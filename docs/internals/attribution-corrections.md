@@ -1344,16 +1344,3 @@ The correction commit states no verification line of its own: the verification a
 correction is composed at its merge, by the merge tooling, from the maintainer's approval standing
 on the correction pull request, and a later mirror commit appends the merge record's composed arm
 lines to this entry.
-||||||| 757ab2a91b
-
-## Correction for `e5658560da35a5b6974b33e5e10a9d432fb86ccd`
-
-The run page's schedule step brought in line with the ratified drawing (PR #3191).
-
-The squash landed the reviewed head's tree exactly, with every required context
-concluded green on that head - but the merge was executed by a coordinating agent
-whose squash message carried the Assisted-by lines and no verification arm at all,
-neither the gate line nor a human one, so the post-merge gate is red on main at
-that commit. The change is untouched. This correction is merged by the maintainer
-with this message kept; the verification line the record needs is composed from
-that approval by the armed merge tooling.
