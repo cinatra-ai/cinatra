@@ -1,18 +1,22 @@
 /**
- * Playwright pixel-diff + axe-core harness for the `/design-fixtures` route.
+ * Playwright harness for the `/design-fixtures/*` design-conformance routes.
  *
- * Why this exists: the design fixture route needs automated visual regression
- * and accessibility coverage so regressions are caught by CI instead of manual
- * review alone.
+ * Why this exists: the shipped components need automated conformance coverage
+ * against the ratified drawings, caught by CI instead of by review alone.
  *
- * Scope: ONE route (`/design-fixtures`), TWO themes (light + dark), full-page
- * screenshots committed under `tests/e2e/design/__screenshots__/<name>-{light,dark}.png`.
- * axe-core gate: zero `serious` or `critical` violations on `/design-fixtures`
- * (NOT site-wide).
+ * ASSERTION-BASED, END TO END (cinatra#3189). This config used to carry a
+ * pixel-diff + axe gate over one route, `/design-fixtures` — the primitives
+ * catalog — whose committed light/dark baselines were then cited as proof that
+ * the primitives conform. They never proved that: a baseline only proves the
+ * page renders the same as last time, and the catalog was a second copy of the
+ * design system rather than the design system itself. The drawings are the
+ * source of truth; everything the catalog carried was audited into them and
+ * the page removed. What remains here asserts named clauses against the pinned
+ * conformance manifests and the real components.
  *
- * The route is STATIC (no DB queries). `cinatra setup branch` is NOT required
- * before this test runs in CI. The `webServer` block below boots `pnpm dev`
- * directly on a dedicated port.
+ * The harness routes are STATIC (no DB queries). `cinatra setup branch` is NOT
+ * required before these tests run in CI. The `webServer` block below boots
+ * `pnpm dev` directly on a dedicated port.
  */
 import { defineConfig } from "@playwright/test";
 import { baseUse, desktopChrome, suitePath, REPO_ROOT, repoPath } from "./base";
@@ -23,23 +27,23 @@ const BASE_URL = process.env.E2E_DESIGN_BASE_URL ?? `http://localhost:${PORT}`;
 export default defineConfig({
   testDir: suitePath("design"),
   outputDir: repoPath("test-results"),
-  // Visual snapshots can take a moment on a cold dev server.
+  // A first assertion can take a moment on a cold dev server.
   timeout: 120_000,
-  // Single baseline per surface — strip the per-project / per-platform suffix
+  // Snapshot plumbing for the ONE remaining snapshot consumer: the opt-in
+  // visual layer of the render-parity spec (RENDER_PARITY_VISUAL=1). Single
+  // baseline per surface — strip the per-project / per-platform suffix
   // Playwright normally appends so the same PNG is consulted on macOS dev and
-  // Linux CI. The committed baseline is portable; the diff threshold below
-  // absorbs font-hinting drift between OSes.
+  // Linux CI; the diff threshold absorbs font-hinting drift between OSes.
   snapshotPathTemplate: "{testDir}/__screenshots__/{arg}{ext}",
   expect: {
     timeout: 15_000,
-    // Pixel-diff threshold:
-    //   0.5% of pixels OR 800 absolute pixels — whichever is smaller — is
-    //   the tolerated drift before we treat it as a real regression. This
-    //   absorbs AA font hinting noise between macOS dev and Linux CI.
+    // 0.5% of pixels OR 800 absolute pixels — whichever is smaller — is the
+    // tolerated drift, which absorbs AA font-hinting noise between macOS dev
+    // and Linux CI. Regenerable supporting evidence, never a gate: the
+    // DOM-normalized parity assertion is what actually fails a regression.
     toHaveScreenshot: {
       maxDiffPixelRatio: 0.005,
       maxDiffPixels: 800,
-      // Avoid animations flickering the diff.
       animations: "disabled",
       caret: "hide",
     },
@@ -58,10 +62,10 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     ...baseUse,
-    // Pixel-diff suite: video capture adds no signal and only bloats artifacts,
-    // so opt out of the shared `retain-on-failure` default.
+    // Video capture adds no signal to an assertion-based suite and only bloats
+    // artifacts, so opt out of the shared `retain-on-failure` default.
     video: "off",
-    // Deterministic viewport so baselines are stable.
+    // Deterministic viewport so geometry assertions are stable.
     viewport: { width: 1280, height: 900 },
   },
 
@@ -85,7 +89,8 @@ export default defineConfig({
   projects: [
     {
       name: "design-fixtures-chromium",
-      // Pixel-diff + axe + the assertion-based fixture specs. The
+      // The per-surface assertion specs that sit directly under tests/e2e/design
+      // (app shell, agents card, marketplace cards, run-step rail). The
       // conformance dir belongs to the functional-acceptance project below.
       testIgnore: "**/conformance/**",
       use: {
@@ -97,8 +102,9 @@ export default defineConfig({
       // Manifest-driven functional-acceptance conformance gate (cinatra#985):
       // consumes the pinned conformance manifests and asserts fields/actions/
       // state variants of the covered surfaces on /design-fixtures/conformance.
-      // Assertion-based (no pixel baselines) — pixel-diff + axe above stay
-      // supporting evidence, never the sole gate.
+      // Assertion-based (no pixel baselines): the gate reads the pinned
+      // manifests generated from the drawings, so a clause can only pass by
+      // being true of the real component.
       name: "design-conformance-functional",
       testMatch: "**/conformance/**/*.spec.ts",
       use: {

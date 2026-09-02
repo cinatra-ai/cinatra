@@ -16,7 +16,7 @@
  * component test cannot compute any of it (jsdom has no layout engine and
  * reports every box as 0×0). Assertion-based on purpose — no pixel baselines
  * here, so the spec stays platform-portable (the pixel baselines remain owned
- * by design-fixtures.spec.ts).
+ * by the design harness).
  *
  * Six claims, at a desktop AND a narrow viewport. Every one was checked against
  * pre-fix markup (the same rail with the row's `h-8 items-center` restored), so

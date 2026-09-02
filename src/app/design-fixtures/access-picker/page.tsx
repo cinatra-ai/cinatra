@@ -4,7 +4,7 @@
 // checkbox multi-select, cinatra#1072) AND the default single-select
 // (cinatra#1508 / #1509 §4.1 — hierarchy, selection synthesis, disabled rows).
 // Static (no DB/auth) so Playwright can drive the real component. Kept off the
-// pixel-diffed /design-fixtures index.
+// now-retired /design-fixtures catalog.
 // ---------------------------------------------------------------------------
 
 import type { Metadata } from "next";

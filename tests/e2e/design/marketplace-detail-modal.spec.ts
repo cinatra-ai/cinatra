@@ -3,7 +3,7 @@
  *
  * Drives the REAL MarketplaceDetailModal on the seeded-fixture route
  * `/design-fixtures/marketplace-detail-modal` (production-equivalent standalone
- * boot in CI — same harness as design-fixtures.spec.ts) and pins the three
+ * boot in CI — the shared design harness) and pins the three
  * regression classes the issues name:
  *
  *  - missing-functionality: the Changelog tab (entries, mono version chips,
@@ -21,7 +21,7 @@
  *    never the SDK ABI range.
  *
  * Assertion-based on purpose — no pixel baselines here (those stay owned by
- * design-fixtures.spec.ts), so the spec is platform-portable.
+ * the design harness), so the spec is platform-portable.
  */
 import { test, expect, type Page } from "@playwright/test";
 

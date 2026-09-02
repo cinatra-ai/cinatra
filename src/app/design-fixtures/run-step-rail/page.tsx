@@ -20,8 +20,8 @@ export const metadata: Metadata = {
  * the report is about (cinatra#2840 — a wrapped reason must PUSH the following
  * rows down, never print over them) is assertion-verifiable in a browser
  * (tests/e2e/design/run-step-rail-geometry.spec.ts) without a run, a session or
- * a DB round-trip. Kept OFF the pixel-diffed /design-fixtures index page so the
- * committed baselines there stay untouched; the Playwright coverage for this
+ * a DB round-trip. Kept OFF the now-retired /design-fixtures catalog page which
+ * cinatra#3189 removed; the Playwright coverage for this
  * route is assertion-based.
  */
 export default function RunStepRailGeometryFixturesPage() {

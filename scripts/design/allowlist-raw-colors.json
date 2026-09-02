@@ -17,7 +17,6 @@
     "scripts/design/**",
     "src/app/globals.css",
     "src/app/global-error.tsx",
-    "src/app/design-fixtures/token-swatches.tsx",
     "src/components/scope-badge.tsx",
     "src/components/scope-badge.test.tsx",
     "src/components/visibility-badge.tsx",

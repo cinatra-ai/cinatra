@@ -25,6 +25,7 @@ import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixt
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
 import { PrimitiveChromeFixtures } from "./primitive-chrome-fixtures";
+import { AppShellSheetFixture } from "./app-shell-sheet-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -33,9 +34,9 @@ import {
 // Bell flyout needs-configuration row (cinatra#1057 ruling (c)). Built here from
 // the REAL server-side builder so the entry copy — `Set up connections for
 // "<agent>":` — is verifiable byte-for-byte on the production-equivalent boot.
-// Mounted in THIS already-allowlisted conformance harness (off the pixel-diffed
-// /design-fixtures index, coverage assertion-based) rather than a NEW standalone
-// public route, so no src/lib/auth-route-guard.ts allowlist edit is needed and
+// Mounted in THIS already-allowlisted conformance harness rather than a NEW
+// standalone public route, so no src/lib/auth-route-guard.ts allowlist edit is
+// needed and
 // the change stays off the gate-suite high-risk auth paths.
 const BELL_CONFIG_NEEDS_FIXTURE = buildConfigurationNeedsNotificationInput({
   agentPackageName: "@cinatra-ai/social-outreach-agent",
@@ -81,9 +82,9 @@ export const metadata: Metadata = {
  * actions produce their specified outcomes, and required state variants exist
  * — on the production-equivalent standalone boot, no DB/registry round-trip.
  *
- * Kept OFF the pixel-diffed /design-fixtures index page (same convention as
- * the §V detail-modal fixture route) so the committed pixel baselines stay
- * untouched; coverage here is assertion-based.
+ * A harness sub-route, never an index of the design system: it mounts real
+ * components so shipped behaviour can be measured, and states no rule of its
+ * own. The drawings are the only source of truth (cinatra#3189).
  *
  * Operational sources: the published conformance manifests (see
  * tests/e2e/design/conformance-pins.json) generated from the annotated
@@ -230,6 +231,18 @@ export default function ConformanceHarnessPage() {
             notifications-filter-rail, notifications-bell, notifications-empty,
             notifications-vendor-gate, notifications-degraded. */}
         <NotificationsConformanceFixtures />
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Side sheet (mount: app-shell-sheet)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#833's top-offset guard measures a real right-side sheet
+                against the live app bar. Its trigger moved here from the
+                retired primitives catalog (cinatra#3189). */}
+            <AppShellSheetFixture />
+          </CardContent>
+        </Card>
 
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>

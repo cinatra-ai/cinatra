@@ -24,7 +24,7 @@
 // harness-instrumentation attribute (same role as data-installed-version /
 // data-cta-state on the sibling fixtures).
 //
-// Assertion-driven, DB-free, off the pixel-diffed /design-fixtures index (adds
+// Assertion-driven, DB-free, off the now-retired /design-fixtures catalog (adds
 // no screenshot baselines). Driven by tests/e2e/design/conformance/contract.ts.
 // ---------------------------------------------------------------------------
 
