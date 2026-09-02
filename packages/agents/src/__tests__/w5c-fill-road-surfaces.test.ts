@@ -28,10 +28,13 @@ const WINDOWS: ReadonlyArray<{ surface: string; file: string }> = [
   // that used to draw it is retired, and `SchedulePromptWindow` is the one
   // component both of its hosts mount. Same window, same reading, same rule.
   { surface: "armed-trigger", file: "packages/agents/src/schedule-prompt-window.tsx" },
-  {
-    surface: "review",
-    file: "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-prompt-window.tsx",
-  },
+  // THE REVIEW WINDOW MOVED FILE TOO (cinatra#3141 item 1, met on the way in
+  // from main). The ratified drawing puts the window inside the GATE's own
+  // frame on every surface the gate opens on, so it is no longer a component of
+  // the review route: `ReviewGatePromptWindow` lives beside the one gate
+  // renderer every host mounts, and the review route mounts none. Same window,
+  // same reading, same rule — one road, and now one place.
+  { surface: "review", file: "packages/agents/src/review-gate-card.tsx" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -60,20 +63,31 @@ describe("the field-assist route and its four callers are gone", () => {
     }
   });
 
-  it("the review page's typed sentence is no longer filed by the page", () => {
-    const src = read(WINDOWS[4]!.file);
-    // The direct submit is gone: no disposition is composed here at all.
-    expect(src).not.toContain('disposition: "comment"');
-    expect(src).not.toContain("submitAction");
-    // And the page no longer takes the action as a prop.
-    // The DECISION BAR keeps the action — its three buttons are untouched. What
-    // must not carry one any more is the WINDOW.
+  it("the review window's typed sentence is no longer filed by the window", () => {
+    // READ THE WINDOW, NOT THE WHOLE CARD. The window now shares a file with the
+    // DECISION BAR's own transport, whose three buttons compose dispositions and
+    // must keep doing so — the rule was never "this file names no disposition",
+    // it was "the WINDOW files nothing itself". So the reading is scoped to the
+    // one function, from its export to the end of the file.
+    const card = read(WINDOWS[4]!.file);
+    const window = card.slice(card.indexOf("export function ReviewGatePromptWindow("));
+    expect(window.length).toBeGreaterThan(0);
+    // The direct submit is gone: no disposition is composed in the window at all.
+    expect(window).not.toContain('disposition: "comment"');
+    expect(window).not.toContain("submitAction");
+    // What is typed goes to the run's own assistant instead.
+    expect(window).toContain("await runWindow.send(");
+    // And nothing hands the window an action any more.
+    const mount = card.slice(card.indexOf("<ReviewGatePromptWindow"));
+    expect(mount.slice(0, mount.indexOf("/>"))).not.toContain("submitAction");
+    // The DECISION BAR keeps the action — its three buttons are untouched, and
+    // the review route still hands the card the action they submit through.
     const page = read(
       "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
     );
-    const mount = page.slice(page.indexOf("<ReviewPromptWindow"));
-    expect(mount.slice(0, mount.indexOf("/>"))).not.toContain("submitAction");
     expect(page).toContain("submitAction={submitAction}");
+    // The route mounts no window of its own: the gate's card draws the one.
+    expect(page).not.toContain("<ReviewPromptWindow");
   });
 
   it("the chat page's own gate readers are gone with their skill call", () => {

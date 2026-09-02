@@ -31,7 +31,7 @@
 //     PRODUCTION path — `SetupCompletionWatcher`, the way `instance-screens.tsx`
 //     mounts it — with the props the page really passes;
 //   * `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/`
-//     `__tests__/review-prompt-window.render.test.tsx` does the same for the
+//     `__tests__/review-gate-prompt-window.render.test.tsx` does the same for the
 //     fifth window, under the root suite that resolves the host app.
 //
 // The one claim about drawing that stays here is the one no render can reach:
@@ -56,9 +56,15 @@ const WINDOWS: Array<{ name: string; file: string; surface: string }> = [
   // the run's schedule tab — now mount, so the same armed schedule is asked
   // about through the same exchange however the reader reached it.
   { name: "the armed schedule's window", file: "packages/agents/src/schedule-prompt-window.tsx", surface: "armed-trigger" },
+  // THE REVIEW WINDOW MOVED INTO THE GATE, AND STAYED ONE WINDOW (cinatra#3141
+  // item 1). The drawing puts it inside the gate's own frame, beneath the
+  // decision bar; it was mounted by the review ROUTE alone, so the run page's
+  // own gate carried no window at all. `ReviewGatePromptWindow` is the one
+  // component `ReviewGateCard` now draws, so the same review is asked about
+  // through the same exchange however the reader reached the gate.
   {
-    name: "the review page",
-    file: "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-prompt-window.tsx",
+    name: "the review gate",
+    file: "packages/agents/src/review-gate-card.tsx",
     surface: "review",
   },
 ];

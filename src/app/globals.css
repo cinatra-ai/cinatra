@@ -106,6 +106,15 @@
      semantics are not hijacked by brand chrome. Consumed through the @theme
      inline binding below as `text-brand-mustard`. */
   --brand-mustard: #c79545;
+  /* The drawing's MUSTARD INK (`--mustard-ink`, specs/app-artifact-review.html)
+     — the darkened mustard the drawing writes text and glyphs in when they sit
+     on a warm mustard tint: the review gate's header glyph inside its tile, the
+     awaiting-your-decision pill, and the `· pinned` marker that is the one
+     highlighted fact on an otherwise muted mono line. It is an INK, not a
+     ground: `--warning` / `--brand-mustard` is the tint it is read on, and at
+     that tint's own value text would not clear the contrast floor. Consumed as
+     `text-mustard-ink` through the @theme inline binding below. */
+  --mustard-ink: #7a5a1f;
   /* Marketplace review stars (design spec §V reviews drawing): the storefront
      rating amber + its empty-star warm grey. Deliberately OUTSIDE the status
      palette — star ratings mirror the public storefront's commerce chrome,
@@ -206,6 +215,15 @@
      hijack status semantics. Bound to text-brand-mustard via @theme inline
      below. */
   --brand-mustard: #c79545;
+  /* The drawing's MUSTARD INK (`--mustard-ink`, specs/app-artifact-review.html)
+     — the darkened mustard the drawing writes text and glyphs in when they sit
+     on a warm mustard tint: the review gate's header glyph inside its tile, the
+     awaiting-your-decision pill, and the `· pinned` marker that is the one
+     highlighted fact on an otherwise muted mono line. It is an INK, not a
+     ground: `--warning` / `--brand-mustard` is the tint it is read on, and at
+     that tint's own value text would not clear the contrast floor. Consumed as
+     `text-mustard-ink` through the @theme inline binding below. */
+  --mustard-ink: #7a5a1f;
   --border: var(--line);
   /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
      held at or above the 3:1 non-text contrast floor against the grounds a
@@ -502,6 +520,13 @@
   --warning-foreground: oklch(0.984 0.003 247.858);
   --info: oklch(0.66 0.15 240);
   --info-foreground: oklch(0.984 0.003 247.858);
+  /* The mustard INK, inverted for a dark ground (#3141 item 3/4). The light
+     palette reads a darkened mustard on a pale tint; on a dark surface the same
+     tint is dark, so the ink is the LIGHT end of the one hue rather than the
+     light palette's value composited onto a ground it cannot clear. Same hue
+     family as the dark `--warning` above, held above it so a glyph reads
+     against the tint the glyph sits on. */
+  --mustard-ink: oklch(0.84 0.11 78);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -555,6 +580,10 @@
      border-brand-mustard. Separate from --warning so page-title display and
      wordmark do not collide with status semantics. */
   --color-brand-mustard: var(--brand-mustard);
+  /* Mustard INK utility: text-mustard-ink / bg-mustard-ink / border-mustard-ink.
+     The drawing names this colour by itself and it has no counterpart among the
+     status tokens — `--warning` is the TINT it is read on, never the reading. */
+  --color-mustard-ink: var(--mustard-ink);
   /* Attention-counter digit utility (spec §IV bell badge): always-white text
      on the solid red attention pill, theme-invariant by construction. */
   --color-attention-foreground: var(--attention-foreground);
@@ -727,6 +756,211 @@ body {
   .bm-spark {
     animation: none;
     opacity: 0;
+  }
+}
+
+/* =====================================================================
+   RENDERED-MARKDOWN TYPOGRAPHY (cinatra#3141 item 5)
+
+   A renderer that emits a markdown document emits ONE container carrying a
+   styling hook — `markdown-body` / `data-markdown-body` — and the elements the
+   document is made of inside it. The host ships Tailwind's preflight, which
+   normalizes `h1`-`h6` to INHERIT their size and weight, and registered no rule
+   for that hook and no typography layer at all, so a heading inside a rendered
+   document landed at paragraph size by construction: "Summary" and "Rollout"
+   drew indistinguishably from the prose around them.
+
+   THIS IS THE HOST'S SIDE OF THE SEAM, AND IT BELONGS HERE. The renderer names
+   a hook and adds no heading styling of its own; the document it draws inherits
+   THIS stylesheet's base layer, including the preflight that flattened it. A
+   rule for the hook therefore reaches every renderer that emits the same hook —
+   the extension-shipped ones, and the host's own markdown handler, which asked
+   for `prose prose-sm` classes that were never defined anywhere either.
+
+   IT IS SCOPED TO THE HOOK AND NOWHERE ELSE. Everything below is a DESCENDANT
+   selector under one of the three hooks, so nothing here can reach a heading
+   the app draws itself; the app's own headings keep being styled by the
+   utilities that draw them. Sizes are relative (`em`) so a body mounted at
+   `text-sm` inside a review target and the same body at full size on the detail
+   surface both keep the same hierarchy — "the renderer fills the slot exactly
+   as it would on the detail surface" (specs/app-artifact-review.html §IV).
+
+   The colours are the app's own tokens, so a document reads in whichever
+   palette the surface — the run card, the review page, the island document,
+   the widget — is painting in.
+   ===================================================================== */
+@layer components {
+  .markdown-body,
+  [data-markdown-body],
+  .prose {
+    color: var(--foreground);
+  }
+
+  .markdown-body h1,
+  [data-markdown-body] h1,
+  .prose h1 {
+    font-size: 1.6em;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin-block: 1.1em 0.45em;
+  }
+
+  .markdown-body h2,
+  [data-markdown-body] h2,
+  .prose h2 {
+    font-size: 1.3em;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-block: 1.15em 0.4em;
+  }
+
+  .markdown-body h3,
+  [data-markdown-body] h3,
+  .prose h3 {
+    font-size: 1.12em;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-block: 1.05em 0.35em;
+  }
+
+  .markdown-body h4,
+  [data-markdown-body] h4,
+  .prose h4 {
+    font-size: 1.02em;
+    font-weight: 600;
+    margin-block: 1em 0.3em;
+  }
+
+  /* The baseline every heading above is measured against. */
+  .markdown-body p,
+  [data-markdown-body] p,
+  .prose p {
+    font-size: 1em;
+    font-weight: 400;
+    margin-block: 0 0.85em;
+  }
+
+  /* A document opens on its title, not on a gap. */
+  .markdown-body > :first-child,
+  [data-markdown-body] > :first-child,
+  .prose > :first-child {
+    margin-block-start: 0;
+  }
+
+  .markdown-body strong,
+  [data-markdown-body] strong,
+  .prose strong {
+    font-weight: 700;
+    color: inherit;
+  }
+
+  .markdown-body em,
+  [data-markdown-body] em,
+  .prose em {
+    font-style: italic;
+  }
+
+  .markdown-body a,
+  [data-markdown-body] a,
+  .prose a {
+    color: var(--info);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .markdown-body code,
+  [data-markdown-body] code,
+  .prose code {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.9em;
+    background: var(--surface-muted);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+  }
+
+  .markdown-body pre,
+  [data-markdown-body] pre,
+  .prose pre {
+    background: var(--surface-muted);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.75em 0.9em;
+    overflow-x: auto;
+    margin-block: 0 0.9em;
+  }
+
+  /* A code span inside a block is the block's ground already. */
+  .markdown-body pre code,
+  [data-markdown-body] pre code,
+  .prose pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .markdown-body ul,
+  [data-markdown-body] ul,
+  .prose ul {
+    list-style: disc;
+    padding-inline-start: 1.45em;
+    margin-block: 0 0.85em;
+  }
+
+  .markdown-body ol,
+  [data-markdown-body] ol,
+  .prose ol {
+    list-style: decimal;
+    padding-inline-start: 1.45em;
+    margin-block: 0 0.85em;
+  }
+
+  .markdown-body li,
+  [data-markdown-body] li,
+  .prose li {
+    margin-block: 0.2em;
+  }
+
+  .markdown-body blockquote,
+  [data-markdown-body] blockquote,
+  .prose blockquote {
+    border-inline-start: 2px solid var(--line-strong);
+    padding-inline-start: 0.9em;
+    color: var(--muted);
+    margin-block: 0 0.9em;
+  }
+
+  .markdown-body hr,
+  [data-markdown-body] hr,
+  .prose hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin-block: 1.2em;
+  }
+
+  .markdown-body table,
+  [data-markdown-body] table,
+  .prose table {
+    border-collapse: collapse;
+    margin-block: 0 0.9em;
+  }
+
+  .markdown-body th,
+  .markdown-body td,
+  [data-markdown-body] th,
+  [data-markdown-body] td,
+  .prose th,
+  .prose td {
+    border: 1px solid var(--line);
+    padding: 0.35em 0.6em;
+    text-align: start;
+  }
+
+  .markdown-body th,
+  [data-markdown-body] th,
+  .prose th {
+    font-weight: 600;
+    background: var(--surface);
   }
 }
 

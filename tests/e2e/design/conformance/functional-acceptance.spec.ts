@@ -26,12 +26,15 @@ import {
   loadAllowlist,
   loadPinnedManifests,
   loadSpecPins,
+  loadUnpinnedManifests,
   sha256Hex,
+  type ManifestSurface,
 } from "./manifest-loader";
 import { ensureSeeded, SURFACE_DRIVERS } from "./contract";
 
 const pins = loadSpecPins();
 const manifests = loadPinnedManifests(pins);
+const unpinnedManifests = loadUnpinnedManifests(pins);
 const allowlist = loadAllowlist();
 const allowBySurface = new Map(allowlist.map((entry) => [entry.surface, entry]));
 
@@ -98,6 +101,141 @@ test.describe("conformance manifest consumption", () => {
   });
 });
 
+
+/**
+ * The per-surface acceptance battery (cinatra#985), generated for ONE manifest
+ * surface.
+ *
+ * `requireEveryAspect` is what tells a PINNED manifest from a committed manifest
+ * still on its way to a pin (cinatra#3156, epic #3155). For a pinned manifest it
+ * is TRUE and the gate semantics are unchanged to the letter: a surface with no
+ * driver and no allowlist entry throws, and an annotated field/action/state with
+ * no assertion in contract.ts throws. For a manifest conformance-pins.json does
+ * not name yet it is FALSE: the aspects a driver DOES declare still run and are
+ * still reconciled against the manifest (a driver asserting the wrong source or
+ * the wrong outcome is the same red it has always been), and an aspect no wave
+ * has landed yet simply has no test. Nothing is exempted by that — the pin is
+ * what turns the ratchet on, and the pin is precisely what the epic withholds
+ * until every surface of that drawing is covered.
+ */
+function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean): void {
+  const driver = SURFACE_DRIVERS[surface.id];
+  const allowEntry = allowBySurface.get(surface.id);
+  // Aspect-level exemptions (cinatra#986): "field:x"/"action:x"/"state:x"
+  // keys of an aspects[] allowlist entry skip ONLY those aspects; every
+  // other annotated aspect still requires an assertion (red otherwise).
+  const allowedAspects = new Set(allowEntry?.aspects ?? []);
+  const wholeSurfaceAllowed = allowEntry !== undefined && allowEntry.aspects === undefined;
+
+  if (wholeSurfaceAllowed && !driver) {
+    if (!requireEveryAspect) return;
+    test(`${surface.id} — allowlisted, not yet covered (coverage ratchet)`, () => {
+      test.skip(true, `shrink-only allowlist: ${allowEntry!.reason}`);
+    });
+    return;
+  }
+
+  if (!driver) {
+    // An unpinned manifest has no ratchet yet: a surface no wave has reached is
+    // simply not generated. It becomes a RED the moment its manifest is pinned.
+    if (!requireEveryAspect) return;
+    test(`${surface.id} — UNMAPPED manifest surface`, () => {
+      throw new Error(
+        `Manifest surface "${surface.id}" has no driver in tests/e2e/design/conformance/contract.ts and no allowlist entry. ` +
+          `Either add functional-acceptance coverage (driver + harness mount + testid contract) — allowlist.json is shrink-only and may NOT gain entries.`,
+      );
+    });
+    return;
+  }
+
+  test.describe(surface.id, () => {
+    if (driver.seeded) {
+      // Idempotent, converging provisioning of the run-namespaced seed
+      // kit (cinatra#986) — memoized per worker; retries converge again.
+      test.beforeAll(async () => {
+        await ensureSeeded();
+      });
+    }
+
+    test.beforeEach(async ({ page }) => {
+      await page.goto(driver.path, { waitUntil: "domcontentloaded" });
+    });
+
+    test("surface renders", async ({ page }) => {
+      await driver.present(page, driver.root(page));
+    });
+
+    for (const field of surface.fields) {
+      const fieldDriver = driver.fields[field.field];
+      if (!fieldDriver && !requireEveryAspect) continue;
+      test(`field "${field.field}" renders bound to ${field.source}`, async ({ page }) => {
+        test.skip(
+          allowedAspects.has(`field:${field.field}`),
+          `shrink-only allowlist (aspect field:${field.field}): ${allowEntry?.reason}`,
+        );
+        if (!fieldDriver) {
+          throw new Error(
+            `Manifest field "${field.field}" (= ${field.source}) on surface "${surface.id}" has no field driver in contract.ts — an annotated field binding with no assertion counts as UNCOVERED (cinatra#986)`,
+          );
+        }
+        if (fieldDriver.source !== field.source) {
+          throw new Error(
+            `Driver for "${surface.id}.${field.field}" asserts source "${fieldDriver.source}" but the pinned manifest binds "${field.source}" — reconcile contract.ts with the manifest`,
+          );
+        }
+        await fieldDriver.assert(page, driver.root(page));
+      });
+    }
+
+    for (const action of surface.actions) {
+      const actionEntry = driver.actions[action.action];
+      if (!actionEntry && !requireEveryAspect) continue;
+      test(`action "${action.action}" -> ${action.outcome}`, async ({ page }) => {
+        test.skip(
+          allowedAspects.has(`action:${action.action}`),
+          `shrink-only allowlist (aspect action:${action.action}): ${allowEntry?.reason}`,
+        );
+        if (!actionEntry) {
+          throw new Error(
+            `Manifest action "${action.action}" on surface "${surface.id}" has no action driver in contract.ts — an annotated action with no assertion counts as UNCOVERED (cinatra#986)`,
+          );
+        }
+        // An action name is usually one outcome, but a genuinely
+        // polymorphic action (the notifications spec is whole-card
+        // "activate": -> navigated with an href, -> toggled without) is
+        // declared as an ARRAY of driver entries, matched by outcome.
+        const candidates = Array.isArray(actionEntry) ? actionEntry : [actionEntry];
+        const actionDriver = candidates.find((d) => d.outcome === action.outcome);
+        if (!actionDriver) {
+          throw new Error(
+            `Driver for "${surface.id}.${action.action}" declares outcome(s) [${candidates
+              .map((d) => d.outcome)
+              .join(", ")}] but the pinned manifest specifies "${action.outcome}" — reconcile contract.ts with the manifest`,
+          );
+        }
+        await actionDriver.run(page, driver.root(page));
+      });
+    }
+
+    for (const state of surface.states) {
+      const assertState = driver.states[state];
+      if (!assertState && !requireEveryAspect) continue;
+      test(`state variant "${state}" exists`, async ({ page }) => {
+        test.skip(
+          allowedAspects.has(`state:${state}`),
+          `shrink-only allowlist (aspect state:${state}): ${allowEntry?.reason}`,
+        );
+        if (!assertState) {
+          throw new Error(
+            `Manifest state "${state}" on surface "${surface.id}" has no state driver in contract.ts — an annotated state variant with no assertion counts as UNCOVERED (cinatra#986)`,
+          );
+        }
+        await assertState(page, driver.root(page));
+      });
+    }
+  });
+}
+
 for (const pm of manifests) {
   test.describe(`conformance:${pm.pin.id} (${pm.manifest.spec})`, () => {
     test("spec pin integrity — committed manifest matches conformance-pins.json", () => {
@@ -127,114 +265,25 @@ for (const pm of manifests) {
     });
 
     for (const surface of pm.manifest.surfaces) {
-      const driver = SURFACE_DRIVERS[surface.id];
-      const allowEntry = allowBySurface.get(surface.id);
-      // Aspect-level exemptions (cinatra#986): "field:x"/"action:x"/"state:x"
-      // keys of an aspects[] allowlist entry skip ONLY those aspects; every
-      // other annotated aspect still requires an assertion (red otherwise).
-      const allowedAspects = new Set(allowEntry?.aspects ?? []);
-      const wholeSurfaceAllowed = allowEntry !== undefined && allowEntry.aspects === undefined;
+      describeSurface(surface, true);
+    }
+  });
+}
 
-      if (wholeSurfaceAllowed && !driver) {
-        test(`${surface.id} — allowlisted, not yet covered (coverage ratchet)`, () => {
-          test.skip(true, `shrink-only allowlist: ${allowEntry!.reason}`);
-        });
-        continue;
-      }
+// Committed but NOT yet pinned (cinatra#3156). One wave at a time lands the
+// drivers for a drawing; the drawing joins the pin gate above only once EVERY
+// one of its surfaces is covered (epic #3155, independent pinning). Until then
+// this is where a landed wave proves itself: the same battery, on the same
+// harness, generated for the surfaces that have a driver today.
+for (const manifest of unpinnedManifests) {
+  test.describe(`conformance:unpinned (${manifest.spec})`, () => {
+    test("committed manifest is a readable conformance artifact", () => {
+      expect(manifest.schemaVersion, "unsupported manifest schemaVersion").toBe("1.0.0");
+      expect(manifest.surfaces.length, "a manifest with no surfaces is not a contract").toBeGreaterThan(0);
+    });
 
-      if (!driver) {
-        test(`${surface.id} — UNMAPPED manifest surface`, () => {
-          throw new Error(
-            `Manifest surface "${surface.id}" (${pm.manifest.spec}) has no driver in tests/e2e/design/conformance/contract.ts and no allowlist entry. ` +
-              `Either add functional-acceptance coverage (driver + harness mount + testid contract) — allowlist.json is shrink-only and may NOT gain entries.`,
-          );
-        });
-        continue;
-      }
-
-      test.describe(surface.id, () => {
-        if (driver.seeded) {
-          // Idempotent, converging provisioning of the run-namespaced seed
-          // kit (cinatra#986) — memoized per worker; retries converge again.
-          test.beforeAll(async () => {
-            await ensureSeeded();
-          });
-        }
-
-        test.beforeEach(async ({ page }) => {
-          await page.goto(driver.path, { waitUntil: "domcontentloaded" });
-        });
-
-        test("surface renders", async ({ page }) => {
-          await driver.present(page, driver.root(page));
-        });
-
-        for (const field of surface.fields) {
-          test(`field "${field.field}" renders bound to ${field.source}`, async ({ page }) => {
-            test.skip(
-              allowedAspects.has(`field:${field.field}`),
-              `shrink-only allowlist (aspect field:${field.field}): ${allowEntry?.reason}`,
-            );
-            const fieldDriver = driver.fields[field.field];
-            if (!fieldDriver) {
-              throw new Error(
-                `Manifest field "${field.field}" (= ${field.source}) on surface "${surface.id}" has no field driver in contract.ts — an annotated field binding with no assertion counts as UNCOVERED (cinatra#986)`,
-              );
-            }
-            if (fieldDriver.source !== field.source) {
-              throw new Error(
-                `Driver for "${surface.id}.${field.field}" asserts source "${fieldDriver.source}" but the pinned manifest binds "${field.source}" — reconcile contract.ts with the manifest`,
-              );
-            }
-            await fieldDriver.assert(page, driver.root(page));
-          });
-        }
-
-        for (const action of surface.actions) {
-          test(`action "${action.action}" -> ${action.outcome}`, async ({ page }) => {
-            test.skip(
-              allowedAspects.has(`action:${action.action}`),
-              `shrink-only allowlist (aspect action:${action.action}): ${allowEntry?.reason}`,
-            );
-            const actionEntry = driver.actions[action.action];
-            if (!actionEntry) {
-              throw new Error(
-                `Manifest action "${action.action}" on surface "${surface.id}" has no action driver in contract.ts — an annotated action with no assertion counts as UNCOVERED (cinatra#986)`,
-              );
-            }
-            // An action name is usually one outcome, but a genuinely
-            // polymorphic action (the notifications spec's whole-card
-            // "activate": -> navigated with an href, -> toggled without) is
-            // declared as an ARRAY of driver entries, matched by outcome.
-            const candidates = Array.isArray(actionEntry) ? actionEntry : [actionEntry];
-            const actionDriver = candidates.find((d) => d.outcome === action.outcome);
-            if (!actionDriver) {
-              throw new Error(
-                `Driver for "${surface.id}.${action.action}" declares outcome(s) [${candidates
-                  .map((d) => d.outcome)
-                  .join(", ")}] but the pinned manifest specifies "${action.outcome}" — reconcile contract.ts with the manifest`,
-              );
-            }
-            await actionDriver.run(page, driver.root(page));
-          });
-        }
-
-        for (const state of surface.states) {
-          test(`state variant "${state}" exists`, async ({ page }) => {
-            test.skip(
-              allowedAspects.has(`state:${state}`),
-              `shrink-only allowlist (aspect state:${state}): ${allowEntry?.reason}`,
-            );
-            const assertState = driver.states[state];
-            if (!assertState) {
-              throw new Error(
-                `Manifest state "${state}" on surface "${surface.id}" has no state driver in contract.ts — an annotated state variant with no assertion counts as UNCOVERED (cinatra#986)`,
-              );
-            }
-            await assertState(page, driver.root(page));
-          });
-        }
-      });
+    for (const surface of manifest.surfaces) {
+      describeSurface(surface, false);
     }
   });
 }

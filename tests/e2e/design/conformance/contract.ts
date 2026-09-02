@@ -18,7 +18,7 @@
  * A manifest surface with NO driver and NO allowlist entry is a RED — the
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
-import { expect, request as playwrightRequest, type Locator, type Page } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 
 import {
   CONFORMANCE_BUTTON_VARIANTS,
@@ -48,6 +48,11 @@ import {
   BREADCRUMB_ENTITY_ID,
   BREADCRUMB_ENTITY_PLACEHOLDER,
 } from "../../../../src/app/design-fixtures/conformance/breadcrumb-conformance-seed";
+import {
+  LIFECYCLE_SUGGESTION_CHIP_FIXTURES,
+  type LifecycleSuggestionChipFixture,
+  type LifecycleSuggestionChipMount,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
@@ -321,6 +326,120 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
   }
 
   return driver;
+}
+
+// ---------------------------------------------------------------------------
+// The SUGGESTION-CHIP family (cinatra#3156, epic #3155 W0)
+// ---------------------------------------------------------------------------
+//
+// One surfaced suggestion has ONE control and TWO drawn states, and the two
+// manifest surfaces are the two ends of that one shape. So they are driven by
+// one family factory over one fixture list, the same shape `cardDriver` +
+// CONFORMANCE_CARD_FIXTURES already give the six extension listing cards. W0
+// lands the factory and proves it on one surface; the waves after it add fixture
+// rows and nothing else.
+//
+// EVERY ASPECT DRIVEN HERE IS SHIPPED ON THE DEFAULT BRANCH. The chip's control
+// names (`dismiss-suggestion -> dismissed` on an accepted chip,
+// `accept-suggestion -> accepted` on a dismissed one) are literals of
+// packages/agents/src/review-gate-card.tsx, and testid-contract.json requires
+// each of them in that file — so a driver that named a control the product does
+// not ship would be RED in scripts/design/check-conformance-testids.mjs before
+// any browser opened.
+//
+// The manifest's actions elsewhere in this drawing that no shipped control
+// carries are NOT driven here, and are not approximated through a different
+// control either. They are on this wave's surface-readiness list.
+
+/** The chip row of one mounted fixture row. */
+function chipRow(root: Locator): Locator {
+  return root.locator('[data-conformance-id="suggestion-chips"]');
+}
+
+/**
+ * One chip, addressed by the MANIFEST'S OWN action name.
+ *
+ * The shipped attribute is written `"<action> -> <outcome>"`, so this locator
+ * cannot resolve at all unless the product ships a control for exactly the
+ * action-and-outcome pair the manifest declares. That is deliberate: it is what
+ * stops a driver from pressing one control and reporting another one's outcome.
+ */
+function chipOffering(root: Locator, action: string, outcome: string): Locator {
+  return chipRow(root).locator(`[data-action="${action} -> ${outcome}"]`);
+}
+
+/**
+ * Press until the reaction is observed. Same hydration retry as
+ * `clickCtaUntil`: a click that lands before React hydration is silently
+ * swallowed on the production standalone build.
+ */
+async function pressChipUntil(chip: Locator, reacted: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await chip.getByRole("button").click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/**
+ * The manifest surface each harness mount stands for.
+ *
+ * It lives HERE, on the test side, rather than on the fixture row, because the
+ * suggestion chip's spec anchors may appear as a literal in exactly ONE
+ * production module — the card that draws them — and the repository proves that
+ * by scanning src and packages. Keyed by the mount union, so a new mount without
+ * a manifest surface is a typecheck failure rather than an undefined driver key.
+ */
+const SUGGESTION_CHIP_MANIFEST_SURFACE: Readonly<
+  Record<LifecycleSuggestionChipMount, string>
+> = {
+  "chip-row-live": "suggestion-accepted",
+};
+
+export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.mount}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const row = chipRow(root);
+      await expect(row).toBeVisible();
+      // LIVE, not the recorded or the read-only partition: this reader may mark.
+      await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
+      // A suggestion ARRIVES accepted — there is no unmarked state to return to.
+      const accepted = row.locator('[data-conformance-id="suggestion-accepted"]');
+      await expect(accepted).toBeVisible();
+      await expect(accepted).toHaveAttribute("data-suggestion-state", "accepted");
+      await expect(accepted).toContainText(fixture.suggestion.label);
+    },
+    fields: {},
+    actions: {
+      // The chip's one control on an accepted suggestion. The press is the REAL
+      // chip button and every drawn consequence — the state it moves to, the
+      // control it then offers, the name of that control — is computed by the
+      // shipped component from the reader's local marks.
+      "dismiss-suggestion": {
+        outcome: "dismissed",
+        run: async (_page, root) => {
+          const row = chipRow(root);
+          const dismissedChip = row.locator('[data-conformance-id="suggestion-dismissed"]');
+          await pressChipUntil(chipOffering(root, "dismiss-suggestion", "dismissed"), async () => {
+            await expect(dismissedChip).toBeVisible({ timeout: 5_000 });
+          });
+          await expect(dismissedChip).toHaveAttribute("data-suggestion-state", "dismissed");
+          // ONE control per suggestion, and the toggle is its own inverse: the
+          // accepted reading is gone and the same chip now offers the way back.
+          await expect(row.locator('[data-conformance-id="suggestion-accepted"]')).toHaveCount(0);
+          await expect(chipOffering(root, "accept-suggestion", "accepted")).toHaveCount(1);
+          // A dismissal is a MARK, not a submit — the row stays live and the
+          // suggestion stays on screen (§VIII: the chips carry no submit).
+          await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
+          await expect(dismissedChip).toContainText(fixture.suggestion.label);
+        },
+      },
+    },
+    states: {},
+  };
 }
 
 const STATUS_PILLS_DRIVER: SurfaceDriver = {
@@ -1442,6 +1561,333 @@ const BREADCRUMB_ENTITY_RESOLUTION_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// The §X Workspace surfaces of the application drawing, adopted with the
+// ratification that made the entity-page tablist a five-entry strip
+// (epic cinatra#2806, part of cinatra#3144).
+//
+// The mechanisms these three surfaces name — the Workspace nav entry, the
+// Workspace scope page and its empty tab — are NOT on the default branch. They
+// arrive with the per-scope surfaces change (cinatra#3152, open at the time of
+// writing), and until that lands there is nothing on the conformance harness to
+// assert against.
+//
+// Two things follow, and both are deliberate:
+//
+//   - The app pin is NOT advanced here. A pin advance is a claim that this
+//     branch's code satisfies the drawing at the new revision, and for these
+//     three surfaces it does not. The advance, its exact values and its
+//     preconditions are recorded (and checked) in
+//     scripts/design/__tests__/conformance-pin-advance-record.test.mjs.
+//   - The drivers below are nonetheless written in full, against the ratified
+//     manifest's own field sources, action outcomes and state variants. They are
+//     what the advance is waiting for. Nothing here stands in for the surface: a
+//     driver whose surface the harness does not mount SKIPS with the reason, and
+//     the same assertions run for real — unchanged — the moment the mount exists.
+// ---------------------------------------------------------------------------
+
+/** Why an awaiting-mount driver skips, named on every skipped test. */
+const AWAITING_PER_SCOPE_SURFACES =
+  "the real component is not on the default branch yet — it arrives with the " +
+  "per-scope surfaces change (cinatra#3152) — so the conformance harness mounts " +
+  "no such surface. Every assertion in this driver is written and runs unchanged " +
+  "the moment the mount exists.";
+
+/**
+ * Wrap a fully written driver whose SURFACE is not on the default branch yet.
+ *
+ * The guard is the harness mount itself, never a branch name or a revision: while
+ * nothing on the harness carries the surface id the whole battery SKIPS with the
+ * reason above; the moment a mount does, every assertion runs for real. That is
+ * why this is not a stub — it asserts nothing it cannot see, and it hides nothing
+ * it can.
+ */
+/**
+ * A surface the conformance harness has mounted since long before this change.
+ * It is the proof that the harness itself rendered, and it is what makes the
+ * guard below fail-CLOSED: a blank page, a boot error or a route regression
+ * would otherwise look exactly like "the surface is not on the branch yet", and
+ * the whole battery would skip instead of failing.
+ */
+const HARNESS_ANCHOR_SURFACE_ID = "status-pills";
+
+/**
+ * How long the harness is given to settle before absence is read as absence.
+ * The suite navigates with `waitUntil: "domcontentloaded"`, so an instantaneous
+ * count would race a surface that mounts a tick later and skip a shipped screen.
+ */
+const AWAITING_MOUNT_SETTLE_MS = 5_000;
+
+function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver {
+  const guard = async (page: Page): Promise<void> => {
+    await expect(
+      page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
+      `the conformance harness itself did not render — this is a real failure, never a surface awaiting cinatra#3152`,
+    ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
+
+    let mounted = true;
+    try {
+      await page
+        .locator(`[data-surface-id="${surfaceId}"]`)
+        .first()
+        .waitFor({ state: "attached", timeout: AWAITING_MOUNT_SETTLE_MS });
+    } catch {
+      mounted = false;
+    }
+    test.skip(!mounted, `${surfaceId}: ${AWAITING_PER_SCOPE_SURFACES}`);
+  };
+  return {
+    ...driver,
+    present: async (page, root) => {
+      await guard(page);
+      await driver.present(page, root);
+    },
+    fields: Object.fromEntries(
+      Object.entries(driver.fields).map(([name, field]) => [
+        name,
+        {
+          source: field.source,
+          assert: async (page: Page, root: Locator) => {
+            await guard(page);
+            await field.assert(page, root);
+          },
+        },
+      ]),
+    ),
+    actions: Object.fromEntries(
+      Object.entries(driver.actions).map(([name, entry]) => [
+        name,
+        (Array.isArray(entry) ? entry : [entry]).map((candidate) => ({
+          outcome: candidate.outcome,
+          run: async (page: Page, root: Locator) => {
+            await guard(page);
+            await candidate.run(page, root);
+          },
+        })),
+      ]),
+    ),
+    states: Object.fromEntries(
+      Object.entries(driver.states).map(([name, assertState]) => [
+        name,
+        async (page: Page, root: Locator) => {
+          await guard(page);
+          await assertState(page, root);
+        },
+      ]),
+    ),
+  };
+}
+
+/**
+ * sidebar-workspace-entry — the Workspace nav entry the amended §IX strip adds.
+ * The manifest binds its title to `nav.title` and its one action to
+ * `open-workspace -> workspace`; both literals are the conformance contract the
+ * real entry must carry, exactly as the Assistants entry above carries its own.
+ */
+const SIDEBAR_WORKSPACE_ENTRY_DRIVER: SurfaceDriver = awaitingMount("sidebar-workspace-entry", {
+  path: HARNESS_PATH,
+  root: harnessRoot("sidebar-workspace-entry"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-conformance-id="sidebar-workspace-entry"]')).toBeVisible();
+    await expect(root.locator('[data-action="open-workspace -> workspace"]')).toBeVisible();
+    await expect(root.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
+  },
+  fields: {
+    // title = nav.title — the entry renders the navigation title, not a scope
+    // name and not a route segment.
+    title: {
+      source: "nav.title",
+      assert: async (_page, root) => {
+        await expect(
+          root.locator('[data-conformance-id="sidebar-workspace-entry"]'),
+        ).toHaveText("Workspace");
+      },
+    },
+  },
+  actions: {
+    "open-workspace": outcomeAction("workspace", "Workspace"),
+  },
+  states: {},
+});
+
+/**
+ * workspace-scope-page — the Workspace scope page the amended drawing adds to
+ * the scopes. Its one field binds the page's name to the scope identity's
+ * DISPLAY NAME; the three state variants are the drawing's own.
+ */
+const WORKSPACE_SCOPE_PAGE_DRIVER: SurfaceDriver = awaitingMount("workspace-scope-page", {
+  path: HARNESS_PATH,
+  root: harnessRoot("workspace-scope-page"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-conformance-id="workspace-scope-page"]')).toBeVisible();
+    await expect(root.locator('[data-testid="workspace-scope-name"]')).toBeVisible();
+  },
+  fields: {
+    // name = identity.displayName — the page names the scope by its display
+    // name and NEVER by the id it was resolved from (the same floor rule the
+    // breadcrumb driver above holds). The mount publishes both on the surface
+    // root, so asserting the wrong source cannot accidentally pass.
+    name: {
+      source: "identity.displayName",
+      assert: async (_page, root) => {
+        const displayName = await root.getAttribute("data-identity-display-name");
+        expect(
+          displayName,
+          'the harness mount for "workspace-scope-page" must publish the seeded identity display name as data-identity-display-name, so this assertion names a source of truth rather than whatever the page rendered',
+        ).toBeTruthy();
+        const name = root.locator('[data-testid="workspace-scope-name"]');
+        await expect(name).toHaveText(displayName!);
+        const identityId = await root.getAttribute("data-identity-id");
+        if (identityId) await expect(name).not.toContainText(identityId);
+      },
+    },
+  },
+  actions: {},
+  states: {
+    empty: variantSlotState("workspace-scope-page", "empty", "empty"),
+    error: variantSlotState("workspace-scope-page", "error", "alert"),
+    loading: variantSlotState("workspace-scope-page", "loading", "skeleton"),
+  },
+});
+
+/**
+ * workspace-scope-empty-tab — a tab of the five-entry strip that the Workspace
+ * scope has nothing to show in. The drawing gives it exactly one state, and the
+ * whole point of the surface is that the empty state is a real, drawn treatment
+ * rather than a blank panel.
+ */
+const WORKSPACE_SCOPE_EMPTY_TAB_DRIVER: SurfaceDriver = awaitingMount("workspace-scope-empty-tab", {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="workspace-scope-empty-tab"][data-variant="empty"]'),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-slot="empty"]')).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    empty: variantSlotState("workspace-scope-empty-tab", "empty", "empty"),
+  },
+});
+
+
+/**
+ * The ratified entity-page tab strip: five entries, in this order, on EVERY
+ * scope. Settings is not a member of it — where a scope has one it is appended
+ * AFTER these five, which is exactly what the amendment changed (Settings used
+ * to be the second entry, and a personal scope used to carry Dashboards alone).
+ */
+const SCOPE_TAB_STRIP = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"];
+
+/**
+ * Action driver for a surface whose control declares its own manifest action.
+ *
+ * The conformance harness marks such a control `data-action="<action> -> <outcome>"`
+ * (the notifications and suggestion-chip mounts already do), which binds the
+ * click to the manifest entry rather than to a copy string this file would
+ * otherwise have to guess. The assertion is the surface root reaching that
+ * outcome, the same evidence `outcomeAction` takes.
+ */
+function declaredAction(
+  action: string,
+  outcome: string,
+): { outcome: string; run: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    outcome,
+    run: async (_page, root) => {
+      await clickUntil(root.locator(`[data-action="${action} -> ${outcome}"]`), async () => {
+        await expect(root).toHaveAttribute("data-outcome", outcome, { timeout: 2_000 });
+      });
+    },
+  };
+}
+
+/**
+ * scope-dashboards-tab — the entity-page tab the same ratification amended, in
+ * section IX of the artifacts drawing.
+ *
+ * Measured against the two published artifacts, the amendment moved the drawing
+ * bytes and moved NO declared aspect of this surface: its one field, its three
+ * actions and its four states are identical before and after. So the strip
+ * itself needs an assertion the manifest cannot ask for, and `present` makes it
+ * — the five entries in the ratified order, with Settings appended LAST where a
+ * scope has one and absent where it has none. The declared aspects are driven on
+ * the harness instrumentation this file already uses everywhere else: the field
+ * element names its own binding (`data-field="name=identity.displayName"`, the
+ * convention the shipped dashboard row carries), and each action is the control
+ * that declares that action and outcome.
+ *
+ * Like the three surfaces above, none of this is on the default branch: the
+ * scope surfaces arrive with cinatra#3152, so the whole battery SKIPS with the
+ * reason until the harness mounts the surface, and runs unchanged afterwards.
+ */
+const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboards-tab", {
+  path: HARNESS_PATH,
+  root: harnessRoot("scope-dashboards-tab"),
+  present: async (page) => {
+    // "on every scope, Settings appended last only where a scope has one" is a
+    // statement about a SET of scopes, so it is graded over every mount of the
+    // surface, and each mount has to declare which half of the rule it stands
+    // for. `data-scope-has-settings` is that declaration, in the same shape as
+    // the `data-field` / `data-action` instrumentation this file already reads;
+    // an undeclared mount FAILS rather than being read charitably.
+    const mounts = page.locator(`[data-surface-id="scope-dashboards-tab"]`);
+    const mountCount = await mounts.count();
+    expect(mountCount, "no scope-dashboards-tab mount on the harness").toBeGreaterThan(0);
+
+    const withSettings: boolean[] = [];
+    for (let index = 0; index < mountCount; index += 1) {
+      const mount = mounts.nth(index);
+      const declared = await mount.getAttribute("data-scope-has-settings");
+      expect(
+        declared,
+        `every scope-dashboards-tab mount declares data-scope-has-settings="true" or "false" — the tested scope's own answer to the conditional half of the ratified strip. Mount ${index} declares ${JSON.stringify(declared)}.`,
+      ).toMatch(/^(true|false)$/);
+      const hasSettings = declared === "true";
+      const entries = (await mount.locator('[role="tablist"] [role="tab"]').allInnerTexts()).map(
+        (entry) => entry.trim(),
+      );
+      expect(
+        entries,
+        `the entity-page tablist is the five-entry strip in the ratified order — Dashboards, Assistants, Agents, Artifacts, Skills — with Settings appended LAST where the scope has one and absent where it has none (mount ${index}, data-scope-has-settings=${declared})`,
+      ).toEqual(hasSettings ? [...SCOPE_TAB_STRIP, "Settings"] : [...SCOPE_TAB_STRIP]);
+      withSettings.push(hasSettings);
+    }
+
+    expect(
+      withSettings.includes(true) && withSettings.includes(false),
+      `the ratified strip is conditional, so both halves must be mounted: a scope that HAS Settings and a scope that has none. The harness mounts ${JSON.stringify(withSettings)}.`,
+    ).toBe(true);
+  },
+  fields: {
+    // name = identity.displayName — the listing row names the entity by its
+    // display name. The element declares its own binding, so a mount that bound
+    // the wrong source cannot satisfy this locator by accident.
+    name: {
+      source: "identity.displayName",
+      assert: async (_page, root) => {
+        await expect(
+          root.locator('[data-field="name=identity.displayName"]').first(),
+        ).toBeVisible();
+      },
+    },
+  },
+  actions: {
+    "open-add-picker": declaredAction("open-add-picker", "add-picker-open"),
+    "open-dashboard": declaredAction("open-dashboard", "dashboard-canonical"),
+    "remove-listing": declaredAction("remove-listing", "listing-removed"),
+  },
+  states: {
+    empty: variantSlotState("scope-dashboards-tab", "empty", "empty"),
+    error: variantSlotState("scope-dashboards-tab", "error", "alert"),
+    loading: variantSlotState("scope-dashboards-tab", "loading", "skeleton"),
+    // kind:artifact — the listing row's own kind declaration, the same
+    // `kind:` state shape the extension-detail and connector drivers assert.
+    "kind:artifact": async (_page, root) => {
+      await expect(root.locator('[data-kind="artifact"]').first()).toBeVisible();
+    },
+  },
+});
 
 // ---------------------------------------------------------------------------
 // /notifications unified-surface drivers (cinatra#1549 E11-AC2) — the nine
@@ -2856,7 +3302,27 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
+  // The Workspace surfaces the ratified drawing adds (epic cinatra#2806). Their
+  // manifest is not pinned yet, so these generate no test today; they are what
+  // the recorded pin advance is waiting for, and they SKIP with a reason until
+  // the harness mounts the real surface (cinatra#3152).
+  "sidebar-workspace-entry": SIDEBAR_WORKSPACE_ENTRY_DRIVER,
+  "workspace-scope-page": WORKSPACE_SCOPE_PAGE_DRIVER,
+  "workspace-scope-empty-tab": WORKSPACE_SCOPE_EMPTY_TAB_DRIVER,
+  // The entity-page tab the same ratification amended (section IX of the
+  // artifacts drawing). Its manifest is STAGED, not pinned, so only the
+  // aspects driven here generate a test; each SKIPS with a reason until the
+  // harness mounts the surface (cinatra#3152).
+  "scope-dashboards-tab": SCOPE_DASHBOARDS_TAB_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
+  ),
+  // The in-conversation suggestion chips (cinatra#3156, epic #3155). One family
+  // factory over one fixture list — the later waves add rows, not drivers.
+  ...Object.fromEntries(
+    LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
+      SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
+      suggestionChipDriver(fixture),
+    ]),
   ),
 };

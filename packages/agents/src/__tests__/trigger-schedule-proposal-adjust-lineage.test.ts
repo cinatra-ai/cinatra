@@ -681,10 +681,19 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
 // winner's run id. Sharing the consume identity is what makes that reachable,
 // so it is this PR's to close, not a pre-existing one.
 
-/** A one-off in another zone — an adjust that moves the DURABLE fields too. */
+/**
+ * A one-off in another zone — an adjust that moves the DURABLE fields too.
+ *
+ * The instant is far ahead on purpose. `mintProposal` refuses a `scheduled`
+ * proposal whose `runAt` has already passed, so a fixture dated near the day it
+ * was written stops testing the adjust the moment real time overtakes it and
+ * silently starts testing the past-time guard instead. Nothing here reads the
+ * date — only the KIND and the ZONE are asserted — so it carries no meaning
+ * beyond "still ahead", exactly as `RUN_AT` does further down this file.
+ */
 const ONCE_NEW_YORK: ProposalSchedule = {
   kind: "scheduled",
-  runAt: "2026-09-01T08:00",
+  runAt: "2099-09-01T08:00",
   timezone: "America/New_York",
 };
 

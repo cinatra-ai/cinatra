@@ -92,6 +92,11 @@ describe("the run-scoped resolve", () => {
       // RUN's access control. `undefined` where the caller presented none — the
       // service then falls back to the run's own owner.
       undefined,
+      // cinatra#3044: and what the REFERENCE records — whether the run's own
+      // schedule step opened in a conversation. This reference is a plain
+      // run-scoped one, so the answer is false and the service's refusals are
+      // exactly what they have always been.
+      { fromScheduleStep: false },
     );
     expect(resolveProposalForReader).not.toHaveBeenCalled();
 
@@ -118,6 +123,7 @@ describe("the run-scoped resolve", () => {
       "run-42",
       { userId: "u-1", orgId: "org-1" },
       access,
+      { fromScheduleStep: false },
     );
   });
 

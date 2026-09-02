@@ -75,6 +75,14 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     // (bootstrap-upgrade parity). The OPERATOR migration half ships in the
     // core__0066 marker/fence migration — this is the bootstrap + code half.
     { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS project_id text` },
+    // `assignment_scope_snapshot` (cinatra#2813 S1, epic #2812): the IMMUTABLE
+    // scopes the thread was created under. It exists BECAUSE `project_id` above
+    // is mutable — a person can move a thread into another project, and if
+    // assignment scope were read from that column the move would silently
+    // re-point the conversation at skills and artifacts it was never given. The
+    // mutable column therefore never supplies assignment scope; this one does,
+    // and is written once. Operator twin = migrations/core/core__0100.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS assignment_scope_snapshot jsonb` },
     // `team_id` (cinatra#1037 P5.6 drop-history PR2 CUTOVER, coordinator-authorized
     // Fork-B extension): the team the thread is owned by — the structured twin of
     // chat_threads' payload.teamId, the axis the list/http/classifier visibility

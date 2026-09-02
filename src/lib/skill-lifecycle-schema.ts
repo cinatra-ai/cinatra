@@ -466,10 +466,22 @@ $body$` },
 // ratchet locks. This file is already in that graph and imports nothing.
 
 /** The table name, shared by the schema builder, the store and the tests. */
+import {
+  assignmentScopeConstraintsSql,
+  assignmentSourceCheckSql,
+} from "@/lib/assignment-scope";
+
 export const AGENT_ASSIGNED_SKILLS_TABLE = "agent_assigned_skills";
 
-/** Name of the unique index backing the per-agent position slot. */
-export const AGENT_ASSIGNED_SKILLS_POSITION_INDEX = "agent_assigned_skills_agent_position_key";
+/** Name of the unique index backing the per-(package, EXACT SCOPE) position
+ *  slot the cap rides on (cinatra#2813 S1). Renamed rather than redefined:
+ *  a `CREATE UNIQUE INDEX IF NOT EXISTS` under the OLD name would silently
+ *  keep the package-wide index, which then refuses a second scope's first
+ *  assignment — a failure that would look like a cap bug. */
+export const AGENT_ASSIGNED_SKILLS_POSITION_INDEX = "agent_assigned_skills_scope_position_key";
+
+/** Name of the (scope_kind, scope_id) read index. */
+export const AGENT_ASSIGNED_SKILLS_SCOPE_INDEX = "agent_assigned_skills_scope_idx";
 
 /** Name of the skill-id lookup index (the S5 teardown path deletes by skill). */
 export const AGENT_ASSIGNED_SKILLS_SKILL_INDEX = "agent_assigned_skills_skill_idx";
@@ -491,21 +503,38 @@ export function agentAssignedSkillsSchemaQueries(schemaName: string): Array<{ te
       text: `CREATE TABLE IF NOT EXISTS ${s}.${quoteIdent(AGENT_ASSIGNED_SKILLS_TABLE)} (
       agent_package_name text NOT NULL,
       skill_id text NOT NULL,
+      scope_kind text NOT NULL,
+      scope_id text NOT NULL,
+      source text NOT NULL DEFAULT 'manual',
+      -- NAMED, and named exactly as core__0100 names it: an inline unnamed
+      -- REFERENCES would be auto-named agent_assigned_skills_origin_run_id_fkey,
+      -- the migration guard looks for agent_assigned_skills_origin_run_fk, and
+      -- running the migration after the bootstrap would then add a SECOND
+      -- identical foreign key instead of doing nothing.
+      origin_run_id text CONSTRAINT agent_assigned_skills_origin_run_fk
+        REFERENCES ${s}."agent_runs"(id) ON DELETE SET NULL,
       "position" integer NOT NULL,
       created_by text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
-      PRIMARY KEY (agent_package_name, skill_id)
+      PRIMARY KEY (agent_package_name, skill_id, scope_kind, scope_id),
+      CONSTRAINT ${AGENT_ASSIGNED_SKILLS_TABLE}_source_chk CHECK (${assignmentSourceCheckSql()}),
+      ${assignmentScopeConstraintsSql(AGENT_ASSIGNED_SKILLS_TABLE)}
     )`,
     },
     {
       text: `CREATE UNIQUE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_SKILLS_POSITION_INDEX} ON ${s}.${quoteIdent(
         AGENT_ASSIGNED_SKILLS_TABLE,
-      )} (agent_package_name, "position")`,
+      )} (agent_package_name, scope_kind, scope_id, "position")`,
     },
     {
       text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_SKILLS_SKILL_INDEX} ON ${s}.${quoteIdent(
         AGENT_ASSIGNED_SKILLS_TABLE,
       )} (skill_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_SKILLS_SCOPE_INDEX} ON ${s}.${quoteIdent(
+        AGENT_ASSIGNED_SKILLS_TABLE,
+      )} (scope_kind, scope_id)`,
     },
   ];
 }

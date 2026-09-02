@@ -5,8 +5,15 @@
  * The fifth of the five windows outside the chat. Its four siblings are
  * rendered by `packages/agents/src/__tests__/run-window-surfaces.render.test.tsx`
  * and the run page's production mount by `run-page-window-render.test.tsx`
- * beside it; this one lives here because the review window is a host-app
- * component and the root suite is the project that resolves it.
+ * beside it; this one stays HERE, in the root suite, because §6 pins the review
+ * page's window to the host app's own tier — the tier the review page itself is
+ * proven in.
+ *
+ * WHAT MOVED, AND WHAT DID NOT (cinatra#3141 item 1). The component is no
+ * longer a component of this one route: the window now belongs to the one gate
+ * renderer every surface mounts, so this fixture mounts it through that
+ * package's own entry (`@cinatra-ai/agents/review-gate-card`). The surface
+ * under test, its access answer and its reading are unchanged.
  *
  * Same two readings as its siblings:
  *
@@ -57,8 +64,9 @@ vi.mock("@cinatra-ai/agents/run-window-actions", () => ({
 beforeEach(() => {
   cleanup();
   document.body.innerHTML = "";
-  // The shared panel portals into <main>.
-  document.body.appendChild(document.createElement("main"));
+  // The window owns the element the shared panel portals into now (#3141 item
+  // 1) — it lands inside the gate's frame, not at the foot of a document — so
+  // nothing outside the component has to exist for it to draw.
 });
 
 afterEach(() => {
@@ -68,9 +76,9 @@ afterEach(() => {
 });
 
 async function mount(canComment: boolean) {
-  const { ReviewPromptWindow } = await import("../review-prompt-window");
+  const { ReviewGatePromptWindow } = await import("@cinatra-ai/agents/review-gate-card");
   return render(
-    <ReviewPromptWindow
+    <ReviewGatePromptWindow
       // NO `submitAction` (cinatra#2934, lifecycle-b W5c): the window does not
       // take the review's decision action any more. What is typed here reaches
       // the assistant, and a request for changes is filed through the card's
@@ -126,7 +134,6 @@ describe('the review page ("review") is the fifth window (cinatra#2933)', () => 
     withAccess.unmount();
     cleanup();
     document.body.innerHTML = "";
-    document.body.appendChild(document.createElement("main"));
 
     await mount(false);
     await settle();

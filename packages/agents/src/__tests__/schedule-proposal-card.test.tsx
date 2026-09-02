@@ -1391,3 +1391,178 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     expect(recurring.container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE PRISTINE SETTLED CARD STAYS PRISTINE WHEN THE THREAD MOVES (cinatra#3053)
+//
+// A settled card nobody touched drew **Save changes** at FULL strength the
+// moment a SECOND run was dispatched into the same conversation — nothing
+// pressed and nothing edited on that card. A live Save changes on an untouched
+// card reads as unsaved changes the reader never made.
+//
+// WHY IT HAPPENED. `SettledPhase` seeds its `draft` ONCE at mount and is never
+// remounted, while `edited` compared that seed against `body.schedule` — a PROP
+// the thread refreshes underneath the card. `useLifecycleCardResolve` re-reads
+// on the window `focus` event, a THREAD-WIDE signal every mounted lifecycle
+// card shares, so a sibling run arriving re-resolved this card too; and a
+// re-resolve does not have to answer byte-alike for one unchanged armed
+// schedule (`selectionsFromInstalled` re-derives a one-off's `runAt` from the
+// clock whenever the installed row carries no instant). One benign refresh
+// therefore made a pristine card claim an edit.
+//
+// WHAT IS PINNED HERE. The control's strength derives from the card's OWN
+// unsaved edits and from nothing else: a refresh cannot invent one, a refresh
+// cannot erase one, and a real edit still lights it.
+// ---------------------------------------------------------------------------
+
+describe("a settled card's Save changes answers only to its own edits", () => {
+  /**
+   * The settled read-back as the server really derives it. Each resolve answers
+   * for the SAME armed one-off, and each answers with a freshly derived `runAt`
+   * — the drift `selectionsFromInstalled` produces when the installed row holds
+   * no instant. The ARMED schedule has not changed at all — only the field the
+   * server re-derives does, which is exactly why the card may neither call it
+   * an edit nor draw it under the reader.
+   */
+  function driftingSettledTransport() {
+    let resolves = 0;
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const isDecision = typeof init?.body === "string" && init.body.includes('"op"');
+      if (isDecision) {
+        return new Response(JSON.stringify({ outcome: { kind: "saved" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      resolves += 1;
+      return new Response(
+        JSON.stringify({
+          kind: "trigger_schedule_proposal",
+          state: { state: "settled" },
+          body: settledBody({
+            triggerType: "scheduled",
+            canCancel: false,
+            scheduleCopy: "Once, on 21 August at 9:00 AM",
+            schedule: {
+              kind: "scheduled",
+              runAt: `2026-08-21T09:0${resolves}`,
+              timezone: "Europe/Berlin",
+            },
+          }),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return () => resolves;
+  }
+
+  /** The thread-wide signal a second run's card arriving trips — the one every
+   *  mounted lifecycle card re-reads on. */
+  function aSiblingRunArrives() {
+    fireEvent(window, new Event("focus"));
+  }
+
+  it("a second run arriving in the thread leaves an untouched card's Save changes quiet", async () => {
+    const resolveCount = driftingSettledTransport();
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    // Settled, nothing edited: the quiet reading.
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    const firstRunAt = (
+      container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement
+    ).value;
+
+    const before = resolveCount();
+    aSiblingRunArrives();
+    await waitFor(() => expect(resolveCount()).toBeGreaterThan(before));
+
+    // NOTHING WAS PRESSED AND NOTHING WAS EDITED, so the control must not have
+    // moved. This is the defect: it used to go live here.
+    await waitFor(() =>
+      expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(
+        true,
+      ),
+    );
+    // AND THE ROWS MUST NOT HAVE MOVED EITHER. The re-derived `runAt` the
+    // read-back answers with is clock-derived fallback, not a run time anybody
+    // armed, so it may not be drawn under a reader who is looking at the card.
+    // A fix that quietened the control by letting the refresh rewrite the draft
+    // would trade one wrong reading for another; this pins that it does not.
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe(firstRunAt);
+  });
+
+  it("the reader's own unsaved edit survives a sibling run's refresh and keeps the control live", async () => {
+    const resolveCount = driftingSettledTransport();
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-field="schedule-timezone"]')).not.toBeNull(),
+    );
+    fireEvent.change(container.querySelector('[data-field="schedule-timezone"]')!, {
+      target: { value: "Europe/Lisbon" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+
+    const before = resolveCount();
+    aSiblingRunArrives();
+    await waitFor(() => expect(resolveCount()).toBeGreaterThan(before));
+
+    // An edit in progress is the reader's, and a refresh nobody asked for does
+    // not get to throw it away or to disarm the control that saves it.
+    await waitFor(() =>
+      expect(
+        (container.querySelector('[data-field="schedule-timezone"]') as HTMLInputElement).value,
+      ).toBe("Europe/Lisbon"),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+  });
+
+  it("a landed save keeps its rows and its quiet control when the read-back drifts", async () => {
+    const resolveCount = driftingSettledTransport();
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-field="schedule-timezone"]')).not.toBeNull(),
+    );
+    fireEvent.change(container.querySelector('[data-field="schedule-timezone"]')!, {
+      target: { value: "Europe/Lisbon" },
+    });
+    fireEvent.click(container.querySelector('[data-action="save-schedule-changes"]')!);
+
+    // The save lands, so the control goes quiet — what was saved is what is
+    // armed, and the card says so without waiting on the read.
+    await waitFor(() =>
+      expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(
+        true,
+      ),
+    );
+
+    // Now the thread refreshes, and the read-back answers for the SAME armed
+    // schedule with a re-derived field. The saved rows must survive it, and the
+    // control must stay quiet: a refresh may neither roll a landed save back nor
+    // re-arm a control over changes the reader already saved.
+    const before = resolveCount();
+    aSiblingRunArrives();
+    await waitFor(() => expect(resolveCount()).toBeGreaterThan(before));
+    expect(
+      (container.querySelector('[data-field="schedule-timezone"]') as HTMLInputElement).value,
+    ).toBe("Europe/Lisbon");
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+  });
+
+  it("an actual edit still lights the control on a settled card", async () => {
+    mockTransport({ state: "settled" }, settledBody());
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    fireEvent.change(container.querySelector('[data-field="recurring-timezone"]')!, {
+      target: { value: "Europe/Lisbon" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+  });
+});
