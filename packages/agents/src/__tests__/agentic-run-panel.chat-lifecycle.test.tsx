@@ -28,6 +28,9 @@ import { ensureDefaultFieldRenderersRegistered } from "../register-default-rende
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
+  // The working placeholder's arc (cinatra#3051) — presence only; its anatomy
+  // is pinned in `review-gate-placeholder-as-drawn.test.tsx`.
+  SpinnerArc: () => null,
   PromptField: ({ placeholder }: { placeholder?: string }) => (
     <div data-testid="field-assist-prompt-stub">{placeholder}</div>
   ),
