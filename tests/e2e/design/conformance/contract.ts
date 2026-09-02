@@ -54,6 +54,13 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  LIFECYCLE_RECOMMENDATION_APPLIED_KINDS,
+  LIFECYCLE_RECOMMENDATION_CHIP_KINDS,
+  LIFECYCLE_RECOMMENDATION_SKILL_ID,
+  LIFECYCLE_RECOMMENDATION_SKILL_NAME,
+  type LifecycleRecommendationChipKind,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-recommendation-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -3267,6 +3274,323 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
   states: {},
 };
 
+// ---------------------------------------------------------------------------
+// The RECOMMENDATION family (cinatra#3160, epic #3155 W4)
+// ---------------------------------------------------------------------------
+//
+// The drawing's §V gives ONE row THREE READINGS — open (the assistant's turn,
+// and the reader who comes back before the run starts), started (read-only), and
+// restricted (visible, not shapeable) — and the thirteen manifest surfaces of
+// this family are those readings, the pills inside them, and the side-by-side
+// example that draws all three. So one factory is parameterised by READING and
+// CHIP KIND, over the fixture data the harness mounts
+// (src/app/design-fixtures/conformance/lifecycle-recommendation-fixture-data.ts),
+// the same shape `cardDriver` and `suggestionChipDriver` already give.
+//
+// EVERY ASPECT DRIVEN HERE IS SHIPPED ON THE DEFAULT BRANCH, and every attribute
+// pressed into service is a required literal of
+// packages/agents/src/run-recommendation-chip-row.tsx in testid-contract.json —
+// so a driver naming a reading the product does not draw is RED in
+// scripts/design/check-conformance-testids.mjs before a browser opens.
+//
+// WHAT IS NOT DRIVEN HERE, AND IS NOT APPROXIMATED EITHER. §V draws a CHECKBOX
+// in front of each pill's label and ONE Continue beneath the list, and the
+// manifest annotates that as `toggle-skill -> selection-changed` on each pill and
+// `continue -> selection-saved` on the row. The shipped row draws neither: it
+// carries three per-pill controls (`confirm-skill`, `adjust-skill`,
+// `skip-skill`) and no row-level control at all, from an earlier revision of the
+// same section. Those two are different interaction models, not two names for
+// one control, so no driver in this family presses one control and reports the
+// other one's outcome — the action aspects stay UNDRIVEN and named on the wave's
+// readiness list, which is what the withheld pin is for. The drawing's second
+// half of a pill label — the vendor after "by" — is likewise not asserted: the
+// run hands the row ONE resolved label and no vendor, so there is nothing shipped
+// to bind it to.
+
+/** The three readings the harness mounts, and the element each one is drawn on. */
+const RECOMMENDATION_READINGS = ["before-start", "running", "restricted"] as const;
+type RecommendationReading = (typeof RECOMMENDATION_READINGS)[number];
+
+/** The reader's turn — the drawing's first example, on its own mount. */
+const RECOMMENDATION_PAUSED_MOUNT = '[data-surface-id="recommendation-paused"]';
+/** The side-by-side example: three readings of one row. */
+const RECOMMENDATION_READINGS_MOUNT = '[data-surface-id="recommendation-readings"]';
+
+const RECOMMENDATION_READING_SELECTOR: Readonly<Record<RecommendationReading, string>> = {
+  "before-start": `${RECOMMENDATION_READINGS_MOUNT} [data-reading="before-start"]`,
+  running: `${RECOMMENDATION_READINGS_MOUNT} [data-reading="running"]`,
+  restricted: `${RECOMMENDATION_READINGS_MOUNT} [data-reading="restricted"]`,
+};
+
+/** The shipped row inside one mount — the row IS the card (§V). */
+function recommendationRow(root: Locator): Locator {
+  return root.locator("[data-run-recommendation-chip-row]");
+}
+
+/** One pill, addressed by the SKILL the drawing's chip surface stands for. */
+function recommendationChip(root: Locator, kind: LifecycleRecommendationChipKind): Locator {
+  return recommendationRow(root).locator(
+    `[data-recommendation-chip][data-skill-id="${LIFECYCLE_RECOMMENDATION_SKILL_ID[kind]}"]`,
+  );
+}
+
+/**
+ * The card-root declaration every reading carries: the kind, the host that
+ * declared the surface, and the state. Under §V the row IS the card, so this is
+ * the row's own outermost element.
+ */
+async function assertRecommendationCardRoot(row: Locator, state: "held" | "decided"): Promise<void> {
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-lifecycle-card", "recommendation_hold");
+  await expect(row).toHaveAttribute("data-lifecycle-card-state", state);
+  // IN THE CONVERSATION, which is what this drawing is about: the host that
+  // declared the surface is the chat thread, and the transcript's own hold
+  // marker is on the same element.
+  await expect(row).toHaveAttribute("data-lifecycle-card-host", "chat_thread");
+  await expect(row).toHaveAttribute("data-chat-thread-recommendation-hold", "");
+}
+
+/**
+ * The LOADING reading, read off the route's OWN SERVER-RENDERED DOCUMENT.
+ *
+ * The shipped row draws it while the offer it was not handed is being read, and
+ * the row's own effect ends that reading as soon as the read answers — so a DOM
+ * assertion here would be racing the product's effect rather than asserting the
+ * product. The document the route serves is where that reading is unambiguous,
+ * and it is the shipped component's output either way: the harness mounts one
+ * row with no prefetched offer, exactly as the chat mount does.
+ */
+async function assertRecommendationLoadingReading(page: Page): Promise<void> {
+  const res = await page.request.get(HARNESS_PATH);
+  expect(res.ok(), `harness route ${HARNESS_PATH} did not serve (HTTP ${res.status()})`).toBe(true);
+  const html = await res.text();
+  const at = html.indexOf('data-surface-id="recommendation-loading"');
+  expect(
+    at,
+    "the recommendation loading mount is absent from the server-rendered harness document",
+  ).toBeGreaterThan(-1);
+  expect(html.slice(at, at + 4_000)).toContain("Loading recommendations…");
+}
+
+/**
+ * State `kind:skill`: the row is a hold over SKILLS. One pill per proposed
+ * skill, each carrying that skill's own package-qualified id and printing the
+ * label the run resolved for it — never the id, and never a second
+ * package-qualified line beside it.
+ */
+function recommendationSkillKindState(rootSel: string): StateAssert {
+  return async (page) => {
+    const root = page.locator(rootSel);
+    const row = recommendationRow(root);
+    await expect(row.locator("[data-recommendation-chip]")).toHaveCount(
+      LIFECYCLE_RECOMMENDATION_CHIP_KINDS.length,
+    );
+    for (const kind of LIFECYCLE_RECOMMENDATION_CHIP_KINDS) {
+      const chip = recommendationChip(root, kind);
+      await expect(chip).toHaveAttribute(
+        "data-skill-id",
+        LIFECYCLE_RECOMMENDATION_SKILL_ID[kind],
+      );
+      await expect(chip).toContainText(LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind]);
+      await expect(chip).not.toContainText(LIFECYCLE_RECOMMENDATION_SKILL_ID[kind]);
+    }
+  };
+}
+
+/**
+ * State `empty`: the row offered NO skill. §V is explicit that this is still the
+ * whole card — the row keeps its place and states its own emptiness, and no
+ * panel stands in for it. Asserted on the mount that draws it.
+ */
+const recommendationEmptyState: StateAssert = async (page) => {
+  const root = page.locator('[data-surface-id="recommendation-empty"]');
+  const row = recommendationRow(root);
+  await assertRecommendationCardRoot(row, "held");
+  await expect(row.locator("[data-recommendation-chip]")).toHaveCount(0);
+  await expect(row).toContainText("No candidate skills.");
+};
+
+/**
+ * A ROW-level surface of this family: the row in one reading, with the states
+ * §V draws on it. No action is declared — see the family note above.
+ */
+function recommendationRowDriver(options: {
+  rootSel: string;
+  state: "held" | "decided";
+  states: Record<string, StateAssert>;
+  present?: (page: Page, root: Locator) => Promise<void>;
+}): SurfaceDriver {
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(options.rootSel),
+    present: async (page, root) => {
+      await assertRecommendationCardRoot(recommendationRow(root), options.state);
+      await options.present?.(page, root);
+    },
+    fields: {},
+    actions: {},
+    states: options.states,
+  };
+}
+
+/**
+ * A CHIP-level surface: one pill, in one reading. The manifest gives these
+ * surfaces no field and no state; what each reading owes the drawing is what the
+ * pill is and what it may do, and that is what `present` asserts.
+ */
+function recommendationChipDriver(
+  reading: RecommendationReading | "paused",
+  kind: LifecycleRecommendationChipKind,
+): SurfaceDriver {
+  const rootSel =
+    reading === "paused"
+      ? RECOMMENDATION_PAUSED_MOUNT
+      : RECOMMENDATION_READING_SELECTOR[reading];
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const chip = recommendationChip(root, kind);
+      await expect(chip).toBeVisible();
+      await expect(chip).toContainText(LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind]);
+
+      if (reading === "running") {
+        // "Once the run is running, the selection is fixed and the row is
+        // read-only: each pill states IN ITS OWN BOX whether that skill was
+        // applied to the run. No Continue is left beneath it, and nothing is
+        // left to press."
+        //
+        // The expectation is the DRAWING'S, not the harness's: the two skills
+        // the run recorded a selection for were applied, and the third — offered
+        // and never recorded — was not. The product derives that third reading
+        // itself (`settledChipsForRow`); the harness hands it only the evidence.
+        const applied = LIFECYCLE_RECOMMENDATION_APPLIED_KINDS.includes(kind);
+        await expect(chip).toHaveAttribute("data-chip-mark", applied ? "confirmed" : "skipped");
+        await expect(chip.getByRole("button")).toHaveCount(0);
+        await expect(recommendationRow(root).getByRole("button")).toHaveCount(0);
+        return;
+      }
+
+      // Every live reading draws an UNDECIDED pill until this reader answers —
+      // the box states what it states, and nothing about it has been settled.
+      await expect(chip).toHaveAttribute("data-chip-mark", "undecided");
+
+      if (reading === "restricted") {
+        // "Shaping this run needs run access on it. Every box, and the Continue
+        // beneath them, stays on screen disabled — the reader sees exactly what
+        // is being asked, and that it is not theirs to answer."
+        await expect(recommendationRow(root)).toHaveAttribute("data-can-decide", "false");
+        await expect(chip).toHaveAttribute("aria-disabled", "true");
+        const controls = chip.getByRole("button");
+        await expect(controls).not.toHaveCount(0);
+        for (const control of await controls.all()) {
+          await expect(control).toBeDisabled();
+        }
+        await expect(
+          recommendationRow(root).locator("[data-run-recommendation-restricted]"),
+        ).toBeVisible();
+        return;
+      }
+
+      // The open readings: the row is this reader's to answer, and the pill is
+      // on screen with its controls live.
+      await expect(recommendationRow(root)).toHaveAttribute("data-can-decide", "true");
+      await expect(chip).not.toHaveAttribute("aria-disabled", "true");
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+}
+
+/** The thirteen surfaces of the family, from the two factories above. */
+const RECOMMENDATION_FAMILY_DRIVERS: Record<string, SurfaceDriver> = {
+  // The row in the assistant's turn, on a run held at the recommendation gate.
+  "recommendation-row-paused": recommendationRowDriver({
+    rootSel: RECOMMENDATION_PAUSED_MOUNT,
+    state: "held",
+    states: {
+      "kind:skill": recommendationSkillKindState(RECOMMENDATION_PAUSED_MOUNT),
+      loading: async (page) => {
+        await assertRecommendationLoadingReading(page);
+      },
+    },
+  }),
+  // The same row, as the thing the CONVERSATION carries: no heading plate above
+  // it and nothing summarised over it — the row is the whole card.
+  "recommendation-in-thread": recommendationRowDriver({
+    rootSel: RECOMMENDATION_PAUSED_MOUNT,
+    state: "held",
+    present: async (_page, root) => {
+      const row = recommendationRow(root);
+      // "The row and its Continue are the whole card. There is no heading plate
+      // above the row": the mount holds the row and nothing else.
+      await expect(root.locator(":scope > *")).toHaveCount(1);
+      await expect(row.locator("[data-recommendation-chip]")).toHaveCount(
+        LIFECYCLE_RECOMMENDATION_CHIP_KINDS.length,
+      );
+    },
+    states: {
+      empty: recommendationEmptyState,
+      "kind:skill": recommendationSkillKindState(RECOMMENDATION_PAUSED_MOUNT),
+      loading: async (page) => {
+        await assertRecommendationLoadingReading(page);
+      },
+    },
+  }),
+  // "One row, three readings" — the side-by-side example, each reading drawn
+  // from the SAME shipped component on the same offer.
+  "recommendation-row-readings": recommendationRowDriver({
+    rootSel: RECOMMENDATION_READING_SELECTOR["before-start"],
+    state: "held",
+    present: async (page) => {
+      const readings = page.locator(RECOMMENDATION_READINGS_MOUNT);
+      await expect(readings).toBeVisible();
+      for (const reading of RECOMMENDATION_READINGS) {
+        const row = recommendationRow(page.locator(RECOMMENDATION_READING_SELECTOR[reading]));
+        await assertRecommendationCardRoot(row, reading === "running" ? "decided" : "held");
+        // The same pills in every reading — one per proposed skill, and never a
+        // reading redrawn as a row above another card.
+        await expect(row.locator("[data-recommendation-chip]")).toHaveCount(
+          LIFECYCLE_RECOMMENDATION_CHIP_KINDS.length,
+        );
+      }
+      // The started reading is the only one with nothing left to press, and the
+      // restricted one is the only one that says why it may not be answered.
+      await expect(
+        recommendationRow(page.locator(RECOMMENDATION_READING_SELECTOR.running)).getByRole(
+          "button",
+        ),
+      ).toHaveCount(0);
+      await expect(
+        recommendationRow(page.locator(RECOMMENDATION_READING_SELECTOR.restricted)).locator(
+          "[data-run-recommendation-restricted]",
+        ),
+      ).toBeVisible();
+    },
+    states: {
+      "kind:skill": recommendationSkillKindState(RECOMMENDATION_READING_SELECTOR["before-start"]),
+      loading: async (page) => {
+        await assertRecommendationLoadingReading(page);
+      },
+    },
+  }),
+  ...Object.fromEntries(
+    LIFECYCLE_RECOMMENDATION_CHIP_KINDS.flatMap((kind) => [
+      [`recommendation-chip-${kind}`, recommendationChipDriver("paused", kind)],
+      [
+        `recommendation-chip-before-start-${kind}`,
+        recommendationChipDriver("before-start", kind),
+      ],
+      [`recommendation-chip-running-${kind}`, recommendationChipDriver("running", kind)],
+    ]),
+  ),
+  // The reader who may see the proposal but not shape it. The drawing draws that
+  // reading on the pill, so the surface is the pill.
+  "recommendation-chip-restricted": recommendationChipDriver("restricted", "enrich"),
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -3319,6 +3643,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   ),
   // The in-conversation suggestion chips (cinatra#3156, epic #3155). One family
   // factory over one fixture list — the later waves add rows, not drivers.
+  // The in-conversation recommendation row (cinatra#3160, epic #3155 W4). Two
+  // factories over one fixture list: the row in each reading, and the pill in
+  // each reading.
+  ...RECOMMENDATION_FAMILY_DRIVERS,
   ...Object.fromEntries(
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
       SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],

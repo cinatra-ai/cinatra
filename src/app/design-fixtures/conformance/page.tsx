@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,22 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation recommendation row (mounts: recommendation-paused,
+              recommendation-empty, recommendation-loading, recommendation-readings)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3160, epic #3155 W4: the REAL RunRecommendationChipRow under
+                the REAL chat-thread host declaration, in each of the three readings
+                the drawing gives it. The harness hands inputs; the shipped component
+                draws every reading. */}
+            <LifecycleRecommendationFixtures />
           </CardContent>
         </Card>
       </PageContent>
