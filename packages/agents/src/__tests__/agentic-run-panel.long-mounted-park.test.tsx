@@ -208,7 +208,7 @@ function theSevenNoisyElements(): Record<string, boolean> {
       re.test((e.textContent ?? "").trim()),
     );
   return {
-    progressHeading: /Agentic Run Progress/i.test(body),
+    progressHeading: [...document.querySelectorAll("h2")].some((h) => /Agentic Run Progress/i.test(h.textContent ?? "")),
     pendingApprovalPill: /pending approval/i.test(body),
     pausedBanner: /Run paused/i.test(body),
     reviewApprovalControl: pressable(/Review approval/i),
@@ -394,10 +394,16 @@ describe("the page that was already open when the run parked", () => {
       const named = quietBox?.querySelector(
         '[data-conformance-id="review-gate-placeholder-run-ref"]',
       );
-      expect(named, "the quiet box names no run").not.toBeNull();
-      expect(RUN_ID.startsWith((named?.textContent ?? "").trim())).toBe(true);
+      // THE BOX NAMES ITS RUN THROUGH ITS ACCESSIBLE NAME, not through drawn
+      // copy: the ratified drawing's placeholder is the card's own name over a
+      // centred arc and nothing else, so the run reference the earlier reading
+      // drew beside the arc is carried by the region's name and its own
+      // attribute instead of by a span the drawing does not put there.
+      const namedRun = quietBox?.getAttribute("data-review-gate-placeholder-run") ?? "";
+      expect(namedRun, "the quiet box names no run").not.toBe("");
+      expect(RUN_ID.startsWith(namedRun)).toBe(true);
       expect(quietBox?.getAttribute("aria-label") ?? "").toContain(
-        (named?.textContent ?? "").trim(),
+        namedRun,
       );
 
       // THE GATE ROW IS MINTED. The swap must arrive in the same slot, in the

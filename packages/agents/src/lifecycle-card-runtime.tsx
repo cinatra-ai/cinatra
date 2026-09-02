@@ -53,6 +53,13 @@ import {
   type LifecycleResolveAnswerFor,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
+// The run vocabulary, from the state machine that owns it — a leaf module with
+// no database and no drizzle, so it costs this client bundle nothing.
+import {
+  TERMINAL_RUN_STATUSES,
+  type AgentRunStatus,
+} from "./run-status";
+
 /** The server route that re-authorizes a ref and answers with the card envelope. */
 export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
 
@@ -880,6 +887,416 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
   }, [enabled, resolve, reloadToken]);
 
   return resolved !== null && resolved.identity === identity ? resolved.envelope : null;
+}
+
+// ---------------------------------------------------------------------------
+// THE MOMENT THE RUN STANDS AT, AND THE CARD THAT MOMENT OWES (cinatra#3044).
+//
+// ONE SLOT, TWO READINGS. The drawing gives a run ONE place in the turn it was
+// started from: the placeholder while it works, the moment's card when a moment
+// opens, then that card's settled reading — nothing above it and nothing
+// between. So the conversation has to know WHICH moment a run stands at before
+// it decides what to draw in that place, and the only thing that knows is the
+// run's own row.
+//
+// AND THE OPEN PAGE HAS TO HEAR ABOUT IT. The turn that started the run was
+// STREAMED into this tab; the platform writes the moment's part into the
+// STORED turn afterwards, so this tab's copy of that turn can never carry it.
+// A person sitting in the conversation that started the run would therefore
+// wait in silence until they navigated or reloaded — which is exactly the
+// silent wait the plan forbids. The run's own read is the channel that is
+// already live on that page (it is what turns "queued" into "Awaiting input"),
+// so the moment reaches the open page on it, and the card mounts with no
+// reload.
+//
+// BOUNDED, LIKE THE REVIEW SLOT BESIDE IT. The cadence backs off and a belt
+// ends it: a run that never parks must not leave a conversation polling for
+// ever, and a run that has settled is read once and left alone.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// WHAT THE SCHEDULE CARD IS READING, TOLD TO THE TURN AROUND IT (cinatra#3044)
+// ---------------------------------------------------------------------------
+//
+// "Where the sentence and the card could disagree, the card is right." The line
+// above a schedule card is the platform's, minted at dispatch and frozen into
+// the turn, and the conversation already re-reads it against the RUN'S OWN ROW
+// while the run stands at its schedule. After the schedule has been spent the
+// row cannot answer any more: it names no schedule at all, and it never said
+// whether the schedule was a one-off or a recurring one.
+//
+// AND THAT DIFFERENCE DECIDES THE SENTENCE. The ratified drawing's section VI
+// gives the spent reading its own words -- "It ran at the time you set. A
+// one-time schedule is spent once it fires..." -- and rules out saying them of
+// anything else: "Only a one-off -- Run right after setup or Schedule for
+// later -- reaches this reading. A recurring schedule is never spent by
+// firing: its past runs are history and its runs still to come stay
+// changeable." A turn that guessed from the row would say "spent" over a
+// recurring schedule that is still live, which is the same class of untruth the
+// correction exists to remove.
+//
+// So the CARD reports it. The card is the one thing that resolved the reading
+// -- the released stamp and the trigger type are in its own body -- and this is
+// the seam it says so through: a sink the enclosing turn provides, written by
+// the card and read by the block that renders the turn's prose. It carries a
+// READING, never a sentence: what the words are is the run-status leaf's, and
+// what is true of this schedule is the card's.
+//
+// PASSIVE. A turn that provides no sink gets no report and the card behaves
+// exactly as it did before this seam existed.
+
+/** The two readings a schedule card's own body can settle into, for the one
+ *  question the turn's sentence turns on. */
+export type ScheduleCardReading = "spent-one-off" | "other";
+
+const ScheduleReadingSinkContext = createContext<
+  ((reading: ScheduleCardReading) => void) | null
+>(null);
+
+/**
+ * The scope a schedule card's reading is reported into — mounted by the turn
+ * around the card, never by the card.
+ */
+export function ScheduleReadingReport({
+  onReading,
+  children,
+}: {
+  onReading: (reading: ScheduleCardReading) => void;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <ScheduleReadingSinkContext.Provider value={onReading}>
+      {children}
+    </ScheduleReadingSinkContext.Provider>
+  );
+}
+
+/**
+ * The card's own side of the report.
+ *
+ * A CARD THAT LEAVES TAKES ITS ANSWER WITH IT: the cleanup reports the neutral
+ * reading, so a turn is never left saying "spent" over a card that has been
+ * unmounted or has re-resolved into something else.
+ */
+export function useReportScheduleReading(reading: ScheduleCardReading): void {
+  const sink = useContext(ScheduleReadingSinkContext);
+  useEffect(() => {
+    if (sink === null) return;
+    sink(reading);
+    if (reading === "other") return;
+    return () => sink("other");
+  }, [sink, reading]);
+}
+
+/** The run's moment, and the card reference that moment was stated with. */
+export type RunMomentCard = {
+  /** The run's own status, so a settled run is read once rather than watched. */
+  status: string | null;
+  /** The lifecycle moment the run stands at, as the row records it. */
+  moment: string | null;
+  /** The card kind that moment was stated with. */
+  kind: string | null;
+  /** The server-minted reference that card is addressed by. */
+  ref: string | null;
+};
+
+export const RUN_MOMENT_UNREAD: RunMomentCard = Object.freeze({
+  status: null,
+  moment: null,
+  kind: null,
+  ref: null,
+});
+
+/**
+ * Reads the run with the SURFACE'S OWN credential, and with the caller's abort
+ * signal so a look that outlives its deadline is really cancelled. A surface
+ * that cannot say who is asking passes `null` and nothing is read — the same
+ * fail-closed posture the review slot's reader takes.
+ */
+export type RunMomentCardReader = (
+  signal: AbortSignal,
+) => Promise<RunMomentCard | null>;
+
+/** Parse the run route's answer. Shared, so a surface cannot invent a shape the
+ *  route does not send. */
+export function parseRunMomentCard(data: unknown): RunMomentCard | null {
+  if (data === null || typeof data !== "object") return null;
+  const row = data as {
+    status?: unknown;
+    lifecycleMoment?: unknown;
+    lifecycleCard?: { kind?: unknown; ref?: unknown } | null;
+  };
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value.length > 0 ? value : null;
+  // A RUN SAYS WHAT IT IS DOING. Without a status this is not the run's answer
+  // — an empty body, a proxy's courtesy page, a shape from another route — and
+  // reading it as "this run states no moment" would take a card off a turn that
+  // really carries one. No status, no answer: the caller keeps looking and
+  // keeps drawing what it was drawing.
+  if (text(row.status) === null) return null;
+  return {
+    status: text(row.status),
+    moment: text(row.lifecycleMoment),
+    kind: text(row.lifecycleCard?.kind),
+    ref: text(row.lifecycleCard?.ref),
+  };
+}
+
+/** The DEFAULT reader: the run's own seed route, same-origin. */
+export function defaultRunMomentCardReader(runId: string): RunMomentCardReader {
+  return async (signal) => {
+    const response = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return null;
+    return parseRunMomentCard(await response.json());
+  };
+}
+
+/**
+ * WHICH MOMENTS A CONVERSATION DRAWS A CARD FOR, and which card each one is.
+ *
+ * A map rather than a condition, so the transcript's mount and the rule that
+ * stands the run's progress reading down cannot drift into two answers about
+ * the same moment. It names exactly the kinds a conversation already renders
+ * from the run's own reading; a moment that is not in it leaves the run's
+ * progress reading exactly as it was.
+ */
+const CONVERSATION_MOMENT_CARDS: Readonly<Record<string, string>> = Object.freeze({
+  schedule: "trigger_schedule_proposal",
+});
+
+/** Is this kind one a conversation draws from the run's own moment? */
+export function isConversationMomentCardKind(kind: unknown): boolean {
+  return (
+    typeof kind === "string" &&
+    Object.values(CONVERSATION_MOMENT_CARDS).includes(kind)
+  );
+}
+
+/**
+ * Does this reading say the run is standing at a moment whose card the
+ * conversation draws? Fails closed: an unread run, a moment with no reference,
+ * or a kind that does not match the moment answers `false`, and the run keeps
+ * the progress reading it has always had.
+ */
+export function runMomentCardIsOpen(card: RunMomentCard): boolean {
+  if (card.moment === null || card.ref === null) return false;
+  return CONVERSATION_MOMENT_CARDS[card.moment] === card.kind;
+}
+
+/**
+ * Statuses that end the watch: the run has settled and cannot open, close or
+ * move a moment again.
+ *
+ * `armed` IS NOT ONE OF THEM (convergence finding, cinatra#3044). It reads like
+ * one — the person has answered the card and cannot answer it again — and the
+ * watch used to stop there. But the person is not the only writer of that row:
+ * the release job is, and what it writes is exactly the change this watch
+ * exists to see. `armed` is the run WAITING FOR THE INSTANT it was given
+ * (`SCHEDULE_PARK_STATUSES` in the coordinator states the schedule moment in
+ * `pending_trigger` AND `armed`, and the release job clears it when it fires),
+ * so a watch that ends there is a page that can never learn its one-off fired:
+ * the row goes on naming a schedule for ever, the run's own next reading never
+ * comes back, and the spent card never reaches the settled election below.
+ * That is the whole delayed one-off road — "Schedule for later" — and it is
+ * the road the drawing's own fired example is drawn on.
+ *
+ * TAKEN FROM THE STATE MACHINE, not written out again. A hand-copied set is how
+ * a status that does not exist gets watched for ever while a real terminal one
+ * is missed — and the run vocabulary is one module away, typed.
+ */
+const RUN_MOMENT_WATCH_ENDS: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(
+  TERMINAL_RUN_STATUSES,
+);
+
+/**
+ * Is this run standing at a moment A PERSON is about to act on?
+ *
+ * The brisk cadence below is bought by that question and not by "a card is on
+ * screen". `pending_trigger` is the card as a CONTROL: somebody is looking at
+ * the thing they are about to press, and the reading that replaces it is one
+ * gesture away. `armed` is the same card as a WAIT — the answer is given, and
+ * what changes it is an instant that may be days out. Polling that every two
+ * seconds for as long as a tab stays open would buy nothing and cost a request
+ * a second per parked run, which is why the wait takes the ordinary backed-off
+ * belt instead.
+ */
+function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
+  return runMomentCardIsOpen(card) && card.status !== "armed";
+}
+
+/**
+ * HOW FAR APART THE LOOKS ARE, AND WHAT ENDS THEM.
+ *
+ * THE CADENCE BACKS OFF but does NOT expire, and that is the whole point of
+ * this watch: a run reaches its schedule moment when it reaches it — after the
+ * setup gate is answered, after the work in front of it is done — and a belt
+ * measured in minutes would put the silent wait back for every run slower than
+ * the belt. So the tail is a STEADY long interval, and what ends the watch is
+ * the run itself settling, which is an answer rather than a timer.
+ *
+ * It is also cheaper than what the surface already does: the run panel beside
+ * this watch polls the same route every two seconds for a working run.
+ *
+ * TWO BELTS, AND THEY ANSWER DIFFERENT QUESTIONS. `UNANSWERED` is for a
+ * transport that never answered at all — a dead endpoint must not be asked for
+ * ever, and a watch that has never had an answer has nothing to show for the
+ * asking. `MISSES` is for one that answered and then stopped: a credential that
+ * expired mid-conversation, or a route that started failing. Without it a
+ * brisk watch on an open moment would retry every two seconds for as long as
+ * the tab stays open. Both leave the LAST answer on screen; what they end is
+ * the asking.
+ */
+const MOMENT_UNANSWERED_LIMIT = 20;
+const MOMENT_MISS_LIMIT = 10;
+const MOMENT_READ_TIMEOUT_MS = 8000;
+
+/**
+ * AND IT IS BRISK WHILE THE RUN IS STANDING AT THE MOMENT. That is the one
+ * state where the answer is about to change and somebody is looking at it: the
+ * card on screen is the control they are about to press, and the reading that
+ * replaces it is the run's own. A backed-off watch would leave the slot empty
+ * for a whole interval after the press — the card takes itself away on its own
+ * re-resolve, and the run's reading would not be back yet.
+ *
+ * It costs nothing net: the run panel this stands down polls the same route
+ * every two seconds for a live run, so while the moment's card owns the slot
+ * this watch is that poll rather than a second one.
+ */
+function momentReadDelay(reads: number, momentAwaitsAPerson: boolean): number {
+  if (momentAwaitsAPerson) return 2000;
+  if (reads < 5) return 2000;
+  if (reads < 15) return 5000;
+  return 10_000;
+}
+
+/**
+ * Keep a run's open moment current, for the surface that draws its slot.
+ *
+ * The first look is IMMEDIATE — a conversation opened onto a run that is
+ * already parked must not draw the progress reading over the moment's card for
+ * a tick — and every later one backs off until the belt ends it.
+ */
+export function useRunMomentCard({
+  read,
+}: {
+  read: RunMomentCardReader | null;
+}): { card: RunMomentCard; answered: boolean; gaveUp: boolean } {
+  const [card, setCard] = useState<RunMomentCard>(RUN_MOMENT_UNREAD);
+  const [probe, setProbe] = useState<{
+    answered: boolean;
+    reads: number;
+    misses: number;
+  }>({ answered: false, reads: 0, misses: 0 });
+  // A DIFFERENT READER IS A DIFFERENT SUBJECT — another run, or the same run
+  // asked for with another credential — and the previous answer says nothing
+  // about it. Adjusted during render (React's documented "adjust state when a
+  // prop changes" shape) so no frame paints the previous run's moment.
+  //
+  // HELD IN A BOX, and that is not decoration: the reader IS a function, and
+  // `useState` reads a bare function as a lazy INITIALIZER while a setter reads
+  // one as an UPDATER — so storing it directly would call it, on every render,
+  // and compare the reader against whatever it returned.
+  const [seenRead, setSeenRead] = useState<{ read: RunMomentCardReader | null }>(
+    { read },
+  );
+  if (seenRead.read !== read) {
+    setSeenRead({ read });
+    setCard(RUN_MOMENT_UNREAD);
+    setProbe({ answered: false, reads: 0, misses: 0 });
+  }
+
+  const watchEnded =
+    probe.answered &&
+    card.status !== null &&
+    // The row's status is free text on the wire; the SET is the typed
+    // vocabulary, and membership is what decides — an unknown status is simply
+    // not a settled one and the watch goes on.
+    (RUN_MOMENT_WATCH_ENDS as ReadonlySet<string>).has(card.status);
+
+  useEffect(() => {
+    if (read === null) return;
+    if (watchEnded) return;
+    if (!probe.answered && probe.reads >= MOMENT_UNANSWERED_LIMIT) return;
+    if (probe.misses >= MOMENT_MISS_LIMIT) return;
+    let cancelled = false;
+    // HOISTED OUT OF THE TIMER so the cleanup can really end the look. Scoped
+    // inside it, an unmount — or a change of run or of credential — left an
+    // authorized request running to its own deadline with nobody to receive it,
+    // and a conversation with several run turns leaves several.
+    const abort = new AbortController();
+    // ONE LOOK AT A TIME. The focus signal below can arrive while a look is
+    // still out, and two overlapping looks would share one abort controller and
+    // count themselves twice against the backoff.
+    let inFlight = false;
+    const look = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void (async () => {
+        const deadline = window.setTimeout(
+          () => abort.abort(),
+          MOMENT_READ_TIMEOUT_MS,
+        );
+        let landed = false;
+        try {
+          const next = await read(abort.signal);
+          if (cancelled) return;
+          if (next) {
+            setCard(next);
+            landed = true;
+          }
+        } catch {
+          // Transport failure or the deadline. The look does not count as an
+          // ANSWER, so the surface keeps whatever it was drawing and the loop
+          // retries on the backoff.
+        } finally {
+          window.clearTimeout(deadline);
+          inFlight = false;
+          if (!cancelled) {
+            setProbe((prev) => ({
+              answered: prev.answered || landed,
+              reads: prev.reads + 1,
+              // CONSECUTIVE misses, reset by any answer: what this ends is a
+              // transport that has stopped answering, not one that hiccupped.
+              misses: landed ? 0 : prev.misses + 1,
+            }));
+          }
+        }
+      })();
+    };
+    const timer = window.setTimeout(
+      look,
+      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
+    );
+    // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
+    // may have happened while nobody was looking" — the same signal the card
+    // resolve beside this uses — and it costs one read rather than a faster
+    // interval for every tab that is not being looked at.
+    const onFocus = () => {
+      if (!cancelled) look();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      abort.abort();
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [read, probe.answered, probe.reads, probe.misses, watchEnded, card]);
+
+  return {
+    card,
+    answered: probe.answered,
+    // THE WATCH IS OVER AND IT NEVER GOT AN ANSWER — a surface that cannot say
+    // who is asking, or a transport that never answered. A caller that is
+    // WITHHOLDING something until this read lands has to be able to stop
+    // withholding it, or a dead endpoint would empty a turn for ever.
+    gaveUp:
+      !probe.answered &&
+      (read === null || probe.reads >= MOMENT_UNANSWERED_LIMIT),
+  };
 }
 
 // ---------------------------------------------------------------------------

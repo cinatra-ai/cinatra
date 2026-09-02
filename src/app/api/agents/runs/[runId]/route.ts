@@ -199,6 +199,22 @@ async function seedResponse(
     // moment rides with the status it belongs to rather than being inferred
     // from `hitlContext` beside it.
     lifecycleMoment: run.lifecycleMoment ?? null,
+    // AND THE CARD THAT MOMENT OWES (cinatra#3044). The moment alone says a run
+    // is waiting; it does not say what to draw. The conversation that started
+    // the run has no other way to learn it: the turn it streamed can never
+    // carry a part written into the STORED turn afterwards, so the reference
+    // the moment was stated with rides the run's own read — the one channel
+    // that is already live on that page — and the card mounts there with no
+    // reload.
+    //
+    // BOTH HALVES OR NEITHER. A kind with no reference addresses nothing, and a
+    // reference with no kind names no renderer; either alone would make a
+    // surface guess. The reader is already authorized for this run by the guard
+    // above, and the reference re-authorizes itself at the resolve route.
+    lifecycleCard:
+      run.lifecycleCardKind && run.lifecycleCardRef
+        ? { kind: run.lifecycleCardKind, ref: run.lifecycleCardRef }
+        : null,
     messages: messages.map((m) => ({
       id: m.id,
       runId: m.runId,

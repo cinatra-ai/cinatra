@@ -307,7 +307,7 @@ async function sampleTheThread(
     out.push({
       card: document.querySelector(REVIEW_CARD) !== null,
       placeholder: document.querySelector(PLACEHOLDER) !== null,
-      progressArm: document.body.textContent?.includes("Agentic Run Progress") === true,
+      progressArm: [...document.querySelectorAll("h2")].some((h) => /Agentic Run Progress/i.test(h.textContent ?? "")),
     });
   }
   return out;

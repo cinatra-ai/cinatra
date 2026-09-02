@@ -402,7 +402,7 @@ describe("a park written onto a row that is already parked on a question", () =>
       // spinning icon … It names no status, reports no result and draws nothing
       // to press."
       expect(placeholder.querySelectorAll("svg.animate-spin").length).toBe(1);
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/pending approval/i)).toBeNull();
       expect(screen.queryByText(/could not be loaded/i)).toBeNull();

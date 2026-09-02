@@ -20,8 +20,11 @@
  * What is pinned here, on the REAL component, on BOTH surfaces:
  *
  *   1. WHILE THE AGENT WORKS the card is the placeholder — the spinner and the
- *      empty review screen — and it says nothing else: no heading, no status
- *      word, no transcript.
+ *      empty review screen — and it says nothing but its own NAME: no status
+ *      word, no transcript. (The name is the heading the ratified drawing's own
+ *      placeholder example puts at the card's head; cinatra#3044, the eleventh
+ *      set. This pin used to read "no heading" — that was the earlier reading of
+ *      a sentence the drawn example settles.)
  *   2. WHEN THE WORK OPENS A REVIEW the SAME slot holds the review screen, and
  *      the placeholder is gone. Nobody asked for it and no new turn happened:
  *      the panel read the run's own state and swapped.
@@ -248,21 +251,26 @@ describe("while the agent works, the card is the placeholder", () => {
       // The spinning icon: the design system's own spinner, by its animation
       // class, inside the placeholder.
       expect(placeholder.querySelector("svg.animate-spin")).not.toBeNull();
-      // The empty review screen it stands in for — the FRAME, and nothing in it.
-      // The bar skeleton that used to be asserted here is gone (cinatra#3046):
-      // §II draws the frame and the spinner only, and a skeleton is a report of
-      // a result the placeholder is defined by not reporting. Pinned in full in
-      // `review-gate-placeholder-drawing.test.tsx`.
-      expect(
-        placeholder.querySelector('[data-conformance-id="review-gate-placeholder-frame"]'),
-      ).not.toBeNull();
+      // THE EMPTY REVIEW SCREEN IS EMPTY (cinatra#3044). The ratified drawing's
+      // section II enumerates what the placeholder is: "the card frame, and a
+      // spinning icon, the indigo arc of Components section Skeleton / Spinner.
+      // It names no status, reports no result and draws nothing to press." Its
+      // own placeholder example draws the card box with one arc in it and
+      // nothing else, so the frame stands empty behind the arc rather than
+      // carrying the gate's bar motif. A graded set measured those bars beside
+      // the arc; this is where they were pinned in.
       expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).toBeNull();
       // A card, and it is the WORKING reading of the one slot.
       expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
         "working",
       );
+      // The card's own name is at its head — the drawn placeholder's first
+      // child, fixed on every run. It is the CARD's name, not the run-progress
+      // arm's heading, so it is read off the placeholder rather than by role.
+      expect(
+        document.querySelector('[data-conformance-id="review-gate-placeholder"]')?.textContent,
+      ).toContain("Agentic Run Progress");
       // And nothing the words do not allow.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/Waiting to start/i)).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();
@@ -331,7 +339,7 @@ describe("the placeholder is replaced, in place, by the review screen", () => {
       expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
       expect(screen.queryByText(/Review requested/i)).not.toBeNull();
       // And the progress card it replaced is not beside it.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();
     },
     15_000,
@@ -614,7 +622,7 @@ describe("the readings the request does not cover are untouched", () => {
     );
     expect(document.querySelector(PLACEHOLDER)).toBeNull();
     expect(document.querySelector(REVIEW_CARD)).toBeNull();
-    expect(screen.queryByText(/Agentic Run Progress/i)).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).not.toBeNull();
   });
 
   it("a run still waiting for its review keeps the placeholder up, not a completion notice", async () => {
@@ -829,7 +837,7 @@ describe("a run parked on its produced output's review draws it in the slot", ()
       expect(document.querySelector(REVIEW_CARD)).toBeNull();
       // The answered question is not redrawn, here or in the prompt window.
       noContinue();
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
       await waitFor(() => expect(published.length).toBeGreaterThan(0));
       expect(published.every((g) => g === null)).toBe(true);
 

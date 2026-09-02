@@ -76,7 +76,10 @@ const TRIGGER_SCREEN = (() => {
 describe("the setup run page draws the run surface, not a single column", () => {
   it("mounts the two-column run surface with the scheduler open on first paint", () => {
     expect(SETUP_BRANCH).toContain("<RunSurfaceRail");
-    expect(SETUP_BRANCH).toContain("steps={setupRailSteps}");
+    // The rail the frame is handed is the run's WHOLE rail (cinatra#3068 fix
+    // leg 2): the run's answered input steps, then these three renumbered
+    // beneath them. `setupRailSteps` is one half of it, never the frame's prop.
+    expect(SETUP_BRANCH).toContain("steps={railSteps}");
     expect(SETUP_BRANCH).toContain('initialSelection="schedule"');
     // The box that HOLDS the two columns is the page's, on this run-page state
     // exactly as on every other one — the `run-surface` contract root a capture
@@ -91,7 +94,13 @@ describe("the setup run page draws the run surface, not a single column", () => 
     }
     // The words are the drawing's own, read by KEY from the one label set, so a
     // step named here cannot ship a row with an empty title.
-    expect(SETUP_BRANCH).toContain("buildSetupRailSteps(setupSteps)");
+    // The words are read by KEY from the one label set, and the numerals count
+    // the whole rail: the offset is however many settled input rows stand above
+    // these three (cinatra#3068 fix leg 2), so the schedule is not numbered 1
+    // over a step the person already took.
+    expect(SETUP_BRANCH).toContain(
+      "buildSetupRailSteps(setupSteps, inputRailSteps.length)",
+    );
     expect(STEP_ROWS_SRC).toContain("label={RUN_SURFACE_RAIL_LABELS[step.key]}");
     expect(STEP_ROWS_SRC).toContain(
       'import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";',

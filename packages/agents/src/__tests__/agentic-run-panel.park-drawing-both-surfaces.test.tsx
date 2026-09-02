@@ -292,7 +292,7 @@ function theSevenNoisyElements(): Record<string, boolean> {
       re.test((e.textContent ?? "").trim()),
     );
   return {
-    progressHeading: /Agentic Run Progress/i.test(body),
+    progressHeading: [...document.querySelectorAll("h2")].some((h) => /Agentic Run Progress/i.test(h.textContent ?? "")),
     pendingApprovalPill: /pending approval/i.test(body),
     pausedBanner: /Run paused/i.test(body),
     reviewApprovalControl: pressable(/Review approval/i),
@@ -384,11 +384,14 @@ describe("a pause with nothing to draw, on both surfaces", () => {
         },
         { timeout: 25_000 },
       );
-      const named = placeholder.querySelector(
-        '[data-conformance-id="review-gate-placeholder-run-ref"]',
-      );
-      expect(named, "the placeholder draws no reference to its run").not.toBeNull();
-      const reference = named?.textContent?.trim() ?? "";
+      // THE BOX NAMES ITS RUN THROUGH ITS ACCESSIBLE NAME, not through drawn
+      // copy: the ratified drawing's placeholder is the card's own name over a
+      // centred arc and nothing else, so the run reference the earlier reading
+      // drew beside the arc is carried by the region's name and its own
+      // attribute instead of by a span the drawing does not put there.
+      const reference =
+        placeholder.getAttribute("data-review-gate-placeholder-run")?.trim() ?? "";
+      expect(reference, "the placeholder names no run").not.toBe("");
       expect(reference.length).toBeGreaterThan(0);
       expect(RUN_ID.startsWith(reference)).toBe(true);
       // A reference is not a status word, a result or a control — the three
@@ -419,8 +422,8 @@ describe("the wordless box itself", () => {
     expect(spinning.querySelectorAll("svg.animate-spin").length).toBe(1);
     expect(spinning.getAttribute("aria-busy")).toBe("true");
     const reference = spinning
-      .querySelector('[data-conformance-id="review-gate-placeholder-run-ref"]')
-      ?.textContent?.trim();
+      .getAttribute("data-review-gate-placeholder-run")
+      ?.trim();
     expect(reference && RUN_ID.startsWith(reference)).toBe(true);
     const spinningLabel = spinning.getAttribute("aria-label") ?? "";
     cleanup();
@@ -433,12 +436,11 @@ describe("the wordless box itself", () => {
     expect(still.getAttribute("aria-busy")).toBe("false");
     // The frame is still the box the review screen fills, and the run is still
     // named: the wait ended, the slot did not move and the box did not go blank.
-    expect(
-      still.querySelector('[data-conformance-id="review-gate-placeholder-frame"]'),
-    ).not.toBeNull();
-    expect(
-      still.querySelector('[data-conformance-id="review-gate-placeholder-run-ref"]'),
-    ).not.toBeNull();
+    // The card is still the box the review screen fills — its own name is still
+    // at its head — and the run is still named, through the region's own
+    // attribute rather than through copy the ratified drawing does not draw.
+    expect(still.textContent).toContain("Agentic Run Progress");
+    expect(still.getAttribute("data-review-gate-placeholder-run")).not.toBeNull();
     // Still nothing to press, in either reading.
     expect(still.querySelectorAll("button, a").length).toBe(0);
     // AND THE NAME IS AVAILABLE TO A READER WHO CANNOT SEE IT (convergence).

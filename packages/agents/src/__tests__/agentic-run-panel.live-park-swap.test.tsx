@@ -351,7 +351,7 @@ describe("the swap happens on its own while the stream stays mute", () => {
       expect(document.querySelector("#field-idea")).toBeNull();
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
       expect(published.every((g) => g === null)).toBe(true);
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
     },
     45_000,
   );
@@ -618,7 +618,7 @@ describe("the swap happens on its own while the stream stays mute", () => {
       expect(document.querySelector(PLACEHOLDER)).not.toBeNull();
 
       // NOTHING THE PLACEHOLDER MAY NOT SAY, on either surface.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/pending approval/i)).toBeNull();
       expect(screen.queryByText(/could not be loaded/i)).toBeNull();

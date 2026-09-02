@@ -156,23 +156,61 @@ export function ReviewGateLoading() {
  *    with the 'Review requested' screen."
  *
  * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
- * nothing else. There is no heading, no status word, no progress sentence and no
- * step list, because the words authorize none of those and the card they
- * describe is defined by what it does NOT say: it is the review screen's own
- * frame, empty, while the screen is still coming.
+ * nothing else, under the card's own NAME. The section's worked example draws
+ * that fixed name as the box's first child, so the heading stays; what the prose
+ * forbids is a status word, a result and a control, and a fixed card name is
+ * none of the three. There is no status word, no progress sentence and no step
+ * list, because the words authorize none of those: it is the review screen's own
+ * frame, empty but named, while the screen is still coming.
  *
  * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
  * of the review screen's states — the one before the gate exists — and it is
- * built from the two pieces the review screen is already built from: the same
- * 30px header tile the gate header draws its clipboard mark in, and the shipped
- * `ReviewGateLoading` bar motif. Keeping it here is what makes the swap read as
- * one card changing rather than two cards trading places, and it is why the
- * replacement needs no new geometry: the placeholder and the screen that
- * replaces it are the same box.
+ * built from the piece the review screen is already built from: the same 30px
+ * header tile the gate header draws its clipboard mark in. Keeping it here is
+ * what makes the swap read as one card changing rather than two cards trading
+ * places, and it is why the replacement needs no new geometry of its own: the
+ * placeholder and the screen that replaces it stand in the SAME BOX, the one
+ * the enclosing surface draws. They are not the same HEIGHT and nothing here
+ * claims they are -- no minimum-height contract exists on this slot, and a
+ * placeholder that reserved the finished screen's height would be reporting a
+ * result it does not have.
+ *
+ * AND IT CARRIES THE CARD'S OWN NAME (cinatra#3044, the eleventh set). The
+ * drawing's placeholder example is markup, and its first child is the heading
+ * "Agentic Run Progress" at weight 700, 14px, `var(--ink)`. The same section's
+ * prose says the placeholder "names no status, reports no result and draws
+ * nothing to press", and an earlier set read that as "no text at all". The two
+ * readings settle once each clause's subject is read: what is forbidden is a
+ * STATUS word, a RESULT and a CONTROL. A fixed card name is none of the three —
+ * it is the name §II itself uses for this card in prose. So the card names
+ * itself and still names no status.
+ *
+ * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
+ * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif
+ * beneath the tile as well — two bars in a header band over three in a body
+ * band — and a graded set measured them. No sentence gives them: the drawing
+ * says the placeholder is "the card frame, and a spinning icon, the indigo arc
+ * of Components § Skeleton / Spinner", and its own placeholder example draws
+ * the card box with one arc in it and nothing else. Bars beside the arc are a
+ * third thing, and one that reads as content arriving when nothing has. The bar
+ * motif keeps its own job — it is the GATE's loading state, drawn in the target
+ * slots while the host prepares them — and that use is untouched.
  *
  * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
  * — the same component the orchestrator stepper's executing card spins — not a
  * second spinner drawn here.
+ *
+ * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
+ * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
+ * so the arc is whatever colour this wrapper sets. It set `text-mustard-ink`,
+ * and no `--color-mustard-ink` is registered in the theme block — so the utility
+ * emitted no rule at all and the arc silently took the INHERITED foreground,
+ * measured as rgb(21,33,58) in light and rgb(248,250,252) in dark. `text-primary`
+ * is the registered indigo the drawing names, and it is the same token the
+ * chosen row's edge takes, so the arc and the edge can never drift apart. In the
+ * dark theme that token resolves to the application's near-white dark primary —
+ * the dark-token deviation this branch already records for the row and the
+ * floor, which now covers the arc with them rather than as a second item.
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
@@ -224,7 +262,7 @@ export function ReviewGatePlaceholder({
       data-review-gate-placeholder-settled={settled ? "true" : undefined}
       // A busy REGION, named for a reader who cannot see the spin. The label is
       // not copy on the card — nothing is drawn from it — it is the accessible
-      // name of a region that is deliberately wordless.
+      // name of a region whose only words are the card's own fixed name.
       role="status"
       aria-busy={settled ? "false" : "true"}
       // AND THE NAME CARRIES THE RUN (convergence). An explicit accessible name
@@ -242,38 +280,30 @@ export function ReviewGatePlaceholder({
       }
       className="flex w-full flex-col gap-3"
     >
-      <div className="flex flex-wrap items-center gap-2.5">
+      {/* THE CARD'S OWN NAME, the heading the drawn placeholder puts at its
+          head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
+          a status word and not a result — it is the fixed name §II uses for
+          this card in its own prose ("the run progress card"), identical on
+          every run. The drawing's `--ink` is #15213a, and the token registered
+          at that value here is `--foreground`. */}
+      <div className="text-sm font-bold text-foreground">Agentic Run Progress</div>
+      {/* THE ARC SITS ON THE CARD'S CENTRE. The drawn band is
+          `display:grid; place-items:center; padding:26px 0 22px` — the full
+          width of the card with the arc in the middle of it. It used to be a
+          left-aligned `flex flex-wrap items-center` row, which put the arc hard
+          against the card's leading edge. Nothing else goes in this band: a
+          sibling here pulls the arc off the centre exactly as the row did. */}
+      {/* AND THE WAIT ENDS (cinatra#3007, fix leg 7). The drawn band is the
+          WORKING reading; on a run that has left every state this box waits in
+          the band stays, because the box is still the box the review screen
+          fills, and the arc that claims something is still coming does not. */}
+      <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
         {settled ? null : (
-          <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+          <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-primary">
             <LoadingSpinner className="size-4" />
           </span>
         )}
-        {runRef ? (
-          <span
-            data-conformance-id="review-gate-placeholder-run-ref"
-            className="font-mono text-xs text-muted-foreground"
-          >
-            {runRef}
-          </span>
-        ) : null}
       </div>
-      {/* THE FRAME, AND NOTHING IN IT (cinatra#3046).
-          §II draws two things here and names the second by what it is not: "the
-          card frame, and a spinning icon … It names no status, reports no result
-          and draws nothing to press." The bar skeleton that used to stand here
-          was the shipped `ReviewGateLoading` motif, borrowed because the box
-          looked empty without it — and a skeleton is a REPORT: five bars in the
-          shape of a header and a body say the review has arrived and is being
-          painted, which is exactly the claim about progress the placeholder is
-          defined by not making. It was carried as a stated deviation on the
-          first graded round and is closed here rather than restated.
-          The empty frame IS the drawing: the box the review screen will fill,
-          with the spinner above it and nothing else in it. */}
-      <div
-        data-conformance-id="review-gate-placeholder-frame"
-        aria-hidden="true"
-        className="h-24 w-full rounded-control border border-line bg-surface-strong"
-      />
     </div>
   );
 }

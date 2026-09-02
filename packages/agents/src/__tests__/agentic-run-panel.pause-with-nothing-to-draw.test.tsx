@@ -328,7 +328,7 @@ describe("the window between the answered question and the park's first look", (
     // THE FRAME AND THE SPINNING ICON, and the four readings the capture
     // counted in this box, each required to be absent.
     expect(placeholder.querySelectorAll("svg.animate-spin").length).toBe(1);
-    expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
     expect(screen.queryByText(/pending approval/i)).toBeNull();
     expect(screen.queryByText(/Run paused/i)).toBeNull();
     expect(screen.queryByText(/Loading the approval step/i)).toBeNull();
@@ -378,7 +378,10 @@ describe("the window between the answered question and the park's first look", (
     // The run has reported its question; the panel has read it.
     await waitFor(
       () => {
-        if (!/Awaiting input|Continue|Agentic Run Progress/i.test(document.body.textContent ?? "")) {
+        if (
+          !/Awaiting input|Continue/i.test(document.body.textContent ?? "") &&
+          ![...document.querySelectorAll("h2")].some((h) => /Agentic Run Progress/i.test(h.textContent ?? ""))
+        ) {
           throw new Error("the panel never read the question off the run");
         }
       },
