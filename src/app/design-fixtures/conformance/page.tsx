@@ -24,6 +24,8 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
+import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +232,35 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Lifecycle cards on the resolve seam (surfaces: verification-*, state-*,
+              suggestion-floor)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3164, epic #3155 W8: the REAL verification card and the
+                REAL review card, under REAL host declarations. These cards draw
+                nothing before an authorized resolve, so the suite's driver
+                answers their own resolve request with a protocol-typed envelope
+                and everything drawn from it is the shipped component's. */}
+            <LifecycleResolveFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Review target — the metadata floor (surface: tier-metadata-floor)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3164: the shipped review-target bridge's floor arm — the
+                sanitized one-line diagnostic above the host's generic read-only
+                view, which is why a floored target is never blank. */}
+            <LifecycleTierFloorFixture />
           </CardContent>
         </Card>
       </PageContent>

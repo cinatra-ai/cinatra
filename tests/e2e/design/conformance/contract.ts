@@ -54,6 +54,13 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  LIFECYCLE_DRAWN_CONTROL_MOUNT,
+  LIFECYCLE_RESOLVE_FIXTURES,
+  LIFECYCLE_RESOLVE_PATH,
+  lifecycleResolveAnswer,
+  type LifecycleResolveFixture,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-resolve-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -393,10 +400,26 @@ const SUGGESTION_CHIP_MANIFEST_SURFACE: Readonly<
   Record<LifecycleSuggestionChipMount, string>
 > = {
   "chip-row-live": "suggestion-accepted",
+  "chip-row-dismissed": "suggestion-dismissed",
 };
 
 export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): SurfaceDriver {
   const rootSel = `[data-surface-id="${fixture.mount}"]`;
+  // THE READING THIS ROW ARRIVES IN, and nothing else, is what the family
+  // factory is parameterized by (cinatra#3164, epic #3155 W8). A suggestion
+  // arrives accepted; a row seeded with the reader's mark already made is that
+  // same suggestion one press later. Everything below — which control the chip
+  // then offers and what it is named — is read back off the shipped component.
+  const arrives = fixture.startsDismissed === true ? "dismissed" : "accepted";
+  const moves = arrives === "accepted" ? "dismissed" : "accepted";
+  const pressed =
+    arrives === "accepted"
+      ? { action: "dismiss-suggestion", outcome: "dismissed" }
+      : { action: "accept-suggestion", outcome: "accepted" };
+  const offeredBack =
+    arrives === "accepted"
+      ? { action: "accept-suggestion", outcome: "accepted" }
+      : { action: "dismiss-suggestion", outcome: "dismissed" };
 
   return {
     path: HARNESS_PATH,
@@ -406,35 +429,37 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
       await expect(row).toBeVisible();
       // LIVE, not the recorded or the read-only partition: this reader may mark.
       await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
-      // A suggestion ARRIVES accepted — there is no unmarked state to return to.
-      const accepted = row.locator('[data-conformance-id="suggestion-accepted"]');
-      await expect(accepted).toBeVisible();
-      await expect(accepted).toHaveAttribute("data-suggestion-state", "accepted");
-      await expect(accepted).toContainText(fixture.suggestion.label);
+      // The chip is drawn in the reading its marks put it in — two states and no
+      // third, so the other one is not on screen at all.
+      const drawn = row.locator(`[data-conformance-id="suggestion-${arrives}"]`);
+      await expect(drawn).toBeVisible();
+      await expect(drawn).toHaveAttribute("data-suggestion-state", arrives);
+      await expect(drawn).toContainText(fixture.suggestion.label);
+      await expect(row.locator(`[data-conformance-id="suggestion-${moves}"]`)).toHaveCount(0);
     },
     fields: {},
     actions: {
-      // The chip's one control on an accepted suggestion. The press is the REAL
-      // chip button and every drawn consequence — the state it moves to, the
-      // control it then offers, the name of that control — is computed by the
-      // shipped component from the reader's local marks.
-      "dismiss-suggestion": {
-        outcome: "dismissed",
+      // The chip's ONE control in this reading. The press is the REAL chip
+      // button and every drawn consequence — the state it moves to, the control
+      // it then offers, the name of that control — is computed by the shipped
+      // component from the reader's local marks.
+      [pressed.action]: {
+        outcome: pressed.outcome,
         run: async (_page, root) => {
           const row = chipRow(root);
-          const dismissedChip = row.locator('[data-conformance-id="suggestion-dismissed"]');
-          await pressChipUntil(chipOffering(root, "dismiss-suggestion", "dismissed"), async () => {
-            await expect(dismissedChip).toBeVisible({ timeout: 5_000 });
+          const movedChip = row.locator(`[data-conformance-id="suggestion-${moves}"]`);
+          await pressChipUntil(chipOffering(root, pressed.action, pressed.outcome), async () => {
+            await expect(movedChip).toBeVisible({ timeout: 5_000 });
           });
-          await expect(dismissedChip).toHaveAttribute("data-suggestion-state", "dismissed");
+          await expect(movedChip).toHaveAttribute("data-suggestion-state", moves);
           // ONE control per suggestion, and the toggle is its own inverse: the
-          // accepted reading is gone and the same chip now offers the way back.
-          await expect(row.locator('[data-conformance-id="suggestion-accepted"]')).toHaveCount(0);
-          await expect(chipOffering(root, "accept-suggestion", "accepted")).toHaveCount(1);
-          // A dismissal is a MARK, not a submit — the row stays live and the
+          // reading it arrived in is gone and the same chip offers the way back.
+          await expect(row.locator(`[data-conformance-id="suggestion-${arrives}"]`)).toHaveCount(0);
+          await expect(chipOffering(root, offeredBack.action, offeredBack.outcome)).toHaveCount(1);
+          // A mark is a MARK, not a submit — the row stays live and the
           // suggestion stays on screen (§VIII: the chips carry no submit).
           await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
-          await expect(dismissedChip).toContainText(fixture.suggestion.label);
+          await expect(movedChip).toContainText(fixture.suggestion.label);
         },
       },
     },
@@ -1619,7 +1644,13 @@ const HARNESS_ANCHOR_SURFACE_ID = "status-pills";
  */
 const AWAITING_MOUNT_SETTLE_MS = 5_000;
 
-function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver {
+function awaitingMount(
+  surfaceId: string,
+  driver: SurfaceDriver,
+  /** Why this surface is not mounted yet. Defaults to the per-scope surfaces
+   *  wait above; another wave naming its own reason passes it here. */
+  reason: string = AWAITING_PER_SCOPE_SURFACES,
+): SurfaceDriver {
   const guard = async (page: Page): Promise<void> => {
     await expect(
       page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
@@ -1635,7 +1666,7 @@ function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver 
     } catch {
       mounted = false;
     }
-    test.skip(!mounted, `${surfaceId}: ${AWAITING_PER_SCOPE_SURFACES}`);
+    test.skip(!mounted, `${surfaceId}: ${reason}`);
   };
   return {
     ...driver,
@@ -3267,6 +3298,430 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
   states: {},
 };
 
+// ---------------------------------------------------------------------------
+// The RESOLVE-BACKED families (cinatra#3164, epic #3155 W8): §VII's verification
+// card, §IV's review-state ladder and the §VIII decision floor.
+// ---------------------------------------------------------------------------
+//
+// These cards draw NO DOM until an authorized resolve answers — that is the
+// epic's posture, not an obstacle to route around — and a conformance harness
+// has no session. So the ONE thing this suite seeds for them is the SERVER'S
+// ANSWER, at the card's own seam: the driver fulfils the card's own resolve
+// request with the protocol-typed envelope its fixture row names
+// (src/app/design-fixtures/conformance/lifecycle-resolve-fixture-data.ts) and
+// then opens the harness.
+//
+// EVERYTHING AFTER THE ANSWER IS THE SHIPPED CARD'S. The envelope goes through
+// the shipped parse (`parseLifecycleResolveEnvelope`), which refuses anything
+// that is not a well-formed answer to the question the card asked; which rung of
+// §IV is drawn, whether any DOM is drawn at all, which controls the floor
+// offers, whether they are disabled and what the reason says, and every value on
+// the verification reading are decided by the shipped components. No control is
+// named by the harness, and no copy string below is invented here: each one is
+// either the drawing's own word or the shipped component's.
+//
+// AND THE SUBSTITUTION LIVES HERE, IN THE TEST. The harness route wraps no
+// product module and patches no transport: opened outside this suite those
+// mounts issue the same real request every host issues and draw nothing.
+//
+// The manifest actions of this drawing that NO SHIPPED CONTROL carries —
+// `suggestion-floor`'s Regenerate/Continue among them — are not driven here and
+// are not approximated through a different control. They are on this wave's
+// surface-readiness list.
+
+/** The label §VII fixes for each outcome pill. The pill is the only place the
+ *  card carries state colour, so the label and its shipped status treatment are
+ *  what a driver reads. */
+const VERIFICATION_OUTCOME_LABEL: Readonly<Record<string, string>> = {
+  verified: "Verified",
+  drifted: "Out-of-scope drift",
+  unmet: "Findings not met",
+};
+
+/**
+ * Answer the card's OWN resolve request from the fixture table, then open the
+ * harness.
+ *
+ * An unknown ref is answered the way an unauthenticated caller is answered — a
+ * 401, never an envelope — so a card can only ever draw from a row that was
+ * deliberately seeded, and a driver that seeded nothing sees the same nothing a
+ * reader without a session sees.
+ */
+async function openWithSeededResolve(page: Page): Promise<void> {
+  await page.route(`**${LIFECYCLE_RESOLVE_PATH}`, async (route) => {
+    let ref: unknown;
+    let viewType: unknown;
+    try {
+      const request = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+      ref = request.ref;
+      viewType = request.viewType;
+    } catch {
+      // A request this seam cannot read is answered like an unknown ref.
+    }
+    const fixture = LIFECYCLE_RESOLVE_FIXTURES.find(
+      (row) => row.ref === ref && row.kind === viewType,
+    );
+    if (fixture === undefined) {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "unauthorized" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(lifecycleResolveAnswer(fixture)),
+    });
+  });
+  await page.goto(HARNESS_PATH, { waitUntil: "domcontentloaded" });
+}
+
+/** The verification card of one mount. */
+function verificationCard(root: Locator): Locator {
+  return root.locator('[data-conformance-id="verification-card"]');
+}
+
+/** The review card of one mount. */
+function reviewCard(root: Locator): Locator {
+  return root.locator('[data-conformance-id="review-gate-card"]');
+}
+
+/**
+ * §VII — the verification card, one factory over the outcome the row seeds.
+ *
+ * The three outcomes and the in-conversation reading are the same card: §IX's
+ * rule is that presence is not layout ("the same regions, the same states, the
+ * same data on screen"), so ONE factory drives all four and the host it was
+ * mounted on is read back off the card rather than assumed.
+ */
+function verificationDriver(fixture: LifecycleResolveFixture): SurfaceDriver {
+  if (fixture.kind !== "verification_summary") {
+    throw new Error(`verificationDriver: ${fixture.mount} is not a verification row`);
+  }
+  const body = fixture.body;
+  const rootSel = `[data-surface-id="${fixture.mount}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (page, root) => {
+      await openWithSeededResolve(page);
+      const card = verificationCard(root);
+      await expect(card).toBeVisible();
+      await expect(card).toHaveAttribute("data-lifecycle-card", "verification_summary");
+      // §VII resolves ADVISORY — a reading, never a decision.
+      await expect(card).toHaveAttribute("data-lifecycle-card-state", "advisory");
+      // §IX — the same card on the host that declared it.
+      await expect(card).toHaveAttribute("data-lifecycle-card-host", fixture.host);
+
+      // THE OUTCOME PILL — "the only place the card carries state colour", and
+      // the shipped status pill rather than a tone table of the card's own.
+      const pill = card.locator(`[data-verification-outcome="${body.outcome}"]`);
+      await expect(pill).toBeVisible();
+      await expect(pill).toHaveText(VERIFICATION_OUTCOME_LABEL[body.outcome]);
+      await expect(pill).toHaveAttribute("data-slot", "status-pill");
+
+      // The two revision pins, bound to the body the answer carried.
+      const revisions = card.locator("[data-verification-revisions]");
+      await expect(revisions).toContainText(body.reviewedRevisionId);
+      await expect(revisions).toContainText(body.repairedRevisionId);
+
+      // "The before / after shows exactly the fields that were inspected —
+      // nothing more": the table is the body's rows, and only those.
+      const rows = card.locator("[data-verification-field-diff] tbody tr");
+      await expect(rows).toHaveCount(body.fieldDiff.length);
+      for (const row of body.fieldDiff) {
+        const drawn = card.locator(`[data-diff-field="${row.field}"]`);
+        await expect(drawn).toHaveCount(1);
+        await expect(drawn).toHaveAttribute("data-diff-in-scope", row.inScope ? "true" : "false");
+        if (row.before !== null) await expect(drawn).toContainText(row.before);
+        if (row.after !== null) await expect(drawn).toContainText(row.after);
+        // "A field changed that the review never covered … is marked IN PLACE
+        // rather than folded into the result."
+        if (!row.inScope) await expect(drawn).toContainText("out of scope");
+      }
+      // Disclosed and out of scope are separate marks: a verified reading
+      // carries no out-of-scope row at all, and an unmet one is a field that was
+      // inspected and did not move.
+      const drifted = body.fieldDiff.filter((row) => !row.inScope);
+      if (body.outcome === "drifted") {
+        expect(
+          drifted.length,
+          "the drift reading marks at least one row out of scope",
+        ).toBeGreaterThan(0);
+      } else {
+        expect(drifted.length, "only the drift reading marks a row out of scope").toBe(0);
+      }
+      if (body.outcome === "unmet") {
+        expect(
+          body.fieldDiff.some((row) => row.before !== null && row.before === row.after),
+          "an unmet reading pins a field that was inspected and did not move",
+        ).toBe(true);
+      }
+
+      // "It closes with Advisory comments" — and the reading's PROVENANCE is the
+      // body of a service comment there, not a line of its own.
+      const advisory = card.locator("[data-verification-advisory]");
+      await expect(advisory).toBeVisible();
+      for (const comment of body.advisoryComments ?? []) {
+        const panel = advisory.locator(`[data-advisory-author-kind="${comment.authorKind}"]`);
+        await expect(panel).toContainText(comment.body);
+      }
+
+      // "IT CARRIES NO FLOOR AT ALL … it asks nothing, so it draws nothing to
+      // press." Not a disabled floor, not a link — nothing pressable.
+      await expect(card.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+      await expect(card.getByRole("button")).toHaveCount(0);
+      await expect(card.getByRole("link")).toHaveCount(0);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+}
+
+/**
+ * §IV — the review card's state ladder, one factory over the state the row
+ * seeds, plus §VIII's decision floor (which is a pending gate carrying
+ * suggestions, and is therefore the same card in the same factory).
+ *
+ * "Four drawn states, and one that draws nothing."
+ */
+function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver {
+  if (fixture.kind !== "artifact_review_gate") {
+    throw new Error(`reviewCardStateDriver: ${fixture.mount} is not a review-gate row`);
+  }
+  const rootSel = `[data-surface-id="${fixture.mount}"]`;
+  const stateName = fixture.state.state;
+  const card = (root: Locator) => reviewCard(root);
+  const floor = (root: Locator) => root.locator('[data-conformance-id="review-decision-bar"]');
+
+  /** The card, drawn on the rung the answer named. */
+  const drawnCard = async (page: Page, root: Locator): Promise<Locator> => {
+    await openWithSeededResolve(page);
+    const drawn = card(root);
+    await expect(drawn).toBeVisible();
+    await expect(drawn).toHaveAttribute("data-lifecycle-card", "artifact_review_gate");
+    await expect(drawn).toHaveAttribute("data-lifecycle-card-state", stateName);
+    await expect(drawn).toHaveAttribute("data-lifecycle-card-host", fixture.host);
+    return drawn;
+  };
+
+  const driver: SurfaceDriver = {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (page, root) => {
+      await drawnCard(page, root);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+
+  switch (fixture.mount) {
+    case "state-loading":
+      // "A card is loading while the host prepares the target": the shipped
+      // gate skeleton, and no floor — there is nothing to decide yet.
+      driver.states.loading = async (page, root) => {
+        const drawn = await drawnCard(page, root);
+        const skeleton = drawn.locator('[data-conformance-id="review-gate-loading"]');
+        await expect(skeleton).toBeVisible();
+        await expect(skeleton).toHaveAttribute("aria-busy", "true");
+        await expect(floor(drawn)).toHaveCount(0);
+      };
+      break;
+
+    case "state-restricted":
+      // "Restricted when the reader may see the gate but not decide it — the
+      // terminal affordances disabled, the reason shown." The card RENDERS: the
+      // reader sees the gate and the disabled floor, with the reason on screen.
+      driver.present = async (page, root) => {
+        const drawn = await drawnCard(page, root);
+        const bar = floor(drawn);
+        await expect(bar).toBeVisible();
+        // The reader may respond, so the non-terminal control stays live.
+        const comment = bar.locator('[data-action="comment-review -> annotated"]');
+        await expect(comment).toBeVisible();
+        await expect(comment).toBeEnabled();
+        // Every TERMINAL affordance is disabled — not hidden, not silently
+        // dropped: a withheld card must never be drawn as a disabled one, and a
+        // disabled one must never be silently dropped.
+        for (const terminal of [
+          '[data-action="approve-review -> resolved"]',
+          '[data-action="reject-review -> resolved"]',
+        ]) {
+          const control = bar.locator(terminal);
+          await expect(control).toBeVisible();
+          await expect(control).toBeDisabled();
+          await expect(control).toHaveAttribute("aria-disabled", "true");
+        }
+        // …and the reason is shown, by the shipped bar rather than by the answer.
+        await expect(bar.locator('[data-conformance-id="review-decision-disabled"]')).toBeVisible();
+      };
+      break;
+
+    case "state-no-longer-open":
+      // "No longer open when the gate was already settled or the run moved on,
+      // offering a refresh rather than letting a stale decision through."
+      driver.states.error = async (page, root) => {
+        const drawn = await drawnCard(page, root);
+        const blocked = drawn.locator('[data-conformance-id="review-gate-blocked"]');
+        await expect(blocked).toBeVisible();
+        await expect(blocked).toHaveAttribute("data-blocked-reason", "no-longer-pending");
+        await expect(blocked).toContainText("This review is no longer open");
+        // The refresh the drawing offers in place of a stale decision.
+        await expect(blocked.locator('[data-action="refresh-gate -> live-gate"]')).toBeVisible();
+        // No decision may be taken from this reading.
+        await expect(floor(drawn)).toHaveCount(0);
+      };
+      break;
+
+    case "state-absent":
+      // THE ONE THAT DRAWS NOTHING. "Absent is no card DOM at all — a reader who
+      // may not read the target gets no panel, no placeholder and no reason."
+      //
+      // An absence proves nothing on its own — an unseeded page, a boot failure
+      // and a route regression all draw no card either — so it is proved AGAINST
+      // the sibling mount that did draw under the same seeded seam. That pairing
+      // is also the danger callout itself: restricted and absent are never drawn
+      // for each other.
+      driver.present = async (page, root) => {
+        await openWithSeededResolve(page);
+        const sibling = page.locator(`[data-surface-id="${LIFECYCLE_DRAWN_CONTROL_MOUNT}"]`);
+        await expect(reviewCard(sibling)).toBeVisible();
+        await expect(root).toBeAttached();
+        await expect(root.locator("[data-lifecycle-card]")).toHaveCount(0);
+        await expect(reviewCard(root)).toHaveCount(0);
+        await expect(root.locator('[data-conformance-id="review-gate-blocked"]')).toHaveCount(0);
+        await expect(root.locator('[data-conformance-id="review-gate-loading"]')).toHaveCount(0);
+        await expect(floor(root)).toHaveCount(0);
+      };
+      driver.states.empty = async (page, root) => {
+        await driver.present(page, root);
+      };
+      break;
+
+    case "suggestion-floor":
+      // §VIII — "The suggestions carry no submit of their own: they ride the
+      // review card's one terminal decision." So the floor is what this surface
+      // is, and it is drawn by the card beneath the chips it decides.
+      driver.present = async (page, root) => {
+        const drawn = await drawnCard(page, root);
+        const chips = drawn.locator('[data-conformance-id="suggestion-chips"]');
+        await expect(chips).toBeVisible();
+        // LIVE marks: this reader may take the decision they would ride on.
+        await expect(chips).toHaveAttribute("data-suggestion-chips-mode", "live");
+        const suggestions = "suggestions" in fixture.state ? (fixture.state.suggestions ?? []) : [];
+        await expect(chips.locator("[data-suggestion-state]")).toHaveCount(suggestions.length);
+        const bar = floor(drawn);
+        await expect(bar).toBeVisible();
+        // The count line the shipped floor draws for the marks it would carry —
+        // every suggestion arrives accepted, so all of them ride this decision.
+        const count = bar.locator('[data-conformance-id="suggestion-accepted-count"]');
+        await expect(count).toBeVisible();
+        await expect(count).toContainText(`${suggestions.length} of ${suggestions.length}`);
+        await expect(count).toContainText("ride this decision");
+        // The gate is decidable for this reader, so the terminal controls are live.
+        await expect(bar.locator('[data-action="approve-review -> resolved"]')).toBeEnabled();
+        await expect(bar.locator('[data-action="reject-review -> resolved"]')).toBeEnabled();
+        await expect(
+          bar.locator('[data-conformance-id="review-decision-disabled"]'),
+        ).toHaveCount(0);
+      };
+      break;
+  }
+
+  return driver;
+}
+
+// --- §III — what the target shows ------------------------------------------
+//
+// "A target is never blank." Where the type resolves to a renderer the target
+// shows it and says NOTHING about it; where none resolves it falls to the
+// metadata floor, "which does say so: a sanitized one-line diagnostic above the
+// generic read-only view of the representation".
+
+/** Why the two loadable tiers skip while this harness mounts no renderer. */
+const AWAITING_RESOLVED_RENDERER =
+  "the tier is decided by the RENDERER: a build-time renderer resolves out of " +
+  "the generated build map and a runtime one out of an installed extension, and " +
+  "the conformance harness admits neither. A stand-in renderer would prove " +
+  "nothing about which tier resolved, so nothing stands in: every assertion here " +
+  "runs unchanged the moment the harness mounts a resolved target (cinatra#3164 " +
+  "surface-readiness list).";
+
+/**
+ * The two loadable tiers, written in full and guarded on the mount.
+ *
+ * §III's rule for both is the same and is a NEGATIVE one — "no chip, no package
+ * identity, no provenance line, because a reader is deciding on the work, not on
+ * what drew it" — so what is asserted is that the target carries no floor
+ * diagnostic and names no package at all.
+ */
+function tierRendererDriver(surfaceId: string): SurfaceDriver {
+  return awaitingMount(
+    surfaceId,
+    {
+      path: HARNESS_PATH,
+      root: harnessRoot(surfaceId),
+      present: async (_page, root) => {
+        await expect(root).toBeVisible();
+        // A resolved renderer never falls to the floor…
+        await expect(root.locator("[data-review-target-floor]")).toHaveCount(0);
+        // …and says nothing about itself: no package identity anywhere in the
+        // target, which is what "no chip, no provenance line" comes to on screen.
+        await expect(root).not.toContainText(/@[a-z0-9-]+\//);
+      },
+      fields: {},
+      actions: {},
+      states: {},
+    },
+    AWAITING_RESOLVED_RENDERER,
+  );
+}
+
+const TIER_BUILD_TIME_DRIVER: SurfaceDriver = tierRendererDriver("tier-build-time");
+const TIER_RUNTIME_DRIVER: SurfaceDriver = tierRendererDriver("tier-runtime");
+
+/**
+ * The metadata floor — the tier this harness CAN mount, because the floor is the
+ * host's own arm of the shipped review-target bridge rather than a renderer it
+ * would have to resolve.
+ */
+const TIER_METADATA_FLOOR_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("tier-metadata-floor"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-review-target-floor="requires-rebuild"]')).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    // The floor IS the error reading of a target: the type's semantic renderer
+    // is runtime-installed and absent from this build.
+    error: async (_page, root) => {
+      const floor = root.locator('[data-review-target-floor="requires-rebuild"]');
+      await expect(floor).toBeVisible();
+      await expect(floor).toHaveAttribute("data-review-floor-package", "@acme/support");
+      await expect(floor).toHaveAttribute("data-review-floor-slot", "detail");
+      // THE SANITIZED ONE-LINE DIAGNOSTIC, composed by the shipped bridge —
+      // package, slot and reason, and nothing else (never a raw error or a
+      // manifest value). The drawing sets the same sentence in typographic
+      // quotes; the shipped line is the same words in straight ones.
+      await expect(floor.getByRole("status")).toHaveText(
+        'review target unavailable — package "@acme/support", slot "detail", reason "requires-rebuild"',
+      );
+      // "A target is never blank": the generic read-only view of the
+      // representation is drawn beneath the diagnostic.
+      await expect(
+        floor.locator('[data-conformance-id="review-target-floor-structured-data"]'),
+      ).toBeVisible();
+    },
+  },
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -3323,6 +3778,22 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
       SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
       suggestionChipDriver(fixture),
+    ]),
+  ),
+  // §III's three renderer tiers (cinatra#3164, epic #3155 W8). The metadata
+  // floor is mounted; the two loadable tiers are written in full and skip on the
+  // missing mount — the harness admits no resolved renderer.
+  "tier-metadata-floor": TIER_METADATA_FLOOR_DRIVER,
+  "tier-build-time": TIER_BUILD_TIME_DRIVER,
+  "tier-runtime": TIER_RUNTIME_DRIVER,
+  // §VII's verification card, §IV's review-state ladder and §VIII's decision
+  // floor — one factory per family over one fixture list, on the resolve seam.
+  ...Object.fromEntries(
+    LIFECYCLE_RESOLVE_FIXTURES.map((fixture: LifecycleResolveFixture) => [
+      fixture.mount,
+      fixture.kind === "verification_summary"
+        ? verificationDriver(fixture)
+        : reviewCardStateDriver(fixture),
     ]),
   ),
 };
