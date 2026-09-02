@@ -102,9 +102,10 @@ describe("each kind round-trips the body it is authorized to carry", () => {
       body: null,
     };
     const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", wire);
-    // The answer adds the one field the envelope itself does not carry: the
-    // server-minted island URL (cinatra#2754), `null` when none was sent.
-    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
+    // The answer adds the two fields the envelope itself does not carry: the
+    // server-minted island URL (cinatra#2754), and the kind's own aside
+    // (cinatra#3193) — `null` on a kind that declares none.
+    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -126,7 +127,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
+    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
   });
 
   it("verification_summary tells `null` advisory comments apart from none", () => {
@@ -164,7 +165,14 @@ describe("each kind round-trips the body it is authorized to carry", () => {
           "trigger_schedule_proposal",
           JSON.parse(JSON.stringify(wire)),
         ),
-      ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
+      ).toEqual({
+        ...wire,
+        islandSrc: null,
+        targetHeaders: null,
+        // The schedule kind declares an aside; an answer that carried no
+        // fired signal reads as "not fired" rather than refusing (#3193).
+        aside: { firedOnce: false },
+      });
     }
   });
 
@@ -413,12 +421,22 @@ describe("`absent` reveals nothing about the target", () => {
         // next to the collapse of every denial would be the oracle the collapse
         // exists to close.
         targetHeaders: null,
+        // And its kind's own aside with it (cinatra#3193), for the same reason.
+        aside: null,
       });
       // The body key may also be omitted entirely — same answer, byte for byte.
       expect(
         parseLifecycleResolveEnvelope(kind, { kind, state: { state: "absent" } }),
         kind,
-      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null, targetHeaders: null });
+      ).toEqual({
+        kind,
+        state: { state: "absent" },
+        body: null,
+        islandSrc: null,
+        targetHeaders: null,
+        // An absence carries nothing beside itself, on every kind.
+        aside: null,
+      });
     }
   });
 
@@ -571,7 +589,14 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
         state,
         body: null,
       }),
-    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null, targetHeaders: null });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state,
+      body: null,
+      islandSrc: null,
+      targetHeaders: null,
+      aside: null,
+    });
   });
 
   it("REFUSES an outcome this build cannot read, rather than dropping it", () => {
