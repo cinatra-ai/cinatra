@@ -129,7 +129,14 @@ describe("the waiting run's card", () => {
 
     const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
 
-    expect(card).toEqual({ state: { state: "absent" }, view: null, firedOnce: false });
+    expect(card).toEqual({
+      state: { state: "absent" },
+      view: null,
+      firedOnce: false,
+      // An absence carries nothing beside itself — no fired reading and no
+      // duration line either (cinatra#3174 fix leg 1).
+      durationCopy: null,
+    });
   });
 });
 

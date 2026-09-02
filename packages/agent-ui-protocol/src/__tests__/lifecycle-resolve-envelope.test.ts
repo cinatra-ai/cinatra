@@ -171,7 +171,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         targetHeaders: null,
         // The schedule kind declares an aside; an answer that carried no
         // fired signal reads as "not fired" rather than refusing (#3193).
-        aside: { firedOnce: false },
+        aside: { firedOnce: false, durationCopy: null },
       });
     }
   });

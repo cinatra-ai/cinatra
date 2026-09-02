@@ -1,5 +1,6 @@
 "use client";
 
+import { durationCopyFor } from "./duration-copy";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, type DefaultValues } from "react-hook-form";
@@ -83,12 +84,6 @@ export type TriggerScreenFormValues = FormValues;
 // Helpers
 // -----------------------------------------------------------------------------
 
-function formatRange(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} hr`;
-}
-
 /**
  * THE DURATION LINE READS ONLY WHAT THE DRAWING GIVES IT (cinatra#3182 item 5).
  *
@@ -103,12 +98,14 @@ function formatRange(seconds: number): string {
  * LINE: where the drawing gives nothing, nothing is drawn. Inventing an
  * estimate for a run with no history would be a worse answer than withholding
  * a line that has nothing to say.
+ *
+ * THE RENDERER ITSELF LIVES IN ITS OWN LEAF (cinatra#3174 fix leg 1). The
+ * schedule card in a conversation draws this same line, and its producer is a
+ * server module that cannot import this client component — so one pure leaf
+ * renders it for both surfaces rather than two copies rounding differently.
+ * Re-exported here under the name this module's own readers already use.
  */
-export function durationCopy(d: DurationEstimate): string {
-  const min = formatRange(d.prepMinSeconds + d.gatedMinSeconds);
-  const max = formatRange(d.prepMaxSeconds + d.gatedMaxSeconds);
-  return `About ${min} – ${max}.`;
-}
+export const durationCopy = (d: DurationEstimate): string => durationCopyFor(d);
 
 /**
  * THE OPTION ROW, AS THE DRAWING DRAWS IT (cinatra#3182 items 2, 3 and 4).

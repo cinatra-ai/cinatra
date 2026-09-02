@@ -1017,7 +1017,17 @@ function OrderedPartsSection({
           // leaves nothing for the wait correction below to match — which is
           // what keeps the two from ever composing into one line.
           for (const firedRunId of scheduleFiredRunIds) {
-            raw = correctRunStartSentenceForFiredSchedule({ text: raw, runId: firedRunId });
+            raw = correctRunStartSentenceForFiredSchedule({
+              text: raw,
+              runId: firedRunId,
+              // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
+              // whether a standing clause is provably this run's line.
+              scheduleRunIds: [...scheduleFiredRunIds, ...scheduleWaitRunIds],
+              // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
+              // schedule runs have ALL fired is corrected rather than left
+              // permanently saying that runs which have all started have not.
+              firedScheduleRunIds: scheduleFiredRunIds,
+            });
           }
           for (const waitingRunId of scheduleWaitRunIds) {
             raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
@@ -1803,7 +1813,16 @@ function FlatAssistantContent({
   let raw = streaming ? trimIncompleteEmbeds(message.content) : message.content;
   // Same order as the trace's own correction, for the same reason.
   for (const runId of scheduleSentences?.firedRunIds ?? []) {
-    raw = correctRunStartSentenceForFiredSchedule({ text: raw, runId });
+    raw = correctRunStartSentenceForFiredSchedule({
+      text: raw,
+      runId,
+      // Same knowledge, same reason as the trace's own correction.
+      scheduleRunIds: [
+        ...(scheduleSentences?.firedRunIds ?? []),
+        ...(scheduleSentences?.waitingRunIds ?? []),
+      ],
+      firedScheduleRunIds: scheduleSentences?.firedRunIds ?? [],
+    });
   }
   for (const runId of scheduleSentences?.waitingRunIds ?? []) {
     raw = correctRunStartSentenceForScheduleWait({ text: raw, runId });

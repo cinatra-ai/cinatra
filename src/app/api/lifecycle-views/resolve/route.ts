@@ -260,6 +260,13 @@ export async function POST(request: Request): Promise<Response> {
         // OMITTED UNLESS TRUE, so an ordinary settled card's answer is
         // byte-identical to the one this route sent before the reading existed.
         ...(card.firedOnce ? { firedOnce: true as const } : {}),
+        // THE DURATION LINE RIDES THE ANSWER TOO (cinatra#3174 fix leg 1), on
+        // the same seam and for the same reason. OMITTED where there is no
+        // estimate, so an answer for a template with no history is byte-
+        // identical to the one this route sent before the reading existed —
+        // and the card draws no line at all for it, which is what the drawing
+        // gives for a reading it does not draw.
+        ...(card.durationCopy === null ? {} : { durationCopy: card.durationCopy }),
       },
       { headers: { "Cache-Control": "no-store" } },
     );

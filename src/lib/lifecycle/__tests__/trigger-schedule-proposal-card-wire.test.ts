@@ -422,7 +422,11 @@ describe("cinatra#3174 - the fired signal reaches the card, on the answer", () =
       body: VERSION_ONE_SETTLED_BODY,
     });
     expect(answer).not.toBeNull();
-    expect(answer?.aside).toEqual({ firedOnce: false });
+    // `durationCopy` joined the aside in cinatra#3174 fix leg 1, on the same
+    // seam and for the same reason: the settled body is `.strict()` and
+    // version-1, so the estimated-duration line cannot be a key in it either.
+    // An answer that carries neither reads as "not fired, no estimate".
+    expect(answer?.aside).toEqual({ firedOnce: false, durationCopy: null });
   });
 
   it("the answer's aside is what carries the reading across the seam", async () => {
@@ -439,7 +443,7 @@ describe("cinatra#3174 - the fired signal reaches the card, on the answer", () =
       body: card.view,
       ...(card.firedOnce ? { firedOnce: true } : {}),
     });
-    expect(answer?.aside).toEqual({ firedOnce: true });
+    expect(answer?.aside).toEqual({ firedOnce: true, durationCopy: null });
     expect(answer?.body).toEqual(card.view);
   });
 

@@ -1265,7 +1265,24 @@ export type LifecycleCardAsideByKind = {
    * answer from a server that predates this reading carries no such key, and
    * the reader below reads that as "not fired" rather than refusing the answer.
    */
-  trigger_schedule_proposal: { firedOnce: boolean };
+  trigger_schedule_proposal: {
+    firedOnce: boolean;
+    /**
+     * THE ESTIMATED-DURATION LINE, ALREADY RENDERED (cinatra#3174 fix leg 1).
+     *
+     * Section VI draws the line as a duration in every one of its five
+     * pictures, and no producer ever asked for the estimate, so every settled
+     * card drew an invented "Unavailable." instead. The reading is here rather
+     * than in the settled body for exactly the reason `firedOnce` is: that body
+     * is a versioned `.strict()` object and a new key in it blanks the card on
+     * every bundle that has not reloaded.
+     *
+     * `null` — and an answer that carries no such key at all — means there is
+     * no estimate, which draws NO LINE. The drawing gives no empty reading and
+     * no wording for one.
+     */
+    durationCopy: string | null;
+  };
 };
 
 /**
@@ -1300,7 +1317,10 @@ const LIFECYCLE_RESOLVE_ASIDE_READERS: {
 } = {
   artifact_review_gate: null,
   verification_summary: null,
-  trigger_schedule_proposal: (record) => ({ firedOnce: record.firedOnce === true }),
+  trigger_schedule_proposal: (record) => ({
+    firedOnce: record.firedOnce === true,
+    durationCopy: typeof record.durationCopy === "string" ? record.durationCopy : null,
+  }),
 };
 
 /**

@@ -402,11 +402,17 @@ describe("cinatra#3174 — the schedule-wait line drops the status token", () =>
   });
 
   it("pins the sentence whole, so the shape cannot drift back", () => {
+    // THE DISPATCH HEAD WENT WITH THE TOKEN (cinatra#3174 fix leg 1). This pin
+    // used to keep the head — package chip, run token — on the theory that only
+    // the status word contradicted the card. The first graded proof round
+    // photographed the rest: two monospace code chips over a card section VI
+    // draws with plain prose above it, in every one of its five pictures.
     for (const status of SCHEDULE_WAIT) {
-      expect(describeStartedRun({ ...STARTED, status, moment: "schedule" })).toBe(
-        `Dispatched \`${STARTED.packageName}\` (runId: \`${STARTED.runId}\`). ` +
-          RUN_START_SCHEDULE_WAIT_CLAUSE,
-      );
+      const line = describeStartedRun({ ...STARTED, status, moment: "schedule" });
+      expect(line).toBe(RUN_START_SCHEDULE_WAIT_CLAUSE);
+      expect(line).not.toContain("`");
+      expect(line).not.toContain("runId");
+      expect(line).not.toContain("Dispatched");
     }
   });
 

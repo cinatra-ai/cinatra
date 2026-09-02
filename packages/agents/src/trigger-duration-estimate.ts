@@ -22,7 +22,7 @@
  *     form needs a stable degradation path and never crashes on UI render.
  */
 import "server-only";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { db } from "./db";
 import { agentRuns } from "./schema";
 
@@ -95,6 +95,20 @@ function normalizeConfidence(v: unknown): ConfidenceLevel {
  * timestamp is not instrumented yet. The approximation is documented in the
  * returned `notes` field so reviewers do not mistake it for a measured value.
  */
+/**
+ * THE SAMPLE IS BOUNDED (cinatra#3174 fix leg 1, converge round).
+ *
+ * The percentile helper above already states the range this tier operates on —
+ * "small sample sizes (3-50 runs) ... before history confidence saturates" —
+ * and the confidence buckets saturate at twelve. The read did not say so, and
+ * this estimate is now asked for by a card that RE-RESOLVES on every window
+ * focus, on every host that draws it, once per settled card in the transcript.
+ * An unbounded read of every completed run a template ever had is not work that
+ * road can carry, so the window is the most recent runs — which is also the
+ * window whose durations describe the agent as it runs today.
+ */
+const HISTORY_SAMPLE_LIMIT = 50;
+
 export async function estimateFromHistory(templateId: string): Promise<DurationEstimate | null> {
   const rows = await db
     .select({
@@ -102,7 +116,9 @@ export async function estimateFromHistory(templateId: string): Promise<DurationE
       completedAt: agentRuns.completedAt,
     })
     .from(agentRuns)
-    .where(and(eq(agentRuns.templateId, templateId), eq(agentRuns.status, "completed")));
+    .where(and(eq(agentRuns.templateId, templateId), eq(agentRuns.status, "completed")))
+    .orderBy(desc(agentRuns.completedAt))
+    .limit(HISTORY_SAMPLE_LIMIT);
 
   // Defensive: skip rows with missing timestamps and non-positive durations.
   const durationsSec: number[] = [];
