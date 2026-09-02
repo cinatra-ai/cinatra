@@ -93,6 +93,10 @@ type SetupCompletionWatcherProps = {
    *  mounts this watcher and threaded straight through to the panel, so the run
    *  page's FIRST paint of a run that already has a review draws that review. */
   initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  /** cinatra#3068 — the page's rail carries the run's input step, so the panel
+   *  draws no "Agentic Run Progress" heading over the form. Forwarded through
+   *  unchanged; see `AgenticRunPanel`'s own prop. */
+  inputStepInRail?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -112,6 +116,7 @@ export function SetupCompletionWatcher({
   runHasExecuted = false,
   triggerConfigured = false,
   initialStreamedText,
+  inputStepInRail = false,
   canRespondInWindow,
   templateId,
   initialHitlContext,
@@ -274,6 +279,7 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
+      inputStepInRail={inputStepInRail}
     />
   );
 }

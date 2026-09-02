@@ -10,27 +10,33 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
-  reviewRevisionMarker,
-  reviewTargetRowFacts,
-  reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
 /**
  * ONE review target panel (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
- * the REPRESENTATION SLOT into which the
- * artifact's type renderer mounts (fed host display-only props). Every target is
- * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
+ * the REPRESENTATION SLOT into which the artifact's type renderer mounts (fed
+ * host display-only props). Every target is type-agnostic: it keys on the OPAQUE
+ * host mount kind only (G1-clean).
  *
- * Conformance anchors (design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f): the panel is `review-target`; the
- * provenance region is `review-provenance-native` (build-time), `review-
- * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
- * §III axis derived from the mount kind — and there is NO region at all when the
- * host itself rendered a declared text form (cinatra#2931 W4): the three drawn
- * regions each state which package's renderer drew the work, or that nothing
- * did, and neither reading is true of the host's own markdown / plain-text
- * rendering. The reviewer gets the draft with nothing above it.
+ * NOTHING IS DRAWN ABOVE THE WORK ANY MORE. The panel used to open a
+ * renderer-provenance region over every rendered target — a type chip, a package
+ * chip for a runtime tier, and a mono `build-time · detail` line. §V of the
+ * ratified artifact-review drawing forbids it outright: the resolution "is not
+ * put on screen: a display shows the work and nothing about itself — no renderer
+ * name, no package identity, no provenance line". §V.1 repeats it for the display
+ * in the slot, and the lifecycle-cards drawing §III says it a third time.
+ *
+ * THE ISSUE QUOTED AN OLDER SENTENCE. cinatra#3141's own wording asks for a chip
+ * here, which is what the drawing said at the commit this repository's pin names.
+ * The drawing at its default branch is the text that governs the branch under
+ * proof, and it decides against the region.
+ *
+ * Conformance anchors: the panel is `review-target`; the ONE region left is
+ * `review-target-floor`, which the drawing keeps and requires — "the one that
+ * does speak on a surface is the floor, and only because a reader must be told a
+ * render failed".
  *
  * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
  * used to pass a generic "no type renderer resolved" card — a sentence, a table
@@ -58,11 +64,7 @@ export function ReviewTargetPanel({
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
-  const { target, props, mount } = prepared;
-  const title = props?.artifact.title ?? target.artifactId;
-  const objectType = props?.artifact.objectType ?? "";
-  const typeLabel = objectType ? reviewTypeLabel(objectType) : "Artifact";
-  const revision = reviewRevisionMarker(target.representationRevisionId);
+  const { props, mount } = prepared;
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
@@ -72,50 +74,24 @@ export function ReviewTargetPanel({
       data-field="name=type.displayName"
       className="overflow-hidden rounded-control border border-line bg-surface-strong"
     >
-      {/* §II — the immutable target header (inert). */}
-      <div className="border-b border-line px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-sans text-sm font-bold text-foreground">{title}</span>
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-xs font-semibold text-blue">
-            {typeLabel}
-          </span>
-        </div>
-        <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
-          {objectType ? <span>{objectType} · </span> : null}
-          <span title={revision.full}>revision {revision.short}</span>
-          <span className="text-mustard-ink"> · pinned</span>
-          {props ? (
-            <>
-              {" · "}
-              {reviewTargetRowFacts(props.artifact).join(" · ")}
-            </>
-          ) : null}
-        </p>
-      </div>
+      {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
+          The header used to be drawn here, inside the island document, which is
+          the one part of the review a reader only sees once an iframe has
+          painted: while the frame was still arriving the card drew a skeleton
+          over it, and past the island's bounded wait it drew a recovery panel,
+          and neither carried a title, a type or a revision. A pending gate on
+          the run page drew with no header at all.
 
-      {/* §V of the ratified drawing — THE RESOLUTION IS NOT PUT ON SCREEN.
-          Verbatim: "It is not put on screen: a display shows the work and
-          nothing about itself — no renderer name, no package identity, no
-          provenance line — because the reader is deciding on the work, not on
-          what drew it", and: "a build-time renderer and a runtime one are drawn
-          the same way, because nothing on either target says which resolved it
-          ... The one that does speak on a surface is the floor, and only because
-          a reader must be told a render failed."
-
-          An earlier ratified reading of this same section said the opposite —
-          "a build-time renderer ... carries the extension's indigo chip; a
-          runtime renderer ... carries the same chip plus its package identity"
-          — and this panel was built to it. The drawing has since replaced that
-          paragraph, and the markdown display's own section repeats the current
-          rule for every surface it is drawn on: "no renderer chip and no
-          provenance line, here or on any other surface this display is drawn".
-
-          The host-derived provenance itself is UNCHANGED and still recorded with
-          the decision (`provenanceFromResolvedMount`); what changed is that the
-          reviewer is no longer shown it. Only the floor still speaks, and only
-          to say a render failed.
-
-          The branch below has already narrowed to the floor reading, so its
+          `ReviewTargetHeader`, in the card, draws it in every one of those
+          states — so what stays here is the part that genuinely needs the
+          server: the provenance reading and the representation itself. Exactly
+          one header per pinned target, and the card is the only place one can
+          come from. */}
+      {/* §V — THE FLOOR'S REGION, AND NO OTHER. A target that rendered says
+          nothing about what rendered it; a target that did NOT render is the one
+          reading the drawing keeps on screen, over the generic read-only view of
+          the representation. */}
+      {/* The branch below has already narrowed to the floor reading, so its
           anchor is written out rather than read back off the model's map: an id
           that reaches the screen only through a mapping literal is one the
           conformance suite cannot tell apart from an id that never reaches it
@@ -137,27 +113,11 @@ export function ReviewTargetPanel({
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context.
 
-          WHERE THE TWO RENDERER-TIER READINGS ARE ANCHORED. §V's three example
-          readings put their conformance id on the WHOLE TARGET, not on a strip:
-          "Example — build-time renderer" and "Example — runtime renderer
-          (marketplace-installed)" each draw the target's own bordered card with
-          the work inside it and NOTHING above it, and only "Example — the
-          generic floor (never blank)" draws a chip row. So the tier anchors
-          belong on the slot that holds the drawn work, and the floor anchor
-          stays on the row that speaks. Anchoring both tiers on the removed strip
-          would have left them unrendered while the conformance suite still read
-          them off the model's mapping literal and called them drawn. */}
-      <div
-        className="p-4"
-        data-review-representation-slot=""
-        data-conformance-id={
-          provenanceConformanceId === "review-provenance-marketplace"
-            ? "review-provenance-marketplace"
-            : provenanceConformanceId === "review-provenance-native"
-              ? "review-provenance-native"
-              : undefined
-        }
-      >
+          NO TIER ANCHOR RIDES ON THIS SLOT. The model's provenance union names
+          the floor reading and nothing else, so the two renderer-tier ids are
+          not values this surface can hold; a keyed attribute for them would be
+          unreachable code that never reaches the screen. */}
+      <div className="p-4" data-review-representation-slot="">
         <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>

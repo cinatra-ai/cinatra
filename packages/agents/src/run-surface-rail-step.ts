@@ -26,7 +26,26 @@ import type { ReactNode } from "react";
  * the run's own detail (its steps and their progress, the gate the review page
  * opened on).
  */
-export type RunStepSelection = "recommendation" | "schedule" | "review" | "detail";
+/**
+ * A step that the rail NAMES with a word of its own: the three the ratified
+ * drawing's rail carries, whose labels live in `run-surface-rail-labels.ts`.
+ */
+export type RunSurfaceRailLabelledKey = "recommendation" | "schedule" | "review";
+
+/**
+ * THE RUN'S OWN INPUT FORM, AS A STEP (cinatra#3068).
+ *
+ * Indexed rather than named, because an agent may ask several input forms in
+ * sequence and each one is its own step; the label is the form's own declared
+ * title, so it is carried by the step rather than looked up from the three
+ * fixed words above.
+ */
+export type RunInputStepKey = `input:${number}`;
+
+export type RunStepSelection =
+  | RunSurfaceRailLabelledKey
+  | RunInputStepKey
+  | "detail";
 
 /** A step that heads the rail: its row, and the surface it opens onto. */
 export type RunSurfaceRailStep = {
