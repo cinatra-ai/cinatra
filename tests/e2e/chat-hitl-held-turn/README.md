@@ -53,6 +53,50 @@ A fresh database is `node scripts/apply-public-schema.mjs` plus `pnpm auth:migra
 materialized at boot from the companion extension repos, and without them the app
 does not boot at all.
 
+## The boot gate, and why `webServer.url` does not poll the app
+
+`webServer` does not run `pnpm dev` directly. It runs
+`scripts/ci/dev-boot-route-gate.mjs`, which runs `pnpm dev` as its own child with
+the environment it inherited, waits for `/api/health` exactly as the old
+`webServer.url` poll did, and only then reports the server ready — on a small
+HTTP listener of its own (`E2E_CHAT_HITL_GATE_PORT`, the app port plus 100),
+which is what `webServer.url` now polls.
+
+It exists because `/api/health` answering was never the claim this flow needs.
+cinatra#3056 established that first and added the bounded readiness probe in
+`auth.setup.ts`; cinatra#3194 is what was left after it. On roughly one boot in
+twenty-five the development runtime answers `/api/health` normally and then
+serves its *own not-found document* for `POST /api/auth/sign-up/email` in
+110-400 ms, every time, for the whole 120 s readiness bound — the route is
+**absent for that boot**, not slow (its measured cold compile is 11.7-21.3 s).
+The probe can report that; it cannot mend it, because by then the server is the
+suite's only server.
+
+The gate probes the two routes the setup probes, with the same side-effect-free
+empty-body requests and **the same 120 s bound** — that bound is not widened
+here or anywhere, because the record proves the route is absent rather than slow.
+If the bound is spent on the runtime's own not-found document, the gate replaces
+the boot with a fresh one (one replacement, then it reports the unrouted boot and
+fails). It never proxies or touches a request the suite makes: the application
+keeps its own port and answers the tests directly.
+
+### Measuring it
+
+`scripts/ci/dev-boot-route-race-repro.mjs` is the constrained cold-boot loop that
+produced the evidence. It removes the build cache before every boot, starts the
+server niced (and pinned with `taskset` where the platform has it — it records
+which constraints it *actually* applied), and probes the routes as the very first
+request after the health poll, with no warm-up:
+
+```
+node scripts/ci/dev-boot-route-race-repro.mjs \
+  --iterations 10 --app-url http://localhost:3126 --out /tmp/3194-boots
+```
+
+It writes `boots.json` plus one dev-server log per boot, and exits non-zero
+unless every boot registered every route — so it doubles as the ten-consecutive-
+boots check rather than only as a report.
+
 ## Which agent, and why it is the only one
 
 `@cinatra-ai/lint-policy-agent`. Three constraints leave exactly one candidate, and
