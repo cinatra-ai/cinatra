@@ -122,6 +122,15 @@ describe("buildSkillIdVendorNames", () => {
 // none. The omission is the package's, and the seam below is the diagnostic
 // that says so rather than leaving the reading ambiguous.
 //
+// WHERE THE OMISSION WAS CLOSED. It was closed in the packages, which is where
+// the diagnostic said it lay: all four now declare `cinatra.vendor` in their own
+// manifests, and the reference pinned for each in this repository is raised to
+// the commit that carries the declaration. That they reach BOTH maps with that
+// identity is pinned on the real data, in
+// `graded-skill-packages-declare-their-vendor.test.ts`. The arms below stay on
+// synthetic descriptors on purpose: they pin the SEAM's behaviour on either side
+// of a declaration, which must hold whatever any shipped package declares.
+//
 // This block pins that diagnostic. It does NOT license a stand-in: a package
 // that declares neither tier still gets no entry, and the npm scope segment is
 // never pressed into service as a name.

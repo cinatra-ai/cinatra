@@ -87,7 +87,7 @@ const SETTLED: RunRecommendationDecision = {
   candidates: CANDIDATES,
 };
 
-function mount(decision: RunRecommendationDecision) {
+function mount(decision: RunRecommendationDecision, candidates = CANDIDATES) {
   return render(
     <LifecycleCardSurfaceProvider host="run_card">
       <RunRecommendationChipRow
@@ -95,7 +95,7 @@ function mount(decision: RunRecommendationDecision) {
         agentPackageName="@cinatra-ai/blog-draft-writer-agent"
         decision={decision}
         holdRef="hold-ref-3047"
-        initialRecommendations={CANDIDATES.map((c) => ({
+        initialRecommendations={candidates.map((c) => ({
           ...c,
           score: 0.8,
           rank: 1,
@@ -199,6 +199,51 @@ describe("the live pill's label", () => {
     expect(pillFor(container, REAL_SKILL_ID).getAttribute("data-skills-step-vendor-state")).toBe(
       "known",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE FOUR GRADED PACKAGES NOW HAVE A VENDOR TO DRAW (cinatra#3062).
+//
+// The arms above measure the RENDERING with a supplied vendor value. The four
+// packages the fourth proof round graded declared no vendor identity of their
+// own, so the row above them drew no by-clause — correctly, and the omission was
+// the packages'. Each of the four now declares one, and the reference pinned for
+// it here is raised to the commit carrying the declaration, so the identity
+// reaches the vendor map: that the map now holds "Cinatra" for exactly these
+// four ids is pinned on the resolving side, in
+// `packages/skills/src/graded-skill-packages-declare-their-vendor.test.ts`.
+//
+// This arm closes the loop on the drawing side: fed the id and the vendor those
+// four now resolve to, the pill draws the by-clause the drawing asks for.
+describe("a graded package that now declares a vendor", () => {
+  const GRADED_SKILL_ID = "@cinatra-ai/blog-writing-skill:blog-writing";
+  const GRADED_SKILL_NAME = "Blog Writing Skill";
+  const GRADED_VENDOR = "Cinatra";
+
+  it("draws the by-clause the fourth round found missing", () => {
+    const { container } = mount(HELD, [
+      {
+        skillId: GRADED_SKILL_ID,
+        name: GRADED_SKILL_NAME,
+        vendorName: GRADED_VENDOR,
+        skillRevisionId: "blog-writing@1",
+        recommended: true,
+      },
+    ]);
+    const pill = pillFor(container, GRADED_SKILL_ID);
+    const vendor = pill.querySelector<HTMLElement>("[data-skills-step-vendor]")!;
+    expect(vendor.textContent).toBe(`${VENDOR_BY_CONNECTIVE} ${GRADED_VENDOR}`);
+    expect(vendor.className).toContain("text-muted-foreground");
+    expect(pill.getAttribute("data-skills-step-vendor-state")).toBe("known");
+    // Name then vendor, on one line, and nothing else on the pill.
+    expect(pill.textContent).toBe(
+      `${GRADED_SKILL_NAME}${VENDOR_BY_CONNECTIVE} ${GRADED_VENDOR}`,
+    );
+    // The checkbox is still named by the skill alone.
+    const box = pill.querySelector<HTMLElement>('[role="checkbox"]')!;
+    const label = pill.querySelector(`#${CSS.escape(box.getAttribute("aria-labelledby")!)}`)!;
+    expect(label.textContent).toBe(GRADED_SKILL_NAME);
   });
 });
 

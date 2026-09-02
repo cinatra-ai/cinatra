@@ -64,8 +64,19 @@ import {
   type RunRecommendationDecision,
 } from "../run-recommendation-chip-row";
 
-// The four skills the recorded pass of this card put on both hosts: every one of
-// them is owned by a package that declares a display name and NO vendor.
+// The four skills the recorded pass of this card put on both hosts, each carried
+// here with NO vendor.
+//
+// The absence is the FIXTURE'S, and it is deliberate: what this file measures is
+// the row's geometry, and its third invariant is that a pill whose vendor does
+// not resolve draws no placeholder standing in for one. Feeding the row a
+// vendorless candidate is how that invariant is put under load, so the fixture
+// keeps `vendorName: null` whatever the shipped packages declare. It is NOT a
+// claim about these four packages: they declare their vendor identity in their
+// own manifests, which is pinned where that identity is resolved, in
+// `packages/skills/src/graded-skill-packages-declare-their-vendor.test.ts`, and
+// drawn from a candidate carrying it in
+// `skills-step-pill-names-its-vendor.test.tsx`.
 const CANDIDATES = [
   { skillId: "@cinatra-ai/blog-image-matcher-skill:blog-image-matcher", name: "Blog Image Matcher Skill" },
   { skillId: "@cinatra-ai/blog-writing-skill:blog-writing", name: "Blog Writing Skill" },
