@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/blog-draft-writer-agent",
       "repo": "cinatra-ai/blog-draft-writer-agent",
-      "resolvedSha": "03a27f524d59f90f635ee98c1b5900c4bc9f7f6e"
+      "resolvedSha": "666e2dc4d8bcf9dee022daf485c734f78cab9b6a"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-artifact",
@@ -45,7 +45,7 @@
     {
       "packageName": "@cinatra-ai/blog-idea-generator-agent",
       "repo": "cinatra-ai/blog-idea-generator-agent",
-      "resolvedSha": "ac021358c3c17ae457db1e54af8b7701c4b0d9d6"
+      "resolvedSha": "377ff00e5d5f50b33df38a52ba257a7aa6d5518b"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-matcher-skill",
@@ -70,17 +70,17 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-publish-agent",
       "repo": "cinatra-ai/blog-linkedin-publish-agent",
-      "resolvedSha": "648ff9dbd46a583332d912875d99a055a5415e33"
+      "resolvedSha": "9e4dbd197210389a786434af4a1df80e9b6f5181"
     },
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
       "repo": "cinatra-ai/blog-linkedin-writer-agent",
-      "resolvedSha": "bb293c910923fb6827d9f7e1bf339b747563a872"
+      "resolvedSha": "f271e9ba17494ebd594262b4906f3f8700b34a5c"
     },
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "fff78d38a756dc901df06f11bf39be935fab031f"
+      "resolvedSha": "f8971d50e992adad83604d14888b179d70978ff2"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -95,7 +95,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "1bd52a31b1dd77ef71587135e85e296629712cfd"
+      "resolvedSha": "d14bb8adf79bd92ddcb574d2377a92492b06ed3a"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
