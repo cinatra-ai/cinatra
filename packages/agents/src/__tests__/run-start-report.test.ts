@@ -134,14 +134,20 @@ describe("the dispatch line says what is TRUE at the moment it is composed", () 
       const report = describeStartedRun({ ...STARTED, status });
       expect(report).not.toContain(RUN_START_STARTED_CLAUSE);
     }
-    // THE STATUS TOKEN, WHERE THE LINE STILL CARRIES ONE (narrowed by
-    // cinatra#3174). What #3147 fixed was the CLAUSE — a pre-running status
-    // described with a sentence claiming a start — and that half is asserted
-    // over all five readings above. The token beside it was never this test's
-    // subject, and the two schedule-wait readings have since dropped their whole
-    // parenthetical because the card's own section draws those turns in plain
-    // prose. Every reading that still prints one is still checked here.
-    for (const status of ["queued", "pending_approval", "pending_input"]) {
+    // THE STATUS TOKEN, OVER ALL FIVE READINGS. cinatra#3174 drops this token
+    // for the schedule-wait reading, and that narrowing is keyed on the
+    // schedule MOMENT rather than on a status — so every one of these five,
+    // reached the ordinary way with no moment named, still prints its token and
+    // is still this loop's subject. None of #3147's coverage is given up to buy
+    // the plain-prose line; the reading that drops the token is a run standing
+    // AT its schedule moment, and it is pinned in its own section below.
+    for (const status of [
+      "queued",
+      "pending_trigger",
+      "pending_approval",
+      "pending_input",
+      "armed",
+    ]) {
       expect(describeStartedRun({ ...STARTED, status })).toContain(`status: \`${status}\``);
     }
   });
@@ -354,8 +360,9 @@ describe("what a start that threw answers with", () => {
 // The drawing's own example turns for this card carry plain assistant prose —
 // "The card is the scheduling step, in the turn — and it is the only thing
 // drawn" — and not one of them prints a machine token beside the sentence. For
-// that reading the line drops the parenthetical entirely: no `runId:` token and
-// no `status:` token.
+// that reading the line drops the `status:` token. The run id stays, and the
+// paragraph WHERE THE CRITERION STOPS below is why — the sentence has to stay
+// findable by the correction that re-mints it.
 //
 // WHICH READING, EXACTLY. Not a status: the reading `runIsWaitingForItsSchedule`
 // names — a run standing AT its schedule moment. The immediate-trigger release

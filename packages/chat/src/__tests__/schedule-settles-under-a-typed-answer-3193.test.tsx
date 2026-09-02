@@ -354,21 +354,28 @@ describe("the schedule settles after the screen was drawn (cinatra#3193)", () =>
         if (container.querySelector(SCREEN) === null) throw new Error("the screen never drew");
       });
 
+      // EVERY FRAME THE WAIT PASSES THROUGH IS READ, not only the one the new
+      // placement first exists on. A card that had to re-read its own authority
+      // before it could draw again leaves the turn with no screen at all for as
+      // long as that read is in flight, and the wait below runs straight through
+      // those frames — so the low-water mark is what discriminates, and a single
+      // reading taken after the wait settled would not.
+      const screensSeen: number[] = [];
       runReading.current = RUN_PAST_SCHEDULE;
       cardReading.current = SETTLED_ENVELOPE;
       await waitFor(
         () => {
           window.dispatchEvent(new Event("focus"));
+          screensSeen.push(container.querySelectorAll(SCREEN).length);
           if (container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`) === null) {
             throw new Error("the turn never elected the settled shape");
           }
         },
         { timeout: 20_000 },
       );
-      // The screen the person was reading is still on screen ON THE SAME FRAME
-      // the placement changed: a card that had to re-read its own authority
-      // before it could draw again would answer zero here.
       expect(container.querySelectorAll(SCREEN).length).toBe(1);
+      expect(screensSeen.length).toBeGreaterThan(0);
+      expect(Math.min(...screensSeen)).toBe(1);
     },
     45_000,
   );
