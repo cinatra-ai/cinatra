@@ -19,9 +19,12 @@
 
 import { describe, expect, it } from "vitest";
 
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
+
 import type { LifecycleCardKind } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 import { projectDurableAssistantTurn } from "@/lib/assistant-thread-store";
+import { decodeScheduleRunRef, encodeScheduleRunRef } from "../lifecycle-card-ref";
 import {
   buildInjectedLifecyclePart,
   contentWithInjectedPart,
@@ -31,6 +34,15 @@ import {
 } from "../lifecycle-run-outbox";
 
 const RUN_ID = "run-77";
+/**
+ * The reference the executor mints when it opens the schedule moment
+ * (cinatra#3044) — the RUN-SCOPED schedule ref, from the shipped codec,
+ * rather than a literal this file made up. What the outbox writes has to be
+ * something a resolver can turn back into a run; a fixture that invented one
+ * could pass while every real conversation stayed empty, which is exactly
+ * what happened.
+ */
+const SCHEDULE_REF = encodeScheduleRunRef({ runId: RUN_ID })!;
 const DISPATCH_CALL = "call-agent-run-1";
 
 /** A turn that dispatched the run and said nothing else. */
@@ -63,7 +75,7 @@ const KINDS: Array<{
   cardRef: string;
 }> = [
   // The schedule, once Confirm created the run that carries it.
-  { moment: "schedule", cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
+  { moment: "schedule", cardKind: "trigger_schedule_proposal", cardRef: SCHEDULE_REF },
   // The audit — the one moment that does not park the run, and still a card.
   { moment: "audit", cardKind: "verification_summary", cardRef: "verif-ref-1" },
 ];
@@ -161,15 +173,21 @@ describe("a run a person starts from a conversation reaches the schedule moment 
     // moment with its card in that conversation, never a silent wait".
     const turn = { id: "turn-1", content: runTurn() };
     const injection = injectionForTurn(
-      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: SCHEDULE_REF },
       turn,
     );
     expect(injection).not.toBeNull();
     const projected = projectDurableAssistantTurn("turn-1", injection!.content)!;
     const call = (projected.parts ?? []).find((p) => p.id === DISPATCH_CALL)!;
     expect(call.views).toEqual([
-      { viewType: "trigger_schedule_proposal", schemaVersion: 1, ref: "sched-ref-1" },
+      { viewType: "trigger_schedule_proposal", schemaVersion: 1, ref: SCHEDULE_REF },
     ]);
+    // …AND THE CARD IN THAT CONVERSATION ADDRESSES THIS RUN (cinatra#3044).
+    // This fixture used to pass a reference it had invented — a literal string
+    // no resolver could decode — so it stayed green while the surface was empty:
+    // it asked what the turn CARRIES and never what the card would RESOLVE to.
+    // The reference is the run-scoped one the executor mints, and it decodes.
+    expect(decodeScheduleRunRef(String(call.views![0].ref))).toEqual({ runId: RUN_ID });
   });
 });
 
@@ -180,23 +198,23 @@ describe("a run a person starts from a conversation reaches the schedule moment 
 describe("writing the same card twice", () => {
   it("is refused — a moment stated again does not give the person a second card", () => {
     const first = injectionForTurn(
-      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: SCHEDULE_REF },
       { id: "turn-1", content: runTurn() },
     )!;
     expect(
       injectionForTurn(
-        { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
+        { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: SCHEDULE_REF },
         { id: "turn-1", content: first.content },
       ),
     ).toBeNull();
     expect(
-      turnAlreadyCarriesCard(first.content, "trigger_schedule_proposal", "sched-ref-1"),
+      turnAlreadyCarriesCard(first.content, "trigger_schedule_proposal", SCHEDULE_REF),
     ).toBe(true);
   });
 
   it("still writes the SAME KIND at a different moment", () => {
     const first = injectionForTurn(
-      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: "sched-ref-1" },
+      { runId: RUN_ID, cardKind: "trigger_schedule_proposal", cardRef: SCHEDULE_REF },
       { id: "turn-1", content: runTurn() },
     )!;
     const second = injectionForTurn(
