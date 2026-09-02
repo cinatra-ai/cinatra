@@ -469,8 +469,22 @@ describe("runRegistryPollJob — 5xx / network failure", () => {
 
   it("doubles the backoff on consecutive 5xx responses (60s after a prior 30s window)", async () => {
     // Simulate "second 5xx attempt" by pre-populating lastPolledAt 30s before nextPollAt.
-    const lastPolledAt = new Date(Date.now() - 60_000).toISOString();
-    const nextPollAt = new Date(Date.now() - 30_000).toISOString();
+    //
+    // BOTH timestamps come off ONE reading of the clock. The handler's
+    // `deriveNext5xxBackoffMs` never asks the clock anything: it re-derives
+    // the previous window by subtracting these two strings from each other
+    // and doubles it. So the
+    // window this case claims to have set up is literally the difference
+    // between the two readings taken here — and two separate `Date.now()`
+    // calls are not one instant. A scheduler tick landing between them makes
+    // the window 30_001 ms rather than 30_000, the handler faithfully doubles
+    // the window it was actually given, and the case fails at 60_002. That is
+    // the shape this test failed in on a loaded runner, and it is a defect in
+    // the fixture, not in the formula. One reading, shared, states the 30s
+    // window exactly instead of betting that the clock stands still.
+    const now = Date.now();
+    const lastPolledAt = new Date(now - 60_000).toISOString();
+    const nextPollAt = new Date(now - 30_000).toISOString();
     vi.mocked(readInstanceIdentity).mockReturnValue(
       makeIdentityWithRemote({ lastPolledAt, nextPollAt }) as never,
     );
@@ -482,8 +496,13 @@ describe("runRegistryPollJob — 5xx / network failure", () => {
   });
 
   it("caps the backoff at BACKOFF_CAP_MS (5min) when previous delta was already at the cap", async () => {
-    const lastPolledAt = new Date(Date.now() - 600_000).toISOString();
-    const nextPollAt = new Date(Date.now() - 300_000).toISOString(); // delta = 5min
+    // One reading for both, for the same reason as the doubling case above.
+    // This case survives a tick today only by luck — a 300_001 ms window is
+    // still >= the cap, so it still saturates — but the construct is the same
+    // bet, and it stops being a lucky one the moment the cap moves.
+    const now = Date.now();
+    const lastPolledAt = new Date(now - 600_000).toISOString();
+    const nextPollAt = new Date(now - 300_000).toISOString(); // delta = 5min
     vi.mocked(readInstanceIdentity).mockReturnValue(
       makeIdentityWithRemote({ lastPolledAt, nextPollAt }) as never,
     );
