@@ -234,6 +234,23 @@ export type OrchestratorStepperPanelProps = {
    * kept current by the same shared reader.
    */
   initialReviewGate?: RunReviewSlot | null;
+  /**
+   * DOES THE PAGE'S RAIL ALREADY CARRY THE RUN'S INPUT STEP? (cinatra#3068)
+   *
+   * The step-less branch below returns a section titled "Agentic Run Progress"
+   * with a status badge and no step list. Over the run's FIRST moment — the
+   * agent's own input form, before anything has run — that is a progress panel
+   * over a run with no progress, and it is the one moment of the run that did
+   * not read as a step. When the screen has given that moment a rail entry of
+   * its own, the panel hands the stage card over BARE, exactly as `embedMode`
+   * does: the card is the step's screen in the detail column, under the rail
+   * that names it.
+   *
+   * Absent ⇒ the section, its title and its badge are drawn exactly as before,
+   * which keeps every other host — the chat thread's run card among them —
+   * byte-identical.
+   */
+  inputStepInRail?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -1528,6 +1545,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     reviewHrefBase = "",
     initialReviewGate,
     canRespondInWindow,
+    inputStepInRail = false,
   } = props;
 
   const router = useRouter();
@@ -2145,6 +2163,14 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   }
 
   if (stepperSteps.length === 0) {
+    // THE RUN'S FIRST STEP IS A STEP (cinatra#3068). The page's rail names this
+    // moment now, so the section that used to stand in for a step list retires
+    // and the stage card IS the step's screen — the same handover `embedMode`
+    // makes above, for the same reason: the chrome belongs to whoever draws the
+    // frame, and here that is the rail beside this column.
+    if (inputStepInRail) {
+      return <>{stageCard}</>;
+    }
     return (
       <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
         <div className="flex items-center justify-between">

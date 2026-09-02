@@ -771,13 +771,13 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
       "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
     );
     expect(message).toContain(
-      "52615494243bb89764809afd8c8b8033b4722c0a1d1b6726452787973b490ecd",
+      "b26135882216c0eeb7004bd74ea4017cfd0ea775b13785e7e60e754d87b20fb3",
     );
     expect(message).toContain(
       "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e",
     );
     expect(message).toContain(
-      "sha256:617b86b316e3835c385ebb86e10ba250c6db03c486d3d0b9eccfcdcb780a476c",
+      "sha256:b99de5a3c18442333c51bf0a6ee583c6dab55ec4a0646052d5d36ce7aad9090c",
     );
     expect(message).toContain("drift");
     expect(message).toContain(MOVE_RULE);
