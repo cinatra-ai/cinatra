@@ -42,13 +42,27 @@ describe("the trail's leaf is the sub-route's own word, name published or not", 
     ["permissions", "Permissions"],
     ["optimization", "Optimization"],
     ["skills", "Skills"],
-    ["review", "Review"],
   ])("%s reads %s", (subRoute, expected) => {
     const trail = buildBreadcrumbTrail(`${INSTANCE_PATH}/${subRoute}`, {
       contributions: PUBLISHED,
     });
     expect(trail.at(-1)?.label).toBe(expected);
     expect(documentTitleLabelFromTrail(trail)).toBe(expected);
+  });
+
+  // RE-PINNED (cinatra#2934, fix leg 10). The review is the ONE sub-route that
+  // draws no crumb of its own: the ratified components drawing gives a review no
+  // trail outside its run's route, so the trail's leaf — and therefore the tab —
+  // is the RUN, not the word "Review".
+  it("the review draws no crumb of its own: the leaf is the run, and so is the tab", () => {
+    const trail = buildBreadcrumbTrail(`${INSTANCE_PATH}/review/task-1`, {
+      contributions: PUBLISHED,
+    });
+    expect(trail.map((c) => c.label)).toEqual([
+      "Agents",
+      "Blog Pipeline Agent (1)",
+    ]);
+    expect(documentTitleLabelFromTrail(trail)).toBe("Blog Pipeline Agent (1)");
   });
 
   it("and on the run's own page the leaf is the published run name", () => {

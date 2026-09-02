@@ -123,8 +123,16 @@ export function reviewSettledCopy(
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
+      // NO CARD NAMES WHO REQUESTED CHANGES (cinatra#2934, fix leg 10). The
+      // ratified review drawing closes §VI's change-request paragraph with it:
+      // the review "draws no card that names who requested changes: there is no
+      // 'Changes requested by …' card on this surface". Requesting changes is a
+      // conversation carried in the run — the request and the returned revision
+      // stay there, in order — not a card with a person's name on it. The
+      // outcome is still named, because approve, reject and changes-requested
+      // are three readings and are held distinct; only the person is dropped.
       return {
-        title: `Changes requested${by}`,
+        title: "Changes requested",
         body: "The gate is resolved and the reviewed work has been turned back for repair.",
       };
   }

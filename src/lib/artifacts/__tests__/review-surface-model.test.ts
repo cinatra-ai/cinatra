@@ -315,9 +315,23 @@ describe("the settled copy names the outcome and its decider", () => {
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
       "Rejected by Dana Okonkwo",
     );
+  });
+
+  // RE-PINNED (cinatra#2934, fix leg 10). The ratified review drawing closes the
+  // change-request paragraph with the sentence this pins: the review "draws no
+  // card that names who requested changes: there is no 'Changes requested by …'
+  // card on this surface". A change request is a conversation carried in the run
+  // (§VI), not a card with a person's name on it.
+  it("never names who requested changes — that card does not exist on this surface", () => {
     expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
-      "Changes requested by Dana Okonkwo",
+      "Changes requested",
     );
+    expect(
+      reviewSettledCopy("changes_requested", "Dana Okonkwo").title,
+    ).not.toContain("Dana Okonkwo");
+    expect(
+      reviewSettledCopy("changes_requested", "Dana Okonkwo").body,
+    ).not.toContain("Dana Okonkwo");
   });
 
   it("reads as a finished sentence with no decider at all", () => {

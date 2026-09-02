@@ -277,6 +277,36 @@ const AGENT_INSTANCE_SUBROUTE_LABELS: Readonly<Record<string, string>> = {
   trigger: "Schedule",
 };
 
+// THE REVIEW HAS NO CRUMB OF ITS OWN (cinatra#2934, fix leg 10).
+//
+// The ratified components drawing fixes the trail as the NAVIGATION HIERARCHY —
+// "the route the page sits on, not the thing the page happens to be about" — and
+// draws the consequence for this one sub-route in as many words: a review has no
+// trail of its own, because "there is no review page view outside the route of
+// the agent's run", so "Agents > Agent run > Review" is "not a possible
+// breadcrumb". The review is read on its run's own route, under that run's
+// trail.
+//
+// So the review segment adds NOTHING, and the trail above a review is the run's:
+// "Agents > <the run's name>". The name is the run's own, published by the route
+// after its access checks over the one crumb channel — the same identity the run
+// page's tabs publish.
+const AGENT_INSTANCE_SUBROUTES_WITHOUT_CRUMB: ReadonlySet<string> = new Set([
+  "review",
+]);
+
+/**
+ * The crumb a run's sub-route contributes to the trail, or `null` where that
+ * sub-route draws none of its own. Exported because the tab title is derived
+ * from the same trail: a sub-route that adds no crumb leaves the RUN as the
+ * trail's leaf, and the tab mirrors it.
+ */
+export function agentInstanceSubRouteCrumbLabel(segment: string): string | null {
+  const subRoute = safelyDecodePathSegment(segment);
+  if (AGENT_INSTANCE_SUBROUTES_WITHOUT_CRUMB.has(subRoute)) return null;
+  return AGENT_INSTANCE_SUBROUTE_LABELS[subRoute] ?? humanizePathSegment(segment);
+}
+
 // THE UNRESOLVED AGENT-INSTANCE CRUMB (cinatra#2934, the sixth graded proof
 // set).
 //
@@ -297,15 +327,45 @@ const AGENT_INSTANCE_SUBROUTE_LABELS: Readonly<Record<string, string>> = {
 // gap, not a disclosure.
 const UNRESOLVED_AGENT_INSTANCE_LABEL = "Agent run";
 
+// A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 10).
+//
+// The ratified drawing: "If a page is not found, then that page has no hierarchy
+// — and so no trail to draw. Its breadcrumb reads 'Page not found' and nothing
+// else: one crumb, current, with no parent above it. A trail like 'Agents >
+// Agent run' over a page that was not found makes no sense — it names a place
+// the reader never reached."
+//
+// The 404 boundary renders at the pathname the reader TYPED, so the composer
+// cannot tell the two apart on its own: the boundary says so (it already clears
+// the parked crumb labels on the same bus), and this reading short-circuits
+// every other rule below — including the entity carve-out, which "reads on the
+// readings that still draw a trail" and this one draws none.
+export const PAGE_NOT_FOUND_CRUMB_LABEL = "Page not found";
+
 export function buildBreadcrumbTrail(
   pathname: string,
   opts: {
     pageTitle?: { title: string; pathname: string } | null;
     chatThreadTitle?: string | null;
     contributions?: readonly CrumbContribution[];
+    /** The route answered NOT FOUND — the page has no hierarchy, so it has no
+     *  trail (see `PAGE_NOT_FOUND_CRUMB_LABEL`). */
+    notFound?: boolean;
   } = {},
 ): BreadcrumbCrumb[] {
-  const { pageTitle = null, chatThreadTitle = null, contributions = [] } = opts;
+  const {
+    pageTitle = null,
+    chatThreadTitle = null,
+    contributions = [],
+    notFound = false,
+  } = opts;
+  // The one crumb, current, with no parent above it. Before every other rule:
+  // a page that was not found has no ancestors to draw.
+  if (notFound) {
+    return [
+      { label: PAGE_NOT_FOUND_CRUMB_LABEL, href: pathname, nonNavigable: true },
+    ];
+  }
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return [{ label: "Personal", href: "/personal" }];
 
@@ -362,13 +422,12 @@ export function buildBreadcrumbTrail(
       },
     ];
     if (segments.length >= 5) {
-      const subRoute = safelyDecodePathSegment(segments[4]);
-      crumbs.push({
-        label:
-          AGENT_INSTANCE_SUBROUTE_LABELS[subRoute] ??
-          humanizePathSegment(segments[4]),
-        href: pathname,
-      });
+      // `null` where the sub-route draws no crumb of its own — the review,
+      // which is read under its run's trail (see the set above).
+      const subRouteLabel = agentInstanceSubRouteCrumbLabel(segments[4]);
+      if (subRouteLabel !== null) {
+        crumbs.push({ label: subRouteLabel, href: pathname });
+      }
     }
     return crumbs;
   }
@@ -380,13 +439,24 @@ export function buildBreadcrumbTrail(
   const crumbPaths: string[] = segments.map(
     (_seg, i) => "/" + segments.slice(0, i + 1).join("/"),
   );
+  // THE AREA CRUMB STAYS, AND THE PAGE TITLE IS APPENDED (cinatra#2934, fix leg
+  // 10). A broadcast page title names the LEAF, and on every deeper route that
+  // is exactly what it replaces — the leaf segment's own word ("Upload
+  // Extension" over "/extensions/upload"), with the area crumb still above it.
+  // On a ONE-segment route the leaf and the area crumb are the SAME crumb, so
+  // the same replacement ate the hierarchy: "/agents" drew the single crumb
+  // "Run agent", with the Agents area nowhere above it. The drawing reads the
+  // run-starting page as "Agents > Agent run" — the area, then the page — so at
+  // depth one the title is APPENDED beneath the area crumb instead of replacing
+  // it. Deeper routes are untouched.
+  const isAreaRoot = segments.length === 1;
   const crumbs: BreadcrumbCrumb[] = segments.map((seg, i) => {
     const isLast = i === segments.length - 1;
     const crumbPath = "/" + segments.slice(0, i + 1).join("/");
     const contributed = replacementFor(crumbPath);
     const label =
       contributed?.label ??
-      (isLast && pageTitle && pageTitle.pathname === pathname
+      (isLast && !isAreaRoot && pageTitle && pageTitle.pathname === pathname
         ? pageTitle.title
         : isIdLikeSegment(seg)
           ? idSegmentPlaceholder(seg)
@@ -411,6 +481,17 @@ export function buildBreadcrumbTrail(
           !canonicalConnectorHref),
     };
   });
+
+  // The area root's own page, appended beneath the area crumb (see above). A
+  // contribution on that crumb still wins outright — the route itself said so —
+  // and a title that only repeats the area's own word adds no crumb.
+  if (isAreaRoot && pageTitle && pageTitle.pathname === pathname) {
+    const title = pageTitle.title.trim();
+    if (title && !replacementFor(crumbPaths[0]) && title !== crumbs[0].label) {
+      crumbPaths.push(pathname);
+      crumbs.push({ label: title, href: pathname, nonNavigable: false });
+    }
+  }
 
   // Ancestry insertions (cinatra#1738 consumes this): a contribution with
   // `insertBefore` inserts a NEW crumb before the crumb whose path equals

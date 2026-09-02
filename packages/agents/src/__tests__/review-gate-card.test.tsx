@@ -1707,16 +1707,25 @@ describe("a settled card that knows its outcome", () => {
   });
 
   it("names each of the three recorded outcomes", async () => {
+    // RE-PINNED (cinatra#2934, fix leg 10): the third outcome is still named as
+    // its own distinct reading, but it names NO PERSON — the drawing gives this
+    // surface no card that says who requested changes.
     const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
       ["approved", "Approved by Dana Okonkwo"],
       ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
+      ["changes_requested", "Changes requested"],
     ];
     for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
       cleanup();
     }
+  });
+
+  it("draws no card naming who requested changes", async () => {
+    const container = await settledWith("changes_requested", "Dana Okonkwo");
+    expect(container.textContent).not.toContain("Changes requested by");
+    expect(container.textContent).not.toContain("Dana Okonkwo");
   });
 
   it("DROPS the Refresh affordance and the floor — but NOT the target: \"A resolved gate opens read-only: what was decided, and the reviewed target(s), kept for the run's audit trail\"", async () => {
@@ -1828,7 +1837,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   const DISPOSITIONS = [
     ["approved", "Approved by Dana Okonkwo"],
     ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Changes requested by Dana Okonkwo"],
+    // fix leg 10 — the change-request reading names no person.
+    ["changes_requested", "Changes requested"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {

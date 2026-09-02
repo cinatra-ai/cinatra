@@ -36,6 +36,7 @@ import {
   documentTitleLabelFromTrail,
 } from "@/lib/breadcrumb-trail";
 import {
+  isPageNotFound,
   selectCrumbContributions,
   CRUMB_CONTRIBUTIONS_EVENT,
 } from "@/lib/breadcrumb-contributions";
@@ -621,14 +622,23 @@ export function AppShell({
     [pathname, crumbEpoch, crumbBusVersion],
   );
 
+  // The 404 boundary's own mark (cinatra#2934, fix leg 10) — read off the same
+  // bus, and invalidated by the same version counter the contributions are.
+  const pageNotFound = useMemo(
+    () => isPageNotFound(pathname),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathname, crumbBusVersion],
+  );
+
   const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
     () =>
       buildBreadcrumbTrail(pathname, {
         pageTitle,
         chatThreadTitle,
         contributions: crumbContributions,
+        notFound: pageNotFound,
       }),
-    [pathname, chatThreadTitle, pageTitle, crumbContributions],
+    [pathname, chatThreadTitle, pageTitle, crumbContributions, pageNotFound],
   );
 
   const refreshRoute = useCallback(() => router.refresh(), [router]);

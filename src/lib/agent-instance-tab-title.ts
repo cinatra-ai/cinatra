@@ -28,7 +28,11 @@ import "server-only";
 
 import type { Metadata } from "next";
 
-import { buildBreadcrumbTrail, documentTitleLabelFromTrail } from "./breadcrumb-trail";
+import {
+  agentInstanceSubRouteCrumbLabel,
+  buildBreadcrumbTrail,
+  documentTitleLabelFromTrail,
+} from "./breadcrumb-trail";
 
 /**
  * What the tab says when the trail resolves nothing safe to say. It is the word
@@ -83,14 +87,20 @@ export function agentInstanceTabTitle(
  * identity, and ANY failure yields the generic title rather than a leak or a
  * broken render.
  *
- * The run identity is read ONLY for the run's own page. On a sub-route the
- * trail's leaf is the sub-route's own word ("Schedule", "Results", "Review"),
- * so the run's name is not part of the answer and no run data is read for it.
+ * The run identity is read for every route whose trail ENDS on the run. On a
+ * sub-route that draws a crumb of its own the trail's leaf is that sub-route's
+ * word ("Schedule"), so the run's name is not part of the answer and no run
+ * data is read for it. A sub-route that draws NO crumb — the review, which is
+ * read under its run's trail (cinatra#2934, fix leg 10) — leaves the RUN as the
+ * leaf, so the tab mirrors the run's own name, exactly as the trail does.
  */
 export async function resolveAgentInstanceMetadata(
   params: AgentInstanceRouteParams,
 ): Promise<Metadata> {
-  const resolvedInstanceLabel = params.subRoute
+  const subRouteDrawsItsOwnCrumb =
+    params.subRoute != null &&
+    agentInstanceSubRouteCrumbLabel(params.subRoute) !== null;
+  const resolvedInstanceLabel = subRouteDrawsItsOwnCrumb
     ? null
     : await readAgentInstanceCrumbLabel(params);
   return { title: agentInstanceTabTitle({ ...params, resolvedInstanceLabel }) };

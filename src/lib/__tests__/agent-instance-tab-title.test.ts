@@ -115,8 +115,25 @@ describe("agentInstanceTabTitle — the tab is the trail's resolved leaf", () =>
       }),
     ).toBe("Schedule");
     expect(agentInstanceTabTitle({ ...BASE, subRoute: "results" })).toBe("Results");
-    expect(agentInstanceTabTitle({ ...BASE, subRoute: "review" })).toBe("Review");
     expect(agentInstanceTabTitle({ ...BASE, subRoute: "skills" })).toBe("Skills");
+  });
+
+  // RE-PINNED (cinatra#2934, fix leg 10). The review is the one sub-route that
+  // draws NO crumb of its own — the ratified drawing gives a review no trail
+  // outside its run's route — so the trail's leaf there is the RUN, and the tab,
+  // which mirrors the trail, is the run's name too.
+  it("is the RUN's own name on the review, because that is the trail's leaf", () => {
+    expect(
+      agentInstanceTabTitle({
+        ...BASE,
+        subRoute: "review",
+        resolvedInstanceLabel: "Blog Pipeline Agent (1)",
+      }),
+    ).toBe("Blog Pipeline Agent (1)");
+    // and with nothing to name, the same fixed label the trail falls back to
+    expect(agentInstanceTabTitle({ ...BASE, subRoute: "review" })).toBe(
+      AGENT_INSTANCE_GENERIC_TAB_TITLE,
+    );
   });
 });
 
@@ -180,13 +197,31 @@ describe("resolveAgentInstanceMetadata — the gate-repeating read", () => {
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
-  it("reads no run data for a sub-route — its leaf is the sub-route's own word", async () => {
+  it("reads no run data for a sub-route that draws its own crumb", async () => {
     getAuthSession.mockResolvedValue(SESSION);
     await expect(
-      resolveAgentInstanceMetadata({ ...BASE, subRoute: "review" }),
-    ).resolves.toEqual({ title: "Review" });
+      resolveAgentInstanceMetadata({ ...BASE, subRoute: "trigger" }),
+    ).resolves.toEqual({ title: "Schedule" });
     expect(getAuthSession).not.toHaveBeenCalled();
     expect(readAgentRunById).not.toHaveBeenCalled();
+  });
+
+  // RE-PINNED (cinatra#2934, fix leg 10): the review draws no crumb of its own,
+  // so its trail — and its tab — end on the RUN, which has to be read for.
+  it("reads the run for the review, whose leaf IS the run", async () => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "Blog Pipeline Agent (1)",
+      status: "armed",
+      templateId: "tpl-1",
+      runBy: "user-1",
+    });
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, subRoute: "review" }),
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
+    expect(readAgentRunById).toHaveBeenCalled();
   });
 
   it("reads no run for the creation route", async () => {

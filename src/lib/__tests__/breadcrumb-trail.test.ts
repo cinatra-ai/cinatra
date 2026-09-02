@@ -238,7 +238,17 @@ describe("buildBreadcrumbTrail — other routes (preserved behavior)", () => {
     ]);
   });
 
-  it("keeps the general trail for a 3-segment /agents/vendor/package (404) path", () => {
+  // RE-PINNED (cinatra#2934, fix leg 10). A page that is NOT FOUND has no
+  // hierarchy, so it has no trail to draw: "Its breadcrumb reads 'Page not
+  // found' and nothing else: one crumb, current, with no parent above it." The
+  // ancestors of the URL the reader typed name a place they never reached.
+  it("a 3-segment /agents/vendor/package path that was NOT FOUND reads Page not found, and nothing else", () => {
+    expect(
+      buildBreadcrumbTrail("/agents/vendor/pkg", { notFound: true }).map((c) => c.label),
+    ).toEqual(["Page not found"]);
+  });
+
+  it("the same 3-segment path, reached as a real page, still draws its general trail", () => {
     const crumbs = buildBreadcrumbTrail("/agents/vendor/pkg");
     expect(crumbs.map((c) => c.label)).toEqual(["Agents", "Vendor", "Pkg"]);
   });
@@ -832,5 +842,75 @@ describe("documentTitleLabelFromTrail — a humanized id is still an id", () => 
         { label: "9C0dfce6 B2cb 4dab 8a01 661ca3288b9a", href: "/agents/x" },
       ]),
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TRAIL IS THE NAVIGATION HIERARCHY (cinatra#2934, fix leg 10).
+//
+// The ratified components drawing states it in one sentence: a breadcrumb
+// "always reflects the navigation hierarchy — the route the page sits on, not
+// the thing the page happens to be about", every trail under the agents area
+// starts with "Agents", an agent instance is named by the agent's own display
+// name, the page that starts a run reads "Agents > Agent run", and a review has
+// no trail of its own — "there is no review page view outside the route of the
+// agent's run, so 'Agents > Agent run > Review' is not a possible breadcrumb".
+// ---------------------------------------------------------------------------
+describe("the trail is the navigation hierarchy (fix leg 10)", () => {
+  const RUN_ID = "aced3514-1f8e-4a44-9c1e-2b6f0f5a77d1";
+  const RUN_PATH = `/agents/vendor/pkg/${RUN_ID}`;
+  const REVIEW_PATH = `${RUN_PATH}/review/8f2b1c7d-53aa-4d02-9d31-70b6c4f0a1e2`;
+  const RUN_NAME = "Blog Draft Writer Agent (1)";
+
+  it("the review page draws its run's own trail — Agents > <the run> — and no Review leaf", () => {
+    const labels = buildBreadcrumbTrail(REVIEW_PATH, {
+      contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+    }).map((c) => c.label);
+    expect(labels).toEqual(["Agents", RUN_NAME]);
+  });
+
+  it("neither an id nor the Agent run placeholder stands where the run's name is resolvable", () => {
+    const labels = buildBreadcrumbTrail(REVIEW_PATH, {
+      contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+    }).map((c) => c.label);
+    expect(labels).not.toContain("Agent run");
+    expect(labels.join(" ")).not.toContain("aced3514");
+  });
+
+  it("keeps the drawing's fixed label only while the run's name is genuinely unavailable", () => {
+    expect(buildBreadcrumbTrail(REVIEW_PATH).map((c) => c.label)).toEqual([
+      "Agents",
+      "Agent run",
+    ]);
+  });
+
+  it("the schedule sub-route still draws its own crumb — only the review has none", () => {
+    expect(
+      buildBreadcrumbTrail(`${RUN_PATH}/trigger`, {
+        contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+      }).map((c) => c.label),
+    ).toEqual(["Agents", RUN_NAME, "Schedule"]);
+  });
+
+  it("the page that starts a run reads Agents > Agent run — the area crumb stays", () => {
+    const crumbs = buildBreadcrumbTrail("/agents", {
+      pageTitle: { title: "Agent run", pathname: "/agents" },
+    });
+    expect(crumbs.map((c) => c.label)).toEqual(["Agents", "Agent run"]);
+    expect(crumbs[0].href).toBe("/agents");
+  });
+
+  it("a deeper page's broadcast title still replaces its own leaf, and nothing above it", () => {
+    expect(
+      buildBreadcrumbTrail("/extensions/upload", {
+        pageTitle: { title: "Upload Extension", pathname: "/extensions/upload" },
+      }).map((c) => c.label),
+    ).toEqual(["Extensions", "Upload Extension"]);
+  });
+
+  it("a page that was not found reads exactly Page not found", () => {
+    expect(
+      buildBreadcrumbTrail(REVIEW_PATH, { notFound: true }).map((c) => c.label),
+    ).toEqual(["Page not found"]);
   });
 });

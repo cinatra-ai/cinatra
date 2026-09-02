@@ -40,9 +40,13 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
-import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
+import {
+  agentInstancePathname,
+  resolveAgentInstanceMetadata,
+} from "@/lib/agent-instance-tab-title";
 
 import {
   loadPinnedCapturePair,
@@ -130,11 +134,56 @@ async function loadRunStepsContext(
   return { steps, activeStep: reviewIndex, templateId };
 }
 
+/**
+ * THE RUN'S OWN NAME, FOR THE TRAIL ABOVE THIS PAGE (cinatra#2934, fix leg 10).
+ *
+ * The ratified components drawing gives a review no trail of its own — it is
+ * read on its run's route, under that run's trail — so the crumb above this page
+ * must name the RUN: "Agents > Blog Draft Writer Agent (1)". This route
+ * published nothing over the one crumb channel, so the trail fell through to the
+ * fixed label a genuinely unresolvable run gets, and read "Agents > Agent run >
+ * Review". Both halves of that were wrong.
+ *
+ * The identity is the run screen's own precedence, minus its write: the run's
+ * editable title, else the template's name. It is read as pure context AFTER the
+ * surface's own access checks — the same standing the step list beside it is
+ * read under — and `null` on anything at all, in which case the trail keeps the
+ * drawing's placeholder rather than guessing.
+ */
+async function readRunCrumbLabel(
+  runId: string,
+  prefix: string,
+): Promise<{ prefix: string; label: string } | null> {
+  try {
+    const run = await readAgentRunById(runId);
+    if (!run) return null;
+    const template = run.templateId
+      ? await readAgentTemplateById(run.templateId)
+      : null;
+    const label = run.title?.trim() || template?.name?.trim() || null;
+    return label ? { prefix, label } : null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+  const {
+    vendor,
+    packageName,
+    instanceId: rawInstanceId,
+    reviewTaskId: rawTaskId,
+  } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
+  // The RUN's own crumb path — the prefix a contribution targets. Built by the
+  // same helper the tab title builds its path with, so the two cannot drift.
+  const runCrumbPrefix = agentInstancePathname({
+    vendor,
+    packageName,
+    instanceId: rawInstanceId,
+  });
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
 
@@ -151,10 +200,11 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (isVerificationView) {
     const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
     if (!access.ok) return <ReviewNotAuthorizedPanel />;
+    const runCrumb = await readRunCrumbLabel(runId, runCrumbPrefix);
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) {
       return (
-        <ReviewShell>
+        <ReviewShell runCrumb={runCrumb}>
           <ReviewGateBlocked reason="no-longer-pending" />
         </ReviewShell>
       );
@@ -188,7 +238,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     // gate by route params and has no envelope to read.
     const verificationCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
     return (
-      <ReviewShell>
+      <ReviewShell runCrumb={runCrumb}>
         {record ? (
           <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
@@ -204,6 +254,10 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     return <ReviewNotAuthorizedPanel />;
   }
 
+  // Published only from here down: the reader has cleared the surface's own read
+  // gate, and a crumb carries an entity's name.
+  const runCrumb = await readRunCrumbLabel(runId, runCrumbPrefix);
+
   // The generic blocked panel is still the page's answer for a gate it cannot
   // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`
   // gate the loader keeps here — a ref that names nothing, or a row too corrupt
@@ -211,7 +265,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (cinatra#2904, AC 4 + AC 5).
   if (surface.kind === "blocked") {
     return (
-      <ReviewShell>
+      <ReviewShell runCrumb={runCrumb}>
         <ReviewGateBlocked reason={surface.reason} />
       </ReviewShell>
     );
@@ -296,7 +350,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     : null;
 
   return (
-    <ReviewShell>
+    <ReviewShell runCrumb={runCrumb}>
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -425,9 +479,20 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
  * with no page title on the bus). Both are kept here with zero drawn pixels: an
  * `sr-only` heading and the same title broadcast the removed header mounted.
  */
-function ReviewShell({ children }: { children: React.ReactNode }) {
+function ReviewShell({
+  children,
+  runCrumb,
+}: {
+  children: React.ReactNode;
+  /** The RUN's crumb — its own name, published over the one crumb channel so the
+   *  trail above this page reads "Agents > <the run>" and the review adds no
+   *  crumb of its own (cinatra#2934, fix leg 10). Absent on a reading that could
+   *  not name the run, where the trail keeps the drawing's placeholder. */
+  runCrumb?: { prefix: string; label: string } | null;
+}) {
   return (
     <Main className="min-h-screen">
+      {runCrumb ? <CrumbContributions entries={[runCrumb]} /> : null}
       <h1 className="sr-only">Review</h1>
       <PageHeaderTitleSync title="Review" />
       <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">

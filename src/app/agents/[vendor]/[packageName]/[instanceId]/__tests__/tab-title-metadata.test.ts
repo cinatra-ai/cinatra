@@ -124,15 +124,34 @@ describe.each(SUB_ROUTES)("the %s sub-route", (_subRoute, expected, load) => {
 
 // The review page — it carried no metadata export at all, so it inherited the
 // root layout's generic default and never mirrored the trail.
+//
+// RE-PINNED (cinatra#2934, fix leg 10). Leg 9 read the review as one more
+// sub-route with a word of its own, so the tab said "Review". The ratified
+// components drawing gives a review NO crumb outside its run's route: the trail
+// on this page reads "Agents > the run" and stops there. The tab mirrors the
+// resolved trail under the same rules, so the tab is the RUN's name too — the
+// word "Review" names the page, and the page is not a crumb.
 describe("the review page", () => {
-  it("carries a title that mirrors the trail's Review leaf", async () => {
+  it("mirrors the trail, whose leaf on a review is the RUN", async () => {
     authorize();
     const mod = await import("../review/[reviewTaskId]/page");
     await expect(
       mod.generateMetadata({
         params: Promise.resolve({ ...PARAMS, reviewTaskId: "gate-1" }),
       }),
-    ).resolves.toEqual({ title: "Review" });
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
+  });
+
+  it("names no id when the run cannot be read", async () => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    readAgentRunById.mockRejectedValue(new Error("forbidden"));
+    const mod = await import("../review/[reviewTaskId]/page");
+    const meta = await mod.generateMetadata({
+      params: Promise.resolve({ ...PARAMS, reviewTaskId: "gate-1" }),
+    });
+    expect(String(meta.title)).not.toContain(RUN_ID.slice(0, 8));
+    expect(meta).toEqual({ title: "Agent run" });
   });
 });
 
