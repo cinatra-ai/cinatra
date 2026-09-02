@@ -1403,14 +1403,21 @@ async function rollBackScheduleThatDidNotArm(
         err,
       );
     });
-    if (!named && !stamped) {
+    if (!named) {
       // NEITHER REPAIR LANDED. The scheduler is live, the row is enabled and
       // names nothing, and no further write from here can change that — so the
       // state is named for what it is rather than left to be inferred from two
       // earlier lines. The refusal below still stands and still reports no
       // armed schedule.
+      // NAMING IS THE HALF THAT MATTERS (convergence round). A stamped row that
+      // does not carry the scheduler id cannot be used by the release job to
+      // tear the orphan down — the job cancels through the id ON THE ROW — so a
+      // failed name is an unresolved live scheduler whether or not the stamp
+      // landed, and it is reported as one rather than only when both writes fail.
       console.error(
-        "[setRunTriggerForActor] an orphaned scheduler could be neither cancelled nor recorded — a live scheduler and an enabled row that names none survive this refusal, for run",
+        "[setRunTriggerForActor] an orphaned scheduler could not be recorded on its row — a live scheduler no row can name survives this refusal (row stamped stopped:",
+        stamped,
+        ") for run",
         args.runId,
       );
     }
@@ -1506,6 +1513,12 @@ export async function deleteRunTriggerForActor(
     return { ok: false, error: "forbidden" };
   }
 
+  // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
+  // Minted BEFORE the claim (cinatra#3054, convergence): the teardown now
+  // happens INSIDE it, and a mint that fail-closes for a non-member does so
+  // before anything is removed rather than after the row is gone.
+  const authority = await verifySessionAuthority(actor.userId, run.orgId);
+
   let outcome: { refusal?: string; deleted?: string | null };
   try {
     outcome = await withTriggerClaim(args.runId, async (trigger) => {
@@ -1534,6 +1547,38 @@ export async function deleteRunTriggerForActor(
         );
       }
       await deleteRunTriggerByRunId(args.runId);
+      // THE STATUS FLIP BELONGS INSIDE THE CLAIM (cinatra#3054, convergence
+      // round). It used to run after the claim was released, which left the arm
+      // path a window it cannot see: an arm that had already settled the run
+      // `armed` inside its own claim could have this `armed → stopped` land
+      // between that settlement and the arm's final row write, and the arm would
+      // then publish an enabled row and a live scheduler over a stopped run. The
+      // claim is this module's serialization point for exactly that reason, so
+      // the stop is decided and written entirely within it and the arm's
+      // compare-and-set can only find the run before or after this whole stop,
+      // never halfway through it.
+      if (
+        trigger.triggerType === "scheduled" ||
+        trigger.triggerType === "recurring"
+      ) {
+        try {
+          await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
+        } catch (err) {
+          if (
+            err instanceof RunTransitionError &&
+            err.code === "stale_from_status"
+          ) {
+            // runId passed as an ARGUMENT (js/tainted-format-string).
+            console.log(
+              "[deleteRunTriggerForActor] run",
+              args.runId,
+              "not in armed state — leaving status as-is",
+            );
+          } else {
+            throw err;
+          }
+        }
+      }
       return { deleted: trigger.triggerType };
     });
   } catch (err) {
@@ -1551,28 +1596,6 @@ export async function deleteRunTriggerForActor(
   if (outcome.refusal) return { ok: false, error: outcome.refusal };
   // Idempotent: no row to remove, and nothing else to undo either.
   if (outcome.deleted == null) return { ok: true };
-
-  if (
-    outcome.deleted === "scheduled" ||
-    outcome.deleted === "recurring"
-  ) {
-    // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
-    const authority = await verifySessionAuthority(actor.userId, run.orgId);
-    try {
-      await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
-    } catch (err) {
-      if (
-        err instanceof RunTransitionError &&
-        err.code === "stale_from_status"
-      ) {
-        console.log(
-          `[deleteRunTriggerForActor] run ${args.runId} not in armed state — leaving status as-is`,
-        );
-      } else {
-        throw err;
-      }
-    }
-  }
 
   // HOOK POINT B (cinatra#317) — unschedule/delete the mirrored PM work item
   // AFTER the local trigger row is deleted and the armed→stopped transition has

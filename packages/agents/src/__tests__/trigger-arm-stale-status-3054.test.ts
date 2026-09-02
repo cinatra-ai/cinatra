@@ -82,6 +82,11 @@ const schedule = vi.hoisted(() => ({
   scheduleTrigger: vi.fn(async () => ({ jobSchedulerId: "sched-3054" })),
   cancelTriggerSchedule: vi.fn(async () => undefined),
 }));
+/** WHAT HAPPENED, AND IN WHICH ORDER — the claim mock brackets its body and the
+ *  transition stub records itself, so a test can prove a write happened while
+ *  the claim was HELD rather than after it was released (cinatra#3054,
+ *  convergence round). */
+const order = vi.hoisted(() => ({ events: [] as string[] }));
 const pm = vi.hoisted(() => ({
   syncRunTriggerPmTask: vi.fn(async () => undefined),
   deleteRunTriggerPmTask: vi.fn(async () => undefined),
@@ -99,7 +104,15 @@ vi.mock("../trigger-claim", async (importOriginal) => {
     withTriggerClaim: async (
       runId: string,
       body: (live: Awaited<ReturnType<typeof readRunTriggerByRunId>>) => Promise<unknown>,
-    ) => body(await readRunTriggerByRunId(runId)),
+    ) => {
+      const live = await readRunTriggerByRunId(runId);
+      order.events.push("claim:held");
+      try {
+        return await body(live);
+      } finally {
+        order.events.push("claim:released");
+      }
+    },
   };
 });
 
@@ -117,6 +130,7 @@ vi.mock("@/lib/agent-run-enqueue", () => enqueue);
 
 import {
   setRunTriggerForActor,
+  deleteRunTriggerForActor,
   armRunScheduleForActor,
   updateRunTriggerScheduleForActor,
   ARM_SCHEDULE_REFUSALS,
@@ -162,9 +176,11 @@ beforeEach(() => {
   store.readAgentRunById.mockImplementation(async () => runRow());
   // CAS-shaped stub: only the edge whose `from` matches the row succeeds.
   store.transitionRunStatus.mockImplementation(async (_runId: string, from: string, to: string) => {
+    order.events.push(`transition:${from}->${to}`);
     if (from !== currentStatus) throw new store.RunTransitionError("stale_from_status");
     currentStatus = to;
   });
+  order.events.length = 0;
 });
 
 describe("cinatra#3054 — the shared setter does not report a stale status as an armed schedule", () => {
@@ -520,5 +536,68 @@ describe("cinatra#3054 — the shared setter does not report a stale status as a
         ([row]) => row.jobSchedulerId !== null,
       ),
     ).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE OTHER HALF OF THE SAME RACE (cinatra#3054, convergence round). Arming
+  // settles the run INSIDE the trigger claim; a Stop that flips `armed →
+  // stopped` OUTSIDE the claim could therefore still land between that
+  // settlement and the arm's final row write, and the arm would publish an
+  // enabled row and a live scheduler over a stopped run. So the stop's own flip
+  // is written inside the claim too, and this pins it there.
+  // -------------------------------------------------------------------------
+  it("writes the stop's armed→stopped flip INSIDE the trigger claim, so no arm can settle across it", async () => {
+    currentStatus = "armed";
+    triggerStore.readRunTriggerByRunId.mockResolvedValue({
+      runId: TEST_RUN_ID,
+      triggerType: "recurring",
+      jobSchedulerId: "sched-3054",
+      stoppedAt: null,
+      releasedAt: null,
+    });
+
+    const result = await deleteRunTriggerForActor(actor, { runId: TEST_RUN_ID });
+
+    expect(result.ok).toBe(true);
+    expect(currentStatus).toBe("stopped");
+    const flip = order.events.indexOf("transition:armed->stopped");
+    expect(flip).toBeGreaterThan(-1);
+    expect(order.events.indexOf("claim:held")).toBeLessThan(flip);
+    expect(order.events.indexOf("claim:released")).toBeGreaterThan(flip);
+  });
+
+  it("reports an orphaned scheduler the row could not NAME, even when the stopped stamp landed", async () => {
+    // The cancel fails, so the repair is the nameable-and-dead row. The naming
+    // write fails and the stamp succeeds: the row then reads stopped but cannot
+    // tell the release job which scheduler to cancel, so a live scheduler
+    // survives and has to be reported as one.
+    stopLandsWhileTheScheduleIsRegistered();
+    schedule.cancelTriggerSchedule.mockImplementation(async () => {
+      throw new Error("redis is unreachable");
+    });
+    triggerStore.createOrUpdateRunTrigger.mockImplementation(async (row: TriggerRowWrite) => {
+      if (row.jobSchedulerId) throw new Error("the row could not be written");
+      return undefined;
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: TEST_RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1",
+      timezone: "UTC",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toBe(ARM_SCHEDULE_REFUSALS.movedOn);
+    // The stamp DID land…
+    expect(triggerStore.stopRunTriggerInDb).toHaveBeenCalledWith(TEST_RUN_ID);
+    // …and the unnameable live scheduler is still reported.
+    expect(
+      errors.mock.calls.some(([first]) =>
+        typeof first === "string" && first.includes("could not be recorded on its row"),
+      ),
+    ).toBe(true);
+    errors.mockRestore();
   });
 });
