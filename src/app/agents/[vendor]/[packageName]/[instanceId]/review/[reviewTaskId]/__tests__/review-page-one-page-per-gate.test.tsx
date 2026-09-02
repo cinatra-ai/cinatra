@@ -57,7 +57,15 @@ vi.mock("@/lib/auth-session", () => ({
   getAuthSession: mocks.getAuthSession,
   signInRedirectTarget: mocks.signInRedirectTarget,
 }));
-vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+// The shell broadcasts this route's title to the breadcrumb bus, and the
+// broadcaster reads the pathname — so the router half of this module has to
+// answer here too, or the page throws before it draws anything at all.
+vi.mock("next/navigation", () => ({
+  redirect: mocks.redirect,
+  usePathname: () => "/agents/vendor/package/instance/review/task",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: mocks.loadReviewGateSurface,
   loadPinnedCapturePair: mocks.loadPinnedCapturePair,

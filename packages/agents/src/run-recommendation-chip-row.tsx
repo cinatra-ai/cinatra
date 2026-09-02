@@ -626,36 +626,38 @@ function SkillsStepPill({
       data-skills-step-vendor-state={vendor.kind}
       data-skills-step-pill-editable={editable ? "true" : "false"}
       data-forced={forced ? "true" : undefined}
-      // ONE GROUND, SET OR CLEAR (cinatra#3062, the second capture).
+      // ONE GROUND, SET OR CLEAR, AND THE PILL IS A STADIUM (cinatra#3062, the
+      // second proof round; cinatra#3047, leg 7 — the same reading reached from
+      // two directions, kept once).
       //
-      // The ratified drawing declares this pill exactly once — `border: 1px
-      // solid var(--line)` over `background: var(--surface-strong)` — and gives
-      // it NO checked variant anywhere in the stylesheet. Its only checked
-      // accent is on the box itself, `.skchip .cbx.on { background: var(--blue);
-      // border-color: var(--blue) }`, which the vendored `Checkbox` draws.
+      // The ratified drawing declares this pill exactly once — `border-radius:
+      // 9999px`, `border: 1px solid var(--line)` over `background:
+      // var(--surface-strong)` — and gives it NO checked variant anywhere in the
+      // stylesheet. Its only checked accent is on the box itself, `.skchip
+      // .cbx.on { background: var(--blue); border-color: var(--blue) }`, which
+      // the vendored `Checkbox` draws.
       //
-      // The row used to tint the pill when its box was set. Measured on a real
-      // capture that read as a green ground with a green border in both themes —
-      // a state tint the stylesheet does not give it, on every checked pill on
-      // every host. What a box is set to is stated by the box, and on this root
-      // as `data-skill-applied`; it is not restated as a colour behind it.
-      //
-      // AND IT IS DRAWN AS A PILL (cinatra#3062, the fourth proof round). The same
-      // one declaration gives the shape: `border-radius: 9999px`. §V calls the
-      // thing it draws by that shape's name throughout — "one pill per skill",
-      // "A pill carries a checkbox, the skill's name and its vendor, and
-      // nothing else" — and a 9999px radius on a 26 pixel box is a stadium,
-      // with no straight run of edge left between its two half-circle ends.
-      //
-      // This row carried `rounded-chip`, which is the design package's SHARED
-      // chip radius (`--r-chip: 0.5rem`). At the height this pill is actually
-      // drawn at, the fourth proof round measured that as an 8px corner in both
-      // palettes — a rounded rectangle, not a pill. `rounded-full` is the
-      // full-round utility the app's other pills already carry, and it is the
-      // drawing's own value. The SHARED TOKEN IS NOT MOVED: chips all over the
-      // app consume `--r-chip` and this drawing says nothing about them, so the
+      // The row used to tint the pill when its box was set, and it carried
+      // `rounded-chip` — the design package's SHARED chip radius (`--r-chip:
+      // 0.5rem`). Both were measured against the drawing and both were wrong:
+      // a tinted ground on the ticked pill against the clear pill's white, on
+      // every checked pill on every host, and a corner of roughly 6 to 8 CSS px
+      // where the drawing gives a stadium with no straight run of edge left
+      // between its two half-circle ends. What a box is set to is stated by the
+      // box, and on this root as `data-skill-applied`; it is not restated as a
+      // colour behind it. The SHARED TOKEN IS NOT MOVED: chips all over the app
+      // consume `--r-chip` and this drawing says nothing about them, so the
       // correction belongs to this pill's own class list and nowhere else.
-      className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-strong px-3 py-1 text-xs text-foreground"
+      //
+      // THE READ-ONLY READING IS SAID OUT LOUD. `.skchip[aria-disabled="true"]
+      // { color: var(--muted); }` is the drawing's own reading for a run that
+      // has started, and its examples carry the attribute on every pill; the box
+      // keeps its `disabled`, so a reader on assistive technology is told by the
+      // pill AND by the control it holds.
+      {...(editable ? {} : { "aria-disabled": "true" })}
+      className={`inline-flex items-center gap-2 rounded-full border border-line bg-surface-strong py-[5px] pr-[11px] pl-[7px] text-xs ${
+        editable ? "text-foreground" : "text-muted-foreground"
+      }`}
       {...(title ? { title } : {})}
     >
       {/* THE CHECKBOX, IN FRONT OF THE NAME. The vendored primitive, because the
@@ -672,14 +674,17 @@ function SkillsStepPill({
         {...(onCheckedChange ? { onCheckedChange: (next) => onCheckedChange(next === true) } : {})}
       />
       <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-        <span id={labelId} className="font-medium">
+        {/* TWO WEIGHTS, ONE LINE. The drawing writes the name at 600 and the
+            byline that follows it at 500 in the muted ink, so the skill is what
+            a reader meets first and its vendor is the qualifier. */}
+        <span id={labelId} className="font-semibold">
           {name}
         </span>
         {vendorKnown ? (
           <span
             data-skills-step-vendor=""
             data-vendor-state={vendor.kind}
-            className="text-muted-foreground"
+            className="font-medium text-muted-foreground"
           >
             {`${VENDOR_BY_CONNECTIVE} ${vendor.displayName}`}
           </span>
@@ -1418,16 +1423,17 @@ export function RunRecommendationChipRow({
           nothing a press could change. */}
       {opts.control ? (
         // THE FLOOR THE DRAWING SEATS CONTINUE IN (cinatra#3062, the second
-        // capture). Its own wrapper, verbatim:
+        // proof round; cinatra#3047, leg 7). Its own wrapper, verbatim:
         //
         //   display:flex; justify-content:flex-end; margin-top:12px;
         //   padding-top:12px; border-top:1px solid var(--line)
         //
         // — the control right-aligned beneath the row, over a hairline rule that
         // separates it from the pills. The 12px above the rule is this step
-        // root's own `gap-3`; `pt-3` is the 12px below it. It was drawn
-        // left-aligned at the card's own edge with no rule at all, which the
-        // capture measured as clean background across the full card width.
+        // root's own `gap-3`; `pt-3` is the 12px below it. Two rounds measured
+        // the same three departures at once, on every frame of both palettes:
+        // the control left-aligned at the card's own edge, no rule above it and
+        // no glyph in it — clean background across the full card width.
         //
         // It is "the same Continue the HITL screen draws" (§V), down to the
         // trailing arrow glyph after the word.
@@ -1455,7 +1461,17 @@ export function RunRecommendationChipRow({
             onClick={() => onContinue()}
           >
             Continue
-            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
+            {/* THE ANCHOR IS THE SPAN, NOT THE ICON — the same rule the rail's
+                own glyph follows: a suite that stubs `lucide-react` renders no
+                icon element, and an anchor carried by the icon would vanish
+                with it. */}
+            <span
+              aria-hidden="true"
+              data-skills-step-continue-glyph=""
+              className="flex items-center justify-center"
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
           </Button>
         </div>
       ) : null}

@@ -212,10 +212,21 @@ describe.each(HOSTS)("the Skills step's row, on %s", (host) => {
     // The 12px between the row and the rule is the step root's own gap.
     expect(floor.parentElement!.className.split(/\s+/)).toContain("gap-3");
     // The word, and then the glyph after it.
+    //
+    // READ THROUGH THE GLYPH'S OWN ANCHOR, not off the icon element (the
+    // forward merge of cinatra#3047 leg 7). The arrow is wrapped in a span the
+    // row anchors as `data-skills-step-continue-glyph`, because a suite that
+    // stubs `lucide-react` renders no icon element at all and an anchor carried
+    // by the icon would vanish with it. The reading the drawing states is
+    // unchanged and still pinned here: the word, then the arrow, and NOTHING
+    // after the arrow.
     expect(button!.textContent).toContain("Continue");
-    const glyph = button!.querySelector("svg");
-    expect(glyph).not.toBeNull();
-    expect(button!.lastElementChild).toBe(glyph);
+    const glyphAnchor = button!.querySelector<HTMLElement>(
+      "[data-skills-step-continue-glyph]",
+    );
+    expect(glyphAnchor).not.toBeNull();
+    expect(button!.lastElementChild).toBe(glyphAnchor);
+    expect(glyphAnchor!.querySelector("svg")).not.toBeNull();
   });
 
   it("draws no placeholder byline, so each pill keeps the drawn width", () => {

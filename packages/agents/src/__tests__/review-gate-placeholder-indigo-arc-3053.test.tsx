@@ -25,6 +25,14 @@
 // So this file pins two things that have to hold together: the arc is drawn with
 // a REGISTERED token, and that token is the indigo one.
 //
+// AND `--color-mustard-ink` IS REGISTERED NOW. The theme block binds it for the
+// warm tint the same wrapper carries behind the arc (`bg-mustard-ink/15`), so
+// the ABSENCE is the history of the defect, not the present state of the theme.
+// What still has to hold is the invariant that absence exposed, and that is
+// what this file pins: the arc's own COLOUR utility is the registered indigo,
+// and the mustard token may reach this wrapper only as a background, never as
+// the arc's text colour.
+//
 // THE DARK READING IS THE ITEM ALREADY TRACKED ON THIS PULL REQUEST. The
 // registered indigo token resolves to the drawing's `#364e81` in light and to
 // the application's near-white dark primary in dark — which is exactly the
@@ -99,10 +107,26 @@ describe("the token the arc now takes", () => {
   });
 
   it("names the token whose absence produced the measured foreground", () => {
-    // Kept as a statement of the CAUSE: nothing registers this, so every
-    // utility built on it emits no rule. It is the reason the arc took
-    // `currentColor` rather than a colour anybody chose.
-    expect(registersColourToken("mustard-ink")).toBe(false);
+    // THE CAUSE, READ ON THE TREE AS IT NOW STANDS. When the foreground was
+    // measured, nothing registered `--color-mustard-ink`, so every utility
+    // built on it emitted no rule and the arc took `currentColor` rather than
+    // a colour anybody chose. The `@theme inline` block binds that token now,
+    // for the warm tint this same wrapper carries, so the absence is history:
+    // pinning it as present state would be asking for the tint to be taken
+    // away again.
+    expect(registersColourToken("mustard-ink")).toBe(true);
+    expect(GLOBALS).toMatch(/--color-mustard-ink:\s*var\(--mustard-ink\)/);
+
+    // What the absence exposed, and what still has to hold: the mustard token
+    // reaches this wrapper only as a BACKGROUND. The arc's own colour utility
+    // is never built on it, so no later tint can take the arc back to
+    // `currentColor`.
+    const { container } = render(<ReviewGatePlaceholder />);
+    const classes = arcWrapper(container).className.split(/\s+/);
+    const mustard = classes.filter((c) => /mustard-ink(\/|$)/.test(c));
+    expect(mustard.length).toBeGreaterThan(0);
+    expect(mustard.every((c) => c.startsWith("bg-"))).toBe(true);
+    expect(classes.some((c) => c.startsWith("text-mustard-ink"))).toBe(false);
   });
 });
 

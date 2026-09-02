@@ -92,14 +92,20 @@ const row = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-run-recommen
 /**
  * Every element from the row's root down to (but not including) a pill.
  *
- * THE CONTINUE FLOOR IS NOT PANEL CHROME (cinatra#3062, convergence round). §V
- * draws the control's own wrapper verbatim —
+ * THE CONTINUE FLOOR IS NOT PANEL CHROME (cinatra#3062, convergence round;
+ * cinatra#3047, leg 7). §V draws the control's own wrapper verbatim —
  * `display:flex; justify-content:flex-end; margin-top:12px; padding-top:12px;
  * border-top:1px solid var(--line)` — so its hairline rule and the padding
- * beneath it are the DRAWING's, not a card this step wrapped itself in. What
- * this file bans is a panel around the step: a border, a ground or a radius that
- * closes the row off from the column it sits in. The floor is excluded by name
- * rather than by loosening the pattern, so a real card would still be caught.
+ * beneath it are the DRAWING's, not a card this step wrapped itself in: one
+ * hairline on one edge, no ground, no radius, no shadow and no padding that
+ * could box the pills. What this file bans is a panel around the step: a
+ * border, a ground or a radius that closes the row off from the column it sits
+ * in. This scan reads "card chrome" off class names alone, so a one-edge rule
+ * reads to it exactly like a four-edge border; the floor is excluded by its own
+ * anchor rather than by loosening the pattern, so a real card would still be
+ * caught, and the rule the floor must carry is asserted positively in
+ * `skills-step-chrome-per-drawing.test.tsx` — so nothing this scan stops
+ * looking at goes unwatched.
  */
 function frameElements(c: HTMLElement): HTMLElement[] {
   const root = row(c);
@@ -113,6 +119,25 @@ function frameElements(c: HTMLElement): HTMLElement[] {
   }
   return out;
 }
+
+/**
+ * THE FLOOR CARRIES A RULE AND NOTHING ELSE. The exclusion above is bounded
+ * here, and bounded by an ALLOWLIST rather than by a list of forbidden shapes
+ * (convergence finding, leg 7): a denial list has to guess every way a frame
+ * could be written — a bare `border`, `border-y`, `border-s`, a padding on one
+ * side — and the one it forgets is the one that lands. These are the only
+ * classes the skipped element may carry; the drawing's floor is exactly a top
+ * hairline, the space above it and the alignment of the row it holds, so
+ * anything else on it is by definition chrome this scan stopped watching.
+ */
+const FLOOR_CHROME_ALLOWED = new Set([
+  "flex",
+  "justify-end",
+  "items-center",
+  "border-t",
+  "border-line",
+  "pt-3",
+]);
 
 afterEach(() => {
   cleanup();
@@ -130,6 +155,17 @@ describe("the live Skills step", () => {
     for (const el of frameElements(container)) {
       expect(`${el.tagName} ${el.className}`).not.toMatch(CARD_CHROME);
     }
+  });
+
+  it("keeps the step's own floor a RULE and never lets it become a frame", () => {
+    const { container } = mount(HELD);
+    const floor = row(container).querySelector<HTMLElement>("[data-skills-step-floor]");
+    expect(floor).not.toBeNull();
+    const carried = floor!.className.split(/\s+/).filter(Boolean);
+    // Stated as the whole set, so the failure names the offending class.
+    expect(carried.filter((c) => !FLOOR_CHROME_ALLOWED.has(c))).toEqual([]);
+    // …and the rule it exists to draw is required, not merely permitted.
+    expect(carried).toEqual(expect.arrayContaining(["border-t", "border-line"]));
   });
 
   it("is the row itself, not a card containing a row — the root IS the card root", () => {

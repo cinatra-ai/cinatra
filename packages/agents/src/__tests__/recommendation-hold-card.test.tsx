@@ -1594,6 +1594,24 @@ describe("finding 2 — a settled chip prints the SAME display name a held chip 
     expect(container.textContent).not.toContain("@cinatra-ai/blog-writing-skill");
   });
 
+  /**
+   * THE SKILL NAME, READ OFF EITHER FACE (the forward merge of cinatra#3047
+   * leg 7). The drawing weights the checkbox pill's name at 600 and the byline
+   * that follows it at 500, so the pill's name span now carries `font-semibold`
+   * while the plain settled chip still writes its single label at
+   * `font-medium`. This pin is about the TEXT the two readings print — the
+   * display name, never the package-qualified id — and not about the weight
+   * either of them draws it at, so it reads the name through the anchor the
+   * pill labels its box by and falls back to the plain chip's one label span.
+   */
+  const chipName = (chip: HTMLElement): string | null => {
+    const named =
+      chip.querySelector<HTMLElement>('[id^="skills-step-label-"]') ??
+      chip.querySelector<HTMLElement>(".font-medium");
+    expect(named).not.toBeNull();
+    return named!.textContent;
+  };
+
   it("the HELD and the SETTLED reading label the same skill identically", async () => {
     // The graded defect stated exactly: held chips read `blog-writing`, settled
     // chips read `@cinatra-ai/blog-writing-skill:blog-writing`.
@@ -1613,7 +1631,7 @@ describe("finding 2 — a settled chip prints the SAME display name a held chip 
     }));
     await mountCard({ wireRef: "hold-ref-name" });
     await waitFor(() => expect(chips()).toHaveLength(1));
-    const heldLabel = chips()[0]!.querySelector(".font-medium")!.textContent;
+    const heldLabel = chipName(chips()[0]!);
     cleanup();
 
     holdStateMock.mockImplementation(async () => ({
@@ -1629,7 +1647,7 @@ describe("finding 2 — a settled chip prints the SAME display name a held chip 
     }));
     await mountCard({ wireRef: null });
     await waitFor(() => expect(chips()).toHaveLength(1));
-    const settledLabel = chips()[0]!.querySelector(".font-medium")!.textContent;
+    const settledLabel = chipName(chips()[0]!);
 
     expect(settledLabel).toBe(heldLabel);
     expect(settledLabel).toBe("Blog writing");

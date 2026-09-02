@@ -2298,6 +2298,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
                 schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
                 ref: gateRef,
               }}
+              // §VI — the gate's conversational prompt window keeps its exchange
+              // with the RUN (cinatra#3141 item 1), so the mount that names the
+              // gate names the run it opened on too.
+              runId={run.id}
             />
           </LifecycleCardSurfaceProvider>
         ) : (
