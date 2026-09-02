@@ -165,6 +165,34 @@ function templateRow(hasArtifactBindings: boolean | null, packageVersion = "1.2.
   };
 }
 
+/**
+ * The pool answers BY QUERY: the template read gets the row above, and the
+ * rewrite probe (template `updated_at` beside the run's immutable `created_at`)
+ * gets the pair this case is about. A case that says nothing about timestamps
+ * gets a probe that answers with no row at all — unreadable, which proves no
+ * rewrite and keeps the caller loud.
+ */
+function poolAnswering(opts: {
+  template: { rows: Array<Record<string, unknown>> };
+  templateUpdatedAt?: Date;
+  runCreatedAt?: Date;
+}) {
+  return async (text: string) => {
+    if (text.includes("template_updated_at")) {
+      if (!opts.templateUpdatedAt || !opts.runCreatedAt) return { rows: [] };
+      return {
+        rows: [
+          {
+            template_updated_at: opts.templateUpdatedAt,
+            run_created_at: opts.runCreatedAt,
+          },
+        ],
+      };
+    }
+    return opts.template;
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   __resetRunPackageBindingsCacheForTests();
@@ -221,6 +249,44 @@ describe("the template says a binding was declared and the package read finds no
     const outcomes = await materializeRunArtifacts(BASE_INPUT);
 
     expect(outcomes).toEqual([]);
+  });
+
+  it("says NOTHING when the template row was rewritten after this run started", async () => {
+    // The recompile road writes has_artifact_bindings together with the SAME
+    // version string when local source is edited without a bump, so a dev who
+    // adds a binding to an already-running agent flips the row to `true` at this
+    // run's pin while the immutable copy this run resolved still declares none.
+    // The run did not cause that and is not evidence of anything: prior posture.
+    const runStarted = new Date("2026-09-02T10:00:00Z");
+    poolQueryMock.mockImplementation(
+      poolAnswering({
+        template: templateRow(true),
+        runCreatedAt: runStarted,
+        templateUpdatedAt: new Date(runStarted.getTime() + 60_000),
+      }),
+    );
+    getAgentPackageMock.mockResolvedValue(packageFixture({ bound: false }));
+
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+
+    expect(outcomes).toEqual([]);
+  });
+
+  it("stays LOUD when the row has stood untouched since before the run started", async () => {
+    const runStarted = new Date("2026-09-02T10:00:00Z");
+    poolQueryMock.mockImplementation(
+      poolAnswering({
+        template: templateRow(true),
+        runCreatedAt: runStarted,
+        templateUpdatedAt: new Date(runStarted.getTime() - 3_600_000),
+      }),
+    );
+    getAgentPackageMock.mockResolvedValue(packageFixture({ bound: false }));
+
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+
+    expect(outcomes.length).toBe(1);
+    expect(outcomes[0]!.outputId).toBe("(binding-disagreement)");
   });
 
   it("leaves a flag that no longer describes THIS run's pin untouched", async () => {

@@ -192,18 +192,25 @@ export function ReviewGateLoading() {
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
+const REVIEW_GATE_PLACEHOLDER_TITLE_ID = "review-gate-placeholder-title";
+
 export function ReviewGatePlaceholder() {
   return (
     <div
       data-conformance-id="review-gate-placeholder"
-      // A busy REGION, named for a reader who cannot see the spin. The card now
-      // names itself on screen, so the region takes its accessible name from the
-      // title rather than carrying a second, invisible one.
+      // A busy REGION, named for a reader who cannot see the spin. The card names
+      // itself on screen now, so the region takes its accessible name FROM THAT
+      // TITLE — `role="status"` is not named from its contents, so the name has
+      // to be pointed at explicitly (convergence round: dropping the old
+      // `aria-label` without this left the region unnamed) rather than carrying a
+      // second, invisible label that could drift from the drawn one.
       role="status"
       aria-busy="true"
+      aria-labelledby={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
       className="w-full"
     >
       <p
+        id={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
         data-placeholder-title="agentic-run-progress"
         className="font-sans text-sm font-bold text-foreground"
       >

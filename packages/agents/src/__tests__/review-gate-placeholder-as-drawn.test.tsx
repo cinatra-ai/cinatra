@@ -136,4 +136,15 @@ describe("the working placeholder draws the ratified drawing's own reading", () 
     expect(root.getAttribute("role")).toBe("status");
     expect(root.getAttribute("aria-busy")).toBe("true");
   });
+
+  it("names its busy region FROM the drawn title (role=status is not named by its contents)", () => {
+    const { container } = render(<ReviewGatePlaceholder />);
+    const region = container.querySelector('[data-conformance-id="review-gate-placeholder"]')!;
+    const labelledBy = region.getAttribute("aria-labelledby");
+    expect(labelledBy).toBeTruthy();
+    const title = container.querySelector(`#${labelledBy}`);
+    expect(title?.textContent).toBe("Agentic Run Progress");
+    // And no second, invisible name that could drift from the drawn one.
+    expect(region.getAttribute("aria-label")).toBeNull();
+  });
 });
