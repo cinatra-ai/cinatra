@@ -633,6 +633,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   role="radio"
                   aria-checked={triggerType === "immediate"}
                   tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
                   onKeyDown={
                     readOnly
                       ? undefined
@@ -665,6 +666,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   role="radio"
                   aria-checked={triggerType === "scheduled"}
                   tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
                   onKeyDown={
                     readOnly
                       ? undefined
@@ -759,6 +761,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   role="radio"
                   aria-checked={triggerType === "recurring"}
                   tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
                   onKeyDown={
                     readOnly
                       ? undefined
@@ -862,7 +865,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                              under `dark:` as well lets tailwind-merge's
                              same-modifier dedup drop the variant's own class
                              instead, so the cell stands where the drawing
-                             stands it on both grounds. */
+                             stands it on both grounds. The hover pair is named as well, so
+                             the variant's own hover fills do not put the
+                             control fill back under the cursor. */
                           <Button
                             key={i}
                             type="button"
@@ -873,7 +878,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                             className={`h-8 w-10 rounded-control border text-xs font-semibold transition-colors ${
                               recurring.weekdays.includes(i)
                                 ? "border-primary bg-primary text-primary-foreground"
-                                : "border-input bg-surface-strong text-muted-foreground dark:bg-surface-strong"
+                                : "border-input bg-surface-strong text-muted-foreground hover:bg-surface-strong dark:bg-surface-strong dark:hover:bg-surface-strong"
                             }`}
                           >
                             {label}

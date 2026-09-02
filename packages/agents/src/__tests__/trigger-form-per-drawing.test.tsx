@@ -193,6 +193,21 @@ describe("the weekday toggles sit on the reserved surface when unselected", () =
     expect(sunday.className).not.toContain("bg-background");
   });
 
+  it("keeps the reserved ground under the cursor, in both palettes", () => {
+    // The primitive's own outline variant carries `hover:bg-muted` and a dark
+    // hover fill of its own. Those are a DIFFERENT modifier from the plain
+    // fill, so naming the surface unmodified does not displace them: without
+    // the hover pair the cell returns to the control fill under the cursor,
+    // which is the one ground the drawing reserves against here.
+    renderForm();
+    fireEvent.click(screen.getByText("Recurring"));
+    const sunday = screen.getByRole("button", { name: "Sun" });
+    expect(sunday.className).toContain("hover:bg-surface-strong");
+    expect(sunday.className).toContain("dark:hover:bg-surface-strong");
+    expect(sunday.className).not.toContain("hover:bg-muted");
+    expect(sunday.className).not.toContain("dark:hover:bg-input-fill");
+  });
+
   it("leaves the selected weekday's fill alone", () => {
     renderForm();
     fireEvent.click(screen.getByText("Recurring"));
@@ -295,6 +310,24 @@ describe("a keyboard can choose every row, not only the first", () => {
     renderForm({ readOnly: true });
     for (const option of ["scheduled", "recurring"] as const) {
       expect(head(option).getAttribute("tabindex")).toBe("-1");
+    }
+  });
+
+  it("says the rows are disabled in the read-only reading, not merely inert", () => {
+    // A disabled fieldset disables form CONTROLS. These heads are not form
+    // controls, they are ARIA radios on plain elements, so the fieldset does
+    // not reach them: a reader would still be told the choice is live. Each
+    // head says so itself.
+    renderForm({ readOnly: true });
+    for (const option of ["immediate", "scheduled", "recurring"] as const) {
+      expect(head(option).getAttribute("aria-disabled")).toBe("true");
+    }
+  });
+
+  it("leaves the rows undisabled in the ordinary reading", () => {
+    renderForm();
+    for (const option of ["immediate", "scheduled", "recurring"] as const) {
+      expect(head(option).getAttribute("aria-disabled")).toBeNull();
     }
   });
 });
