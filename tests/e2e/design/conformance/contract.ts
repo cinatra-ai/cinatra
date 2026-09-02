@@ -54,6 +54,11 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  ARTIFACT_KIND_DISPLAY_ROWS,
+  type ArtifactKindDisplay,
+  type ArtifactKindDisplaySurfaceId,
+} from "./artifact-review-displays";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -1619,11 +1624,15 @@ const HARNESS_ANCHOR_SURFACE_ID = "status-pills";
  */
 const AWAITING_MOUNT_SETTLE_MS = 5_000;
 
-function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver {
+function awaitingMount(
+  surfaceId: string,
+  driver: SurfaceDriver,
+  reason: string = AWAITING_PER_SCOPE_SURFACES,
+): SurfaceDriver {
   const guard = async (page: Page): Promise<void> => {
     await expect(
       page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
-      `the conformance harness itself did not render — this is a real failure, never a surface awaiting cinatra#3152`,
+      `the conformance harness itself did not render — this is a real failure, never a surface whose mount has not landed yet`,
     ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
 
     let mounted = true;
@@ -1635,7 +1644,7 @@ function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver 
     } catch {
       mounted = false;
     }
-    test.skip(!mounted, `${surfaceId}: ${AWAITING_PER_SCOPE_SURFACES}`);
+    test.skip(!mounted, `${surfaceId}: ${reason}`);
   };
   return {
     ...driver,
@@ -1904,6 +1913,408 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // packages/notifications/src/bell-skeleton.tsx); each action is exercised to its
 // specified outcome on the harness `data-outcome` instrumentation.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The ARTIFACT-KIND DISPLAY family, STANDALONE (cinatra#3158, epic #3155 W2)
+// ---------------------------------------------------------------------------
+//
+// The eleven artifact-kind display surfaces of the artifact-review drawing: the
+// displays the fleet adds, one per type, drawn on the artifact's own page and —
+// unchanged — on the review step of the run page. This is the standalone reading
+// of the same family W1 drives in a conversation.
+//
+// ONE LIST, ONE MAP. The rows live in artifact-review-displays.ts, keyed by the
+// manifest surface id, and the map below is built FROM them: being listed is
+// being mapped, so there is no second place a surface could be forgotten. The
+// three surfaces whose per-kind display shape is the whole of what the drawing
+// gives them ride the factory alone; the eight that carry a drawn structure of
+// their own extend it.
+//
+// NONE OF THESE DISPLAYS IS ON THE DEFAULT BRANCH, and this wave does not
+// pretend otherwise. Grounded by reading the shipped tree, not assumed: seven of
+// the eleven belong to extensions that declare a type and ship no renderer at
+// all; the pointer and the page draw through ONE renderer the drawing names
+// (@cinatra-ai/website-artifacts:page-diff) which no package in the tree ships;
+// the shipped markdown display draws its two readings SIDE BY SIDE, which the
+// drawing forbids in those words; and the download card, which IS shipped and
+// does draw what §V.2 describes, carries none of the conformance anchors this
+// contract addresses and is an extension renderer the conformance harness may
+// not mount at all. So every driver below is guarded by `awaitingMount` — the
+// same guard, and the same fail-closed harness anchor, the Workspace surfaces
+// have used since cinatra#3152 — and each names in its skip reason exactly what
+// its display is waiting for. Nothing here stands in for a surface: every
+// assertion is written in full against the drawing's own declarations and runs
+// unchanged, for real, the moment a mount exists.
+//
+// WHY NO HARNESS MOUNT LANDS WITH THIS WAVE. W0's mount is the real shipped chip
+// row under the real host declaration. There is no equivalent to mount here: a
+// harness element drawing a display the product does not have would be a stand-in
+// — the one thing this epic's road forbids — and mounting the one display that
+// does ship would put a real extension instance in a core fixture, which is
+// precisely what the core/extension instance-coupling ban exists to stop. The
+// mount lands with the display.
+
+/** The populated mount of one artifact-kind display. */
+function kindDisplayMount(surface: string, variant: string): string {
+  return `[data-surface-id="${surface}"][data-variant="${variant}"]`;
+}
+
+/** The display panel itself, inside its mount. It carries the surface anchor. */
+function kindDisplayPanel(root: Locator, surface: string): Locator {
+  return root.locator(`[data-conformance-id="${surface}"]`);
+}
+
+/**
+ * A drawn state variant: its own mount, drawing the same display in that
+ * reading.
+ *
+ * §XI is explicit about what a reading is NOT: "a sentence about a failure …
+ * reports through the app's toast surface, never as a line written into the
+ * panel", and "where content is absent by right … the display draws the named
+ * gap in the missing thing's place, never a blank plate and never a row appended
+ * beneath the work". So a state variant is the display drawn differently, never
+ * a note added to it — and never the floor, which §V.2 keeps strictly apart from
+ * a display ("a display and a floor are never drawn for each other").
+ */
+function kindDisplayState(surface: string, variant: string): StateAssert {
+  return async (page) => {
+    const mount = page.locator(kindDisplayMount(surface, variant));
+    await expect(mount).toHaveCount(1);
+    const display = kindDisplayPanel(mount, surface);
+    await expect(display).toBeVisible();
+    await expect(display).toHaveAttribute("data-display-state", variant);
+    await expect(display.locator('[data-conformance-id="review-target-floor"]')).toHaveCount(0);
+    // "a sentence about a failure ... reports through the app's toast surface,
+    // never as a line written into the panel" — so NO reading of the display
+    // carries an alert of its own, the failure reading least of all.
+    await expect(display.locator('[role="alert"]')).toHaveCount(0);
+    if (variant === "empty") {
+      // "the display draws the named gap in the missing thing's place, never a
+      // blank plate": an empty reading that says nothing is a red, not a pass.
+      await expect(display).not.toHaveText(/^\s*$/);
+    }
+  };
+}
+
+/**
+ * The `kind:*` reading. The display carries the artifact kind it draws, the same
+ * way the extension listing card carries its catalog kind (`cardKindState`).
+ */
+function kindDisplayKindState(surface: string, kind: string): StateAssert {
+  return async (_page, root) => {
+    await expect(kindDisplayPanel(root, surface)).toHaveAttribute("data-kind", kind);
+  };
+}
+
+/**
+ * The shared per-kind display factory.
+ *
+ * What every display in this family owes the drawing, and therefore what this
+ * factory asserts for all eleven:
+ *
+ *   - §XI: "A display draws the work and nothing about itself — no renderer chip
+ *     and no provenance line"; §V says the same for the slot, and the
+ *     lifecycle-cards drawing a third time.
+ *   - §XI: "It carries no decision affordance: Comment, Regenerate and Continue
+ *     are the review floor's … drawn by the surface around the display and never
+ *     inside it, so a display drawn where there is no review shows no control at
+ *     all."
+ *   - §XI: "Where a display divides one artifact into readings, they are the
+ *     design system's tabs … never a toggle and never a segmented control."
+ *   - the one field the manifest binds, addressed through the binding the
+ *     display names on itself — the `data-field="<name>=<source>"` convention the
+ *     shipped review target already carries — so a display bound to the wrong
+ *     source cannot resolve the locator at all.
+ *   - the one action the manifest declares, pressed on the control that declares
+ *     exactly that action AND that outcome (`declaredAction`), so a driver
+ *     cannot press one control and report another one's outcome.
+ *   - every state variant the manifest declares.
+ */
+function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
+  const driver: SurfaceDriver = {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(kindDisplayMount(row.surface, "populated")),
+    present: async (_page, root) => {
+      const display = kindDisplayPanel(root, row.surface);
+      await expect(display).toBeVisible();
+      // Nothing about itself.
+      await expect(
+        display.locator('[data-conformance-id="review-provenance-native"]'),
+      ).toHaveCount(0);
+      await expect(
+        display.locator('[data-conformance-id="review-provenance-marketplace"]'),
+      ).toHaveCount(0);
+      // No decision affordance, ever, inside a display.
+      await expect(display.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+      // Readings are tabs, never a switch and never a segmented control.
+      await expect(display.locator('[role="switch"]')).toHaveCount(0);
+      await expect(display.locator('[data-slot="toggle-group"]')).toHaveCount(0);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+
+  const field = row.field;
+  if (field !== null) {
+    driver.fields[field.name] = {
+      source: field.source,
+      assert: async (_page, root) => {
+        const bound = kindDisplayPanel(root, row.surface).locator(
+          `[data-field="${field.name}=${field.source}"]`,
+        );
+        await expect(bound).toHaveCount(1);
+        await expect(bound).toBeVisible();
+      },
+    };
+  }
+
+  const action = row.action;
+  if (action !== null) {
+    driver.actions[action.name] = declaredAction(action.name, action.outcome);
+  }
+
+  for (const state of row.states) {
+    driver.states[state] = state.startsWith("kind:")
+      ? kindDisplayKindState(row.surface, state.slice("kind:".length))
+      : kindDisplayState(row.surface, state);
+  }
+
+  return driver;
+}
+
+/** Assert the display draws no tab strip at all — a surface the drawing gives
+ *  ONE view ("There is no tab strip and no second reading to switch to"). */
+async function expectOneView(root: Locator, surface: string): Promise<void> {
+  await expect(kindDisplayPanel(root, surface).locator('[data-slot="tabs-list"]')).toHaveCount(0);
+}
+
+/**
+ * The way back to the live dashboard, which §XI.5 and §XI.6 draw ONLY once the
+ * review is continued: "while a decision is still open the proposal is not the
+ * live dashboard, so the display offers no way to open one, and the navigation
+ * appears with the settled marker".
+ *
+ * So the action is driven on the SETTLED mount, and the open reading is asserted
+ * to carry no such control at all — the absence is half of what the drawing says.
+ */
+function openLiveDashboardOnceContinued(
+  surface: string,
+): { outcome: string; run: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    outcome: "dashboard-canonical",
+    run: async (page, root) => {
+      // The absence below is evidence ONLY if the open reading is actually
+      // drawn: on a missing populated mount a zero count proves nothing, and the
+      // settled half alone would carry the whole test.
+      await expect(page.locator(kindDisplayMount(surface, "populated"))).toHaveCount(1);
+      await expect(kindDisplayPanel(root, surface)).toBeVisible();
+      await expect(
+        kindDisplayPanel(root, surface).locator(
+          '[data-action="open-live-dashboard -> dashboard-canonical"]',
+        ),
+      ).toHaveCount(0);
+      const settled = page.locator(kindDisplayMount(surface, "continued"));
+      await expect(settled).toHaveCount(1);
+      await expect(settled.locator('[data-conformance-id="settled-marker"]')).toBeVisible();
+      await clickUntil(
+        settled.locator('[data-action="open-live-dashboard -> dashboard-canonical"]'),
+        async () => {
+          await expect(settled).toHaveAttribute("data-outcome", "dashboard-canonical", {
+            timeout: 2_000,
+          });
+        },
+      );
+    },
+  };
+}
+
+/**
+ * What each of the eight displays that carry a drawn structure of their own adds
+ * to the family shape. Keyed by the surface union, so a row without an entry is
+ * a deliberate omission (the three factory-only surfaces) rather than a typo.
+ */
+/**
+ * The eight surfaces that carry a drawn structure of their own — the union
+ * minus the three the wave rides on the factory alone. The extras map below is
+ * typed over THIS union and is NOT Partial, so dropping one of the eight is a
+ * compile error rather than a silently thinner driver.
+ */
+type ArtifactKindDisplayExtraSurfaceId = Exclude<
+  ArtifactKindDisplaySurfaceId,
+  "markdown-display-tabs" | "binary-download-card" | "chart-display-only"
+>;
+
+const ARTIFACT_KIND_DISPLAY_EXTRAS: Record<
+  ArtifactKindDisplayExtraSurfaceId,
+  (base: SurfaceDriver) => SurfaceDriver
+> = {
+  // §XI.1 — one view: the sender block, the subject under it, the body under a
+  // rule. "There is no tab strip and no second reading to switch to." "A text
+  // display draws no picture: the avatar is the sender's initials set in a plain
+  // disc, never an image." And "beyond those two fields the pane offers nothing:
+  // it carries no reply field and no compose affordance of any kind — not inert,
+  // not disabled, absent".
+  "email-body-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      await expectOneView(root, "email-body-display");
+      const display = kindDisplayPanel(root, "email-body-display");
+      const sender = display.locator('[data-conformance-id="email-body-sender"]');
+      await expect(sender).toBeVisible();
+      await expect(sender.locator("img")).toHaveCount(0);
+      await expect(display.locator('[data-conformance-id="email-body-subject"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="email-body-reply"]')).toHaveCount(0);
+    },
+  }),
+
+  // §XI.2 — "the reader sees one panel, not two": the display branches on the
+  // artifact's own content form and draws it on a renderer the fleet already has
+  // — the markdown display over text, the embedded pdf viewer over pdf — and
+  // never a viewer written for this kind.
+  "mixed-kind-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const display = kindDisplayPanel(root, "mixed-kind-display");
+      await expect(
+        display.locator(
+          '[data-conformance-id="markdown-display-tabs"], [data-conformance-id="pdf-embedded-viewer"]',
+        ),
+      ).toHaveCount(1);
+    },
+  }),
+
+  // §XI.3 — "The display shows the captured picture and, beneath it, the facts
+  // that make a screenshot readable a week later: where it was taken, at what
+  // viewport, and when."
+  "screenshot-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const display = kindDisplayPanel(root, "screenshot-display");
+      await expect(display.locator('[data-conformance-id="screenshot-picture"]')).toBeVisible();
+      for (const fact of ["captured-url", "captured-viewport", "captured-at"]) {
+        await expect(display.locator(`[data-conformance-id="screenshot-${fact}"]`)).toBeVisible();
+      }
+    },
+  }),
+
+  // §XI.4 — the exported deck in the embedded viewer, and "the display adds no
+  // controls of its own": no page counter, no Previous and no Next.
+  "slide-deck-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const display = kindDisplayPanel(root, "slide-deck-display");
+      await expect(display.locator('[data-conformance-id="pdf-embedded-viewer"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="deck-page-counter"]')).toHaveCount(0);
+      for (const name of ["Previous", "Next"]) {
+        await expect(display.getByRole("button", { name, exact: true })).toHaveCount(0);
+      }
+    },
+  }),
+
+  // §XI.5 — the shared read-only composition: "no toolbar, no filters, no drag,
+  // no save, and no decision affordance", and one line that says both facts at
+  // once with the time the numbers were read.
+  "dashboard-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const display = kindDisplayPanel(root, "dashboard-display");
+      await expect(display.locator('[data-conformance-id="dashboard-composition"]')).toBeVisible();
+      for (const forbidden of ["dashboard-toolbar", "dashboard-filters", "dashboard-save"]) {
+        await expect(display.locator(`[data-conformance-id="${forbidden}"]`)).toHaveCount(0);
+      }
+      await expect(display.locator('[data-conformance-id="pinned-and-current"]')).toBeVisible();
+    },
+    actions: {
+      ...base.actions,
+      "open-live-dashboard": openLiveDashboardOnceContinued("dashboard-display"),
+    },
+  }),
+
+  // §XI.6 — one entry of a dashboard, drawn exactly as it sits in it, "and says
+  // which dashboard and which dashboard revision it was cut from, so a reader can
+  // always get back to where it came from".
+  "portlet-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const display = kindDisplayPanel(root, "portlet-display");
+      await expect(display.locator('[data-conformance-id="dashboard-composition"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="portlet-cut-from"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="pinned-and-current"]')).toBeVisible();
+    },
+    actions: {
+      ...base.actions,
+      "open-live-dashboard": openLiveDashboardOnceContinued("portlet-display"),
+    },
+  }),
+
+  // §XI.7 — the pointer draws through the page display, and "a pointer is still
+  // never a review target": "the identity line reads not pinnable where a target
+  // reads its revision, and no decision floor is drawn anywhere the pointer
+  // appears".
+  "drupal-pointer-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      await expectOneView(root, "drupal-pointer-display");
+      const display = kindDisplayPanel(root, "drupal-pointer-display");
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="pointer-identity"]')).toContainText(
+        "not pinnable",
+      );
+      await expect(root.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+    },
+  }),
+
+  // §XI.8 — "one view and no tab strip": the page embedded live in a frame, a
+  // diff of only the changed excerpts beneath it, and Open in the CMS drawn under
+  // the excerpts, the same way in every reading.
+  "cms-page-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      await expectOneView(root, "cms-page-display");
+      const display = kindDisplayPanel(root, "cms-page-display");
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      await expect(
+        display.locator('[data-action="open-in-cms -> cms-opened"]'),
+      ).toBeVisible();
+    },
+  }),
+};
+
+/** Why an artifact-kind display driver skips, named on every skipped test. */
+function artifactKindDisplayReadiness(row: ArtifactKindDisplay): string {
+  return (
+    `the display drawn in §${row.section} of the artifact-review drawing is not on the ` +
+    `default branch yet — ${row.readiness}. Every assertion in this driver is written ` +
+    `against the drawing's own declarations and runs unchanged the moment the mount exists.`
+  );
+}
+
+/** The eleven drivers, built from the one row list. */
+const ARTIFACT_KIND_DISPLAY_DRIVERS: Record<string, SurfaceDriver> = Object.fromEntries(
+  ARTIFACT_KIND_DISPLAY_ROWS.map((row) => {
+    const base = artifactKindDisplayDriver(row);
+    const extend = (
+      ARTIFACT_KIND_DISPLAY_EXTRAS as Partial<
+        Record<ArtifactKindDisplaySurfaceId, (base: SurfaceDriver) => SurfaceDriver>
+      >
+    )[row.surface];
+    return [
+      row.surface,
+      awaitingMount(row.surface, extend ? extend(base) : base, artifactKindDisplayReadiness(row)),
+    ];
+  }),
+);
 
 const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
@@ -3317,6 +3728,11 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
   ),
+  // The artifact-kind display surfaces of the artifact-review drawing, standalone
+  // (cinatra#3158, epic #3155 W2). Built from ONE row list, so being listed is
+  // being mapped; each SKIPS with the reason its display is waiting for until the
+  // harness mounts it.
+  ...ARTIFACT_KIND_DISPLAY_DRIVERS,
   // The in-conversation suggestion chips (cinatra#3156, epic #3155). One family
   // factory over one fixture list — the later waves add rows, not drivers.
   ...Object.fromEntries(
