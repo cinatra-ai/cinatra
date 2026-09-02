@@ -39,7 +39,16 @@ vi.mock("../run-actions", () => ({
   setRunTrigger: vi.fn(),
 }));
 
+import type { ProposedSchedule } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+
 import { setRunTrigger } from "../run-actions";
+
+/** The one-off the step is given — the moment this reading arms and asserts. */
+const STATED_ONE_OFF: ProposedSchedule = {
+  kind: "scheduled",
+  runAt: "2099-01-01T09:00",
+  timezone: "Europe/Berlin",
+};
 import {
   TriggerScreenClient,
   scheduleContinueLanding,
@@ -94,11 +103,16 @@ describe("scheduleContinueLanding — where the press lands, read on its own", (
 describe("Continue on a schedule re-renders the surface instead of leaving it", () => {
   it("a one-off: the step redraws in place, and the reader is not navigated", async () => {
     mockedSetRunTrigger.mockResolvedValueOnce({ ok: true, runId: "abc", jobSchedulerId: null });
-    renderForm({ agentId: "demo-agent", instanceId: "abc" });
-    fireEvent.click(screen.getByText("Schedule for later"));
-    fireEvent.change(document.querySelector("#scheduledAt") as HTMLInputElement, {
-      target: { value: "2099-01-01T09:00" },
+    // THE MOMENT ARRIVES THE WAY THE SCREEN NOW TAKES IT. `Run at` is the
+    // drawn date picker, not the browser's own date-time input, so a moment is
+    // no longer typed into a text field — the step opens on the schedule it was
+    // given, which is the one road a one-off reaches this press by.
+    renderForm({
+      agentId: "demo-agent",
+      instanceId: "abc",
+      statedSchedule: STATED_ONE_OFF,
     });
+    expect(screen.getByText("Schedule for later")).toBeTruthy();
     fireEvent.click(screen.getByText("Continue"));
     await waitFor(() => {
       expect(routerState.refresh).toHaveBeenCalledTimes(1);
@@ -108,6 +122,9 @@ describe("Continue on a schedule re-renders the surface instead of leaving it", 
     expect(mockedSetRunTrigger.mock.calls[0][0]).toMatchObject({
       runId: "abc",
       triggerType: "scheduled",
+      // The stated moment is what was armed — the press carries the field's
+      // own value, not merely the row's kind.
+      scheduledAt: "2099-01-01T09:00",
     });
   });
 

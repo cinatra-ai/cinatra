@@ -16,7 +16,6 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
 
 import { requireAdminSession } from "@/lib/auth-session";
 import { validateInstanceNamespace } from "@/lib/instance-namespace";
@@ -30,6 +29,13 @@ import {
 // (The setup-wizard completion cache is gone — S3 cinatra#2388 re-derives
 // completion freshly on every read, so there is nothing to invalidate here.)
 import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
+// The deferred-mode PERSISTENCE PATH lives in its own module so a non-browser
+// caller (the development instance-provisioning command) can reach the SAME
+// writer instead of growing a second one. A "use server" module may only export
+// async functions, so a shared helper cannot live here and stay importable --
+// the same reason `./registry-url` was extracted.
+import { persistDeferredInstanceIdentity } from "@/lib/instance-identity-deferred-write";
+import { instanceDisplayNameSchema } from "@/lib/instance-identity-display-name";
 import { encryptSecret } from "@/lib/instance-secrets";
 import {
   createNpmUser,
@@ -44,25 +50,18 @@ import { reconcileRemoteFromVendorGet } from "@/lib/marketplace-reconcile";
 import { detectMarketplaceEnvConflict } from "@/lib/marketplace-env-conflict";
 import { withInstanceIdentityWriteLock } from "@/lib/instance-identity-write-lock";
 import type { RemoteRegistryConnection } from "@/lib/instance-identity-store";
-import { redactSensitive } from "@/lib/redact-sensitive";
 import { resolveRegistryUrl, shouldSelfRegisterRegistryUser } from "./registry-url";
 import type { SetupErrorCode } from "../setup-flash";
 
 // -----------------------------------------------------------------------------
 // Validation — npm scope rules for namespace + display name.
 //
-// Namespace validation lives in the shared validator module
-// (src/lib/instance-namespace) so the same policy hooks the wizard client island
-// and any control-plane endpoint.
+// BOTH halves live in shared validator modules so one policy serves the wizard
+// client island, this action and any non-browser caller: the namespace in
+// src/lib/instance-namespace, the display name in
+// src/lib/instance-identity-display-name (`instanceDisplayNameSchema`, the same
+// schema this file used to declare inline).
 // -----------------------------------------------------------------------------
-
-const instanceDisplayNameSchema = z.object({
-  instanceDisplayName: z
-    .string()
-    .trim()
-    .min(1, "Instance display name is required.")
-    .max(120, "Instance display name must be 120 characters or fewer."),
-});
 
 // Codes-only flash protocol: build a `/setup/name?error=<code>` target. The
 // <SearchParamToast> island in the setup layout maps the code to a STATIC
@@ -85,49 +84,6 @@ function redirectWithErrorCode(code: SetupErrorCode): never {
 // instance .env file).
 function isPlausibleRegistryToken(token: string): boolean {
   return token.length >= 16 && !/[\s\u0000-\u001f]/.test(token);
-}
-
-function buildDeferredRemoteRegistry(
-  instanceNamespace: string,
-  registryUrl: string,
-): RemoteRegistryConnection | undefined {
-  if (!registryUrl || !/^https?:\/\//i.test(registryUrl)) return undefined;
-  return {
-    url: registryUrl,
-    namespace: instanceNamespace,
-    status: "not_connected",
-  };
-}
-
-async function attachMarketplaceConsumerBestEffort(): Promise<void> {
-  try {
-    const { ensureMarketplaceAttachment } = await import("@/lib/marketplace-attach");
-    await ensureMarketplaceAttachment();
-  } catch (e) {
-    console.error(
-      "[saveInstanceIdentityAction] marketplace consumer attach failed; will retry on boot:",
-      redactSensitive(e),
-    );
-  }
-}
-
-async function persistDeferredInstanceIdentity(input: {
-  instanceNamespace: string;
-  instanceDisplayName: string;
-  registryUrl: string;
-}): Promise<void> {
-  const remote = buildDeferredRemoteRegistry(input.instanceNamespace, input.registryUrl);
-  writeInstanceIdentity({
-    instanceNamespace: input.instanceNamespace,
-    instanceDisplayName: input.instanceDisplayName,
-    ...buildFreshInstanceIdentityDurableFields(),
-    registryUrl: input.registryUrl,
-    firstPublishedAt: null,
-    createdAt: new Date().toISOString(),
-    ...(remote ? { registries: { remote } } : {}),
-  });
-  invalidateInstanceIdentityCache();
-  await attachMarketplaceConsumerBestEffort();
 }
 
 // Namespace-validation specifics are surfaced at the field by the wizard client

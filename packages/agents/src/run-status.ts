@@ -432,12 +432,18 @@ export function deriveProducedOutputTitle(input: {
 // never derived — so the two clauses cannot both be true of one turn: a run that
 // parked is described as parked, a run that did not is described as running.
 //
-// EVENT TENSE, deliberately, in BOTH clauses: this line is persisted with the
-// turn and re-read long after the card beside it has settled, while the run it
-// names goes on changing under both of them.
-// "The run paused" and "The run started" record what happened; "the run is
-// paused" or "the agent is running" would keep asserting a state that stopped
-// being true the moment somebody decided, or the moment the run finished.
+// EVENT TENSE WHERE THERE IS AN EVENT: this line is persisted with the turn and
+// re-read long after the card beside it has settled, while the run it names goes
+// on changing under it.
+// "The run paused" and "The run started" record what happened; "the agent is
+// running" would keep asserting a state that stopped being true the moment the
+// run finished.
+// A status that has NOT run has no event to record, and that is the one case
+// where a state reading is the honest one (cinatra#3147): the line names the
+// state the answer carried, the status it names is printed in the same
+// sentence, and the card beside it is what a reader follows from there. What is
+// never allowed is the reverse of both — an event sentence for a run that has
+// not had the event.
 //
 // IT NAMES THE RUN. The card carries the run's own link, but the line is what
 // makes the turn readable beside it — and a turn that never names the run it
@@ -544,6 +550,121 @@ export function runIsWaitingForItsSchedule(reading: {
 }
 
 /**
+ * The clause for a start whose run was enqueued and has not been picked up.
+ *
+ * `queued` is pre-dispatch: the job is on the queue and no worker has taken it
+ * yet. The line is composed at that instant and said back without a read of the
+ * run, so "The run started." was a claim about something that had not happened.
+ * This says the two things that ARE true then — the run is on the queue, and
+ * nobody has to do anything more for it to run — so a reader is neither misled
+ * nor left wondering whether the start needs chasing.
+ */
+export const RUN_START_QUEUED_CLAUSE = "The run is queued and will start on its own.";
+
+/**
+ * The clause for a start that landed on a human decision before running.
+ *
+ * `pending_approval` has TWO producers in the transition table above —
+ * `queued->pending_approval` (the setup interrupt, nothing has executed) and
+ * `running->pending_approval` (an interrupt raised mid-flight) — and a start
+ * answer can carry either, because the lost-dispatch-race branch re-reads
+ * whatever state the winning writer left. So this clause says only what is
+ * true of BOTH: a decision is outstanding. It does not claim the run has yet
+ * to start, and it does not name who may make the decision — standing is the
+ * approval surface's own answer, not this sentence's.
+ */
+export const RUN_START_AWAITING_APPROVAL_CLAUSE = "The run is waiting for an approval.";
+
+/**
+ * The clause for a start held by a trigger that IS set — `armed`.
+ *
+ * `armed` is the one status where a trigger has actually been established
+ * (`pending_trigger->armed` is its only producer besides `pending_input->armed`,
+ * both of them a submitted trigger), and the release job is what moves it on.
+ * Deliberately GENERIC about WHICH trigger: the schedule's own moment-specific
+ * wording is a separate concern layered above this choice, and this clause has
+ * to stay true of every trigger a run can wait on rather than describe one of
+ * them.
+ */
+export const RUN_START_AWAITING_TRIGGER_CLAUSE =
+  "The run is waiting for its trigger and has not started.";
+
+/**
+ * The clause for a start sitting in the trigger FORM — `pending_trigger`.
+ *
+ * Not the same state as `armed`, and this is why it cannot share its sentence:
+ * `pending_trigger` means the trigger step is open and awaiting the person's
+ * choice (see its own comment on the status union above), so no trigger exists
+ * yet for the run to be waiting on. Saying it were "waiting for its trigger"
+ * would hand a reader the same shape of untruth this whole block answers —
+ * a sentence describing a thing that has not happened.
+ */
+export const RUN_START_TRIGGER_NOT_SET_CLAUSE =
+  "The run has not started: its trigger is not set yet.";
+
+/**
+ * The clauses for a start that answered with a TERMINAL status.
+ *
+ * A start answer reaches these only through the lost-dispatch-race branch,
+ * which re-reads the row a concurrent writer settled — and `failed` and
+ * `stopped` are both reachable WITHOUT the run ever executing
+ * (`queued->failed`, `pending_input->failed`, `armed->failed`,
+ * `pending_trigger->failed`, and the matching `->stopped` cancel edges). So
+ * neither may say "The run started."; each reports the outcome the status
+ * names, which is true whether or not there was an execution. `completed` is
+ * the terminal status that DOES imply one, and it keeps the started clause.
+ */
+export const RUN_START_FAILED_CLAUSE = "The run ended in failure.";
+export const RUN_START_STOPPED_CLAUSE = "The run was stopped.";
+
+/**
+ * The floor for a status outside the vocabulary entirely.
+ *
+ * `describeStartedRun` takes `status: string` because the value crosses a wire,
+ * so a string the union does not name can still arrive. It falls here rather
+ * than back to `RUN_START_STARTED_CLAUSE` — the defect this whole block answers
+ * was exactly a fallback that claimed a start for statuses nobody had
+ * considered — and this clause errs the safe way, toward the card, which the
+ * plan makes right wherever the two could disagree. A status ADDED to
+ * `AgentRunStatus` never reaches this line: the clause table below is
+ * exhaustive and will not compile without it.
+ */
+export const RUN_START_NOT_STARTED_CLAUSE = "The run has not started yet.";
+
+/**
+ * The clause EVERY run status is described with — one entry per status, and
+ * exhaustive by the type checker.
+ *
+ * TYPED `Record<AgentRunStatus, string>` ON PURPOSE. The defect this block
+ * answers was a fallback: a status nobody had considered fell through to a
+ * sentence claiming a start. A lookup table keyed by `string` with a default
+ * would have rebuilt exactly that, one status later. Here a status added to
+ * `AgentRunStatus` fails to compile until somebody writes what is true of it,
+ * which is the only guarantee that scales past this change.
+ *
+ * READ BY THE STATUS ALONE, so the sentence a person is handed cannot disagree
+ * with the status printed beside it in the same line. Note this table is NOT
+ * `PRE_EXECUTION_RUN_STATUSES`: that set answers a different question (which
+ * statuses can never carry an execution record) and is deliberately not
+ * consulted here.
+ */
+const RUN_START_CLAUSES: Readonly<Record<AgentRunStatus, string>> = {
+  queued: RUN_START_QUEUED_CLAUSE,
+  pending_input: RUN_START_PARKED_CLAUSE,
+  pending_approval: RUN_START_AWAITING_APPROVAL_CLAUSE,
+  pending_trigger: RUN_START_TRIGGER_NOT_SET_CLAUSE,
+  armed: RUN_START_AWAITING_TRIGGER_CLAUSE,
+  // These three DID start: `running` by definition, `waiting_trigger` only ever
+  // from `running` (its single producer in the table above), and `completed`
+  // only from `running` or a WayFlow resume that executed.
+  running: RUN_START_STARTED_CLAUSE,
+  waiting_trigger: RUN_START_STARTED_CLAUSE,
+  completed: RUN_START_STARTED_CLAUSE,
+  failed: RUN_START_FAILED_CLAUSE,
+  stopped: RUN_START_STOPPED_CLAUSE,
+};
+
+/**
  * The platform's own report for a started run — the sentence the assistant says
  * back, on every host.
  *
@@ -574,8 +695,13 @@ export function describeStartedRun(input: {
       RUN_START_SCHEDULE_WAIT_CLAUSE
     );
   }
-  const clause =
-    input.status === "pending_input" ? RUN_START_PARKED_CLAUSE : RUN_START_STARTED_CLAUSE;
+  // The status decides, and every status the vocabulary knows has its own
+  // sentence — no status falls through to another status's claim. `status` is
+  // widened to `string` on this boundary (the answer crosses a wire), so a
+  // value outside the vocabulary lands on the floor rather than on a start it
+  // cannot vouch for: the sentence still prints the status the answer named,
+  // and the card beside the line is right where the two could disagree.
+  const clause = RUN_START_CLAUSES[input.status as AgentRunStatus] ?? RUN_START_NOT_STARTED_CLAUSE;
   return (
     `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
     `status: \`${input.status}\`). ${clause}`
@@ -609,14 +735,29 @@ export function correctRunStartSentenceForScheduleWait(input: {
   runId: string;
 }): string {
   const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
+  // status table itself rather than listed by hand, so a status given its own
+  // sentence is correctable the day it is added: a platform sentence this
+  // corrector does not recognise is a sentence left claiming a tense the run's
+  // row does not support, which is the defect this function answers.
+  //
   // THE WAIT CLAUSE IS IN THE SET TOO, which is what makes this idempotent: a
   // turn that has already been corrected matches WHOLE and is replaced by the
   // identical bytes, rather than matching its head and growing a second clause.
+  //
+  // LONGEST FIRST. Alternation is ordered, and several of these clauses share
+  // the head "The run has not started"; a shorter one placed first would match
+  // that head and leave the rest of a longer clause standing beside the
+  // replacement.
   const clauses = [
-    RUN_START_STARTED_CLAUSE,
-    RUN_START_PARKED_CLAUSE,
-    RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ...new Set([
+      ...Object.values(RUN_START_CLAUSES),
+      RUN_START_NOT_STARTED_CLAUSE,
+      RUN_START_PARKED_CLAUSE,
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ]),
   ]
+    .sort((a, b) => b.length - a.length)
     .map(escape)
     .join("|");
   const pattern = new RegExp(

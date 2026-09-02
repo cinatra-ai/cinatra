@@ -25,6 +25,10 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+import {
+  assertAssignmentScopeSnapshotNotMutated,
+  buildRunCreationAssignmentScopeSnapshot,
+} from "./assignment-scope-snapshot";
 // cinatra#2933 (lifecycle-b W5b) — `agent_run_messages` now carries a SECOND
 // use: the per-run conversation of the prompt windows outside the chat. This
 // reader is the RUN'S OWN replay thread and must keep returning exactly that,
@@ -1727,6 +1731,11 @@ export async function createAgentRun(
     // Persist whatever the caller supplied; the run-worker reads this at
     // re-authz time to reconstruct the originating user's authority.
     delegatedActorSnapshot: input.delegatedActorSnapshot ?? null,
+    // The IMMUTABLE assignment-scope snapshot (cinatra#2813 S1, epic #2812).
+    // Derived by the snapshot module's own run-creation seam — see it for
+    // why the scopes are decided HERE, at the primitive, and not at each
+    // producer, and for why only an explicit human contributes a personal tier.
+    assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input),
     // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
@@ -1840,6 +1849,11 @@ export async function updateAgentRunMeta(
     stepResults?: unknown[];
   },
 ): Promise<void> {
+  // The run-scope snapshot is decided at creation and never updated
+  // (cinatra#2813 S1). This is the generic patch path, so the guard lives here:
+  // a future writer that adds the field to this payload fails loudly instead of
+  // quietly re-pointing a live run at another set of assignments.
+  assertAssignmentScopeSnapshotNotMutated(patch as Record<string, unknown>);
   const updates: Partial<typeof agentRuns.$inferInsert> = {};
   if (patch.stepResults !== undefined) {
     updates.stepResults = JSON.stringify(patch.stepResults);
@@ -3400,6 +3414,9 @@ export async function createAgentRunPendingInput(
         // the same project frame.
         projectId: input.projectId ?? null,
         oboCeiling: oboCeilingJson,
+        // Same derivation as createAgentRun — a pending-input run is a run,
+        // and it must not reach dispatch with an undecided scope.
+        assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input),
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
       // LAST in the guarded transaction: the row exists for it to reference, and
