@@ -1559,10 +1559,11 @@ export function AgenticRunPanel({
   //
   //   WORKING     — the agent is doing the work and nothing is waiting on the
   //                 reader. The card is the placeholder: the frame, the spinner,
-  //                 the empty review screen. No heading, no status word, no
-  //                 progress list, no transcript — the words describe a card
-  //                 that says nothing, and everything it used to say is a claim
-  //                 about progress the reader did not ask for.
+  //                 the empty review screen, under the card's own fixed name.
+  //                 No status word, no progress list, no transcript — the words
+  //                 describe a card that says nothing ABOUT THE RUN, and
+  //                 everything it used to say beyond its name is a claim about
+  //                 progress the reader did not ask for.
   //
   //   REVIEW      — the work opened a review. The SAME box now holds the
   //                 'Review requested' screen — the shipped `ReviewGateCard`,
@@ -1668,7 +1669,20 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
+          // eleventh set). The drawn card frame is
+          // `border:1px solid var(--line); border-radius:12px;
+          //  background:var(--surface-strong)`. `.soft-panel` grounds on
+          // `var(--surface)` — one token light of it — and the review card's
+          // `run_card` frame draws no background of its own, so this section is
+          // the ground a reader actually sees. Only the WORKING reading is
+          // redrawn here: the review reading is the graded cell it already was
+          // and keeps the class string it was measured on.
+          className={
+            reviewScreenNode !== null
+              ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+          }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
           // ruled property: a proof has to be able to see the placeholder go and

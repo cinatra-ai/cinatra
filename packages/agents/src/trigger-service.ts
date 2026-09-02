@@ -163,8 +163,17 @@ export type SetTriggerReplaceStrictness = {
    * half: a caller that checked released/fired state against an EARLIER read
    * has an open window between its check and this write, and re-asking here
    * closes it against the read that actually matters.
+   *
+   * IT MAY ANSWER ASYNCHRONOUSLY (cinatra#3044). Some guards are about the row
+   * this function reads and some are about the RUN it belongs to — a run that
+   * has been stopped since the caller looked. The second kind needs a read of
+   * its own, and it has to happen HERE, inside the claim, or it is another
+   * snapshot with a window after it. A synchronous guard is unchanged and still
+   * satisfies this type.
    */
-  reverify?: (existing: TriggerRecord | null) => string | null;
+  reverify?: (
+    existing: TriggerRecord | null,
+  ) => string | null | Promise<string | null>;
 };
 
 export type GetTriggerForActorResult =
@@ -812,7 +821,7 @@ export async function setRunTriggerForActor(
         // upsert are about to act on. Nothing has been written yet at this point, so
         // a refusal here leaves the reader's existing schedule untouched.
         if (strictness?.reverify) {
-          const refusal = strictness.reverify(existing);
+          const refusal = await strictness.reverify(existing);
           if (refusal) return { ok: false, error: refusal };
         }
         // THE STOP STAMP WINS ON EVERY KIND SWITCH (cinatra#2981), and it is
@@ -1564,6 +1573,184 @@ function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null 
     return SAVE_SCHEDULE_REFUSALS.firedOneOff;
   }
   return null;
+}
+
+/** The status a run waits for its schedule CHOICE in (cinatra#3044) — the one
+ *  state the conversation's pending card is ever drawn for. */
+const SCHEDULE_PENDING_STATUS = "pending_trigger";
+
+// ---------------------------------------------------------------------------
+// armRunScheduleForActor — the schedule a WAITING run is given (cinatra#3044)
+// ---------------------------------------------------------------------------
+//
+// NOT A SECOND ARMING PATH, and the difference from its neighbour above is the
+// whole of it. `updateRunTriggerScheduleForActor` REPLACES a schedule the reader
+// is already looking at, so it carries the save guard and refuses "Run right
+// after setup". This one is the FIRST answer to "When should this run?" for a
+// run that is parked at its schedule step with nothing armed — the same question
+// the run page's own scheduling step submits, and every row it offers is a legal
+// answer, `immediate` included.
+//
+// IT MAPS AND DELEGATES, AND NOTHING ELSE. §VI's closed selections become the
+// arguments `setRunTriggerForActor` already takes, and that one call keeps every
+// refusal it speaks: ownership, the terminal-run gate, the in-flight-wait gate,
+// the configuration-needs gate, cron validation, and the transition ladder that
+// dispatches an immediate row or arms a future one. There is no second ladder
+// here to drift from it.
+//
+// WHY THE MAPPING LIVES HERE rather than at the card: `buildCron` is this
+// package's, the argument shape is this module's, and the card's whole rule is
+// that it "implements none of them — each op is handed to the canonical path
+// that already owns it".
+export const ARM_SCHEDULE_REFUSALS = {
+  /** The run is no longer waiting to be given a schedule. Reader-facing: it
+   *  names the state and leaves them somewhere real. */
+  movedOn:
+    "This run is no longer waiting for a schedule — it has already moved on. Start a new run to schedule it again.",
+} as const;
+
+/**
+ * THE SENTINEL FOR "THE QUESTION WAS ALREADY ANSWERED", which never reaches a
+ * reader: this call turns it into a SUCCESS, because a second press on the same
+ * question has the same true answer as the first. It is a namespaced token
+ * rather than a sentence so it can never be mistaken for reader copy, and it
+ * travels back out of `setRunTriggerForActor` through the caller's own
+ * `reverify` hook — i.e. through the trigger CLAIM, which is what makes the
+ * answer serialized rather than a snapshot.
+ */
+const ALREADY_ANSWERED = "cinatra:schedule-already-answered";
+
+export type ArmRunScheduleResult =
+  | {
+      ok: true;
+      runId: string;
+      /** The schedule was already set — this call wrote nothing. */
+      alreadyArmed: boolean;
+    }
+  | { ok: false; error: string };
+
+export async function armRunScheduleForActor(
+  actor: TriggerActorContext,
+  args: UpdateTriggerScheduleArgs,
+): Promise<ArmRunScheduleResult> {
+  if (!actor.userId) return { ok: false, error: "unauthorized" };
+
+  // THE RUN MUST STILL BE WAITING (a convergence finding). The card resolved the
+  // run as waiting some time ago and everything since is asynchronous, so a Stop
+  // — or a schedule the run page's own step armed — can land in the gap. Without
+  // this read a `scheduled` request would sail past `setRunTriggerForActor`'s
+  // terminal-run gate, which applies to `immediate` alone, and install a live
+  // future scheduler on a run that is over.
+  //
+  // THIS READ IS THE CHEAP REFUSAL, NOT THE BOUNDARY. It answers before any
+  // write for the ordinary case — the reader pressed Confirm on a card that had
+  // gone stale minutes ago — and it is where ownership is decided. The BOUNDARY
+  // is the same question re-asked inside the trigger claim below, against the
+  // read the cancel and the upsert act on.
+  const run = await readAgentRunById(args.runId);
+  if (!run) return { ok: false, error: "run not found" };
+  if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
+    return { ok: false, error: "forbidden" };
+  }
+  if (run.status !== SCHEDULE_PENDING_STATUS) {
+    return { ok: false, error: ARM_SCHEDULE_REFUSALS.movedOn };
+  }
+
+  // BOTH REMAINING QUESTIONS ARE ASKED INSIDE THE CLAIM, AND NOWHERE ELSE
+  // (a second convergence round).
+  //
+  // THE QUESTION IS ASKED ONCE. A second press — a retry, a double click, a
+  // second tab — must not REPLACE the schedule the first press set: this call is
+  // the FIRST answer, and a replacement is what
+  // `updateRunTriggerScheduleForActor` is for. Without this the second press
+  // cancelled the live scheduler and installed its own, reporting a plain
+  // success, so two presses on two different rows silently kept the last one.
+  //
+  // AND IT IS ASKED ON THE CLAIMED READ ONLY. A cheap snapshot outside the claim
+  // read better and was wrong: the arming body writes a PRELIMINARY trigger row
+  // before it registers the scheduler and DELETES that row again if the
+  // registration fails, so a snapshot taken in that window would tell a second
+  // press "already armed" about a schedule that was then rolled away — leaving a
+  // reader told Confirm succeeded with nothing armed. The claim serializes the
+  // two presses, so the second one reads what the first actually left.
+  //
+  // THE RUN MUST STILL BE WAITING, asked here for the same reason. The read at
+  // the top of this function is a courtesy that refuses early and cheaply; a Stop
+  // landing after it would otherwise sail past `setRunTriggerForActor`'s
+  // terminal-run gate, which applies to `immediate` alone, and install a live
+  // future scheduler on a run that is over.
+  //
+  // ONE INTERLEAVING SURVIVES, AND IT IS NAMED RATHER THAN CLAIMED AWAY. The
+  // trigger claim serializes writers of the TRIGGER ROW; it does not lock the
+  // RUN's status row, which several writers legitimately move. A stop that lands
+  // between this re-ask and the arm's own `pending_trigger -> armed` compare-and-
+  // set therefore still leaves a trigger row and a scheduler behind, because that
+  // compare-and-set's failure is swallowed one screen up.
+  //
+  // WHAT IT COSTS IS BOUNDED: a scheduler that can never start the run. The
+  // release job re-reads the run at its instant and refuses everything that is
+  // not `armed` — "the run reads ANYTHING ELSE … enqueues nothing" — so the stop
+  // holds and the residue is a dangling schedule entry, not a stopped run that
+  // executes.
+  //
+  // AND IT IS NOT THIS ROAD'S TO CLOSE. Every caller of `setRunTriggerForActor`
+  // has it — the run page's own scheduling step, the trigger MCP handler, the
+  // proposal install — because closing it needs an atomic run-status reservation
+  // shared by every writer of that column, coordinated with scheduler exposure
+  // and its compensation. That is a change to the shared trigger ladder, owed on
+  // its own; what this call does is narrow the window from the whole request to
+  // the interval between one claimed read and one compare-and-set.
+  const strictness: SetTriggerReplaceStrictness = {
+    // Nothing is being replaced, so a cancel failure can only mean a scheduler
+    // appeared under this call — fail closed rather than install a second one.
+    failClosedOnCancelFailure: true,
+    reverify: async (existing) => {
+      if (existing) return ALREADY_ANSWERED;
+      const live = await readAgentRunById(args.runId).catch(() => null);
+      // A read that cannot answer refuses: not arming is recoverable — the
+      // person presses again — and arming a run that is over is not.
+      if (!live || live.status !== SCHEDULE_PENDING_STATUS) {
+        return ARM_SCHEDULE_REFUSALS.movedOn;
+      }
+      return null;
+    },
+  };
+
+  const result =
+    args.schedule.kind === "immediate"
+      ? await setRunTriggerForActor(
+          actor,
+          { runId: args.runId, triggerType: "immediate" },
+          strictness,
+        )
+      : args.schedule.kind === "scheduled"
+        ? await setRunTriggerForActor(
+            actor,
+            {
+              runId: args.runId,
+              triggerType: "scheduled",
+              scheduledAt: args.schedule.runAt,
+              timezone: args.schedule.timezone,
+            },
+            strictness,
+          )
+        : await setRunTriggerForActor(
+            actor,
+            {
+              runId: args.runId,
+              triggerType: "recurring",
+              cronExpression: buildCron(args.schedule.selection),
+              timezone: args.schedule.timezone,
+            },
+            strictness,
+          );
+  if (result.ok) return { ok: true, runId: args.runId, alreadyArmed: false };
+  // The claim answered what the snapshot could not: somebody else got there
+  // first. That is the same true answer as the first press's, not a failure.
+  if (result.error === ALREADY_ANSWERED) {
+    return { ok: true, runId: args.runId, alreadyArmed: true };
+  }
+  return { ok: false, error: result.error };
 }
 
 export async function updateRunTriggerScheduleForActor(
