@@ -394,7 +394,6 @@ describe("the settle pass re-pins until the content height stops moving", () => 
 // ---------------------------------------------------------------------------
 // The column, on the real `/chat` surface.
 // ---------------------------------------------------------------------------
-
 describe("the conversation column arms the settle pass on a cold thread load", () => {
   let frames: ReturnType<typeof createFrameQueue>;
   let observers: ReturnType<typeof createObserverFactory>;
@@ -435,6 +434,22 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     (globalThis as Record<string, unknown>).ResizeObserver = originalObserver;
   });
 
+  /**
+   * The settle pass's OWN observers — the ones watching the stream.
+   *
+   * The column observes a second box now (cinatra#3044): its composer, so the
+   * stream can reserve the height the composer really occupies rather than a
+   * constant. That observer is not this file's subject and it is not created in
+   * a fixed order relative to the pass's, so the passes are found by WHAT THEY
+   * WATCH rather than by when they were made.
+   */
+  const settleObservers = (): FakeObserver[] =>
+    observers.created.filter((observer) =>
+      observer.targets.some((target) =>
+        (target as HTMLElement).classList.contains("overflow-y-auto"),
+      ),
+    );
+
   /** Mount `/chat` and hand back its scroll container, measurable. */
   async function mountChatThread(threadId: string) {
     const view = render(chatSurfaceElement({ threadId }));
@@ -459,13 +474,13 @@ describe("the conversation column arms the settle pass on a cold thread load", (
 
     // Markdown, highlighted code and the run panel expand after mount.
     metrics.growTo(2400);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
     expect(metrics.scrollTop).toBe(2400);
 
     // The auto-sized textareas grow last.
     metrics.growTo(3100);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
 
     expect(metrics.atBottom).toBe(true);
@@ -483,24 +498,24 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     fireEvent.scroll(scroller);
 
     metrics.growTo(3000);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
 
     expect(metrics.scrollTop).toBe(150);
-    expect(observers.created[0]!.disconnected).toBe(true);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
   });
 
   it("re-arms on a thread switch — a second cold load gets its own pass", async () => {
     const { view } = await mountChatThread("thread-cold-c");
     frames.flush();
-    expect(observers.created).toHaveLength(1);
+    expect(settleObservers()).toHaveLength(1);
 
     view.rerender(chatSurfaceElement({ threadId: "thread-cold-d" }));
-    await waitFor(() => expect(observers.created.length).toBeGreaterThan(1));
+    await waitFor(() => expect(settleObservers().length).toBeGreaterThan(1));
 
     // The first thread's pass is over; the second thread has a live one.
-    expect(observers.created[0]!.disconnected).toBe(true);
-    expect(observers.created[1]!.disconnected).toBe(false);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
+    expect(settleObservers()[1]!.disconnected).toBe(false);
 
     const scroller = view.container.querySelector<HTMLElement>(
       "[data-parity-surface='chat'] > div > div.overflow-y-auto",
@@ -508,7 +523,7 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     const metrics = stubScrollMetrics(scroller, 800, 400);
     frames.flush();
     metrics.growTo(2900);
-    observers.created[1]!.fire();
+    settleObservers()[1]!.fire();
     frames.flush();
     expect(metrics.scrollTop).toBe(2900);
   });
@@ -516,11 +531,11 @@ describe("the conversation column arms the settle pass on a cold thread load", (
   it("leaves nothing behind on unmount — no observer, no frame loop", async () => {
     const { view } = await mountChatThread("thread-cold-e");
     frames.flush();
-    expect(observers.created[0]!.disconnected).toBe(false);
+    expect(settleObservers()[0]!.disconnected).toBe(false);
 
     view.unmount();
 
-    expect(observers.created[0]!.disconnected).toBe(true);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
     expect(frames.pending).toBe(0);
   });
 });

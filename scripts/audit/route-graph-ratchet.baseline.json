@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 163,
     "/api/mcp": 1778,
-    "/chat": 1879,
+    "/chat": 1881,
     "/api/a2a": 1786,
     "/api/llm-bridge": 1796
   },
@@ -11,25 +11,25 @@
     "/api/a2a": {
       "from": 1764,
       "to": 1786,
-      "reason": "cinatra#3091 (lifecycle-d W3) restores mains extension pins for every pack this wave does not need and keeps exactly three display packs at their merged heads: cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact. Measured with the companion extension fleet cloned PINNED to this branchs lock (115 of 115, 0 unresolved first-party imports) and an identical scripts/route-graph.mjs, exactly as CI measures. Those three packs publish their own renderer exports, so their detail, preview and list-row entries enter the generated display map through the guarded-optional resolution road, adding the same 22 first-party modules to each of these four routes: /api/mcp 1778, /chat 1879, /api/a2a 1786, /api/llm-bridge 1796. /sign-in reaches none of it and measures 163, below mains 223, so its ceiling is LOWERED and its carried-forward record is retired by that lowering. Narrowing is unavailable: the generated display map is a literal-import dispatch map, so every entry must name its own module for the build to contain it, and a pack that publishes a renderer with no resolution road fails the generator closed.",
+      "reason": "Forward merge of main into cinatra#3091 (lifecycle-d W3, the two media displays and the byte road). `from` is main's OWN committed ceiling at 1a4b6d00f705593d725a8e576f47e094d569c0ea; `to` is the count RE-MEASURED on the merged tree with the extension lock resolved at the union of the newest pin per package (this wave's three display packs cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact, plus main's six blog-agent packs). The growth is those pins arriving on the shared store spine every one of these four routes already reaches; the merge introduces no new cross-package edge of its own, and /sign-in LOWERS 223 to 163 in the same measurement.",
       "pr": 3143
     },
     "/api/llm-bridge": {
       "from": 1774,
       "to": 1796,
-      "reason": "cinatra#3091 (lifecycle-d W3) restores mains extension pins for every pack this wave does not need and keeps exactly three display packs at their merged heads: cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact. Measured with the companion extension fleet cloned PINNED to this branchs lock (115 of 115, 0 unresolved first-party imports) and an identical scripts/route-graph.mjs, exactly as CI measures. Those three packs publish their own renderer exports, so their detail, preview and list-row entries enter the generated display map through the guarded-optional resolution road, adding the same 22 first-party modules to each of these four routes: /api/mcp 1778, /chat 1879, /api/a2a 1786, /api/llm-bridge 1796. /sign-in reaches none of it and measures 163, below mains 223, so its ceiling is LOWERED and its carried-forward record is retired by that lowering. Narrowing is unavailable: the generated display map is a literal-import dispatch map, so every entry must name its own module for the build to contain it, and a pack that publishes a renderer with no resolution road fails the generator closed.",
+      "reason": "Forward merge of main into cinatra#3091 (lifecycle-d W3, the two media displays and the byte road). `from` is main's OWN committed ceiling at 1a4b6d00f705593d725a8e576f47e094d569c0ea; `to` is the count RE-MEASURED on the merged tree with the extension lock resolved at the union of the newest pin per package (this wave's three display packs cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact, plus main's six blog-agent packs). The growth is those pins arriving on the shared store spine every one of these four routes already reaches; the merge introduces no new cross-package edge of its own, and /sign-in LOWERS 223 to 163 in the same measurement.",
       "pr": 3143
     },
     "/api/mcp": {
       "from": 1756,
       "to": 1778,
-      "reason": "cinatra#3091 (lifecycle-d W3) restores mains extension pins for every pack this wave does not need and keeps exactly three display packs at their merged heads: cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact. Measured with the companion extension fleet cloned PINNED to this branchs lock (115 of 115, 0 unresolved first-party imports) and an identical scripts/route-graph.mjs, exactly as CI measures. Those three packs publish their own renderer exports, so their detail, preview and list-row entries enter the generated display map through the guarded-optional resolution road, adding the same 22 first-party modules to each of these four routes: /api/mcp 1778, /chat 1879, /api/a2a 1786, /api/llm-bridge 1796. /sign-in reaches none of it and measures 163, below mains 223, so its ceiling is LOWERED and its carried-forward record is retired by that lowering. Narrowing is unavailable: the generated display map is a literal-import dispatch map, so every entry must name its own module for the build to contain it, and a pack that publishes a renderer with no resolution road fails the generator closed.",
+      "reason": "Forward merge of main into cinatra#3091 (lifecycle-d W3, the two media displays and the byte road). `from` is main's OWN committed ceiling at 1a4b6d00f705593d725a8e576f47e094d569c0ea; `to` is the count RE-MEASURED on the merged tree with the extension lock resolved at the union of the newest pin per package (this wave's three display packs cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact, plus main's six blog-agent packs). The growth is those pins arriving on the shared store spine every one of these four routes already reaches; the merge introduces no new cross-package edge of its own, and /sign-in LOWERS 223 to 163 in the same measurement.",
       "pr": 3143
     },
     "/chat": {
-      "from": 1857,
-      "to": 1879,
-      "reason": "cinatra#3091 (lifecycle-d W3) restores mains extension pins for every pack this wave does not need and keeps exactly three display packs at their merged heads: cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact. Measured with the companion extension fleet cloned PINNED to this branchs lock (115 of 115, 0 unresolved first-party imports) and an identical scripts/route-graph.mjs, exactly as CI measures. Those three packs publish their own renderer exports, so their detail, preview and list-row entries enter the generated display map through the guarded-optional resolution road, adding the same 22 first-party modules to each of these four routes: /api/mcp 1778, /chat 1879, /api/a2a 1786, /api/llm-bridge 1796. /sign-in reaches none of it and measures 163, below mains 223, so its ceiling is LOWERED and its carried-forward record is retired by that lowering. Narrowing is unavailable: the generated display map is a literal-import dispatch map, so every entry must name its own module for the build to contain it, and a pack that publishes a renderer with no resolution road fails the generator closed.",
+      "from": 1859,
+      "to": 1881,
+      "reason": "Forward merge of main into cinatra#3091 (lifecycle-d W3, the two media displays and the byte road). `from` is main's OWN committed ceiling at 1a4b6d00f705593d725a8e576f47e094d569c0ea; `to` is the count RE-MEASURED on the merged tree with the extension lock resolved at the union of the newest pin per package (this wave's three display packs cms-snapshot-artifact, screenshot-artifact and slide-deck-artifact, plus main's six blog-agent packs). The growth is those pins arriving on the shared store spine every one of these four routes already reaches; the merge introduces no new cross-package edge of its own, and /sign-in LOWERS 223 to 163 in the same measurement.",
       "pr": 3143
     }
   }
