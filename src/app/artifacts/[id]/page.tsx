@@ -48,6 +48,10 @@ import {
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
+import {
+  artifactDisplayTitle,
+  buildArtifactDetailHeader,
+} from "./artifact-detail-header";
 
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
@@ -108,7 +112,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     return (
       <Main className="min-h-screen">
         <PageHeader
-          title="Dashboard"
+          title={artifactDisplayTitle(artifact)}
           description="A dashboard artifact — opens at its canonical surface."
           divider={false}
         />
@@ -180,7 +184,21 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // lands. Open still renders the row read-only.
   const selectionPreparing = isSelectionPreparing(artifact.effectiveIdentity);
 
-  const title = artifact.title ?? artifact.artifactId;
+  // THE DRAWN HEADER (ratified drawing, artifact-review §IV and §XI). The page
+  // used to draw a title over the media type and a count of bytes, which the
+  // third proof round graded FAIL on sixteen frames for five reasons: no
+  // type, no revision, no owner level or visibility, no kind beside the title,
+  // and a size counted out in bytes. The model is pure and tested; this page
+  // draws it and decides nothing about it.
+  const header = buildArtifactDetailHeader({
+    artifact,
+    mime,
+    revisionId,
+    sizeBytes: artifact.size,
+  });
+  // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
+  // one place the Breadcrumb rule against a raw id in a name's place lands.
+  const title = header.title;
 
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
@@ -212,7 +230,18 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     <Main className="min-h-screen">
       <PageHeader
         title={title}
-        description={`${mime || "unknown"} · ${artifact.size} bytes`}
+        titleContent={
+          <span className="flex flex-wrap items-baseline gap-3">
+            <span>{title}</span>
+            <span
+              className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-sans text-xs font-semibold not-italic text-primary"
+              data-testid="artifact-kind-label"
+            >
+              {header.kindLabel}
+            </span>
+          </span>
+        }
+        meta={header.metaCells.join(" · ")}
         divider={false}
         actions={
           downloadHref || artifact.sourceUrl ? (
