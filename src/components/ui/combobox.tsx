@@ -150,9 +150,16 @@ function Combobox({
           // A trigger with nothing bound is marked, so it takes the muted
           // placeholder ink the select family already uses for that state.
           data-placeholder={label === undefined ? "" : undefined}
-          // The side the open list took, or nothing at all while it is closed:
-          // a closed trigger meets no list and draws no seam.
-          data-join={open && side ? side : undefined}
+          // The side the list took, for exactly as long as the list is there
+          // to meet. Closing does not remove it: the layer holds the closing
+          // node in the document for its own exit animation, still squared and
+          // still missing the border on the seam, so a seam drawn from the OPEN
+          // FLAG rounds this corner back underneath a list that is still
+          // standing flush against it and opens a notch for the whole of the
+          // fade. `side` is published by the content's own ref and cleared when
+          // that ref is handed back — which is the moment the list is gone —
+          // so the seam lasts precisely as long as the pair does.
+          data-join={side ?? undefined}
           // `h-8` and `rounded-[7px]`: the Input's own, because the drawing
           // says so twice — "Trigger mirrors Input chrome" over the family, and
           // its own Combobox picture writing the trigger out at

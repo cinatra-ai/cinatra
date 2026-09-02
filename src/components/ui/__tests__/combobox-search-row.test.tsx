@@ -196,3 +196,82 @@ describe("the open trigger's seam follows the list's placement", () => {
     ).toBeNull()
   })
 })
+
+// THE SEAM LASTS AS LONG AS THE LIST DOES (cinatra#3142, convergence round).
+//
+// Closing the list does not remove it: the popover layer holds the closing
+// content in the document for its own 100ms exit animation, and that content
+// keeps the squared corner and the dropped border it was drawn with all the
+// way through. A trigger that stops squaring its seam the instant the OPEN
+// FLAG turns therefore rounds its corner back underneath a list that is still
+// standing flush against it, and the pair reads as two objects with a notch
+// between them for the whole of the fade — the very picture the join exists to
+// remove, restored on every close.
+//
+// The exit window is a real-boot behaviour, but its cause is settleable here.
+// The layer decides whether to hold a closing node by asking the node whether
+// it carries an exit animation; jsdom resolves no animation at all, which is
+// why an ordinary jsdom close unmounts on the spot and never enters the window.
+// Answering that one question the way a browser answers it — an animation name
+// that changes when the node's own `data-state` does — puts the window back,
+// and the seam can then be read inside it.
+describe("the trigger keeps its seam while the closing list is still standing", () => {
+  const realGetComputedStyle = window.getComputedStyle.bind(window)
+
+  afterEach(() => {
+    window.getComputedStyle = realGetComputedStyle
+  })
+
+  function answerLikeABrowserWithAnExitAnimation() {
+    window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
+      const styles = realGetComputedStyle(element, pseudo ?? undefined)
+      const state = element.getAttribute?.("data-state")
+      if (state !== "open" && state !== "closed") return styles
+      return new Proxy(styles, {
+        get(target, property) {
+          if (property === "animationName") {
+            return state === "open" ? "combobox-enter" : "combobox-exit"
+          }
+          const value = Reflect.get(target, property, target)
+          return typeof value === "function" ? value.bind(target) : value
+        },
+      })
+    }) as typeof window.getComputedStyle
+  }
+
+  it("still squares the edge it meets while the closing list is on screen", () => {
+    answerLikeABrowserWithAnExitAnimation()
+    render(<Combobox id="under-test" value="gmail" options={OPTIONS} />)
+    const trigger = document.getElementById("under-test") as HTMLElement
+
+    fireEvent.click(trigger)
+    const opened = document.querySelector(
+      '[data-slot="combobox-content"]',
+    ) as HTMLElement
+    expect(opened, "the combobox must open its list").not.toBeNull()
+    const side = opened.getAttribute("data-side")
+    expect(trigger.getAttribute("data-join")).toBe(side)
+
+    fireEvent.click(trigger)
+    const closing = document.querySelector(
+      '[data-slot="combobox-content"]',
+    ) as HTMLElement | null
+    expect(
+      closing,
+      "the closing list left the document at once, so this reading never " +
+        "entered the exit window it is meant to measure",
+    ).not.toBeNull()
+    expect(
+      closing!.getAttribute("data-state"),
+      "the held node is the CLOSING one",
+    ).toBe("closed")
+
+    expect(
+      trigger.getAttribute("data-join"),
+      "the list is still standing flush against the trigger, squared and " +
+        "missing the border on the seam, while the trigger has already " +
+        "rounded its corner back — a notch opens between the two halves for " +
+        "the whole of the close",
+    ).toBe(side)
+  })
+})
