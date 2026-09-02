@@ -226,7 +226,12 @@ describe.each(HOSTS)("the Skills step's row, on %s", (host) => {
     );
     expect(glyphAnchor).not.toBeNull();
     expect(button!.lastElementChild).toBe(glyphAnchor);
-    expect(glyphAnchor!.querySelector("svg")).not.toBeNull();
+    const glyph = glyphAnchor!.querySelector("svg");
+    expect(glyph).not.toBeNull();
+    // NOTHING after the arrow inside the anchor either: the arrow is the
+    // last node the anchor draws, and the anchor writes no text beside it.
+    expect(glyphAnchor!.lastElementChild).toBe(glyph);
+    expect(glyphAnchor!.textContent).toBe("");
   });
 
   it("draws no placeholder byline, so each pill keeps the drawn width", () => {

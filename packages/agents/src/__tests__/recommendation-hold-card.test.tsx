@@ -1034,7 +1034,9 @@ const HELD_THREE: HoldState = {
 // host list in a suite is a copy that can disagree with the shipped one.
 import { chipRowDrawsSkillChecklist } from "../run-recommendation-chip-row";
 
-const chips = () => [...document.querySelectorAll("[data-recommendation-chip]")];
+const chips = () => [
+  ...document.querySelectorAll<HTMLElement>("[data-recommendation-chip]"),
+];
 /** The checklist hosts decide with ONE control; this presses it. */
 const pressContinue = async () => {
   const btn = document.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
