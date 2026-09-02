@@ -999,11 +999,52 @@ export async function setRunTriggerForActor(
         // Compensating the SCHEDULER is the failure this shape can actually
         // carry, and it is a cancel rather than a status rewrite.
         if (args.triggerType === "scheduled" || args.triggerType === "recurring") {
-          const settled = await settledRunStatusForSchedule(args.runId, authority);
+          // A SETTLEMENT THAT THROWS MUST NOT LEAVE AN UNNAMEABLE SCHEDULER
+          // (cinatra#3054, second convergence round). `stale_from_status` is
+          // handled inside the helper; anything else — a database timeout, an
+          // authority rejection, an illegal edge — propagates. Before the
+          // settlement moved in here the row already named the scheduler by
+          // this point, so an orphan left by a throw was at least removable by
+          // the release job. It is not any more: the id is persisted only
+          // BELOW, so a throw here would leave a live scheduler and a row
+          // naming `null`, and the release job tears a scheduler down only
+          // through the id on the row. So the scheduler is cancelled before the
+          // error is rethrown, and the caller still gets the original failure.
+          let settled: string | null;
+          try {
+            settled = await settledRunStatusForSchedule(args.runId, authority);
+          } catch (err) {
+            if (scheduleResult.jobSchedulerId) {
+              await cancelTriggerSchedule({
+                jobSchedulerId: scheduleResult.jobSchedulerId,
+                triggerType: args.triggerType,
+              }).catch((cancelErr) => {
+                console.error(
+                  "[setRunTriggerForActor] the arm settlement failed AND the scheduler it never named would not cancel — a live scheduler no row can name survives this failure, for run",
+                  args.runId,
+                  cancelErr,
+                );
+              });
+            }
+            throw err;
+          }
           const scheduleIsLive =
             settled !== null && SCHEDULE_LIVE_RUN_STATUSES.has(settled);
           const armWasDecidedOnAPendingRun = ARMING_SNAPSHOT_RUN_STATUSES.has(run.status);
-          if (!scheduleIsLive && armWasDecidedOnAPendingRun && settled !== run.status) {
+          // NO EQUALITY CONJUNCT HERE, and the reason is a real interleaving
+          // (cinatra#3054, second convergence round). An earlier form also
+          // required `settled !== run.status`, reading an unchanged status as
+          // "nothing raced the arm". It is not: a SUCCESSFUL compare-and-set
+          // above answers `armed`, so reaching a pending answer at all means
+          // neither rung landed. A run can leave and return — `pending_input →
+          // pending_trigger` (the person opens the trigger form) and
+          // `pending_trigger → pending_input` (they navigate away) are both in
+          // LEGAL_TRANSITIONS — and land back on the status the arm was decided
+          // on with both rungs stale. The equality then suppressed the rollback
+          // and the call reported an armed schedule over a run that is not
+          // armed and that nothing will ever release. Decided on a pending rung
+          // and not settled live is the whole test.
+          if (!scheduleIsLive && armWasDecidedOnAPendingRun) {
             // THE RUN MOVED OUT FROM UNDER ITS OWN ARM — the defect, exactly.
             // runId + status are discrete ARGUMENTS, never interpolated into the
             // format string (CodeQL js/tainted-format-string).

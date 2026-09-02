@@ -431,4 +431,94 @@ describe("cinatra#3054 — the shared setter does not report a stale status as a
     expect(triggerStore.deleteRunTriggerByRunId).not.toHaveBeenCalled();
     expect(schedule.cancelTriggerSchedule).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // Second convergence round (cinatra#3054). Two holes the first settlement
+  // still left open, each pinned by the interleaving that reaches it.
+  // -------------------------------------------------------------------------
+
+  it("refuses an arm whose run LEFT AND CAME BACK to the status the arm was decided on", async () => {
+    // THE INTERLEAVING. The arm is decided on `pending_input`. The person opens
+    // the trigger form while the schedule is registering (`pending_input ->
+    // pending_trigger`), so the first rung is stale; then they navigate away
+    // (`pending_trigger -> pending_input`) before the second rung is tried, so
+    // that one is stale too. Both edges are in LEGAL_TRANSITIONS. The run ends
+    // on exactly the status the arm was decided on, and NOTHING armed it.
+    //
+    // An earlier settlement asked `settled !== run.status` and read this as
+    // "nothing raced the arm", reporting an armed schedule over a run that is
+    // not armed and that no release job will ever move.
+    currentStatus = "pending_input";
+    schedule.scheduleTrigger.mockImplementation(async () => {
+      currentStatus = "pending_trigger"; // the form is opened mid-arm
+      return { jobSchedulerId: "sched-3054" };
+    });
+    store.transitionRunStatus.mockImplementation(
+      async (_runId: string, from: string, to: string) => {
+        if (from !== currentStatus) {
+          // The navigate-away lands between the two rungs: the first rung finds
+          // `pending_trigger` and fails, and by the second the run is back.
+          if (from === "pending_input" && currentStatus === "pending_trigger") {
+            currentStatus = "pending_input";
+          }
+          throw new store.RunTransitionError("stale_from_status");
+        }
+        currentStatus = to;
+      },
+    );
+
+    const result = await setRunTriggerForActor(actor, {
+      runId: TEST_RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1",
+      timezone: "UTC",
+    });
+
+    // The run never reached `armed`, so the arm is refused...
+    expect(currentStatus).toBe("pending_input");
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toBe(ARM_SCHEDULE_REFUSALS.movedOn);
+    // ...and the scheduler that would have ticked for ever is taken back down.
+    expect(schedule.cancelTriggerSchedule).toHaveBeenCalledWith({
+      jobSchedulerId: "sched-3054",
+      triggerType: "recurring",
+    });
+    expect(
+      triggerStore.createOrUpdateRunTrigger.mock.calls.some(
+        ([row]) => row.jobSchedulerId !== null,
+      ),
+    ).toBe(false);
+  });
+
+  it("cancels the scheduler when the SETTLEMENT ITSELF throws, so no orphan outlives the error", async () => {
+    // A settlement failure that is NOT `stale_from_status` -- a database
+    // timeout, an authority rejection -- propagates to the caller. The
+    // scheduler is already registered and the row does not name it yet (the id
+    // is persisted only after the settlement), and the release job tears a
+    // scheduler down ONLY through the id on the row. So an orphan left here is
+    // unnameable and immortal; it has to be cancelled before the rethrow.
+    store.transitionRunStatus.mockImplementation(async () => {
+      throw new Error("the database could not be reached");
+    });
+
+    await expect(
+      setRunTriggerForActor(actor, {
+        runId: TEST_RUN_ID,
+        triggerType: "recurring",
+        cronExpression: "0 9 * * 1",
+        timezone: "UTC",
+      }),
+    ).rejects.toThrow("the database could not be reached");
+
+    expect(schedule.cancelTriggerSchedule).toHaveBeenCalledWith({
+      jobSchedulerId: "sched-3054",
+      triggerType: "recurring",
+    });
+    // Nothing was left behind naming a scheduler as though the arm had settled.
+    expect(
+      triggerStore.createOrUpdateRunTrigger.mock.calls.some(
+        ([row]) => row.jobSchedulerId !== null,
+      ),
+    ).toBe(false);
+  });
 });
