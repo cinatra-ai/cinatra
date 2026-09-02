@@ -35,11 +35,22 @@ export type ScopeDashboardTabRow = {
  *  needed one was the add-to-scope picker's title ("Add a dashboard to Team:
  *  Growth", §IX.1), and the picker is now a section of the toolbar-launched
  *  popup, which the landing labels directly. */
+/**
+ * Every scope whose Dashboards tab the drawing's Dashboards-tab section fixes:
+ * the three shared scopes that list a COLLECTION, plus the two that list the
+ * acting user's own dashboards and are "not add-to-scope targets — they carry
+ * no Add" (cinatra#2807 fix leg 3).
+ */
+export type ScopeDashboardsTabScopeKind =
+  | ListingScopeKind
+  | "personal"
+  | "workspace";
+
 export type ScopeDashboardsTabData = {
-  /** The scope kind — names the collection panel's heading noun ("Dashboards in
-   *  this team") now that the collection is folded onto the entity landing
-   *  (cinatra#2474 PR2), where the entity's own name is already the h1. */
-  readonly scopeKind: ListingScopeKind;
+  /** The scope kind. It no longer names the panel heading — the drawing gives
+   *  the tab a muted caption naming the ENTITY, which the hosting page supplies
+   *  (`caption`) — it only records which scope the rows were read for. */
+  readonly scopeKind: ScopeDashboardsTabScopeKind;
   readonly rows: readonly ScopeDashboardTabRow[];
   /** actorMayWriteScope — gates the Add affordance + every Remove (§IX.2). A
    *  non-manager gets a read-only tab: every row, open-able, but no Add/Remove. */

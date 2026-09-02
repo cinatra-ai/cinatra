@@ -1,25 +1,28 @@
 /**
- * `/organizations/[id]` screen — per-org detail surface (cinatra#705, epic
- * #699; tabless since #1734, the #1693 ruling: the detail page keeps only the
- * dashboards).
+ * `/organizations/[id]` screen — the organization's entity page, opening on its
+ * Dashboards tab (cinatra#705; the tab body rebuilt to the ratified drawing by
+ * cinatra#2807 fix leg 3).
  *
- *   - The reusable entity Dashboards shell (#701) bound to this org's
- *     per-user dashboard set, with the non-removable **Overview** default
- *     rendering the org's identity + member/team counts as portlets (#702)
- *     and a "+ New dashboard" / select toolbar.
- *   - The access model + management (settings, members & invitations, danger
- *     zone) live on `/organizations/[id]/settings`, reached from this page's
- *     **Settings tab** (cinatra#2474 PR1: the entity-page tablist replaces the
- *     former top-right settings button). The tab is rendered for EVERY member,
- *     outside any capability branch — the settings page itself splits read-only
- *     vs manage, exactly as the retired tabs did.
+ * WHAT THIS TAB DRAWS. The ratified drawing's Dashboards-tab section fixes it:
+ * the caption "The dashboards in Organization: <name>." over the scope's rows —
+ * homed and secondary-listed alike, with no relation badge — and, for a scope
+ * manager only, "Add dashboard" at the right of that caption row (§IX.2:
+ * "Suppression, not a disabled control").
+ *
+ * WHAT IT NO LONGER DRAWS, and why. This landing used to stack a dashboard
+ * canvas above that panel: a toolbar band, an Overview selector, an Organization
+ * details card and a members/teams counts card. The section names none of them,
+ * and it sends identity and membership somewhere else in its own words — the
+ * Settings entry is "that entity's management pane, where rename, visibility and
+ * the members / access section live folded together". The Components Toolbar
+ * rule also forbids the band's placement outright ("never stack a toolbar and
+ * the etched paired rule"). So the tab body is the section's body and nothing
+ * else; each dashboard is opened at its canonical surface.
  *
  * Authz (fail closed): the redirect gate uses the session SecurityContext, then
- * the org identity + counts are only read AFTER `readUserIsOrgMember` confirms
- * the viewer is a member of THIS org — the Overview data is fetched
- * outside the cube, so this surface enforces the same "member of the org" rule
- * the cube predicate (`WHERE id IN (accessibleOrgIds)`) applies to the analytics
- * path. A non-member (or a deleted org) is a 404, never a widened surface.
+ * nothing about the org is read until `readUserIsOrgMember` confirms the viewer
+ * is a member of THIS org. A non-member (or a deleted org) is a 404, never a
+ * widened surface.
  */
 import "server-only";
 import { notFound, redirect } from "next/navigation";
@@ -42,29 +45,11 @@ import {
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
   betterAuthDb,
-  betterAuthMembers,
   betterAuthOrganizations,
-  betterAuthUsers,
-  listTeamsForOrg,
   readUserIsOrgMember,
 } from "@/lib/better-auth-db";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
-import { OrganizationDashboards } from "../components/organization-dashboards";
-import { buildOrganizationOverviewConfig } from "../components/seed-configs/overview-config";
-import type { EntityDashboardsDataSource } from "../entity-dashboards-contract";
-import {
-  createOrganizationDashboardAction,
-  deleteOrganizationDashboardAction,
-  ensureAndListOrganizationDashboardsAction,
-  getOrganizationDashboardConfigAction,
-  renameOrganizationDashboardAction,
-  saveOrganizationDashboardConfigAction,
-} from "./organization-detail-actions";
-import {
-  buildOrganizationAccessModel,
-  buildOrganizationDetailRef,
-} from "./organization-detail-model";
 
 export async function OrganizationDetailDashboardPage({
   params,
@@ -79,42 +64,24 @@ export async function OrganizationDetailDashboardPage({
   }
   const userId = ctx.userId;
 
-  // Fail-closed access gate: only a member of THIS org may see its identity,
-  // counts, and access model (all read outside the cube's own predicate).
+  // Fail-closed access gate: only a member of THIS org may see its identity.
   const isMember = await readUserIsOrgMember(userId, id);
   if (!isMember) {
     notFound();
   }
 
-  // Access-scoped reads — the membership gate above authorizes them.
-  const [orgRows, memberRows, teams] = await Promise.all([
-    betterAuthDb
-      .select({
-        name: betterAuthOrganizations.name,
-        slug: betterAuthOrganizations.slug,
-        // cinatra#1942 V4 — threaded through for the "Archived — read-only"
-        // banner below; reads `archivedAt` directly, never the archive
-        // activation gate (visibility surfaces are gate-blind by design:
-        // with the gate off no org has archivedAt set, so they are inert
-        // without needing a second switch).
-        archivedAt: betterAuthOrganizations.archivedAt,
-      })
-      .from(betterAuthOrganizations)
-      .where(eq(betterAuthOrganizations.id, id))
-      .limit(1),
-    betterAuthDb
-      .select({
-        id: betterAuthMembers.id,
-        userId: betterAuthMembers.userId,
-        role: betterAuthMembers.role,
-        name: betterAuthUsers.name,
-        email: betterAuthUsers.email,
-      })
-      .from(betterAuthMembers)
-      .leftJoin(betterAuthUsers, eq(betterAuthUsers.id, betterAuthMembers.userId))
-      .where(eq(betterAuthMembers.organizationId, id)),
-    listTeamsForOrg(id),
-  ]);
+  // Access-scoped read — the membership gate above authorizes it.
+  const orgRows = await betterAuthDb
+    .select({
+      name: betterAuthOrganizations.name,
+      // cinatra#1942 V4 — threaded through for the "Archived — read-only"
+      // banner below; reads `archivedAt` directly, never the archive
+      // activation gate.
+      archivedAt: betterAuthOrganizations.archivedAt,
+    })
+    .from(betterAuthOrganizations)
+    .where(eq(betterAuthOrganizations.id, id))
+    .limit(1);
 
   const org = orgRows[0];
   if (!org) {
@@ -123,66 +90,26 @@ export async function OrganizationDetailDashboardPage({
   }
 
   const orgName = org.name ?? "";
-  // cinatra#1942 V4 — read-only posture: an archived org's dashboards stay
-  // viewable but the surface is presented as read-only chrome (the banner
-  // below); no write path on this screen is gated on it (there is none —
-  // the Dashboards surface here has no org-mutating actions).
   const isArchived = org.archivedAt !== null;
-  // Access model retained ONLY for its counts (Overview portlets) — the full
-  // view + management moved to /organizations/[id]/settings (#1734).
-  const accessModel = buildOrganizationAccessModel(memberRows, teams);
 
-  // The Overview is EPHEMERAL: built fresh here from the just-fetched counts and
-  // handed to the shell's render seam, never persisted (render-only portlets).
-  const overviewConfig = buildOrganizationOverviewConfig({
-    name: orgName,
-    ...(org.slug ? { slug: org.slug } : {}),
-    memberCount: accessModel.memberCount,
-    teamCount: accessModel.teamCount,
-  });
-
-  // The #1897 scope collection folded onto this landing (cinatra#2474 PR2).
-  //
-  // ACTIVE-TENANT FENCE — this is the retired route's own gate, preserved
-  // exactly. `/organizations/[id]/dashboards` refused any request where the
-  // target org was not the session's ACTIVE org (`activeOrgId !== id ||
-  // actor.organizationId !== id -> redirect`). This landing is deliberately
-  // wider than that: `readUserIsOrgMember` above admits a member of ANY of their
-  // orgs, active or not. So the panel must re-apply the fence, or folding the
-  // collection here would WIDEN the read — a member of orgs A and B, active in
-  // A, visiting /organizations/B would newly read B's collection
-  // (`getScopeDashboardsTabData` authorizes nothing itself; it reads whatever
-  // `scope.orgId` it is handed), and a platform admin in that position could
-  // even mutate it (platform_admin bypasses both the predicate's and the server
-  // actions' tenant fences). #2474 is presentation-only — no read may widen.
-  // Suppressing the panel, rather than redirecting, keeps the landing itself
-  // reachable for every member exactly as PR1 left it (codex convergence).
+  // ACTIVE-TENANT FENCE — this is the retired collection route's own gate,
+  // preserved exactly. `readUserIsOrgMember` above admits a member of ANY of
+  // their orgs, active or not; the collection read must not be wider than the
+  // route it replaced, so the panel is suppressed (not redirected) outside the
+  // active tenant, keeping the landing reachable for every member.
   const actor = await getActorContext();
   const actorIsActiveInThisOrg = actor?.organizationId === id;
   const scope = { kind: "organization", scopeId: id, orgId: id } as const;
 
-  // The §IX.1 add-to-scope source for the unified Add-dashboard popup
-  // (cinatra#2474 PR3). It is `null` for anyone who may not write this scope
-  // (§IX.2 suppression), and it rides the SAME active-tenant fence as the panel:
-  // an org the actor is merely a member of must not gain an add path either.
+  // The add-to-scope source for the unified Add-dashboard popup. It is `null`
+  // for anyone who may not write this scope (§IX.2 suppression), and it rides
+  // the SAME active-tenant fence the panel rides.
   const scopeReference =
     actor && actorIsActiveInThisOrg
       ? buildScopeReferenceSource(actor, scope)
       : null;
   const scopeLabel = `Organization: ${orgName || id}`;
 
-  // Bind the generic entity-dashboards actions with this surface's
-  // server-derived ref (Next-encrypted across the boundary; the client shell
-  // never authors the owner axis).
-  const ref = buildOrganizationDetailRef(id, userId);
-
-  // Concept B's installed-catalog section (cinatra#2474 PR4), rendered
-  // server-side into the slot PR3 left in the popup. It rides the SAME
-  // active-tenant fence the panel and the §IX.1 source ride — an org the actor
-  // is merely a member of gains no catalog either. The destination collection is
-  // DERIVED inside the read from this surface plus the actor's own id (it
-  // reproduces `buildOrganizationDetailRef`, pinned by test), so no ref crosses
-  // that could disagree with the scope the templates are authorized against.
   const catalog =
     actor && actorIsActiveInThisOrg
       ? await buildScopeCatalogNode({
@@ -190,14 +117,13 @@ export async function OrganizationDetailDashboardPage({
           surface: { kind: "organization", orgId: id, scopeId: id, userId },
         })
       : null;
-  const dataSource: EntityDashboardsDataSource = {
-    listDashboards: ensureAndListOrganizationDashboardsAction.bind(null, ref),
-    loadConfig: getOrganizationDashboardConfigAction.bind(null, ref),
-    createDashboard: createOrganizationDashboardAction.bind(null, ref),
-    renameDashboard: renameOrganizationDashboardAction.bind(null, ref),
-    deleteDashboard: deleteOrganizationDashboardAction.bind(null, ref),
-    saveDashboard: saveOrganizationDashboardConfigAction.bind(null, ref),
-  };
+
+  // NOTE (fix leg 3, convergence round): the popup's create and installed-catalog
+  // paths are NOT wired from this landing. Both write a row owned by the acting
+  // user, and this tab reads the SCOPE's collection, so a copy made through them
+  // would report success and then appear nowhere here. The drawn Add is the
+  // add-to-scope picker; where the other two belong is recorded on the pull
+  // request for the maintainer.
 
   return (
     <Main className="min-h-screen">
@@ -220,9 +146,9 @@ export async function OrganizationDetailDashboardPage({
         actions={isArchived ? <LifecycleBadge status="archived" /> : undefined}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        {/* The entity-page tablist (cinatra#2474 PR1, spec §IX): this landing IS
-            the Dashboards tab; Settings is the second entry. Rendered for every
-            member — the settings page owns the read-only/manage split. */}
+        {/* The entity-page tablist: this landing IS the Dashboards tab, and
+            Settings is appended last. Rendered for every member — the settings
+            page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/organizations/${encodeURIComponent(id)}`}
           assistantsHref={`/organizations/${encodeURIComponent(id)}/assistants`}
@@ -232,11 +158,7 @@ export async function OrganizationDetailDashboardPage({
           settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
           active="dashboards"
         />
-        {/* cinatra#1942 V4 — "Archived — read-only" banner.
-            Reads `archivedAt` directly, never the activation gate. The copy
-            deliberately claims read-only for the ORG's settings/membership
-            only — the viewer's own dashboards ABOUT the org (per-user rows,
-            not org data) stay editable, so the banner must not overclaim. */}
+        {/* cinatra#1942 V4 — "Archived — read-only" banner. */}
         {isArchived ? (
           <div
             data-cinatra-archived-banner="true"
@@ -250,32 +172,21 @@ export async function OrganizationDetailDashboardPage({
           </div>
         ) : null}
 
-        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3). The
-            popup is launched from the dashboards toolbar INSIDE the shell, so
-            the provider wraps the shell; what crosses is server-bound actions
-            and a label, never the actor or the scope's owner axis. */}
-        <ScopeAddSourcesProvider
-          scopeLabel={scopeLabel}
-          reference={scopeReference}
-          catalog={catalog}
-        >
-          <OrganizationDashboards
-            dataSource={dataSource}
-            overviewPortlets={overviewConfig.portlets}
-          />
-        </ScopeAddSourcesProvider>
-        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
-            landing by cinatra#2474 PR2 — it used to live on the separate
-            `/organizations/[id]/dashboards` route, which PR2 deletes outright
-            (no redirect, no shim). Homed + secondary-listed rows, the
-            add-to-scope picker, Remove and the promotion recourse all keep the
-            #1897 service and components; only the mount point moved. The
-            per-user shell above (its dropdown and the non-removable Overview) is
-            untouched — a secondary listing is deliberately NOT unioned into that
-            per-user list (#2474's converged model fact), which is exactly why it
-            renders as its own panel here. */}
+        {/* The Dashboards tab body. The provider hands the Add affordance its
+            sources; what crosses is server-bound actions and a label, never the
+            actor or the scope's owner axis. */}
         {actor && actorIsActiveInThisOrg ? (
-          <ScopeDashboardsSection actor={actor} scope={scope} />
+          <ScopeAddSourcesProvider
+            scopeLabel={scopeLabel}
+            reference={scopeReference}
+            catalog={catalog}
+          >
+            <ScopeDashboardsSection
+              actor={actor}
+              scope={scope}
+              entityLabel={scopeLabel}
+            />
+          </ScopeAddSourcesProvider>
         ) : null}
       </PageContent>
     </Main>

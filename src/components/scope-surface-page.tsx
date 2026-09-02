@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { domainIcons, type DomainIcon } from "@/components/domain-icons";
-import { ScopeDashboardsEmptyState } from "@/components/dashboards/scope-dashboards-empty";
+import { ScopeDashboardsTab } from "@/components/dashboards/scope-dashboards-tab";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -18,10 +19,10 @@ import {
   SCOPE_SURFACE_ENTITY_FALLBACK,
   SCOPE_SURFACE_KIND_LABEL,
   SCOPE_SURFACE_TAB_ACTION,
+  scopeSurfaceCrumbEntries,
   scopeSurfaceEmptyTestId,
   scopeSurfaceSettingsHref,
   scopeSurfaceTabHrefs,
-  type ScopeSurfaceKind,
   type ScopeSurfaceRef,
   type ScopeSurfaceTab,
 } from "@/lib/scope-surfaces";
@@ -70,14 +71,20 @@ const TAB_ICON: Record<ScopeSurfaceTab, DomainIcon> = {
   skills: domainIcons.skills,
 };
 
-/** The noun the Dashboards panel heading names, per scope kind. */
-const DASHBOARDS_NOUN: Record<ScopeSurfaceKind, string> = {
-  workspace: "workspace",
-  personal: "scope",
-  organization: "organization",
-  team: "team",
-  project: "project",
-};
+/**
+ * The entity the drawn caption names — "The dashboards in <b>Team: Growth</b>."
+ * The workspace names itself; the three id-bearing scopes are named
+ * "<Kind>: <Name>" exactly as the drawing's own example names them, and fall
+ * back to the kind alone where the reader may not be told the name.
+ */
+function dashboardsCaptionEntity(
+  scope: ScopeSurfaceRef,
+  title: string | undefined,
+): string {
+  if (scope.kind === "workspace") return SCOPE_SURFACE_ENTITY_FALLBACK.workspace;
+  const kind = SCOPE_SURFACE_KIND_LABEL[scope.kind];
+  return title ? `${kind}: ${title}` : kind;
+}
 
 export function ScopeSurfacePage({
   scope,
@@ -100,6 +107,9 @@ export function ScopeSurfacePage({
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher: the route resolved the name behind the
+          entity's own read gate before rendering this shell. */}
+      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, title)} />
       <PageHeader
         label={SCOPE_SURFACE_KIND_LABEL[scope.kind]}
         title={title ?? SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]}
@@ -109,7 +119,7 @@ export function ScopeSurfacePage({
       <PageContent className="flex flex-col gap-6 pb-8">
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
         {tab === "dashboards" ? (
-          <DashboardsTabBody scope={scope} />
+          <DashboardsTabBody scope={scope} title={title} />
         ) : (
           <ScopedTabEmpty tab={tab} />
         )}
@@ -126,30 +136,27 @@ export function ScopeSurfacePage({
  * — "The body below the strip is the ordinary entity-page body of that same
  * section" — and that section rules that "a personal user scope and the
  * whole-workspace scope are not add-to-scope targets — they carry no Add". So
- * this renders that section's own panel: its kind-named heading and its own
- * empty reading, with no Add affordance anywhere. No dashboard is rendered
- * inline: "the tab points, it never renders a dashboard inline".
+ * this renders that section's own body: the drawn muted caption naming the
+ * entity, the row list, and — until the workspace's own dashboards reader lands
+ * with its slice (#2811) — that section's own empty reading, with no Add
+ * anywhere and no page-wide dashed frame ("The panel sits inside the tab body:
+ * no bespoke panel, and no page-wide dashed frame").
  */
-function DashboardsTabBody({ scope }: { scope: ScopeSurfaceRef }) {
+function DashboardsTabBody({
+  scope,
+  title,
+}: {
+  scope: ScopeSurfaceRef;
+  title?: string;
+}) {
   return (
-    <section
-      data-conformance-id="scope-dashboards-tab"
-      data-state="empty"
-      className="flex flex-col gap-3"
-    >
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-        <h2 className="min-w-0 flex-1 text-sm font-semibold leading-normal text-foreground">
-          Dashboards in this {DASHBOARDS_NOUN[scope.kind]}
-        </h2>
-      </div>
-      {/* No Add: this scope is not an add-to-scope target, so the manager
-          recourse the drawing words for the three shared scopes is not the
-          reading it gives here. */}
-      <ScopeDashboardsEmptyState
-        canManage={false}
-        data-testid={scopeSurfaceEmptyTestId("dashboards")}
-      />
-    </section>
+    <ScopeDashboardsTab
+      data={{ scopeKind: scope.kind, rows: [], canManage: false }}
+      caption={{
+        kind: "entity",
+        entityLabel: dashboardsCaptionEntity(scope, title),
+      }}
+    />
   );
 }
 

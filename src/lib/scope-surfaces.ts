@@ -145,3 +145,35 @@ export const SCOPE_SURFACE_TAB_ACTION: Record<
   artifacts: { label: "Go to Artifacts", href: "/artifacts" },
   skills: { label: "Go to Skills", href: "/skills" },
 };
+
+/**
+ * The crumb labels a scope surface RESOLVES and publishes (the Breadcrumb
+ * pattern: "A crumb that stands for an entity id shows that entity's display
+ * name — at every position, not only the last. Names come from the owning page's
+ * server render, strictly after its access checks").
+ *
+ *   - the ENTITY crumb carries the resolved name, or — while the name is
+ *     genuinely unavailable to this reader — the id's first eight characters
+ *     plus an ellipsis, never a title-cased raw id;
+ *   - the LEAF crumb of a scoped tab carries the TAB's own name. Without it the
+ *     shell's leaf-crumb rule takes the page heading, which on an entity page is
+ *     the entity — so /workspace/assistants read "Workspace > Workspace" and an
+ *     organization tab repeated the org's name after its own truncated id.
+ */
+export function scopeSurfaceCrumbEntries(
+  scope: ScopeSurfaceRef,
+  tab: ScopeSurfaceTab | "dashboards",
+  title?: string,
+): { prefix: string; label: string }[] {
+  const base = scopeSurfaceBase(scope);
+  const entityLabel =
+    title ??
+    ("id" in scope
+      ? `${scope.id.slice(0, 8)}\u2026`
+      : SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]);
+  const entries = [{ prefix: base, label: entityLabel }];
+  if (tab !== "dashboards") {
+    entries.push({ prefix: `${base}/${tab}`, label: SCOPE_SURFACE_TAB_LABEL[tab] });
+  }
+  return entries;
+}

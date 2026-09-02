@@ -168,7 +168,12 @@ describe("the folded #1897 collection panel is fenced to the ACTIVE org (cinatra
     // closes, so the binder is not even consulted.
     expect(h.buildScopeReferenceSource).not.toHaveBeenCalled();
     // Suppression only — the landing itself stays reachable for every member.
-    expect(html).toContain('data-testid="org-dashboards"');
+    // RE-POINTED by cinatra#2807 fix leg 3: the per-user dashboard canvas that
+    // used to prove "still renders" is not drawn on this tab any more, so the
+    // landing's own chrome carries the proof — the entity heading and the full
+    // tab strip, Settings included.
+    expect(html).toContain("Acme Inc");
+    expect(html).toContain('href="/organizations/org-1/settings"');
   });
 
   test("active org matches: the §IX.1 add source IS built, for THIS org's scope (cinatra#2474 PR3)", async () => {

@@ -20,6 +20,7 @@ import { getScopeDashboardsTabData } from "@/lib/dashboards/scope-dashboards-ser
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ListingScope } from "@cinatra-ai/dashboards/entity-links";
 import { ScopeDashboardsTab, ScopeDashboardsTabError } from "./scope-dashboards-tab";
+import { ScopeAddDashboardButton } from "./scope-add-dashboard-button";
 import type {
   ScopeListingRemovalSource,
   ScopeDashboardsTabData,
@@ -32,9 +33,14 @@ import {
 export async function ScopeDashboardsSection({
   actor,
   scope,
+  entityLabel,
 }: {
   actor: ActorContext;
   scope: ListingScope;
+  /** The entity the drawn caption names — "Team: Growth", "Organization:
+   *  Northwind Analytics", "Project: Q3 Outbound". The hosting page owns the
+   *  name (it resolved it behind its own read gate); the tab never reads one. */
+  entityLabel: string;
 }) {
   // Contain a service failure in the DESIGNED error frame (§IX/§X data-state
   // "error") instead of bubbling an unhandled Next 500 up through the route: the
@@ -62,5 +68,15 @@ export async function ScopeDashboardsSection({
   const removal: ScopeListingRemovalSource = {
     removeListing: scopeRemoveListingAction.bind(null, scopeArg),
   };
-  return <ScopeDashboardsTab data={data} removal={removal} />;
+  return (
+    <ScopeDashboardsTab
+      data={data}
+      removal={removal}
+      caption={{ kind: "entity", entityLabel }}
+      // The drawn Add sits in the caption row. The button suppresses itself
+      // where the landing handed down no reference source, which it does only
+      // for a principal who may write the collection (§IX.2).
+      add={<ScopeAddDashboardButton />}
+    />
+  );
 }
