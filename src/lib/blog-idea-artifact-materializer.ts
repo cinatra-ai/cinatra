@@ -1,95 +1,25 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Blog post IDEA summary materializer + reader. Parallel to
+// Blog post IDEA summary READER. Parallel to
 // `src/lib/blog-post-artifact-materializer.ts`.
 //
 // The blog-post-idea record carried a free-form `summary: string` field.
 // The host store keeps only refs + operational metadata, so the body lives in
 // `@cinatra-ai/blog-idea-artifact`.
 //
-// Same identity rule (singleton-org, asset-blog single-tenant) +
-// `liveOnly: true` reader as the image / post-body materializers.
-//
-// `@cinatra-ai/blog-idea-artifact` accepts `text/markdown` + `text/plain`;
-// we choose `text/markdown` for agent-produced summaries (consistent with
-// blog-post-artifact). The matcher's 0.7 confidence floor does NOT gate
-// `assertedBy: "agent"` writes; explicit agent assertions use
-// `skipFallbackClassification: true`.
+// The in-core idea WRITER that used to live here is GONE (cinatra#3034): a
+// call-site census over the whole tree found no caller, and an idea is now
+// filed through the declarative binding road — the idea generator's fan-out
+// over its plain-text ideas, one artifact per idea. What remains is the
+// reader, on the same identity rule (singleton-org, asset-blog single-tenant)
+// and the same `liveOnly: true` default as the image / post-body readers; the
+// publish path still reads an idea's bytes through it.
 // ---------------------------------------------------------------------------
 
-import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
-import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
-import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { resolveSingletonBlogOrgId } from "@/lib/blog-image-materializer";
-// Target type via the manifest-declared "artifact-blog-idea-summary"
-// extension role — fail-loud when absent (cinatra#151 Stage 6).
-import { requireExtensionRole } from "@/lib/extension-roles";
-
-export type MaterializeBlogIdeaInput = {
-  /** UTF-8 markdown idea summary string. */
-  summary: string;
-  title?: string;
-  createdByRunId?: string | null;
-};
-
-export type MaterializeBlogIdeaResult = {
-  artifactId: string;
-  representationRevisionId: string;
-};
-
-async function* asTextStream(bytes: Uint8Array): AsyncIterable<Uint8Array> {
-  yield bytes;
-}
-
-export async function materializeBlogIdeaArtifact(
-  input: MaterializeBlogIdeaInput,
-): Promise<MaterializeBlogIdeaResult> {
-  // Resolve the target type FIRST (fail-loud in reduced universes) so an
-  // absent claimant never leaves an orphaned floor-only artifact behind.
-  const targetExtension = requireExtensionRole("artifact-blog-idea-summary");
-  const orgId = await resolveSingletonBlogOrgId();
-  // Resolve the target extension's EXACT declared object type (epic #1785 wave A3).
-  const resolvedTarget = await resolveBoundArtifactTarget({
-    orgId,
-    extension: targetExtension,
-  });
-  if (!resolvedTarget.ok) {
-    throw new Error(
-      `blog-idea materialization: extension "${targetExtension}" resolves no declared artifact object type: ${resolvedTarget.error}`,
-    );
-  }
-  const bytes = Buffer.from(input.summary, "utf-8");
-  const result = await createSemanticArtifact({
-    orgId,
-    objectType: resolvedTarget.target.objectTypeId,
-    expectedAcceptMimes: resolvedTarget.target.acceptedFileMimeTypes,
-    createdBy: null,
-    ownerLevel: "organization",
-    ownerId: orgId,
-    title: input.title,
-    declaredMime: "text/markdown",
-    originKind: "agent_generated",
-    stream: asTextStream(bytes),
-    createdByRunId: input.createdByRunId ?? null,
-    skipFallbackClassification: true,
-  });
-
-  assertSemanticType({
-    orgId,
-    artifactId: result.artifactId,
-    extension: targetExtension,
-    assertedBy: "agent",
-    principal: null,
-  });
-
-  return {
-    artifactId: result.artifactId,
-    representationRevisionId: result.representationRevisionId,
-  };
-}
 
 export type ReadBlogIdeaArtifactBytesInput = {
   artifactId: string;

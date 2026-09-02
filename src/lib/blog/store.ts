@@ -986,8 +986,7 @@ export async function saveGeneratedIdeas(
     transcriptId: string;
     transcriptTitle: string;
     title: string;
-    // Caller materializes the idea summary via `materializeBlogIdeaArtifact`
-    // and passes refs.
+    // Caller files the idea through the binding road and passes refs.
     summaryArtifactId: string;
     summaryRepresentationRevisionId: string;
   }>,
