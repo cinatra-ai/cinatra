@@ -20,7 +20,7 @@
 // components that emit byte-identical DOM.
 
 import { isRunStartToolName } from "./run-start-tool-names";
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,28 @@ import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
+// The run's OWN reading of the moment it stands at (cinatra#3044), reached by
+// the same subpath the host declaration is, and for the same reason.
+import {
+  isConversationMomentCardKind,
+  parseRunMomentCard,
+  runMomentCardIsOpen,
+  ScheduleReadingReport,
+  useRunMomentCard,
+  type RunMomentCardReader,
+  type ScheduleCardReading,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
+// The one wording a start answers with, and the correction the conversation
+// applies to a sentence that has been outlived by its own card (cinatra#3044).
+// The zero-dependency run-status leaf, reached by its own subpath.
+import {
+  correctRunStartSentenceForFiredSchedule,
+  correctRunStartSentenceForScheduleWait,
+  runIsWaitingForItsSchedule,
+} from "@cinatra-ai/agents/run-status";
+import { useConversationCredential } from "./conversation-credential";
+import { runSeedRequest } from "./run-seed-request";
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -249,17 +271,44 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 function AgentRunTurnSlot({
   runId,
   slot,
+  views,
   onActiveGateChange,
+  onScheduleWaitChange,
+  onScheduleFiredChange,
+  onApplyIntent,
   children,
 }: {
   runId: string;
   /** The part index this container is the slot for (S9i's positional mark). */
   slot: number;
+  /** The MOMENT views this step produced, raw, as the wire carries them
+   *  (cinatra#3044) — the platform-injected parts whose card is this run's own
+   *  reading. They are handed over UNRENDERED, because whether one is still the
+   *  run's reading is a question only the run's row answers; every other view
+   *  the step produced arrives already rendered in `children`. */
+  views: readonly Record<string, unknown>[];
   onActiveGateChange?: (
     runId: string,
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /** THE TURN'S SENTENCE, TOLD WHAT THIS RUN IS DOING (cinatra#3044). The run's
+   *  own row is read HERE, so the line above the card learns from the same
+   *  reading the card itself is drawn from — never from a second poller and
+   *  never from the frozen text. */
+  onScheduleWaitChange?: (runId: string, waiting: boolean) => void;
+  /** THE OTHER HALF OF THE SAME REPORT (cinatra#3044). A run whose one-off has
+   *  FIRED is not waiting for anything, and the drawing gives that reading its
+   *  own line; the answer is read here — off this container's own settled
+   *  reading and the card's own body — and reported up to the parts list for
+   *  exactly the reason the wait is: the sentence is a SIBLING of this
+   *  container, not a child of it. */
+  onScheduleFiredChange?: (runId: string, fired: boolean) => void;
+  /** The §6e apply-intent seam, threaded to the settled reading this container
+   *  draws for exactly the reason the ordinary slotted views get it: the card is
+   *  the same card, drawn through the same registry, and the gesture the widget
+   *  owns must not depend on which mount drew it. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
   /** The renderable views this same step produced, drawn under the run card. */
   children?: ReactNode;
 }) {
@@ -268,6 +317,259 @@ function AgentRunTurnSlot({
   );
   const runCardWaits = runCardWaitsForRecommendation(hold);
   const decided = recommendationWasDecided(hold);
+
+  // ONE SLOT, TWO READINGS (cinatra#3044).
+  //
+  // This container is the ONE place the drawing gives this run in the turn: the
+  // progress reading while it works, the moment's card when a moment opens,
+  // then that card's settled reading. A run-progress card stacked above the
+  // moment's card is two readings in one slot, and the person then meets a card
+  // that says "Awaiting input · No messages yet" standing between the
+  // assistant's sentence and the form they are being asked to fill in.
+  //
+  // WHAT DECIDES IT IS THE RUN'S OWN ROW, read here rather than derived from
+  // the turn's content, because the turn's content cannot answer it on either
+  // road. The tab that STREAMED this turn will never see the part the platform
+  // wrote into the stored turn afterwards — that is the silent wait — and a
+  // RELOADED turn carries the part for ever, including after the run has moved
+  // on, so the part's presence alone would keep the run's own reading away.
+  //
+  // THE READ IS THE RUN'S OWN, on the surface's own credential: the same route
+  // the inline panel seeds from, which is what already turns "queued" into
+  // "Awaiting input" on this page. That makes the moment reach the OPEN page
+  // live, and the card mount here with no reload.
+  const credential = useConversationCredential();
+  const momentReader = useMemo<RunMomentCardReader | null>(() => {
+    const request = runSeedRequest(credential, runId);
+    // A host that cannot say who is asking reads NOTHING, and the turn keeps
+    // exactly the reading it drew before this rule existed.
+    if (!request) return null;
+    return async (signal) => {
+      const response = await fetch(request.url, { ...request.init, signal });
+      if (!response.ok) return null;
+      return parseRunMomentCard(await response.json());
+    };
+  }, [credential, runId]);
+  const {
+    card: momentCard,
+    answered: momentAnswered,
+    gaveUp: momentUnreadable,
+  } = useRunMomentCard({ read: momentReader });
+  const momentIsOpen = runMomentCardIsOpen(momentCard);
+  // WHAT THE TURN'S OWN CONTENT CARRIES FOR THIS MOMENT. The platform-injected
+  // part is the carriage a reload reads, and it is drawn HERE — inside the
+  // producing part's own container — exactly as every slotted view is.
+  //
+  // USABLE OR NOT CARRIED AT ALL. `carriedMomentView` is what the caller
+  // recognised as a moment's card AND could address: this container reconstructs
+  // the payload from it, so a part with no reference, or one written at a schema
+  // version this bundle does not know, is not something to hold a place with. It
+  // is not silently dropped either — the caller leaves it in the ordinary
+  // slotted views, where it draws the registry's own fallback exactly as any
+  // other unreadable view does.
+  const carriedMoment = views.find(carriedMomentView) as
+    | { viewType?: string; ref?: string }
+    | undefined;
+  const turnCarriesMomentCard = carriedMoment !== undefined;
+
+  // THE ONE MOMENT CARD THIS SLOT DRAWS, and where its identity comes from.
+  //
+  //   · THE ROW ANSWERED AND STATES THE MOMENT — the card is addressed by the
+  //     reference the row states. The row is the authority: it is what the
+  //     reload's resolver answers from, and it is the only thing that is right
+  //     on BOTH roads (the streamed turn that carries no part, and the reloaded
+  //     turn that carries one for ever).
+  //   · THE ROW HAS NOT ANSWERED YET — the turn's own part holds the place, so
+  //     a reader who opens a parked conversation sees the card immediately and
+  //     a read that never lands never empties a turn that has one.
+  //   · THE ROW ANSWERED AND STATES NO SUCH MOMENT — NOTHING. This is the
+  //     "run right after setup" road: the run moved on, so its slot goes back
+  //     to the run's own reading and the part it still carries draws nothing
+  //     beside it. Leaving that part to draw itself is how a settled schedule
+  //     card would end up standing next to the next gate's card.
+  //   · THE RUN CANNOT BE READ AT ALL — nothing either, and the run's own
+  //     reading comes back below. This is the fail-open case, and it fails open
+  //     to ONE reading rather than to both: a card whose currency nothing can
+  //     establish is exactly the stale card standing in the run's place that
+  //     this whole rule exists to prevent, and drawing it beside the run's
+  //     progress reading would be the two-readings defect again. Nothing is
+  //     lost for good — the first read that lands brings the card back.
+  const stillLooking = !momentAnswered && !momentUnreadable;
+
+  // THE READING THE ROW ALREADY NAMED, KEPT (cinatra#3044 — the LIVE road).
+  //
+  // TWO ROADS CARRY THIS RUN'S SPENT SCHEDULE, AND ONLY ONE OF THEM IS A PART.
+  // A RELOADED turn carries the platform-injected part in its stored content
+  // for ever, so "what did this run already settle" can be read out of `views`.
+  // The STREAMED turn cannot: the platform writes that part into the STORED
+  // turn after the stream has closed, so the tab that sent the turn has an
+  // `agent_run` part with no views on it and never will. The rule that
+  // answered only from `views` therefore closed the reloaded road and left the
+  // live one exactly as it was measured — four walks holding ZERO schedule
+  // cards after the fire while the durable rows carried the part in the same
+  // instant, and the run's own next screen standing in the card's place.
+  //
+  // THE LIVE ROAD'S CARRIAGE IS THIS CONTAINER'S OWN READ. While the schedule
+  // is open the row NAMES it — that is how the card reaches this page at all —
+  // and the row stops naming it the moment the run moves on. So the reference
+  // is remembered as it goes past, and the settled reading is drawn from what
+  // was remembered. It is this run's own schedule by construction: the
+  // container is scoped to one run, and the row is that run's.
+  //
+  // ONE-WAY, AND NEVER RE-ARMED BY AN ABSENCE. Only a row that NAMES a schedule
+  // writes here, so a read that fails, a run that never parked and a run that
+  // has moved on all leave the memory exactly as it was — which is what makes
+  // the fail-open case below still fail open to ONE reading.
+  //
+  // ADJUSTED DURING RENDER, not in an effect, for the same reason the card's own
+  // wire reference is: an effect would let one paint go out with the reference
+  // already gone from the row and not yet remembered here — a single frame in
+  // which the card is drawn by neither road. This is React's own
+  // adjust-state-when-the-input-changes shape: it is guarded by a comparison, so
+  // it re-renders once when the row first names a schedule and never again.
+  const [seenScheduleRef, setSeenScheduleRef] = useState<string | null>(null);
+  const namedScheduleRef =
+    momentIsOpen && momentCard.kind === SPENT_MOMENT_CARD_VIEW_TYPE
+      ? momentCard.ref
+      : null;
+  if (namedScheduleRef !== null && seenScheduleRef !== namedScheduleRef) {
+    setSeenScheduleRef(namedScheduleRef);
+  }
+
+  const momentKind = momentIsOpen
+    ? momentCard.kind
+    : stillLooking
+      ? (carriedMoment?.viewType ?? null)
+      : null;
+  const momentRef = momentIsOpen
+    ? momentCard.ref
+    : stillLooking
+      ? (carriedMoment?.ref ?? null)
+      : null;
+
+  // THE SPENT SCHEDULE KEEPS ITS OWN READING (cinatra#3044). The ratified
+  // drawing's section VI, fifth reading:
+  //
+  //   "Once it has fired, the card is a reading. A one-off that has fired
+  //    cannot be changed, so the rows go read-only - the values still legible,
+  //    the pickers gone - and the card carries no floor at all: no hairline, no
+  //    button, nothing to press. A spent schedule is still worth reading, so
+  //    nothing is hidden; it simply asks nothing."
+  //
+  // The selection above answers ONE question: which card is the run's CURRENT
+  // reading. It is not an answer to "what did this run already settle", and
+  // reading it as one is what took the fired card off the conversation
+  // altogether: the run moved on to its next screen, the row stopped naming the
+  // schedule, and the part the turn still carries drew nothing at all.
+  //
+  // So a carried moment card the row does NOT name is not withdrawn - it is a
+  // reading of its own, at its own place in this container, and the run's next
+  // screen takes its own place beside it. Neither displaces the other, which is
+  // the whole of what the drawing asks for.
+  //
+  // ONLY ONCE THE ROW HAS ANSWERED. Before the answer the placeholder above is
+  // already holding this very part's place, and drawing it a second time as a
+  // settled reading is the "once, never twice" defect the slot partition exists
+  // to prevent. A read that never lands therefore changes nothing here: the
+  // turn keeps exactly the reading it drew before this rule existed.
+  //
+  // AND THE CARD SAYS WHAT IT IS, never this container. The reading is drawn
+  // through the SAME registry every other view goes through and resolves its own
+  // state, so a schedule that has fired draws the read-only rows with no floor
+  // and one that has not draws whatever it honestly is. This states only WHERE.
+  //
+  // ONE READING, ADDRESSED BY KIND AND NOT BY REFERENCE. A card reference is
+  // MINTED, not derived: every encoding draws a fresh initialisation vector, so
+  // the same run's same schedule has as many distinct references as the number
+  // of times it was minted, and a run that re-enters its moment mints another.
+  // Comparing the row's reference to the carried part's bytes therefore answers
+  // "is this the same MINTING", which is not the question - two mintings of one
+  // run's schedule would leave the older one standing beside the newer as a
+  // second card for one schedule. This container is already scoped to ONE run,
+  // and this kind's reference carries nothing but that run, so every carried
+  // schedule part in it is a reading of the SAME schedule: the question is only
+  // whether the row still names one, and the answer is one reading either way.
+  //
+  // AND THE READING IS ELECTED FROM WHICHEVER ROAD CARRIES IT. The turn's own
+  // part first, because on the reloaded road it is the durable carriage and it
+  // is what the reader arrived with; the reference this container itself saw
+  // the row name otherwise, which is the only carriage the streamed turn has.
+  // Never both: one schedule, one reading, on either road.
+  const settledMomentViews = useMemo<readonly Record<string, unknown>[]>(() => {
+    // The row still names this run's schedule: it is the run's CURRENT reading
+    // and the mount below draws it. Nothing settled to draw here.
+    if (!momentAnswered || momentKind === SPENT_MOMENT_CARD_VIEW_TYPE) return [];
+    const carried = views.find((view) => view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE);
+    if (carried) return [carried];
+    if (seenScheduleRef === null) return [];
+    return [
+      {
+        viewType: SPENT_MOMENT_CARD_VIEW_TYPE,
+        schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+        ref: seenScheduleRef,
+      },
+    ];
+  }, [views, momentAnswered, momentKind, seenScheduleRef]);
+
+  // WHAT THAT READING TURNED OUT TO BE, ASKED OF THE CARD (cinatra#3044).
+  //
+  // The container states WHERE a reading is drawn and never what it says, so it
+  // does not know whether the schedule it kept was a one-off that is now spent
+  // or a recurring one that is still live. The card resolved that answer to
+  // draw itself, and it reports it back through the sink below — the same
+  // "where the sentence and the card could disagree, the card is right" the
+  // wait correction already follows, applied to the half the row cannot answer.
+  const [settledReading, setSettledReading] = useState<ScheduleCardReading>("other");
+  const scheduleHasFired =
+    settledMomentViews.length > 0 && settledReading === "spent-one-off";
+  useEffect(() => {
+    onScheduleFiredChange?.(runId, scheduleHasFired);
+    // A SLOT THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as the wait does.
+    if (!scheduleHasFired) return;
+    return () => {
+      onScheduleFiredChange?.(runId, false);
+    };
+  }, [onScheduleFiredChange, runId, scheduleHasFired]);
+
+  // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
+  // slot. It also WAITS on a turn that carries the moment's card until the run
+  // has been read: drawing it on "not yet" and taking it away on the answer
+  // would show the stacked reading briefly, every single time a parked
+  // conversation is opened. An ordinary run pays nothing for this — its turn
+  // carries no moment card, so it draws exactly when it always did.
+  //
+  // AND THE WAIT FAILS OPEN. A read that never lands — a dead endpoint, a
+  // surface with no credential — must not be able to leave a turn with nothing
+  // in it at all: once the watch has given up unanswered, the run's own reading
+  // comes back and the turn draws what it drew before this rule existed.
+  const runCardStandsDown =
+    momentIsOpen || (turnCarriesMomentCard && stillLooking);
+
+  // THE SENTENCE ABOVE THE CARD MAY NOT CONTRADICT IT (cinatra#3044).
+  //
+  // The line that introduces this card was written when the run was dispatched
+  // — before the schedule moment existed — and it says the run started. The
+  // card beneath it is still asking when the run should happen, and the row
+  // says the run has not run. One of the two readings is false, and it is not
+  // the card's: "where the sentence and the card could disagree, the card is
+  // right". So the run's own reading, already read here for the card, is
+  // reported UP to the parts list, which corrects the platform's own sentence
+  // for this run and leaves everything else in the turn alone.
+  //
+  // IT IS THE SAME READING, not a second one. Nothing extra is fetched, no
+  // second poller is started, and a turn whose run never parks at a schedule
+  // reports `false` once and is never touched again.
+  const waitingForSchedule = momentIsOpen && runIsWaitingForItsSchedule(momentCard);
+  useEffect(() => {
+    onScheduleWaitChange?.(runId, waitingForSchedule);
+    // A SLOT THAT LEAVES TAKES ITS ANSWER WITH IT: a run whose container
+    // unmounts while still waiting must not leave the turn correcting a
+    // sentence for a card that is no longer drawn.
+    if (!waitingForSchedule) return;
+    return () => {
+      onScheduleWaitChange?.(runId, false);
+    };
+  }, [onScheduleWaitChange, runId, waitingForSchedule]);
 
   // WHEN THE RUN STARTS ASKING, AND HOW THIS TURN HEARS ABOUT IT
   // (cinatra#2930, lifecycle-b W3).
@@ -366,12 +668,20 @@ function AgentRunTurnSlot({
   );
 
   const turn = (
+    // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole
+    // of its own turn rather than around the produced views alone: #3044 draws
+    // this run's schedule card from THREE places in here - the moment's own
+    // mount, the settled reading beside it, and the ordinary slotted views -
+    // and a card that cannot report is a turn that never learns what it is
+    // carrying. It is still this container asking what IT holds: the provider
+    // is scoped to one run's turn and declares nothing surface-wide.
     // `data-agent-run-slot` names WHICH run this marked slot belongs to. The
     // slot index alone says "some marked container" — this view marks three —
     // and the run panel's own link used to be what told them apart, which stops
     // being true the moment a held turn draws no panel. It is passive: a name
     // for the container, driving nothing.
-    <div data-transcript-slot={slot} data-agent-run-slot={runId}>
+    <SettledScheduleRegisterProvider register={registerSettledSchedule}>
+      <div data-transcript-slot={slot} data-agent-run-slot={runId}>
       {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
           A chat-started run can PARK on the run-start recommendation hold, and
           the decision belongs where the person is: in the conversation. This
@@ -422,6 +732,30 @@ function AgentRunTurnSlot({
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
       <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      {/* THE SETTLED MOMENT'S OWN READING (cinatra#3044). Drawn here, in the
+          producing part's own container, ABOVE the reading the run has now:
+          the schedule was settled before the run moved on, and a conversation
+          reads downwards. Its own marked container, so the reading has a place
+          of its own rather than sharing the run's - "the fired part keeps its
+          own slot; a later run's screens take their own". See the selection
+          above for which views reach this line and why none of them can be the
+          run's current reading.
+
+          IT CARRIES NO SLOT MARK OF ITS OWN. The producing part's container
+          already carries `data-transcript-slot`, and the positional rule asks
+          which marked container a card is inside -- an answer that has to stay
+          single. A second mark with the same index nested inside the first
+          would give `closest` a container that names no run. */}
+      <ScheduleReadingReport onReading={setSettledReading}>
+        {settledMomentViews.map((view) => (
+          <div
+            key={`settled-moment-${String(view.viewType)}-${String(view.ref)}`}
+            data-settled-moment-reading={String(view.ref)}
+          >
+            <RenderableViewCard data={view} {...(onApplyIntent ? { onApplyIntent } : {})} />
+          </div>
+        ))}
+      </ScheduleReadingReport>
       {/* THE HITL SCREEN, ON THE CONVERSATION HOSTS (cinatra#2930, lifecycle-b
           W3). The second kind whose carriage is a typed INTERRUPT, mounted for
           exactly the same reasons as the §V card above it and in exactly the
@@ -444,6 +778,10 @@ function AgentRunTurnSlot({
           result's status: the card self-gates — a run that states no HITL
           moment renders nothing — which is also what makes it survive a
           transcript reload. */}
+      {/* THE AGENT'S OWN NEXT SCREEN, at the placement this turn has elected
+          (cinatra#3174, criterion 2). One element, two containers - see the
+          construction above for why the person's half-typed answer travels
+          with it rather than living inside the instance that moves. */}
       {turnCarriesSettledSchedule ? null : hitlScreen}
       {/* THE RUN-PROGRESS PANEL IS NOT DRAWN FOR A SETTLED SCHEDULE CARD - AND
           IS NOT UNMOUNTED EITHER (cinatra#3174, criterion 1, as converged).
@@ -468,9 +806,15 @@ function AgentRunTurnSlot({
           read once would answer 'no screen' and never ask again while the
           person sat in front of a run that was waiting on them."
 
+          AND THE MOMENT'S OWN STAND-DOWN IS UNTOUCHED (cinatra#3044). A run
+          whose row still NAMES its moment already withholds the panel outright,
+          and that rule is left exactly as it landed: it is asked first, so the
+          two readings can never both draw a panel and the settled card's own
+          stand-down applies only where #3044 was drawing one.
+
           The run page's own panel is untouched - what the section governs is
           this turn. */}
-      {runCardWaits ? null : turnCarriesSettledSchedule ? (
+      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule ? (
         <div hidden aria-hidden data-inline-run-panel-stood-down={runId}>
           {runPanel}
         </div>
@@ -479,14 +823,28 @@ function AgentRunTurnSlot({
       )}
       {/* Inline undo for a recent restorable change-set produced by this run. */}
       <UndoActionChip runId={runId} />
-      {/* THE VIEWS THIS STEP PRODUCED, under the register the schedule card
-          reports its reading into (cinatra#3174). The provider wraps ONLY the
-          produced views: it is the container asking what it is carrying, not a
-          surface-wide declaration. */}
-      <SettledScheduleRegisterProvider register={registerSettledSchedule}>
+      {/* THE MOMENT'S ONE CARD (cinatra#3044).
+          ONE mount, whichever road the reader arrived by: the page that STARTED
+          the run has no part in its copy of the turn (the turn was streamed
+          here and the platform wrote the part into the STORED turn afterwards),
+          and a reloaded turn has one for ever. Both draw through the SAME
+          registry every other slotted view draws through, in the producing
+          part's own container, under this column's declared host - so the card
+          a person meets live and the card they meet after a reload are the same
+          card in the same place. See the selection above for which reference it
+          is addressed by, and for why a run that has moved on draws none. */}
+      {momentKind && momentRef ? (
+        <RenderableViewCard
+          data={{
+            viewType: momentKind,
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: momentRef,
+          }}
+        />
+      ) : null}
         {children}
-      </SettledScheduleRegisterProvider>
-    </div>
+      </div>
+    </SettledScheduleRegisterProvider>
   );
 
   // THE SCREEN'S OWN MARKED PLACE (cinatra#3174, criterion 2). Where the turn
@@ -505,6 +863,47 @@ function AgentRunTurnSlot({
   );
 }
 
+/**
+ * THE ONE MOMENT CARD A CONVERSATION KEEPS AFTER ITS MOMENT HAS CLOSED
+ * (cinatra#3044).
+ *
+ * Named rather than spelled inline, and deliberately ONE kind: the ratified
+ * drawing's section VI is the sentence that gives a spent card a standing
+ * reading -- "A spent schedule is still worth reading, so nothing is hidden; it
+ * simply asks nothing" -- and no other moment has one. A kind added to the
+ * conversation's moment map does NOT join this rule by default; it joins when a
+ * drawing sentence says what its closed moment reads as.
+ */
+export const SPENT_MOMENT_CARD_VIEW_TYPE = "trigger_schedule_proposal";
+
+/**
+ * IS THIS PRODUCED VIEW A MOMENT'S CARD THIS COLUMN CAN ADDRESS (cinatra#3044)?
+ *
+ * ONE definition, used by the caller that hands moment views to the run's
+ * container and by the container that decides what to draw with them, so the
+ * two cannot disagree about which views left the ordinary slotted list.
+ *
+ * IT IS DELIBERATELY STRICT. The run's container reconstructs the payload from
+ * what this returns, so anything it cannot address — a kind it does not draw
+ * from the run, a missing or empty reference, a schema version this bundle does
+ * not know — is NOT a moment's card here. Such a view stays in the ordinary
+ * slotted views and meets the registry's own validation and fallback, which is
+ * the forward-compatibility contract every other view already has.
+ */
+function carriedMomentView(view: Record<string, unknown>): boolean {
+  const candidate = view as {
+    viewType?: unknown;
+    ref?: unknown;
+    schemaVersion?: unknown;
+  };
+  return (
+    isConversationMomentCardKind(candidate.viewType) &&
+    typeof candidate.ref === "string" &&
+    candidate.ref.length > 0 &&
+    candidate.schemaVersion === LIFECYCLE_VIEW_SCHEMA_VERSION
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Ordered parts renderer (chronologically interleaved text + tool badges)
 // ---------------------------------------------------------------------------
@@ -517,6 +916,8 @@ function OrderedPartsSection({
   onMarkdownClick,
   onActiveGateChange,
   onApplyIntent,
+  onWaitingRunsChange,
+  onFiredRunsChange,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -540,13 +941,73 @@ function OrderedPartsSection({
    *  produced so a SLOTTED card keeps the one gesture the widget owns. Absent
    *  (`/chat`) ⇒ display-only, exactly as for the turn-level list. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
+  /** cinatra#3044 — the same answer, reported OUT, for the layouts that render
+   *  the turn's prose as flat `content` beside this list rather than inside it
+   *  (the pinned Slack layout, and any turn that carries no ordered trace). */
+  onWaitingRunsChange?: (runIds: readonly string[]) => void;
+  /** The same answer for the runs whose one-off has FIRED (cinatra#3044), for
+   *  the same layouts and the same reason. */
+  onFiredRunsChange?: (runIds: readonly string[]) => void;
 }) {
+  // WHICH RUNS IN THIS TURN ARE WAITING FOR A SCHEDULE (cinatra#3044). Each
+  // run's own container reads its row for the card it draws and reports the
+  // answer here, because the sentence that has to be corrected is a SIBLING of
+  // that container, not a child of it — the platform writes the line and the
+  // dispatch part into one turn, and only the run's row can say which of the
+  // two readings the person is looking at is still true.
+  //
+  // A LIST, not a boolean: one turn can start more than one run, and a
+  // correction is addressed to the run it names.
+  const [scheduleWaitRunIds, setScheduleWaitRunIds] = useState<readonly string[]>([]);
+  const onScheduleWaitChange = useCallback((runId: string, waiting: boolean) => {
+    setScheduleWaitRunIds((prev) => {
+      const known = prev.includes(runId);
+      // Identity is preserved when nothing changed, so a run that reports the
+      // same answer on every read cannot re-render the transcript.
+      if (waiting === known) return prev;
+      return waiting ? [...prev, runId] : prev.filter((id) => id !== runId);
+    });
+  }, []);
+  useEffect(() => {
+    onWaitingRunsChange?.(scheduleWaitRunIds);
+  }, [onWaitingRunsChange, scheduleWaitRunIds]);
+  // WHICH RUNS IN THIS TURN HAVE A SPENT ONE-OFF ON SCREEN (cinatra#3044). The
+  // mirror of the wait list above, kept apart from it because the two say
+  // different things about the same run at different times and the sentence
+  // they choose is a different sentence. A run cannot be in both: the container
+  // reports "waiting" only while the row still names the schedule and "fired"
+  // only once it no longer does.
+  const [scheduleFiredRunIds, setScheduleFiredRunIds] = useState<readonly string[]>([]);
+  const onScheduleFiredChange = useCallback((runId: string, fired: boolean) => {
+    setScheduleFiredRunIds((prev) => {
+      const known = prev.includes(runId);
+      if (fired === known) return prev;
+      return fired ? [...prev, runId] : prev.filter((id) => id !== runId);
+    });
+  }, []);
+  useEffect(() => {
+    onFiredRunsChange?.(scheduleFiredRunIds);
+  }, [onFiredRunsChange, scheduleFiredRunIds]);
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
         if (part.kind === "text") {
-          const raw = trimContent ? trimContent(part.content) : part.content;
+          let raw = trimContent ? trimContent(part.content) : part.content;
+          // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
+          // construction: only the sentence this platform minted, only for a
+          // run this turn is drawing a schedule card for, and only while that
+          // run is waiting. Prose the model wrote is not touched.
+          // THE SPENT ONE-OFF'S LINE FIRST. Its correction replaces the whole
+          // platform sentence rather than its clause, so a run corrected here
+          // leaves nothing for the wait correction below to match — which is
+          // what keeps the two from ever composing into one line.
+          for (const firedRunId of scheduleFiredRunIds) {
+            raw = correctRunStartSentenceForFiredSchedule({ text: raw, runId: firedRunId });
+          }
+          for (const waitingRunId of scheduleWaitRunIds) {
+            raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+          }
           // Skip pure-whitespace text parts (they're separator artifacts).
           if (!raw.replace(/\s+/g, "").length) return null;
           return (
@@ -574,7 +1035,22 @@ function OrderedPartsSection({
         // card, never inside it: the run card is a `run_card` host of its own,
         // and a chat card rendered in that subtree would be another host's mount.
         const producedViews = part.kind === "tool_call" ? (part.views ?? []) : [];
-        const slottedViews = producedViews.map((view, i) => (
+        // A MOMENT'S CARD IS NOT DRAWN FROM HERE (cinatra#3044). Every other
+        // view a step produced is its own reading and draws unconditionally;
+        // a lifecycle MOMENT's card is the run's reading, and whether it is
+        // still the run's reading is a question only the run's own row can
+        // answer. So it is handed to the run's container below, which draws
+        // exactly one — never a settled moment card standing beside the run's
+        // next reading. In a container that is not a run's (no `agent_run`
+        // part), a moment view has no run to be measured against and draws as
+        // it always did.
+        const momentViews = producedViews.filter(carriedMomentView);
+        const isRunSlot =
+          part.kind === "tool_call" && isRunStartToolName(part.name) && !!part.runId;
+        const slottedViews = (isRunSlot
+          ? producedViews.filter((view) => !momentViews.includes(view))
+          : producedViews
+        ).map((view, i) => (
           <RenderableViewCard
             key={`slot-${idx}-view-${i}`}
             data={view}
@@ -594,7 +1070,11 @@ function OrderedPartsSection({
               key={`agent-run-${part.runId}`}
               runId={part.runId}
               slot={idx}
+              views={momentViews}
               onActiveGateChange={onActiveGateChange}
+              onScheduleWaitChange={onScheduleWaitChange}
+              onScheduleFiredChange={onScheduleFiredChange}
+              {...(onApplyIntent ? { onApplyIntent } : {})}
             >
               {slottedViews}
             </AgentRunTurnSlot>
@@ -1234,6 +1714,97 @@ function MessageRenderableViews({
  * whether that branch already drew them, which is what keeps ONE rendered
  * instance per kind per host however many ladder branches mount this.
  */
+// ---------------------------------------------------------------------------
+// THE ONE CORRECTION, IN THE LAYOUTS THAT DO NOT RENDER AN ORDERED TRACE
+// (cinatra#3044).
+//
+// `OrderedPartsSection` corrects the platform's dispatch sentence where the
+// sentence is a text PART of the trace it renders. Two shipped layouts do not
+// render that trace: the pinned Slack layout projects the turn's prose as flat
+// `content` and carries only the lifecycle SLOTS beside it, and an older turn
+// with no trace falls through the same way. There the sentence and the card are
+// siblings in the message body, so the answer the run's own container reads has
+// to travel one level up — a turn-scoped context, written by the slot list that
+// draws the card and read by the block that renders the prose.
+// ---------------------------------------------------------------------------
+const ScheduleWaitContext = createContext<{
+  waitingRunIds: readonly string[];
+  firedRunIds: readonly string[];
+  reportWaitingRunIds: (runIds: readonly string[]) => void;
+  reportFiredRunIds: (runIds: readonly string[]) => void;
+} | null>(null);
+
+/** The assistant turn's body, and the scope of the correction inside it. */
+function ScheduleWaitTurnBody({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
+  const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
+  // Identity is preserved when the answer did not change, so a run that reports
+  // the same reading on every poll cannot re-render the transcript.
+  const reportWaitingRunIds = useCallback((next: readonly string[]) => {
+    setWaitingRunIds((prev) =>
+      prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
+    );
+  }, []);
+  const reportFiredRunIds = useCallback((next: readonly string[]) => {
+    setFiredRunIds((prev) =>
+      prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
+    );
+  }, []);
+  const value = useMemo(
+    () => ({ waitingRunIds, firedRunIds, reportWaitingRunIds, reportFiredRunIds }),
+    [waitingRunIds, firedRunIds, reportWaitingRunIds, reportFiredRunIds],
+  );
+  return (
+    <ScheduleWaitContext.Provider value={value}>
+      <div className={className}>{children}</div>
+    </ScheduleWaitContext.Provider>
+  );
+}
+
+/** The turn's flat prose, corrected for every run this turn is drawing a
+ *  pending schedule card for. Identical bytes to the trace's own correction —
+ *  both call the one function in the run-status leaf. */
+function FlatAssistantContent({
+  message,
+  theme,
+  detectWidgets,
+  streaming,
+  onMarkdownClick,
+}: {
+  message: UiMessage;
+  theme: ThemeName;
+  detectWidgets: (content: string) => DetectedWidget[];
+  streaming: boolean;
+  onMarkdownClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  const scheduleSentences = useContext(ScheduleWaitContext);
+  // While streaming, trim incomplete embed prefixes so partial JSON/mermaid
+  // never flashes as raw text in the markdown output.
+  let raw = streaming ? trimIncompleteEmbeds(message.content) : message.content;
+  // Same order as the trace's own correction, for the same reason.
+  for (const runId of scheduleSentences?.firedRunIds ?? []) {
+    raw = correctRunStartSentenceForFiredSchedule({ text: raw, runId });
+  }
+  for (const runId of scheduleSentences?.waitingRunIds ?? []) {
+    raw = correctRunStartSentenceForScheduleWait({ text: raw, runId });
+  }
+  return (
+    <div
+      data-embed-content
+      className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
+      /* renderMarkdown strips mermaid blocks; they are rendered separately below */
+      onClick={onMarkdownClick}
+    />
+  );
+}
+
 function MessageLifecycleSlots({
   message,
   theme,
@@ -1249,6 +1820,11 @@ function MessageLifecycleSlots({
     instanceId: string,
   ) => void;
 }) {
+  // The answer this mount reports OUT to the turn's prose, which is a sibling
+  // of this block in these layouts and not a child of it (cinatra#3044).
+  const scheduleSentences = useContext(ScheduleWaitContext);
+  const reportWaitingRunIds = scheduleSentences?.reportWaitingRunIds;
+  const reportFiredRunIds = scheduleSentences?.reportFiredRunIds;
   // The ordered-parts branch condition, restated: when it ran, it already drew
   // every slot in the trace and this mount must draw nothing.
   if (message.parts && message.parts.length > 0 && !message.error) return null;
@@ -1260,6 +1836,8 @@ function MessageLifecycleSlots({
       theme={theme}
       detectWidgets={detectWidgets}
       onActiveGateChange={onActiveGateChange}
+      {...(reportWaitingRunIds ? { onWaitingRunsChange: reportWaitingRunIds } : {})}
+      {...(reportFiredRunIds ? { onFiredRunsChange: reportFiredRunIds } : {})}
     />
   );
 }
@@ -1609,7 +2187,7 @@ export function ChatMessagesView({
                     mentionables={mentionables}
                   />
                 ) : (
-                  <div className="group min-w-0 max-w-full flex-1">
+                  <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
                     {/* Ordered parts: when an assistant message
                         has a `parts` trace, render text + tool badges
                         chronologically interleaved. Replaces the
@@ -1681,17 +2259,12 @@ export function ChatMessagesView({
                       </>
                     ) : message.content ? (
                       <>
-                        <div
-                          data-embed-content
-                          className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                          dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                            isStreaming(message.id)
-                              ? trimIncompleteEmbeds(message.content)
-                              : message.content,
-                            theme,
-                            widgetRuntime.detectWidgets,
-                          ) }}
-                          onClick={handleAssistantMarkdownClick}
+                        <FlatAssistantContent
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          streaming={isStreaming(message.id)}
+                          onMarkdownClick={handleAssistantMarkdownClick}
                         />
                         <MessageWidgetEmbeds
                           message={message}
@@ -1741,7 +2314,7 @@ export function ChatMessagesView({
                     ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                       <ThinkingIndicator label={getLiveProgressStatus(message)} />
                     ) : null}
-                  </div>
+                  </ScheduleWaitTurnBody>
                 )}
               </div>
             </div>
@@ -1792,7 +2365,7 @@ export function ChatMessagesView({
                 mentionables={mentionables}
               />
             ) : (
-              <div className="group min-w-0 max-w-full flex-1">
+              <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
                 {/* Ordered parts — see comment at the first render site
                     above. Same conditional applies here in slack-mode
                     view. */}
@@ -1856,20 +2429,12 @@ export function ChatMessagesView({
                   </>
                 ) : message.content ? (
                   <>
-                    <div
-                      data-embed-content
-                      className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                        // While streaming, trim incomplete embed prefixes so partial
-                        // JSON/mermaid never flashes as raw text in the markdown output.
-                        isStreaming(message.id)
-                          ? trimIncompleteEmbeds(message.content)
-                          : message.content,
-                        theme,
-                        widgetRuntime.detectWidgets,
-                      ) }}
-                      /* renderMarkdown strips mermaid blocks; they are rendered separately below */
-                      onClick={handleAssistantMarkdownClick}
+                    <FlatAssistantContent
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      streaming={isStreaming(message.id)}
+                      onMarkdownClick={handleAssistantMarkdownClick}
                     />
                     <MessageWidgetEmbeds
                       message={message}
@@ -1931,7 +2496,7 @@ export function ChatMessagesView({
                 ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                   <ThinkingIndicator label={getLiveProgressStatus(message)} />
                 ) : null}
-              </div>
+              </ScheduleWaitTurnBody>
             )}
           </div>
         );
