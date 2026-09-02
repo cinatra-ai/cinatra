@@ -118,11 +118,22 @@ function frameElements(c: HTMLElement): HTMLElement[] {
 
 /**
  * THE FLOOR CARRIES A RULE AND NOTHING ELSE. The exclusion above is bounded
- * here: the one element this scan skips may draw a top border and the space
- * around it, and may draw no ground, no radius, no shadow and no box padding.
+ * here, and bounded by an ALLOWLIST rather than by a list of forbidden shapes
+ * (convergence finding, leg 7): a denial list has to guess every way a frame
+ * could be written — a bare `border`, `border-y`, `border-s`, a padding on one
+ * side — and the one it forgets is the one that lands. These are the only
+ * classes the skipped element may carry; the drawing's floor is exactly a top
+ * hairline, the space above it and the alignment of the row it holds, so
+ * anything else on it is by definition chrome this scan stopped watching.
  */
-const FLOOR_CHROME_FORBIDDEN =
-  /(^|\s)(border-[bxlr](-|$)|border-\d|rounded(-|$)|bg-(?!transparent)|shadow(-|$)|p-|px-|py-|pb-)/;
+const FLOOR_CHROME_ALLOWED = new Set([
+  "flex",
+  "justify-end",
+  "items-center",
+  "border-t",
+  "border-line",
+  "pt-3",
+]);
 
 afterEach(() => {
   cleanup();
@@ -146,7 +157,11 @@ describe("the live Skills step", () => {
     const { container } = mount(HELD);
     const floor = row(container).querySelector<HTMLElement>("[data-skills-step-floor]");
     expect(floor).not.toBeNull();
-    expect(floor!.className).not.toMatch(FLOOR_CHROME_FORBIDDEN);
+    const carried = floor!.className.split(/\s+/).filter(Boolean);
+    // Stated as the whole set, so the failure names the offending class.
+    expect(carried.filter((c) => !FLOOR_CHROME_ALLOWED.has(c))).toEqual([]);
+    // …and the rule it exists to draw is required, not merely permitted.
+    expect(carried).toEqual(expect.arrayContaining(["border-t", "border-line"]));
   });
 
   it("is the row itself, not a card containing a row — the root IS the card root", () => {

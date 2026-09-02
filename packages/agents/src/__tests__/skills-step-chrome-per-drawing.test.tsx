@@ -39,6 +39,9 @@
 // Run:
 //   cd packages/agents && npx vitest run \
 //     src/__tests__/skills-step-chrome-per-drawing.test.tsx
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -156,7 +159,13 @@ describe("the Continue row sits on a floor rule at the right of the detail", () 
     expect(floor).not.toBeNull();
     // The button is this row's own content, so the row is what aligns it.
     expect(floor!.contains(continueButton(container)!)).toBe(true);
-    expect(floor!.className.split(/\s+/)).toContain("justify-end");
+    // BOTH HALVES OF THE SENTENCE. `justify-content` is inert without the flex
+    // context the drawing names it in, so dropping `flex` would leave the
+    // control back at the left with `justify-end` still on the row and this
+    // test still green — the alignment is asserted as the pair it is.
+    const alignment = floor!.className.split(/\s+/);
+    expect(alignment).toContain("flex");
+    expect(alignment).toContain("justify-end");
   });
 
   it("draws the rule ABOVE the row, with the drawing's own space either side", async () => {
@@ -167,7 +176,14 @@ describe("the Continue row sits on a floor rule at the right of the detail", () 
     const classes = floor.className.split(/\s+/);
     // `border-top: 1px solid var(--line)` over `padding-top: 12px`, and the
     // 12px of air between the list and the rule.
+    // ONE EDGE, AND ONLY ONE. `border-t` is both the edge and its hairline;
+    // `border-line` is the ink alone, and a floor carrying the ink without the
+    // edge draws nothing. A BARE `border` here would be the four-edge frame
+    // the step's no-card scan exists to forbid, so it is refused rather than
+    // required — the pill, which the drawing does frame on every side, names
+    // it instead.
     expect(classes).toContain("border-t");
+    expect(classes).not.toContain("border");
     expect(classes).toContain("border-line");
     expect(classes).toContain("pt-3");
     // The 12px of air ABOVE the rule is the step's own row gap rather than a
@@ -192,6 +208,10 @@ describe("the Continue row sits on a floor rule at the right of the detail", () 
     expect(button.textContent).toContain("Continue");
     expect(button.lastElementChild).toBe(glyph);
     expect(button.childNodes[0]!.textContent).toBe("Continue");
+    // AND THE ARROW IS ACTUALLY DRAWN. The anchor alone proves only a marked
+    // wrapper, which an empty span satisfies; this suite renders the real
+    // icon set, so the glyph is required to hold the rendered mark.
+    expect(glyph!.querySelector("svg")).not.toBeNull();
   });
 });
 
@@ -210,7 +230,37 @@ describe("every pill has ONE ground, and the box alone states the value", () => 
     // …and the ground itself is the drawing's, named rather than merely equal.
     const classes = ticked!.className.split(/\s+/);
     expect(classes).toContain("bg-surface-strong");
+    expect(classes).toContain("border");
     expect(classes).toContain("border-line");
+  });
+
+  it("keys no ground, border or ink off a ticked state ANYWHERE, stylesheet included", () => {
+    // BYTE-IDENTICAL CLASS NAMES ARE NOT THE WHOLE SENTENCE (convergence
+    // finding, leg 7). The two pills still differ by attribute —
+    // `data-skill-applied`, and the box's own checked state — so a rule
+    // written in a stylesheet rather than in a class could tint the ticked
+    // pill while the equality above stayed green. The drawing's `.skchip` is
+    // ONE rule with no ticked-state companion, so the absence is read at the
+    // source seam the classes cannot reach: the row's own module and every
+    // stylesheet this surface loads.
+    const sources = [
+      "../run-recommendation-chip-row.tsx",
+      "../../../design/src/index.css",
+      "../../../design/src/theme.css",
+      "../../../design/src/tokens.css",
+      "../../../design/src/utilities.css",
+      "../../../../src/app/globals.css",
+    ].map((rel) => ({
+      rel,
+      text: readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), rel), "utf8"),
+    }));
+
+    // A selector that reaches the pill and narrows it by a ticked state.
+    const TICKED_STATE_RULE =
+      /\[data-skill-applied[^\]]*\]|(?:skills-step-pill|recommendation-chip|skchip)[^\n{]*(?::checked|\[aria-checked|\[data-state=)/;
+    for (const { rel, text } of sources) {
+      expect(`${rel} ${TICKED_STATE_RULE.exec(text)?.[0] ?? ""}`.trim()).toBe(rel);
+    }
   });
 
   it("draws the pill as a stadium, not a rounded box", async () => {
