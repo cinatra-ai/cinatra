@@ -119,3 +119,52 @@ export async function withExtensionEgressScope<T>(
   installExtensionEgressFetch();
   return egressScope.run({ timeoutMs }, async () => run());
 }
+
+/**
+ * The outcome of a BOUNDED run inside the egress scope. Settle-shaped on
+ * purpose: the abandoned work's eventual rejection is already handled here, so
+ * it never surfaces as an unhandled rejection after the caller has answered.
+ */
+export type BoundedExtensionEgressOutcome<T> =
+  | { kind: "value"; value: T }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+/**
+ * Run extension-backed work inside the egress scope AND under a bound, and
+ * report which of the three things happened.
+ *
+ * THE HOST HAS MORE THAN ONE ROAD INTO A CONNECTOR, AND THEY MUST BE BOUNDED
+ * BY THE SAME CODE. A named ui action reaches a connector through
+ * `dispatchExtensionUiAction`. A host capability facade reaches the SAME
+ * connector work from the tool-dispatch and deterministic-passthrough roads,
+ * which never enter a ui action and therefore never entered this scope.
+ * Measured on one instance in one minute against one live connection: the same
+ * add settled in 1.95 s through the ui-action road while the tool road was
+ * still unanswered when its caller gave up at about 59 s, four times in the
+ * same window. The bound was not missing in general, it was missing on that
+ * road. So both roads call THIS, and there is one bounded scope rather than
+ * two spellings of one.
+ *
+ * The caller keeps its own vocabulary. This returns the outcome and never a
+ * status or a sentence, because a ui action answers a person through a
+ * response and a host capability answers its caller through an error.
+ */
+export async function runBoundedInExtensionEgressScope<T>(
+  run: () => T | Promise<T>,
+  timeoutMs: number,
+): Promise<BoundedExtensionEgressOutcome<T>> {
+  const settled = withExtensionEgressScope(run).then(
+    (value) => ({ kind: "value" as const, value }),
+    (error: unknown) => ({ kind: "error" as const, error }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
+  try {
+    return await Promise.race([settled, gaveUp]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}

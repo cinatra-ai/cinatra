@@ -20,7 +20,7 @@ import "server-only";
 // (registry read), and a pre-resolved `actor`.
 
 import type { ExtensionUiAction } from "@/lib/extension-ui-registry";
-import { withExtensionEgressScope } from "@/lib/extension-egress-fetch";
+import { runBoundedInExtensionEgressScope } from "@/lib/extension-egress-fetch";
 
 /** The canonical install row fields the dispatch + authz need. */
 export type DispatchInstallRow = {
@@ -220,36 +220,26 @@ export async function dispatchExtensionUiAction(
   // request — from wedging at all, and the bound guarantees an answer for every
   // other way a handler can stop.
   const timeoutMs = deps.timeoutMs ?? DEFAULT_EXTENSION_UI_ACTION_TIMEOUT_MS;
-  // Settle-shaped, so the abandoned handler's eventual rejection is already
-  // handled here and never surfaces as an unhandled rejection after we answered.
-  const settled = withExtensionEgressScope(run).then(
-    (value) => ({ kind: "value" as const, value }),
-    (error: unknown) => ({ kind: "error" as const, error }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const gaveUp = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-  });
-  try {
-    const outcome = await Promise.race([settled, gaveUp]);
-    if (outcome.kind === "value") {
-      return { status: 200, result: outcome.value };
-    }
-    if (outcome.kind === "error") {
-      const error = outcome.error;
-      return {
-        status: 500,
-        error: error instanceof Error ? error.message : "Action handler failed.",
-      };
-    }
-    return {
-      status: 504,
-      error:
-        `The "${actionId}" action did not respond within ${Math.round(timeoutMs / 1000)} seconds, ` +
-        `so we stopped waiting for it. It may still be running: reload the page and check ` +
-        `whether it completed before you try again.`,
-    };
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
+  // Scope AND bound come from the ONE shared helper, so the host's other road
+  // into a connector — a capability facade the tool dispatch and the
+  // deterministic passthrough reach, which never enters a ui action — is
+  // bounded by this same code instead of by a second spelling of it.
+  const outcome = await runBoundedInExtensionEgressScope(run, timeoutMs);
+  if (outcome.kind === "value") {
+    return { status: 200, result: outcome.value };
   }
+  if (outcome.kind === "error") {
+    const error = outcome.error;
+    return {
+      status: 500,
+      error: error instanceof Error ? error.message : "Action handler failed.",
+    };
+  }
+  return {
+    status: 504,
+    error:
+      `The "${actionId}" action did not respond within ${Math.round(timeoutMs / 1000)} seconds, ` +
+      `so we stopped waiting for it. It may still be running: reload the page and check ` +
+      `whether it completed before you try again.`,
+  };
 }
