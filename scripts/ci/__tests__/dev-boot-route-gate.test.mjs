@@ -16,6 +16,7 @@
 // poisoned boot and the suite at all — the readiness probe could only report it.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -41,7 +42,8 @@ const STANDIN = `
 import http from "node:http";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const [port, counterPath, poisonedBoots] = process.argv.slice(2);
+const [port, counterPath, poisonedBoots, dieAfterMs, dieAfterRouteHits] = process.argv.slice(2);
+let routeHits = 0;
 let boots = 0;
 try { boots = Number(readFileSync(counterPath, "utf8")) || 0; } catch {}
 boots += 1;
@@ -54,11 +56,18 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify({ ok: true, boot: boots }));
     return;
   }
+  routeHits += 1;
+  // DEATH ON THE Nth ROUTE REQUEST, so "the server dies mid-probe" is staged by
+  // COUNTING rather than by a timer — the sequence the gate sees is then the
+  // same on a fast machine and a loaded one.
+  const dieNow = Number(dieAfterRouteHits) > 0 && routeHits >= Number(dieAfterRouteHits);
   if (poisoned) {
     // The development runtime's own not-found DOCUMENT: the page tree rendered
     // because nothing was routable at this path.
     response.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-    response.end("<!doctype html><html><body>404</body></html>");
+    response.end("<!doctype html><html><body>404</body></html>", () => {
+      if (dieNow) process.exit(3);
+    });
     return;
   }
   // What the real handler answers an empty body with.
@@ -66,6 +75,9 @@ const server = http.createServer((request, response) => {
   response.end(JSON.stringify({ error: "invalid body" }));
 });
 server.listen(Number(port), "127.0.0.1");
+// A DEVELOPMENT SERVER THAT DIES ON ITS OWN, on demand: the class the gate must
+// report as a crash rather than diagnose as the #3194 routing fault.
+if (Number(dieAfterMs) > 0) setTimeout(() => process.exit(3), Number(dieAfterMs));
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => { server.close(); process.exit(0); });
 `;
 
@@ -119,7 +131,14 @@ afterEach(() => {
 });
 
 /** Run the gate against a stand-in server that is poisoned for `poisonedBoots`. */
-function runGate({ poisonedBoots, maxBoots, appPort, gatePort }) {
+function runGate({
+  poisonedBoots,
+  maxBoots,
+  appPort,
+  gatePort,
+  dieAfterMs = 0,
+  dieAfterRouteHits = 0,
+}) {
   const dir = mkdtempSync(path.join(tmpdir(), "cinatra-3194-"));
   const standin = path.join(dir, "standin.mjs");
   const counter = path.join(dir, "boots.count");
@@ -144,7 +163,7 @@ function runGate({ poisonedBoots, maxBoots, appPort, gatePort }) {
       "--shutdown-grace-ms",
       "2000",
       "--child-command",
-      `"${process.execPath}" "${standin}" ${appPort} "${counter}" ${poisonedBoots}`,
+      `"${process.execPath}" "${standin}" ${appPort} "${counter}" ${poisonedBoots} ${dieAfterMs} ${dieAfterRouteHits}`,
     ],
     { detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -266,5 +285,78 @@ describe("a boot that registers the route", () => {
     expect(run.read()).toContain("every route is routable");
     expect(run.read()).not.toContain("Replacing the boot");
     expect(run.read()).not.toContain("boot 2/2");
+  });
+});
+
+describe("a server this run did not start", () => {
+  /**
+   * THE GUARANTEE PLAYWRIGHT USED TO ENFORCE, RESTORED HERE.
+   *
+   * `reuseExistingServer: false` is what makes this suite's result attributable:
+   * the server under test carries the environment the config states. Playwright
+   * enforced it by refusing to start when the url it polls already answers — and
+   * that url is now the GATE's, not the application's. So the gate has to refuse
+   * an occupied application port itself, or a stale server would answer health,
+   * answer both probes, and be certified while the child that should have served
+   * the run lost the bind.
+   */
+  it("refuses to certify a server already holding the application port", async () => {
+    const appPort = await freePort();
+    const gatePort = await freePort();
+    const squatter = http.createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    await new Promise((resolve) => squatter.listen(appPort, "127.0.0.1", resolve));
+    try {
+      const run = runGate({ poisonedBoots: 0, maxBoots: 2, appPort, gatePort });
+      const code = await run.exited;
+      expect(code).toBe(1);
+      expect(run.read()).toContain("ALREADY serving");
+      expect(run.read()).toContain(String(appPort));
+      // It must not have opened the gate on somebody else's server.
+      expect(await gateAnswers(gatePort)).toBe(false);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
+  });
+});
+
+describe("a development server that dies on its own", () => {
+  it("closes the gate with it instead of answering ready for a dead application", async () => {
+    const appPort = await freePort();
+    const gatePort = await freePort();
+    const run = runGate({ poisonedBoots: 0, maxBoots: 2, appPort, gatePort, dieAfterMs: 4_000 });
+
+    expect(await waitUntil(() => gateAnswers(gatePort), 25_000)).toBe(true);
+
+    // The server goes; the gate must stop claiming readiness AND stop existing,
+    // rather than sitting on an open listener that outlives what it speaks for.
+    const code = await run.exited;
+    expect(code).not.toBe(0);
+    expect(await gateAnswers(gatePort)).toBe(false);
+    expect(run.read()).toContain("exited on its own");
+  });
+
+  it("is reported as a crash, not diagnosed as the routing fault and rebooted", async () => {
+    const appPort = await freePort();
+    const gatePort = await freePort();
+    // Poisoned, so the probe sees the not-found document first — and then the
+    // server dies mid-bound, which is the mixed sequence that used to be read as
+    // the #3194 signature and earn a fresh boot.
+    const run = runGate({
+      poisonedBoots: 5,
+      maxBoots: 2,
+      appPort,
+      gatePort,
+      dieAfterRouteHits: 2,
+    });
+
+    const code = await run.exited;
+    expect(code).toBe(1);
+    expect(run.read()).toContain("EXITED while its routes were being probed");
+    expect(run.read()).not.toContain("Replacing the boot");
+    expect(run.read()).not.toContain("boot 2/2");
+    expect(await gateAnswers(gatePort)).toBe(false);
   });
 });

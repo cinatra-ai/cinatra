@@ -194,21 +194,25 @@ async function probeRoute(appUrl, route, boundMs, onAttempt) {
   );
 }
 
+/** Is anything listening on this port right now? */
+function isPortInUse(port, host) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host });
+    const settle = (value) => {
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(1_000, () => settle(false));
+    socket.on("connect", () => settle(true));
+    socket.on("error", () => settle(false));
+  });
+}
+
 /** Wait until nothing is listening on the port again, so the next boot can bind. */
 async function waitForPortFree(port, host, boundMs) {
   const started = Date.now();
   while (Date.now() - started < boundMs) {
-    const inUse = await new Promise((resolve) => {
-      const socket = net.connect({ port, host });
-      const settle = (value) => {
-        socket.destroy();
-        resolve(value);
-      };
-      socket.setTimeout(1_000, () => settle(false));
-      socket.on("connect", () => settle(true));
-      socket.on("error", () => settle(false));
-    });
-    if (!inUse) return true;
+    if (!(await isPortInUse(port, host))) return true;
     await sleep(500);
   }
   return false;
@@ -291,15 +295,38 @@ async function main() {
     killTree(dying.pid, signal);
   };
 
+  // THE TREE IS LISTED BEFORE THE SIGNAL, NOT LOOKED UP AFTER IT.
+  //
+  // `pgrep -P` can only name a process's children while that process is alive.
+  // The shell `pnpm dev` runs exits promptly on SIGTERM, and a bundler
+  // descendant that is mid-compile may not — at which point the shell is gone,
+  // its orphan has been reparented, and no walk from the shell's pid can find it
+  // any more. Escalating against a list taken BEFORE the first signal is what
+  // reaches that orphan; without it the development server survives holding the
+  // application port and the next boot cannot bind. (A pid could in principle be
+  // recycled between the listing and the escalation; the window is the shutdown
+  // grace and the alternative is a guaranteed orphan.)
   const stopChild = async () => {
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    if (!child) return;
     const dying = child;
+    const doomed = [...descendantsOf(dying.pid).reverse(), dying.pid];
     signalChild(dying, "SIGTERM");
     const deadline = Date.now() + options.shutdownGraceMs;
     while (Date.now() < deadline && dying.exitCode === null && dying.signalCode === null) {
       await sleep(200);
     }
-    if (dying.exitCode === null && dying.signalCode === null) signalChild(dying, "SIGKILL");
+    for (const pid of doomed) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        continue; // already gone
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // raced us to the exit
+      }
+    }
   };
 
   // SHUTDOWN HAS TO BE SYNCHRONOUS-FIRST, AND IT HAS TO BE BELTED.
@@ -338,6 +365,27 @@ async function main() {
     if (killTimer) clearTimeout(killTimer);
     signalChild(child, "SIGKILL");
   });
+
+  // NOTHING MAY ALREADY OWN THE APPLICATION PORT.
+  //
+  // The suite declares `reuseExistingServer: false` and means it: the run must
+  // never be attributed to a server started with a different environment. That
+  // guarantee used to be enforced by Playwright, which refuses to start when the
+  // url it polls is already answering — but `webServer.url` now polls THIS
+  // process, so Playwright's check covers the gate's port and no longer covers
+  // the application's. The check has to live here instead. Without it a stale
+  // server left on the port would answer health and both route probes, the gate
+  // would certify it, the child would lose the bind, and the suite would run
+  // green or red against a server nobody in this run configured.
+  const appPort = Number(appUrl.port || (appUrl.protocol === "https:" ? 443 : 80));
+  if (await isPortInUse(appPort, appUrl.hostname)) {
+    say(
+      `something is ALREADY serving on ${appUrl.hostname}:${appPort} — refusing to certify a ` +
+        "server this run did not start (the suite requires a fresh server carrying its own " +
+        "environment). Stop it and run again.",
+    );
+    return 1;
+  }
 
   for (let bootIndex = 0; bootIndex < options.maxBoots; bootIndex += 1) {
     if (shuttingDown) return 0;
@@ -402,8 +450,25 @@ async function main() {
 
     if (verdict === "ready") {
       say(`boot ${bootIndex + 1}: every route is routable — opening the gate on :${options.gatePort}`);
-      await openGate(options.gatePort);
-      return await waitForChildExit(child);
+      const gate = await openGate(options.gatePort);
+      return await waitForChildExit(child, gate, () => shuttingDown);
+    }
+
+    // A SPENT BOUND ONLY MEANS #3194 WHILE THE SERVER IS STILL THERE.
+    //
+    // `unrouted` is "the bound was spent and something answered" — and something
+    // DID answer if the runtime served its not-found document and then the
+    // process died, which is a crash, not the routing fault this gate replaces
+    // boots for. Rebooting after a crash would hide it behind the wrong name, so
+    // a dead child is reported as itself and the budget is not spent on it.
+    if (childExited) {
+      say(
+        `boot ${bootIndex + 1}: the development server EXITED while its routes were being ` +
+          "probed — this is a crashed server, not the cinatra#3194 routing fault, and it is " +
+          `not retried here. Its log is above. (${failure})`,
+      );
+      await stopChild();
+      return 1;
     }
 
     say(`boot ${bootIndex + 1}: ${failure}`);
@@ -443,10 +508,31 @@ function openGate(port) {
   });
 }
 
-function waitForChildExit(child) {
+/**
+ * Hold the gate open for exactly as long as the server it certified is alive.
+ *
+ * THE LISTENER IS CLOSED WHEN THE CHILD GOES. Leaving it open would keep this
+ * process alive after the server it speaks for is gone AND keep `/ready`
+ * answering 200 for a dead application — the two halves of the same lie. A child
+ * that exits while nobody asked it to is reported as a failure; a child that
+ * exits because this process is shutting down is the ordinary end of a run.
+ */
+function waitForChildExit(child, gate, isShuttingDown) {
   return new Promise((resolve) => {
-    if (child.exitCode !== null) return resolve(child.exitCode);
-    child.on("exit", (code, signal) => resolve(signal ? 0 : (code ?? 0)));
+    const settle = (code, signal) => {
+      gate.close();
+      if (isShuttingDown()) return resolve(0);
+      say(
+        "the development server exited on its own " +
+          (signal ? `(signal ${signal})` : `(code ${code ?? 0})`) +
+          " — the gate is closing with it; anything still running is now talking to nothing.",
+      );
+      return resolve(signal ? 1 : (code ?? 0) === 0 ? 1 : (code ?? 1));
+    };
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return settle(child.exitCode, child.signalCode);
+    }
+    child.on("exit", settle);
   });
 }
 

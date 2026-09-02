@@ -80,6 +80,21 @@ the boot with a fresh one (one replacement, then it reports the unrouted boot an
 fails). It never proxies or touches a request the suite makes: the application
 keeps its own port and answers the tests directly.
 
+Three things the gate owes the run, because moving the readiness poll off the
+application moved them here too:
+
+* **nothing may already hold the application port.** `reuseExistingServer: false`
+  is what makes a result attributable to the environment this config states, and
+  Playwright used to enforce it by refusing to start when the url it polls
+  already answers — that url is now the gate's. So the gate refuses an occupied
+  application port itself rather than certifying a server this run did not start.
+* **the gate closes when the server it speaks for dies.** `/ready` answering 200
+  for a dead application would be the same lie in the other direction, so the
+  listener is closed on the child's exit and the gate exits with it.
+* **a boot that dies mid-probe is reported as a crash**, not diagnosed as this
+  routing fault and replaced. A replacement boot is for a server that is *there*
+  and not routing; a server that is gone is a different finding and is named one.
+
 ### Measuring it
 
 `scripts/ci/dev-boot-route-race-repro.mjs` is the constrained cold-boot loop that
