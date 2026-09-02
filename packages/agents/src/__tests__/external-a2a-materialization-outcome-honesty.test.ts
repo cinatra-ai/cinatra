@@ -345,8 +345,13 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     expect(from).toBe("running");
     expect(to).toBe("failed");
     // The reason reaches the run-status/UI surface, not just a log line.
+    // Issue 3033: the persisted `error` is now the drawn floor -
+    // a sanitized package / slot / reason triple - and the producer's own
+    // sentence keeps going to the server log (execution.ts writes one warn per
+    // failed outcome before this composes); this suite asserts the PERSISTED row.
     expect(String(meta?.error)).toContain("draft");
-    expect(String(meta?.error)).toContain("did not resolve to a string");
+    expect(String(meta?.error)).toContain("output-not-produced");
+    expect(String(meta?.error)).not.toContain("did not resolve to a string");
     // ...and the full evidence lands in the same payload a green run would carry.
     const stepResults = meta?.stepResults as Array<Record<string, unknown>>;
     expect(Array.isArray(stepResults)).toBe(true);
@@ -370,7 +375,7 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("1 of 2 failed");
+    expect(String(meta?.error)).toContain("review target unavailable");
     expect(String(meta?.error)).toContain("summary");
     // Nothing is dropped: the successful ref is preserved alongside the failure.
     expect(meta?.stepResults as unknown[]).toBeDefined();
@@ -387,7 +392,8 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
     expect(String(meta?.error)).toContain("(materializer)");
-    expect(String(meta?.error)).toContain("artifact stack unavailable");
+    expect(String(meta?.error)).toContain("materializer-failed");
+    expect(String(meta?.error)).not.toContain("artifact stack unavailable");
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
   });
 
@@ -468,7 +474,8 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("ECONNREFUSED");
+    expect(String(meta?.error)).toContain("binding-resolution-failed");
+    expect(String(meta?.error)).not.toContain("ECONNREFUSED");
     expect(agUiEventTypes()).toContain("RUN_ERROR");
   });
 

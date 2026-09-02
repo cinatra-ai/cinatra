@@ -193,8 +193,13 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     expect(runId).toBe("run-mat-1");
     expect(from).toBe("running");
     expect(to).toBe("failed");
+    // Issue 3033: the persisted `error` is now the drawn floor -
+    // a sanitized package / slot / reason triple - and the producer's own
+    // sentence keeps going to the server log (execution.ts writes one warn per
+    // failed outcome before this composes); this suite asserts the PERSISTED row.
     expect(String(meta?.error)).toContain("(binding-resolution)");
-    expect(String(meta?.error)).toContain("ECONNREFUSED");
+    expect(String(meta?.error)).toContain("binding-resolution-failed");
+    expect(String(meta?.error)).not.toContain("ECONNREFUSED");
     // The evidence still lands: the same stepResults payload carries the
     // per-output outcomes, so the failure is inspectable, not just a log line.
     const stepResults = meta?.stepResults as Array<Record<string, unknown>>;
@@ -232,7 +237,8 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
     expect(String(meta?.error)).toContain("draft");
-    expect(String(meta?.error)).toContain("did not resolve to a string");
+    expect(String(meta?.error)).toContain("output-not-produced");
+    expect(String(meta?.error)).not.toContain("did not resolve to a string");
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
   });
 
@@ -282,7 +288,8 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("boom in the materializer");
+    expect(String(meta?.error)).toContain("materializer-failed");
+    expect(String(meta?.error)).not.toContain("boom in the materializer");
   });
 
   it("resume terminal-success from pending_approval also fails honestly", async () => {

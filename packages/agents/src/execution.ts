@@ -129,6 +129,7 @@ import {
   mcpRequestContextStorage,
   type McpRequestContext,
 } from "@cinatra-ai/mcp-server";
+import { composeRunFailureFloorMessage } from "./run-failure-floor";
 
 // ---------------------------------------------------------------------------
 // FAIL-CLOSED pinned-run snapshot resolution (cinatra#1040 S7).
@@ -629,12 +630,6 @@ export function stripCinatraEndNodeOutputMessages(
   });
 }
 
-/** Upper bound on the `agent_runs.error` message this module composes for a
- *  materialization failure — enough for every failing output's reason on a
- *  realistic binding set, short enough that a pathological error string can
- *  never bloat the row. */
-const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
-
 /**
  * cinatra#2486 — the operator-facing reason a terminal-success run is landed as
  * `failed` rather than `completed`: which declared outputs failed to
@@ -642,25 +637,30 @@ const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
  * and the external-A2A branch, cinatra#2497) so a failed run reads identically
  * whichever runtime produced it. Module-private: the honesty suites assert it
  * through the persisted `error`, which is the surface that actually matters.
+ *
+ * Issue 3033 — this used to compose the MATERIALIZER'S OWN sentence
+ * ("... did not produce (1 of 1 failed): ideaBatch [@pkg]: contentFrom output
+ * ... did not resolve to a string") and the run-progress card drew it verbatim
+ * on the conversation surface. The ratified run-surface drawing gives exactly
+ * one reading for a target that did not resolve, and it is sanitized: "a
+ * sanitized, telemetry-safe one-line diagnostic (package - slot - reason, never
+ * a raw error or manifest value)". So the persisted row now carries the floor,
+ * and the raw per-output cause keeps going to the server log — every caller
+ * below already writes one `[artifact-materializer] run=... output=...
+ * extension=... failed: <raw>` warn line per failed outcome BEFORE this
+ * composes, which is where an operator reads the cause. Nothing is lost; it
+ * simply stops being drawn at a reader.
+ *
+ * `totalOutcomes` is no longer part of the message (the drawn floor names one
+ * target, not a tally) but stays in the signature: both call sites pass it, and
+ * the count is what makes the log line above readable next to the row.
  */
 function describeMaterializationFailure(
   failures: ReadonlyArray<Record<string, unknown>>,
   totalOutcomes: number,
 ): string {
-  const detail = failures
-    .map(
-      (outcome) =>
-        `${String(outcome.outputId)}${
-          outcome.extension ? ` [${String(outcome.extension)}]` : ""
-        }: ${String(outcome.error)}`,
-    )
-    .join("; ");
-  const message =
-    `artifact materialization failed — the run declared artifact output(s) it did not produce ` +
-    `(${failures.length} of ${totalOutcomes} failed): ${detail}`;
-  return message.length > MATERIALIZATION_ERROR_MAX_CHARS
-    ? `${message.slice(0, MATERIALIZATION_ERROR_MAX_CHARS - 1)}…`
-    : message;
+  void totalOutcomes;
+  return composeRunFailureFloorMessage(failures);
 }
 
 /**

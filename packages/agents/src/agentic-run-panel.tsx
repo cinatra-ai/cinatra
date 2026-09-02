@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
@@ -12,6 +12,10 @@ import {
   MCP_CONFIG_HREF,
   isGenericWayflowFailure,
 } from "./agent-error-display";
+import {
+  formatRunFailureFloorLine,
+  runFailureFloorForDisplay,
+} from "./run-failure-floor";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { StartNewRunButton, RunCompletionCard } from "./run-completion-affordances";
@@ -660,6 +664,19 @@ export function AgenticRunPanel({
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
   const status = resolveStreamFirst(streamEnabled, streamResult.status, pollStatus);
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
+  // Issue 3033 — the drawn floor for a run that failed at artifact
+  // materialization. The ratified run-surface drawing gives ONE reading for a
+  // target that did not resolve: "a sanitized, telemetry-safe one-line
+  // diagnostic (package - slot - reason, never a raw error or manifest value)",
+  // and where there is nothing left to show it "renders the diagnostic alone".
+  // The server now persists exactly that line; this also reduces a row written
+  // BEFORE the change, so an old run never draws its raw sentence either.
+  // `null` means "not a materialization failure" — every other failure class
+  // keeps the reading it already had below.
+  const runFailureFloor = useMemo(
+    () => (status === "failed" ? runFailureFloorForDisplay(error) : null),
+    [error, status],
+  );
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
   // External A2A runs (helloworld-style peers) emit
   // TEXT_MESSAGE_CONTENT deltas accumulated by useAgUiRunStream. Internal
@@ -2048,7 +2065,35 @@ export function AgenticRunPanel({
         </div>
       ) : null}
 
-      {error && status === "failed" && (
+      {/* Issue 3033 — the floor: the diagnostic alone. No Error
+          label, no raw <pre>, and no control beside it, because the drawing
+          draws none on a floor (the settled card's one drawn control, "Start
+          new run", belongs to the COMPLETED reading). Drawn as the drawing
+          draws it: one muted mono status line. */}
+      {runFailureFloor !== null && (
+        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
+          {/* One LINE per failed target. A newline inside a single text node
+              collapses to a space under normal HTML whitespace handling, which
+              would run two diagnostics together as one paragraph - a reading the
+              drawing does not give, since it draws a ONE-LINE diagnostic per
+              target. So each target is its own element, the line breaks between
+              them are real, and `whitespace-pre-line` keeps them. */}
+          <p
+            role="status"
+            data-testid="run-failure-floor"
+            className="font-mono text-xs text-muted-foreground break-words whitespace-pre-line"
+          >
+            {runFailureFloor.map((entry, index) => (
+              <Fragment key={`${entry.package}:${entry.slot}:${entry.reason}:${index}`}>
+                {index > 0 ? "\n" : null}
+                <span>{formatRunFailureFloorLine(entry)}</span>
+              </Fragment>
+            ))}
+          </p>
+        </div>
+      )}
+
+      {error && status === "failed" && runFailureFloor === null && (
         <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
           <div className="text-xs font-medium text-muted-foreground mb-1">Error</div>
           {/* Long unbreakable tokens (e.g. masked sk-proj-… keys) overflowed the
