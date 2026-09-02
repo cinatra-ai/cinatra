@@ -94,7 +94,8 @@ export function PageNotFoundCrumb() {
   const pathname = usePathname();
   useLayoutEffect(() => {
     markPageNotFound(pathname);
-    return () => clearPageNotFound();
+    // Named, so a boundary leaving cannot lift the ARRIVING page's mark.
+    return () => clearPageNotFound(pathname);
   }, [pathname]);
   return null;
 }

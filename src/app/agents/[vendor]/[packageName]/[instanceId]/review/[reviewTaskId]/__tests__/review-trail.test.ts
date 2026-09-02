@@ -37,11 +37,33 @@ describe("the review route publishes its run's name for the trail", () => {
     expect(PAGE).toMatch(/agentInstancePathname/);
   });
 
-  it("publishes only after the surface's own access checks", () => {
-    const publishAt = PAGE.indexOf("<CrumbContributions");
-    const gateAt = PAGE.indexOf("loadReviewGateSurface");
-    expect(publishAt).toBeGreaterThan(-1);
-    expect(gateAt).toBeGreaterThan(-1);
+  // CONVERGENCE ROUND (fix leg 10): the earlier form of this case only asserted
+  // that both strings EXIST — it never compared them, and the bare module name
+  // matched its own import line before any call site. It now pins the ordering
+  // that matters: every read of the run's name happens after an access
+  // decision, and the refusal path returns before the gated branch reads
+  // anything at all.
+  it("reads the run's name only after an access decision", () => {
+    const gateCall = PAGE.indexOf("await loadReviewGateSurface(");
+    const verificationCheck = PAGE.indexOf("if (!access.ok)");
+    expect(gateCall).toBeGreaterThan(-1);
+    expect(verificationCheck).toBeGreaterThan(-1);
+    const reads = [...PAGE.matchAll(/await readRunCrumbLabel\(/g)].map(
+      (m) => m.index ?? -1,
+    );
+    expect(reads.length).toBeGreaterThan(0);
+    const earliestDecision = Math.min(gateCall, verificationCheck);
+    for (const at of reads) expect(at).toBeGreaterThan(earliestDecision);
+  });
+
+  it("refuses before it reads — the gated branch returns the panel first", () => {
+    const gateCall = PAGE.indexOf("await loadReviewGateSurface(");
+    const refusal = PAGE.indexOf("return <ReviewNotAuthorizedPanel />", gateCall);
+    const readAfterGate = [...PAGE.matchAll(/await readRunCrumbLabel\(/g)]
+      .map((m) => m.index ?? -1)
+      .find((at) => at > gateCall);
+    expect(refusal).toBeGreaterThan(gateCall);
+    expect(readAfterGate).toBeGreaterThan(refusal);
   });
 
   it("draws no hardcoded Agent run eyebrow and no Review crumb of its own", () => {

@@ -40,4 +40,22 @@ describe("the page that was not found marks itself", () => {
     clearPageNotFound();
     expect(isPageNotFound(RUN_PATH)).toBe(false);
   });
+
+  // CONVERGENCE ROUND (fix leg 10): the mark is pathname-scoped, so its LIFT
+  // must be too. React runs the next boundary's layout effect before the
+  // leaving boundary's cleanup during an overlapping transition, so an
+  // unconditional clear would erase a mark the leaving page never owned.
+  it("the boundary that owns the mark lifts it by naming it", () => {
+    markPageNotFound(RUN_PATH);
+    clearPageNotFound(RUN_PATH);
+    expect(isPageNotFound(RUN_PATH)).toBe(false);
+  });
+
+  it("a leaving boundary cannot lift a newer page's mark", () => {
+    const OTHER = "/agents/vendor/pkg/1f0b1f2e-0000-4000-8000-000000000000";
+    markPageNotFound(RUN_PATH);
+    markPageNotFound(OTHER);
+    clearPageNotFound(RUN_PATH);
+    expect(isPageNotFound(OTHER)).toBe(true);
+  });
 });

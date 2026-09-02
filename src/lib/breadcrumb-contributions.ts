@@ -95,9 +95,17 @@ export function markPageNotFound(pathname: string): void {
   }
 }
 
-/** Lifts the mark when the boundary is left. */
-export function clearPageNotFound(): void {
+/** Lifts the mark when the boundary is left.
+ *
+ * SCOPED TO THE MARK'S OWN PATHNAME (fix leg 10, convergence round). React runs
+ * the ARRIVING boundary's layout effect before the LEAVING one's cleanup during
+ * an overlapping transition, so an unconditional clear would erase a mark the
+ * leaving page never owned and the newer page would draw the hierarchy of a URL
+ * its reader never reached. A caller that names its pathname lifts only its own
+ * mark; a bare call (a reset, a test) still lifts whatever is marked. */
+export function clearPageNotFound(pathname?: string): void {
   if (notFoundPathname === null) return;
+  if (pathname !== undefined && notFoundPathname !== pathname) return;
   notFoundPathname = null;
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(CRUMB_CONTRIBUTIONS_EVENT));
