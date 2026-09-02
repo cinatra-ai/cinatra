@@ -84,10 +84,14 @@ const TABLE: Array<{
   },
   {
     agent: "blog-pipeline-agent",
+    // A produces entry is a promise the run keeps: the pipeline files its draft
+    // and its LinkedIn post through terminal bindings today. Its ideas and its
+    // pictures go through mid-run write roads that are not built yet, so those
+    // two entries wait for them — the fleet's adoption gate refuses a declared
+    // production nothing materializes. All four EDGES stay: they say what the
+    // run touches, which is true either way.
     produces: [
-      { extension: IDEA, objectTypeId: IDEA_TYPE },
       { extension: POST, objectTypeId: POST_TYPE },
-      { extension: IMAGE, objectTypeId: IMAGE_TYPE },
       { extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE },
     ],
     edges: [IDEA, POST, IMAGE, LINKEDIN].sort(),
@@ -114,9 +118,11 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(12);
   });
 
-  it("declares eight of the nine typed produces entries", () => {
+  it("declares six of the nine typed produces entries", () => {
+    // Nine after the prototype. The image agent's one arrives with its package;
+    // the pipeline's idea and picture entries arrive with their write roads.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(8);
+    expect(total).toBe(6);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);
