@@ -66,12 +66,23 @@ export function islandPaletteClass(scheme: IslandColorScheme | null): string {
  *     inherits that COMPUTED colour; redefining the token further down does not
  *     recompute it. Without this the renderer's own unstyled prose keeps the
  *     document's ink and reads as dark text on a dark panel;
- *   • `min-h-dvh` — the full frame, so the document's own (unthemed) ground
- *     never paints around the panel.
+ * AND IT NO LONGER FORCES THE FRAME'S FULL HEIGHT (cinatra#3080, fix leg 6).
+ * `min-h-dvh` was here so "the document's own (unthemed) ground never paints
+ * around the panel" — and the frame it filled was a fixed box, so on a target
+ * shorter than that box it painted 261 to 272 css px of empty panel under the
+ * reading, on every frame of the sixth reading and in both palettes. No drawing
+ * sentence puts it there: the drawing draws the pane and then what comes after
+ * it. The frame is now the height of THIS document (`reviewIslandFrameHeight`),
+ * which is a height this class had to stop deciding for it — a document that is
+ * always at least the frame's height can only ever measure the frame. Nothing
+ * paints around the panel any more because there is no "around" left; the
+ * canvas an overscroll exposes is still the named palette's, from
+ * `islandDocumentGroundCss` below, which is where the document's own ground has
+ * belonged all along.
  */
 export function islandBodyClassName(scheme: IslandColorScheme | null): string {
   const base = "flex flex-col gap-3 bg-surface p-3";
-  return scheme ? `${islandPaletteClass(scheme)} min-h-dvh text-foreground ${base}` : base;
+  return scheme ? `${islandPaletteClass(scheme)} text-foreground ${base}` : base;
 }
 
 /**

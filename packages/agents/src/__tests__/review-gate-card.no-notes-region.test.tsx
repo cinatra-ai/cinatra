@@ -28,6 +28,27 @@
 // target, with the settled marker below the whole card saying what happened.
 // The card was heading a settled gate with an invented settled wording, which
 // no drawing draws. The pending reading keeps its heading and pill, unchanged.
+//
+// RE-READ AT THE ADOPTED PIN (cinatra#3080, fix leg 6). §XIII of the cards
+// drawing did not exist at the pin this suite was written against, and it draws
+// the settled reading outside a conversation with the SAME header strip its
+// pending frame carries — the sans heading "Review" — taking away the floor and
+// not the strip. So the request wording and the pill stay gone, the heading
+// comes back, and the marker names its act and no person
+// (`review-gate-card.settled-reading.test.tsx` owns that reading in full).
+//
+// AND THE CARD STILL CARRIES NO NOTES REGION, re-read at the same adopted pin.
+// The question the sixth reading left open was whether the reviewer's OWN note
+// has a drawn place on the card once the service diagnostic is filtered out of
+// it. It does not. The note field is an INPUT on the floor - "The decision bar
+// carries one free-text Note field" - and the floor is what a settled reading
+// takes away; no sentence anywhere draws those words back onto the card, and a
+// typed request is not on the card at all: "A change request is carried by the
+// prompt window, not this field." The card's own frames agree: the in-thread
+// card is "the target panel naming what is under review and pinning its exact
+// revision, then the decision floor that governs it", and the settled frames
+// draw the pane and the marker and nothing between them. So the filtered
+// reading this suite pins CONFORMS, and leg 6 restores nothing here.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -175,8 +196,9 @@ describe("the settled reading carries no request heading", () => {
     expect(container.textContent).not.toContain("Review settled");
     expect(container.textContent).not.toContain("Review requested");
     expect(container.textContent).not.toContain("Awaiting your decision");
-    // The settled marker the drawing DOES draw is untouched.
-    expect(container.textContent).toContain("Superseded by Ines Kovac");
+    // The settled marker the drawing DOES draw — its act, and no person.
+    expect(container.textContent).toContain("Superseded");
+    expect(container.textContent).not.toContain("Ines Kovac");
   });
 
   it("leaves the PENDING heading and pill exactly where they are drawn", async () => {

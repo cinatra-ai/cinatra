@@ -154,6 +154,12 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
   // component on this branch, and what they pin from here on is that the four
   // hosts keep drawing them identically.
   //
+  // RE-RECORDED AGAIN for cinatra#3080 fix leg 6, deliberately and for the same
+  // class of reason: the settled entries pinned a marker naming a person, which
+  // no settled marker in the ratified drawings carries, and a settled reading
+  // with no header at all, which §XIII draws with one. The pending entries move
+  // too, because the island frame is now the height of its own document.
+  //
   // RE-RECORDED for cinatra#2931 W4, deliberately, because what these three
   // entries pinned had become false: "A resolved gate opens read-only: what was
   // decided, and the reviewed target(s), kept for the run's audit trail" — and
@@ -286,7 +292,10 @@ describe("review card render parity across the resolve envelope", () => {
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
-        expect(drawn[host]).toContain("Ada Lovelace");
+        // AND NOT THE DECIDER (cinatra#3080, fix leg 6). The wire still carries
+        // the name for the audit trail; no settled marker the ratified drawing
+        // draws carries one, so no host draws one either.
+        expect(drawn[host]).not.toContain("Ada Lovelace");
       }
     }
   });

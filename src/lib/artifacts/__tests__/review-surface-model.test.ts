@@ -352,25 +352,29 @@ describe("the settled copy names the outcome and its decider", () => {
     }
   });
 
-  it("names the decider when there is one to name", () => {
+  it("names the ACT, and never the decider (cinatra#3080, fix leg 6)", () => {
     // cinatra#3080 — a gate whose STORED disposition is `approve` reads as
     // CONTINUED. The row is unmigrated and unmigratable-by-design: what changed
     // is the word the person is shown, not the value the store holds, so a gate
     // decided before the relabel and one decided after it read identically.
-    expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Continued by Dana Okonkwo",
+    //
+    // AND THE MARKER CARRIES NO NAME. The four settled markers the ratified
+    // drawings draw — twice in §XIII.1, twice in §II of the cards drawing —
+    // read "Continued" or "Superseded" over a sentence about the revision, and
+    // not one of them names a person. The decider still travels on the wire for
+    // the audit trail. The signature takes the outcome ALONE, so a caller
+    // cannot re-introduce one by passing it.
+    expect(reviewSettledCopy("approved")).toEqual({
+      title: "Continued",
       body: "The gate is resolved and the run has been released to continue.",
     });
     // A LEGACY reject row stays readable — it simply can no longer be produced.
-    expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
-      "Rejected by Dana Okonkwo",
-    );
+    expect(reviewSettledCopy("rejected").title).toBe("Rejected");
     // cinatra#3080 item 4 — a gate the change road settled reads SUPERSEDED.
     // The stored disposition is unchanged (`changes_requested`, "the change
     // road's existing representation"); the WORD is the drawing's.
-    expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
-      "Superseded by Dana Okonkwo",
-    );
+    expect(reviewSettledCopy("changes_requested").title).toBe("Superseded");
+    expect(reviewSettledCopy.length).toBe(1);
   });
 
   it("reads as a finished sentence with no decider at all", () => {
@@ -515,8 +519,17 @@ describe("cinatra#3080 — the settled act, and the schema gap it is stored acro
     }
   });
 
-  it("a decider's name rides the same word", () => {
-    expect(reviewSettledCopy("changes_requested", "Ada").title).toBe("Superseded by Ada");
+  it("no name rides the word, whatever a caller holds (cinatra#3080, fix leg 6)", () => {
+    // The surface that used to read "Superseded by {name}" is the one the sixth
+    // reading photographed. A name handed to this function is not appended: it
+    // is not a parameter, and every reading of an act is the act's one title.
+    expect(reviewSettledCopy("changes_requested").title).toBe("Superseded");
+    expect(
+      (reviewSettledCopy as (o: "changes_requested", name?: string) => { title: string })(
+        "changes_requested",
+        "Ada",
+      ).title,
+    ).toBe("Superseded");
   });
 
   it("a value this build cannot read says Settled, and never a raw column", () => {

@@ -140,13 +140,19 @@ describe("the floor's own words, everywhere a review is read (cinatra#3080)", ()
     // THE DRAWING'S SETTLED READING, in a conversation and outside one, is "the
     // same pane, the marker below the whole card, no floor" — no request
     // heading and no awaiting pill above the target; the settled marker below
-    // the whole card is what says the gate is done. So the header block is the
-    // PENDING reading's alone, drawn exactly as the drawing draws it, and a
-    // settled gate draws none of it.
+    // the whole card is what says the gate is done.
+    //
+    // RE-READ AT THE ADOPTED PIN (fix leg 6). §XIII of the cards drawing did not
+    // exist when the line above was written, and it draws the settled reading
+    // outside a conversation with the SAME header strip its pending frame
+    // carries — the sans heading "Review" — taking the FLOOR away and not the
+    // strip. So what a settled gate must not carry is the REQUEST and the ASK:
+    // the request wording and the awaiting pill. The heading stays.
     const code = stripComments(GATE_CARD);
-    expect(code).toMatch(/if \(!pending\) return null;/);
-    expect(code).toContain('<span className="font-sans text-sm font-bold text-foreground">Review requested</span>');
-    // No second heading wording was invented in its place.
+    expect(code).toContain('{pending ? "Review requested" : "Review"}');
+    // The pill is drawn for the pending reading and for no other.
+    expect(code).toMatch(/\{pending \? \(\s*<span[^]*?Awaiting your decision/);
+    // No settled wording was invented in its place.
     expect(code).not.toContain("Review settled");
   });
 

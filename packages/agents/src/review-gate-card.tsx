@@ -134,7 +134,14 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import {
   ArrowRight,
   Check,
@@ -295,9 +302,39 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** The island's ONE height. The representation scrolls inside it — the
- *  drawing's own answer to a tall or wide target, and it draws no expand. */
+/** The island's height CEILING. A representation taller than this scrolls
+ *  inside it — the drawing's own answer to a target that outgrows its box, and
+ *  it draws no expand. */
 const ISLAND_HEIGHT_CLAMPED = 380;
+
+/** The floor under a measured height, so a document that reports nothing (or
+ *  reports before its own layout settles) cannot collapse the frame to a
+ *  hairline: the skeleton and the never-blank floor both need room to read. */
+const ISLAND_HEIGHT_MIN = 120;
+
+/**
+ * THE HEIGHT THE ISLAND FRAME IS GIVEN (cinatra#3080, fix leg 6).
+ *
+ * The box used to be `ISLAND_HEIGHT_CLAMPED` tall whatever was inside it, so a
+ * target shorter than the ceiling sat above a bordered emptiness that no drawing
+ * sentence puts there — 261 to 272 css px of it on every frame of the sixth
+ * reading, on the run page, the review page and in a conversation alike. The
+ * drawing draws the pane and then what comes after it: "the gate opens with a
+ * gate header …, then the review target, then the decision bar and the
+ * conversational prompt window", and its own frames show the pane ending where
+ * its content ends. The one size sentence the drawing does give is for a target
+ * that is TOO BIG — "a wide representation scrolls inside its own container
+ * rather than widening the page" — which is what the ceiling keeps.
+ *
+ * `null` — nothing measured yet, or a document this frame may not read — keeps
+ * the ceiling, which is exactly what shipped before.
+ */
+export function reviewIslandFrameHeight(measured: number | null): number {
+  if (measured === null || !Number.isFinite(measured) || measured <= 0) {
+    return ISLAND_HEIGHT_CLAMPED;
+  }
+  return Math.min(ISLAND_HEIGHT_CLAMPED, Math.max(ISLAND_HEIGHT_MIN, Math.ceil(measured)));
+}
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -888,10 +925,7 @@ function renderState(args: {
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
           {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          <ReviewGateSettled outcome={state.outcome} />
         </>
       ) : (
         <>
@@ -1383,29 +1417,35 @@ export function SuggestionChips({
  * §I/§II — the gate header the review page has always drawn ("Review requested"
  * + the awaiting-your-decision pill), now owned by the card so all three hosts
  * show the same thing. Markup and tokens are the page's, unchanged.
+ *
+ * A SETTLED GATE KEEPS A HEADER, AND IT IS NOT A REQUEST (cinatra#3080, fix leg
+ * 6). Fix leg 5 headed a settled gate with NOTHING, reading "the same pane, the
+ * marker below the whole card, no floor" as taking the whole strip away. The
+ * drawing does not: §XIII.1 draws the settled reading outside a conversation
+ * with the SAME header strip its pending frame carries — the sans heading
+ * "Review" over the gate, byte for byte in both frames — and the annotation
+ * above it takes away only the floor: "Settled, outside the conversation — the
+ * same display, no floor, and the marker below the whole gate". What is untrue
+ * once a gate is decided is the REQUEST and the ASK: the request wording, and
+ * the awaiting-your-decision pill. Those go; the heading stays and says what the
+ * region is. (§XIII was written after this branch's pin was taken, which is why
+ * fix leg 5 could not read it.)
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement | null {
-  // A SETTLED GATE IS HEADED BY NOTHING (cinatra#3080, fix leg 5). This block
-  // read "Review requested" on every reading, so a gate already continued or
-  // superseded still headed its card with a request nobody was being asked for;
-  // heading it with a settled wording instead only swapped one undrawn line for
-  // another. The ratified cards drawing draws the settled reading, in a
-  // conversation and outside one, as "the same pane, the marker below the whole
-  // card, no floor" — no request heading and no awaiting pill above the target,
-  // and the settled marker below the whole card says what happened. §IV draws no
-  // heading over a settled gate either. So the block is the PENDING reading's,
-  // exactly as drawn, and the settled reading draws none of it.
-  if (!pending) return null;
+function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-logo/40 bg-logo/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
-        <span className="size-[7px] rounded-full bg-logo" aria-hidden="true" />
-        Awaiting your decision
+      <span className="font-sans text-sm font-bold text-foreground">
+        {pending ? "Review requested" : "Review"}
       </span>
+      {pending ? (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-logo/40 bg-logo/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
+          <span className="size-[7px] rounded-full bg-logo" aria-hidden="true" />
+          Awaiting your decision
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -1456,10 +1496,51 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  const [load, setLoad] = useState<{
+    src: string;
+    attempt: number;
+    loaded: boolean;
+    timedOut: boolean;
+    /** What the island's own document reports, once it can be read. */
+    measured: number | null;
+  }>({ src, attempt: 0, loaded: false, timedOut: false, measured: null });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ src, attempt: 0, loaded: false, timedOut: false, measured: null });
   }
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  // THE ISLAND IS SAME-ORIGIN, so its own document is measurable directly and
+  // nothing has to be sent from inside it — no message channel, and no addition
+  // to the display-only posture. A read that is refused, or a document that is
+  // not there yet, answers null and the frame keeps its ceiling.
+  const measure = useCallback(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let reported: number | null = null;
+    try {
+      const doc = frame.contentDocument;
+      // THE BODY IS THE MEASURE, NOT THE ROOT (the convergence round on fix
+      // leg 6). `documentElement` is this document's scrolling element, and a
+      // scrolling element's `scrollHeight` is never smaller than the viewport
+      // it scrolls in — which here IS the frame. Reading it inside a box that
+      // starts at the ceiling answers the ceiling for a 184-tall document, so
+      // the frame could never shrink and the empty region this leg exists to
+      // remove would have survived in a browser (jsdom does not model the
+      // floor, which is why a stub could hide it). The body's own scroll height
+      // is content-driven, so it is what is read; the root is kept only as the
+      // fallback for a document that has no body yet.
+      const measuredBody = doc?.body?.scrollHeight ?? 0;
+      const height = measuredBody > 0 ? measuredBody : (doc?.documentElement?.scrollHeight ?? 0);
+      reported = height > 0 ? height : null;
+    } catch {
+      reported = null;
+    }
+    setLoad((current) =>
+      current.src !== src || current.measured === reported
+        ? current
+        : { ...current, measured: reported },
+    );
+  }, [src]);
 
   useEffect(() => {
     if (load.loaded) return;
@@ -1469,16 +1550,50 @@ function ReviewTargetIsland({
     return () => clearTimeout(timer);
   }, [load.src, load.attempt, load.loaded]);
 
+  // A DOCUMENT THAT GROWS AFTER ITS LOAD EVENT IS STILL MEASURED. A picture
+  // decodes, a font swaps, a renderer paints a second pass — all of them settle
+  // AFTER `load`, and a height taken once would clip exactly the targets that
+  // take the longest to arrive. The observer is optional everywhere it is not
+  // implemented, and it is torn down with the frame it watches.
+  useEffect(() => {
+    if (!load.loaded) return;
+    measure();
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === "undefined") return;
+    let observer: ResizeObserver | null = null;
+    try {
+      const doc = frame.contentDocument;
+      // AND THE BODY IS WHAT IS WATCHED, for the same reason it is what is
+      // read: a document stretched to its frame has a root box that never
+      // changes, so an observer on the root alone can sleep through exactly the
+      // late arrival this exists for — a picture decoding, a font swapping, a
+      // renderer's second pass. The root is observed as well, for a document
+      // whose body is not there yet.
+      const targets = [doc?.body, doc?.documentElement].filter(
+        (node): node is HTMLElement => !!node,
+      );
+      if (targets.length === 0) return;
+      observer = new ResizeObserver(() => measure());
+      for (const target of targets) observer.observe(target);
+    } catch {
+      observer?.disconnect();
+      observer = null;
+    }
+    return () => observer?.disconnect();
+  }, [load.loaded, load.src, load.attempt, measure]);
+
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  // ONE CLAMPED BOX, AND IT SCROLLS INSIDE ITSELF (cinatra#3080, the fourth
-  // reproduction of the real road). The drawing's answer to a representation
-  // taller or wider than the box is the box's own scroll — §III, "a wide
-  // representation scrolls inside its own container rather than widening the
-  // page" — not a control. It enumerates this gate's frame as "a gate header
-  // …, then the review target, then the decision bar and the conversational
-  // prompt window", and the word Expand does not appear anywhere in it. The
-  // toggle and the footer strip it sat on are gone.
-  const height = ISLAND_HEIGHT_CLAMPED;
+  // ONE BOX, AND IT SCROLLS INSIDE ITSELF WHEN IT HAS TO (cinatra#3080, the
+  // fourth reproduction of the real road, and fix leg 6). The drawing's answer
+  // to a representation taller or wider than the box is the box's own scroll —
+  // §III, "a wide representation scrolls inside its own container rather than
+  // widening the page" — not a control. It enumerates this gate's frame as "a
+  // gate header …, then the review target, then the decision bar and the
+  // conversational prompt window", and the word Expand does not appear anywhere
+  // in it. The toggle and the footer strip it sat on are gone. What the box is
+  // NOT is a fixed pane with emptiness under a short target: see
+  // `reviewIslandFrameHeight`.
+  const height = reviewIslandFrameHeight(load.measured);
 
   return (
     <div
@@ -1491,6 +1606,7 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.src}:${load.attempt}`}
+        ref={frameRef}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -1509,9 +1625,10 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
-        }
+        onLoad={() => {
+          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current));
+          measure();
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The

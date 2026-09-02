@@ -167,13 +167,27 @@ export function reviewSettledActForOutcome(outcome: ReviewSettledOutcome): Revie
   }
 }
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
-export function reviewSettledCopy(
-  outcome: ReviewSettledOutcome,
-  decidedByName?: string,
-): { title: string; body: string } {
-  const by = decidedByName ? ` by ${decidedByName}` : "";
+/**
+ * The user-facing copy for a settled gate whose outcome is recorded. Title +
+ * one line; NO refresh (the component draws none) — the reading is final.
+ *
+ * THE MARKER NAMES THE ACT, NEVER A PERSON (cinatra#3080, fix leg 6). It used to
+ * read `${title} by ${name}`, and the ratified drawings name nobody in any
+ * settled marker they draw. The cards drawing draws the settled reading twice in
+ * §XIII.1 — "Settled — the same pane, the marker below the whole card, no floor"
+ * and "Settled, outside the conversation — the same display, no floor, and the
+ * marker below the whole gate" — and the marker in both frames reads "Continued
+ * · Decided on the revision above. These are the words that will be sent." §II's
+ * own two settled cards read "Continued · Decided on the revision above. The post
+ * keeps the revision it was continued at, and this review does not re-open." and
+ * "Superseded · The review of the earlier picture — kept, and no longer open. Its
+ * successor is below." Not one of the four carries a name. The decider still
+ * travels on the wire for the audit trail; this surface stopped drawing one.
+ */
+export function reviewSettledCopy(outcome: ReviewSettledOutcome): {
+  title: string;
+  body: string;
+} {
   switch (outcome) {
     case "approved":
       // CONTINUED (cinatra#3080). The STORED disposition is still `approve` —
@@ -182,7 +196,7 @@ export function reviewSettledCopy(
       // nothing else: a gate decided before the floor was redrawn and one
       // decided after it are the same row and read the same way.
       return {
-        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
         body: "The gate is resolved and the run has been released to continue.",
       };
     case "rejected":
@@ -190,7 +204,7 @@ export function reviewSettledCopy(
       // decision operation refuses one — but rows decided before the retirement
       // must still read as what they were, so the copy stays.
       return {
-        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
@@ -203,7 +217,7 @@ export function reviewSettledCopy(
       // reviewed revision is kept and displayed, and its successor opens beneath
       // it on the next revision. Nothing was turned back and nothing was lost.
       return {
-        title: `${REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)]}${by}`,
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
         body: "The gate is settled as superseded. The reviewed revision is kept as it was, and the review has moved on from it.",
       };
   }

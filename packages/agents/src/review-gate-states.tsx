@@ -65,10 +65,15 @@ export function ReviewGateBlocked({
 
 /**
  * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Superseded by …", over the shipped sentence for
- * that outcome, and with the recorded suggestion chips still drawn above it by
- * the caller.
+ * §4.2). The card that knows what happened says so — "Continued", "Rejected",
+ * "Superseded" — over the shipped sentence for that outcome, and with the
+ * recorded suggestion chips still drawn above it by the caller.
+ *
+ * AND IT NAMES NO PERSON (cinatra#3080, fix leg 6). This block read
+ * "Superseded by {name}" on the sixth reading; the ratified drawing names nobody
+ * in any settled marker it draws — see `reviewSettledCopy`, where the four
+ * drawn markers are quoted. The decider is still carried on the wire for the
+ * audit trail and is simply not drawn here.
  *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
@@ -81,16 +86,8 @@ export function ReviewGateBlocked({
  *
  * Conformance anchor: `review-gate-settled`.
  */
-export function ReviewGateSettled({
-  outcome,
-  decidedByName,
-}: {
-  outcome: ReviewSettledOutcome;
-  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
-   *  cannot name safely, and the copy then states the outcome alone. */
-  decidedByName?: string;
-}) {
-  const copy = reviewSettledCopy(outcome, decidedByName);
+export function ReviewGateSettled({ outcome }: { outcome: ReviewSettledOutcome }) {
+  const copy = reviewSettledCopy(outcome);
   const Icon =
     outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
   // The status palette's own tokens (`--success` / `--destructive` / `--warning`),

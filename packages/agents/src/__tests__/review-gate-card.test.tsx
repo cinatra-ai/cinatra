@@ -1693,9 +1693,13 @@ describe("a settled card that knows its outcome", () => {
     return container;
   }
 
-  it("names the outcome AND the decider", async () => {
+  it("names the outcome, and NEVER the decider (cinatra#3080, fix leg 6)", async () => {
+    // The ratified drawing names nobody in any settled marker it draws — see
+    // `reviewSettledCopy`, where its four markers are quoted. The decider is
+    // still carried on the wire for the audit trail and is not drawn here.
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Continued by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Dana Okonkwo");
     expect(container.textContent).toContain(
       "The gate is resolved and the run has been released to continue.",
     );
@@ -1708,15 +1712,16 @@ describe("a settled card that knows its outcome", () => {
 
   it("names each of the three recorded outcomes", async () => {
     const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Continued by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
+      ["approved", "Continued"],
+      ["rejected", "Rejected"],
       // cinatra#3080 item 4 — the gate the change road settled reads SUPERSEDED.
       // The stored disposition is untouched; the WORD is the drawing's.
-      ["changes_requested", "Superseded by Dana Okonkwo"],
+      ["changes_requested", "Superseded"],
     ];
     for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
+      expect(container.textContent).not.toContain("Dana Okonkwo");
       cleanup();
     }
   });
@@ -1767,7 +1772,8 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Continued by Dana Okonkwo");
+      expect(html).toContain("Continued");
+      expect(html).not.toContain("Dana Okonkwo");
     }
   });
 
@@ -1793,7 +1799,8 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Continued by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Dana Okonkwo");
   });
 });
 
@@ -1828,9 +1835,9 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
   const DISPOSITIONS = [
-    ["approved", "Continued by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Superseded by Dana Okonkwo"],
+    ["approved", "Continued"],
+    ["rejected", "Rejected"],
+    ["changes_requested", "Superseded"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {
@@ -1883,7 +1890,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Continued by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued");
+      expect(container.textContent).not.toContain("Dana Okonkwo");
       cleanup();
     }
   });

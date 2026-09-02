@@ -92,7 +92,7 @@ import { RecommendationRailStepRow } from "./recommendation-rail-step";
 // own rail rows and run detail; the setup run page composes the whole frame from
 // it, with the shared row for steps that carry no anchors of their own
 // (cinatra#2970).
-import { RunSurfaceRail } from "./run-surface-rail";
+import { RUN_SURFACE_RAIL_COLUMN_CLASS, RunSurfaceRail } from "./run-surface-rail";
 // The step's own shape, and the setup page's step-to-row mapping. Both read from
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
@@ -1438,7 +1438,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               return (
                 <>
                   {railNode ? (
-                    <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
+                    // The SAME column the frame draws (cinatra#3080, fix leg 6):
+                    // a rail that stays in view on the branch with gate steps and
+                    // scrolls away on the branch without them would be two rails.
+                    // The holder carries no anchor of its own — this file's
+                    // run-embedded anchor set is closed by the ratified spec, and
+                    // the rail inside it already carries its own.
+                    <div className={RUN_SURFACE_RAIL_COLUMN_CLASS}>{railNode}</div>
                   ) : null}
                   <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
                 </>
