@@ -85,6 +85,31 @@ describe("Card — components drawing, Card section", () => {
     ).toEqual([]);
   });
 
+  // Convergence adoption (cinatra#3189, leg 1). The lift is a transform, and
+  // this product carries no blanket prefers-reduced-motion rule for the
+  // primitive to inherit — the only one in the stylesheet is scoped to a single
+  // decorative class. So the guard has to live on the opt-in itself.
+  it("silences the lift for a reader who has asked for reduced motion", () => {
+    const { el } = renderCard({ interactive: true });
+    const classes = Array.from(el.classList);
+    expect(classes).toContain("motion-reduce:transition-none");
+    expect(classes).toContain("motion-reduce:hover:translate-y-0");
+  });
+
+  // Convergence adoption (cinatra#3189, leg 1). Turning the ring into a real
+  // border is the graded fix, and it has a consumer-visible consequence that
+  // this test states out loud rather than leaving to be discovered: a card that
+  // was already passing a border COLOUR had no stroke to colour while the
+  // primitive drew a ring, and now paints one. That is the clause working, not
+  // a regression, but it is an appearance change on shipped surfaces and it is
+  // pinned here so it cannot be reverted by accident.
+  it("lets a consumer-supplied border colour actually paint", () => {
+    const { el } = renderCard({ className: "border-destructive/40" });
+    const classes = Array.from(el.classList);
+    expect(classes).toContain("border");
+    expect(classes).toContain("border-destructive/40");
+    expect(classes).not.toContain("border-border");
+  });
   it("rounds the card and every part that rounds with it on one corner token", () => {
     const { el, container } = renderCard();
     const corner = Array.from(el.classList).find((c) => /^rounded-/.test(c));

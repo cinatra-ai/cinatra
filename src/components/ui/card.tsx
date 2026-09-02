@@ -37,15 +37,24 @@ function Card({
         // border-width was 0, so a consumer that passed a `border-*` colour got
         // no stroke at all.
         //
-        // The corner is UNCHANGED and conforms: under the palette the app
-        // actually runs, `rounded-xl` computes to 12px, the top of the section's
-        // stated 10 to 12px band. (It reads 14px only under the bare token
-        // defaults, which no shipped surface uses — measured, not assumed, by
-        // tests/e2e/design/conformance/primitive-chrome.spec.ts on the live
-        // boot.)
+        // The corner is UNCHANGED, and the reading is THEME-CONDITIONAL. In the
+        // default palette the app boots in, `rounded-xl` is
+        // calc(var(--radius) + 4px) over a 0.5rem radius, so it computes to
+        // 12px — the top of the section's stated 10 to 12px band, conforming.
+        // The dark palette declares its own 0.625rem radius, so the same
+        // utility computes to 14px there, OUTSIDE the band. That is an open
+        // departure of the corner clause in the dark palette, recorded rather
+        // than fixed here: the radius rides a shared scale step, so moving it
+        // is a cross-primitive token change and not one this primitive may
+        // make on its own. Both readings are measured, not assumed, by
+        // tests/e2e/design/conformance/primitive-chrome.spec.ts.
         "group/card flex flex-col gap-4 overflow-hidden rounded-xl border border-border bg-card py-4 text-sm text-card-foreground has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // The lift is a transform, so it is silenced for a reader who has asked
+        // the platform for reduced motion. There is no blanket
+        // prefers-reduced-motion rule in this product to inherit, so the
+        // primitive carries the guard itself.
         interactive &&
-          "bg-surface-strong transition-transform hover:-translate-y-px",
+          "bg-surface-strong transition-transform hover:-translate-y-px motion-reduce:transition-none motion-reduce:hover:translate-y-0",
         className
       )}
       {...props}
