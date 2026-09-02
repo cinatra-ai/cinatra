@@ -20,13 +20,20 @@
 // `.dark` was written as an increment on `:root` and only completed when it
 // landed on the element `:root` matches.
 //
-// The target chip is where that shows. Its outline is the ONE border in the
-// panel that no `--color-*`-backed utility paints — the panel's own frame is
-// `border-line`, which resolves at the element — so nothing draws it but the
-// base layer's `* { border-color: var(--border) }`. In the island's dark
-// document that alias stayed at the LIGHT hairline and was composited over a
-// dark panel, which is the panel's ground and no outline at all, while the same
-// chip on the run page drew the dark hairline.
+// What this suite measures is that alias itself: `--border`, the token the base
+// layer's `* { border-color: var(--border) }` gives every border the app does
+// not colour explicitly, RESOLVED against a real element chain inside the
+// panel. In the island's dark document it stayed at the LIGHT hairline and was
+// composited over a dark panel — the panel's ground and no outline at all —
+// while the same chain on the run page resolved the dark hairline.
+//
+// The chain is read at the panel's own frame, `[data-conformance-id=
+// \"review-target\"]`. That frame declares `border border-line`, so `--line`
+// and not `--border` is what paints the frame's own pixels; the frame is used
+// here as a STABLE POINT ON THE CHAIN, because cinatra#3141 item 7 moved the
+// one element the base layer alone used to colour — the target chip — out of
+// this document entirely. Both tokens are therefore checked: the alias, which
+// is the bug class, and the frame's own `--line`, which is what it draws.
 //
 // jsdom implements no custom-property substitution, so this suite resolves the
 // cascade from the stylesheet itself against the element chain the render
@@ -317,7 +324,12 @@ function channelDistance(a: Rgb, b: Rgb): number {
 // The two documents, each with the REAL panel rendered inside it.
 // ---------------------------------------------------------------------------
 
-const TYPE_LABEL = "Blog Post Artifact";
+// cinatra#3141 item 7 moved the target chip and title into the CARD's own
+// `ReviewTargetHeader` (packages/agents/src/review-gate-card.tsx), so this
+// document no longer draws the one element the base layer alone coloured. The
+// alias is therefore resolved at the panel's own frame instead — a different
+// element, the SAME cascade question. The frame's own `border-line` is pinned
+// alongside it so the element's actual paint is not left unasserted.
 
 /** One pinned target, shaped like the gate the picture was taken of. */
 const PREPARED = {
@@ -335,8 +347,12 @@ const PREPARED = {
       updatedAt: "8 min ago",
     },
   },
+  // cinatra#3141 item 7 / §V: only the floor kind still draws a provenance
+  // region (Floor pill + muted-foreground reading) — build-map and runtime
+  // draw none, so the floor kind is what keeps this suite exercising the
+  // "--muted-foreground" token the region paints with.
   mount: {
-    kind: "build-map",
+    kind: "floor",
     slot: "review",
     packageName: "@cinatra-ai/blog-post-artifact",
   },
@@ -355,7 +371,7 @@ const PANEL_MARKUP = renderToStaticMarkup(
  * whatever is read off the panel has to be read while that panel is the one
  * mounted.
  */
-function onRunPage<T>(read: (chip: Element) => T): T {
+function onRunPage<T>(read: (at: Element) => T): T {
   return mounted("dark", (host) => {
     host.innerHTML = PANEL_MARKUP;
   }, read);
@@ -367,7 +383,7 @@ function onRunPage<T>(read: (chip: Element) => T): T {
  * DEFAULT palette; the host's palette arrives on the wrapper the island draws
  * the ladder in.
  */
-function inIsland<T>(read: (chip: Element) => T): T {
+function inIsland<T>(read: (at: Element) => T): T {
   return mounted("cinatra", (host) => {
     const wrapper = document.createElement("div");
     wrapper.className = islandBodyClassName("dark");
@@ -379,46 +395,51 @@ function inIsland<T>(read: (chip: Element) => T): T {
 function mounted<T>(
   rootClass: string,
   fill: (host: HTMLElement) => void,
-  read: (chip: Element) => T,
+  read: (at: Element) => T,
 ): T {
   document.documentElement.className = rootClass;
   document.body.className = "";
   document.body.innerHTML = "";
   fill(document.body);
-  // The chip in the target panel's HEADER — the panel's first region, above the
-  // renderer-provenance row that names the same type again.
-  const header = document.body.querySelector(
+  // The panel's own frame. The fixture renders exactly one target, so this is
+  // the single `review-target` element in the document.
+  const frames = document.body.querySelectorAll(
     "[data-conformance-id='review-target']",
-  )?.firstElementChild;
-  const chip = Array.from(header?.querySelectorAll("span") ?? []).find(
-    (span) => span.textContent === TYPE_LABEL,
   );
-  expect(chip, "the panel header draws the target chip").toBeTruthy();
-  return read(chip!);
+  expect(frames.length, "the fixture renders exactly one target panel").toBe(1);
+  return read(frames[0]!);
 }
 
-/** The colour the chip's outline is actually painted in, at this element: no
- *  `--color-*`-backed utility claims it, so the base layer is what colours it. */
-function chipOutline(chip: Element): string {
-  return substituteAt(chainOf(chip), BASE_BORDER_COLOR);
+/** The base layer's `border-color` alias, RESOLVED on this element's chain.
+ *  Not a claim about what this element paints — a reading of the alias the
+ *  island's palette wrapper used to leave unfinished. */
+function baseBorderAt(at: Element): string {
+  return substituteAt(chainOf(at), BASE_BORDER_COLOR);
 }
 
-/** The ground the chip is painted on — the panel's own `bg-surface-strong`. */
-function chipGround(chip: Element): string {
-  const ground = tokenAt(chainOf(chip), "--surface-strong");
+/** The token the frame's own `border-line` utility paints its border with. */
+function declaredBorderAt(at: Element): string {
+  const line = tokenAt(chainOf(at), "--line");
+  expect(line, "the frame's own border token resolves").toBeTruthy();
+  return line!;
+}
+
+/** The ground it is painted on — the panel's own `bg-surface-strong`. */
+function groundAt(at: Element): string {
+  const ground = tokenAt(chainOf(at), "--surface-strong");
   expect(ground, "the panel's ground resolves").toBeTruthy();
   return ground!;
 }
 
-describe("the target chip keeps its outline inside the island's dark document", () => {
+describe("the panel keeps its hairline inside the island's dark document", () => {
   it("draws the outline the run page draws, not the ground it sits on", () => {
-    const run = onRunPage((chip) => ({
-      outline: chipOutline(chip),
-      ground: chipGround(chip),
+    const run = onRunPage((at) => ({
+      outline: baseBorderAt(at),
+      ground: groundAt(at),
     }));
-    const island = inIsland((chip) => ({
-      outline: chipOutline(chip),
-      ground: chipGround(chip),
+    const island = inIsland((at) => ({
+      outline: baseBorderAt(at),
+      ground: groundAt(at),
     }));
 
     // The same hairline token, so the same pixels.
@@ -437,10 +458,25 @@ describe("the target chip keeps its outline inside the island's dark document", 
     ).toBeGreaterThan(8);
   });
 
+  // The alias above is the bug class. This is the element's OWN paint: the
+  // frame declares `border-line`, and that token has to land identically in
+  // both documents too, or the frame diverges even while the alias agrees.
+  it("draws the hairline it actually declares the same in both documents", () => {
+    const run = onRunPage(declaredBorderAt);
+    const island = inIsland(declaredBorderAt);
+    expect(island).toBe(run);
+    expect(
+      channelDistance(
+        paintedOn(island, inIsland(groundAt)),
+        parseColor(inIsland(groundAt)).rgb,
+      ),
+    ).toBeGreaterThan(8);
+  });
+
   it("keeps the run page exactly where it was — the dark hairline over the panel", () => {
-    const run = onRunPage((chip) => ({
-      outline: chipOutline(chip),
-      ground: chipGround(chip),
+    const run = onRunPage((at) => ({
+      outline: baseBorderAt(at),
+      ground: groundAt(at),
     }));
     expect(run.outline).toBe("oklch(1 0 0 / 10%)");
     expect(paintedOn(run.outline, run.ground)).toEqual([37, 47, 63]);
@@ -467,8 +503,7 @@ describe("every token the panel paints with reads the same on both hosts", () =>
       "caret",
     ];
 
-    /** The token the base layer colours every unclaimed border with — the target
-     *  chip's outline among them. */
+    /** The token the base layer colours every unclaimed border with. */
     const baseBorderMatch = /var\(\s*(--[A-Za-z0-9-]+)\s*\)/.exec(BASE_BORDER_COLOR);
     if (!baseBorderMatch) throw new Error("the border colour is not a token");
     const baseBorderToken = baseBorderMatch[1]!;
@@ -476,9 +511,9 @@ describe("every token the panel paints with reads the same on both hosts", () =>
     /** Every token the rendered panel asks for, resolved WHERE it asks for it —
      *  walking the markup's own class lists through the theme's colour
      *  bindings, so the enumeration is the panel's and not a copy of it. */
-    function tokensUnder(chip: Element): Map<string, string | undefined> {
-      const panel = chip.closest("[data-conformance-id='review-target']");
-      if (!panel) throw new Error("the chip is not inside a target panel");
+    function tokensUnder(at: Element): Map<string, string | undefined> {
+      const panel = at.closest("[data-conformance-id='review-target']");
+      if (!panel) throw new Error("the anchor is not inside a target panel");
       const resolved = new Map<string, string | undefined>();
       const note = (token: string, at: Element) => {
         if (!resolved.has(token)) resolved.set(token, tokenAt(chainOf(at), token));
@@ -497,7 +532,7 @@ describe("every token the panel paints with reads the same on both hosts", () =>
           }
         }
       }
-      note(baseBorderToken, chip);
+      note(baseBorderToken, at);
       return resolved;
     }
 
