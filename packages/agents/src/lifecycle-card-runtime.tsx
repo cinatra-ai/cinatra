@@ -1019,6 +1019,45 @@ const PARK_READ_FAILURE_LIMIT = 5;
  */
 const PARK_READ_RECOVERY_SPACING_MS = 30_000;
 
+/**
+ * AND THE PARK FLAG IS AS FAIL-SOFT AS THE GATE FIELDS IT IS READ BESIDE
+ * (cinatra#3007, fix leg 11).
+ *
+ * The ninth graded reading measured the arrival LEAVING an untouched page: two
+ * palettes of one run opened before the gate was minted and never touched, 0
+ * navigations on either, and after the card had landed 256 of 509 polls in one
+ * and 237 of 513 in the other carried no lifecycle card of any kind — 80 and 83
+ * separate absences, the longest 43.670 s. The two palettes disagreed at the
+ * SAME second, so what moved was a page-wide reading each of them takes on its
+ * own schedule.
+ *
+ * That reading is this one. On the transport a conversation really runs — the
+ * A2A snapshot, which carries no gate reading at all — the run row's park never
+ * rides the caller's tick, so the whole of the surface's park is
+ * `slot.producedReviewPark` and nothing else: the panel draws the review at that
+ * flag, falls to its own progress arm without it, and that arm draws neither a
+ * card nor a placeholder and redraws the question the run already answered.
+ *
+ * The rule below already protects the two GATE fields from a look that stumbled,
+ * and says why: "never take a review off a screen somebody is reading". The park
+ * flag was handed the opposite treatment — one look answering `false` was taken
+ * as the row's own word, skipped that protection entirely, and was filed whole.
+ * The flag is not more authoritative than the fields: the route computes it from
+ * the run row it happened to read, and a park that has really ended is followed
+ * by the run LEAVING the status, which re-keys this reader in render and empties
+ * the slot there.
+ *
+ * So beside a gate this reader has already delivered, a `false` here is withheld
+ * while consecutive drops stay inside this budget, and BELIEVED once it is spent.
+ * It is a budget rather than a veto for the reason leg 9's convergence gave when
+ * it added the release: a produced review can be released into a SECOND wait
+ * under the same `pending_approval`, with no status edge to re-key on, and a
+ * decided review's card wedged over that run for the life of the mount would be
+ * the worse defect. Three consecutive looks is the whole cost of the release,
+ * and the withholding can never become permanent.
+ */
+const PARK_FLAG_DROP_LIMIT = 3;
+
 function slotReadDelay(reads: number, failures = 0): number {
   if (failures >= PARK_READ_FAILURE_LIMIT) return PARK_READ_RECOVERY_SPACING_MS;
   if (reads < 5) return 2000;
@@ -1256,6 +1295,12 @@ export function useRunReviewSlot({
   const lookEpochRef = useRef(0);
   const inFlightRef = useRef(false);
   const inFlightEpochRef = useRef(0);
+  // HOW MANY CONSECUTIVE LOOKS HAVE DROPPED THE PARK FLAG beside a gate this
+  // reader has already delivered (fix leg 11). Held in a ref because it is read
+  // and written INSIDE the look, which runs a render behind any state, and
+  // because it must never itself re-key the schedule. Cleared by an answer that
+  // keeps the flag, and by every re-key below.
+  const parkFlagDropsRef = useRef(0);
   // A LOOK THAT NEVER SETTLES MUST NOT BE ABLE TO STOP THE READER either, which
   // is the failure mode of every guard like the one above. The deadline aborts
   // a read at SLOT_READ_TIMEOUT_MS; past that plus a margin the guard lets go
@@ -1273,6 +1318,7 @@ export function useRunReviewSlot({
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+    parkFlagDropsRef.current = 0;
     // The look in flight was asking about the status this reader has just left,
     // so its answer is not about this wait. Releasing the guard here is what
     // keeps the re-key's own immediate look immediate.
@@ -1307,6 +1353,7 @@ export function useRunReviewSlot({
       lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
       setSlot(EMPTY_RUN_REVIEW_SLOT);
       setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+      parkFlagDropsRef.current = 0;
       lookEpochRef.current += 1;
       inFlightRef.current = false;
     }
@@ -1611,18 +1658,56 @@ export function useRunReviewSlot({
               // review released into a second wait under the same
               // `pending_approval`. Taking it whole is what stops a delivered
               // card from being held over a question the run has moved on to.
-              const rowSaysTheParkIsOver =
+              // AND A LONE `false` ON THE PARK FLAG IS NOT THE ROW'S WORD
+              // EITHER (cinatra#3007, fix leg 11). See PARK_FLAG_DROP_LIMIT:
+              // this reading is exactly as fail-soft as the two gate fields
+              // above, it is the WHOLE of what a conversation knows about the
+              // park, and one look that answered it `false` took the review off
+              // an untouched thread 80 times in the ninth graded reading. So it
+              // is withheld while consecutive drops stay inside the budget, and
+              // believed once the budget is spent — which is what still lets a
+              // produced review released into a SECOND wait clear its card with
+              // no status edge to re-key on.
+              const parkFlagDropped =
                 last.producedReviewPark === true &&
                 next.producedReviewPark !== true;
+              parkFlagDropsRef.current = parkFlagDropped
+                ? parkFlagDropsRef.current + 1
+                : 0;
+              // AND THE PARK THAT HAS NO GATE YET IS THE ONE THE WAITING BOX
+              // RESTS ON (cinatra#3007, fix leg 11, convergence). The budget was
+              // first written to protect a delivered CARD, so it asked for a gate
+              // beside the flag. Before any gate is minted, though, the whole of
+              // a parked surface IS the flag alone - `ref` null, `awaiting`
+              // false, the park true - and that reading is what draws the quiet
+              // waiting box. Requiring a gate there left the box with no
+              // protection at all, so the first dropped flag took it. WHAT THIS
+              // CLOSES IS NARROWER THAN THE MEASUREMENT, and is written down as
+              // such: it keeps a box that WAS drawn from leaving a parked
+              // surface. It is NOT an answer to the ninth graded reading's other
+              // number - a waiting box drawn on 0 of 4 untouched parked surfaces
+              // - because that number is about whether the pre-gate window is
+              // entered at all, which is not decided here and is not claimed.
+              // The drop is the same drop and it is withheld the same way.
+              // `parkFlagDropped` already requires that this surface WAS drawing
+              // the park, which is the only precondition the withholding needs.
+              const withholdTheParkDrop =
+                parkFlagDropped && parkFlagDropsRef.current < PARK_FLAG_DROP_LIMIT;
+              const rowSaysTheParkIsOver = parkFlagDropped && !withholdTheParkDrop;
+              // The park reading this look is allowed to deliver: its own, or —
+              // while the drop is withheld — the one the surface is drawing.
+              const nextPark = withholdTheParkDrop
+                ? last.producedReviewPark
+                : next.producedReviewPark;
               if (nextGateIsEmpty && lastGateSaidSomething && !rowSaysTheParkIsOver) {
-                if (next.producedReviewPark !== last.producedReviewPark) {
+                if (nextPark !== last.producedReviewPark) {
                   // The ROW moved into the park while its gate row does not
                   // exist yet: that is a fact, and it is taken beside the
                   // gate this surface is already drawing rather than instead
                   // of it.
                   const merged: RunReviewSlot = {
                     ...last,
-                    producedReviewPark: next.producedReviewPark,
+                    producedReviewPark: nextPark,
                   };
                   changed = true;
                   lastAnswerRef.current = merged;
@@ -1633,12 +1718,20 @@ export function useRunReviewSlot({
                 // the gate, so the ceiling spends one.
                 landed = true;
               } else {
+                // THE SAME WITHHOLDING TRAVELS DOWN THIS BRANCH. An answer that
+                // keeps the gate and moves ONLY the park flag never reaches the
+                // rule above, and it is the shape the ninth reading measured:
+                // the card left the thread with its own ticket still on file.
+                const merged: RunReviewSlot =
+                  nextPark === next.producedReviewPark
+                    ? next
+                    : { ...next, producedReviewPark: nextPark };
                 changed =
-                  next.ref !== last.ref ||
-                  next.awaiting !== last.awaiting ||
-                  next.producedReviewPark !== last.producedReviewPark;
-                lastAnswerRef.current = next;
-                setSlot(next);
+                  merged.ref !== last.ref ||
+                  merged.awaiting !== last.awaiting ||
+                  merged.producedReviewPark !== last.producedReviewPark;
+                lastAnswerRef.current = merged;
+                setSlot(merged);
                 landed = true;
               }
             }
