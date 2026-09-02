@@ -238,9 +238,15 @@ describe("the cookie arm is untouched — the credential is ADDITIVE", () => {
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
   });
 
-  it("never even decodes the ref for a credential it will not mint", async () => {
+  it("decodes the ref ONCE, for the reading it composes — never a second time for a credential it will not mint", async () => {
     await POST(post({ widget: false }));
-    expect(decodeLifecycleGateRef).not.toHaveBeenCalled();
+    // The credential branch is not entered at all on this arm, so it decodes
+    // nothing. The ONE decode this answer makes is §IV's target header
+    // (cinatra#3141 item 7), which is addressed by the gate the ref names and is
+    // composed on both arms alike; a second decode here would be the mint's,
+    // and there is none.
+    expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
   });
 });
 

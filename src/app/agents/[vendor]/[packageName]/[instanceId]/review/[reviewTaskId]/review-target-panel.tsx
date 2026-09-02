@@ -10,9 +10,6 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
-  reviewRevisionMarker,
-  reviewTargetRowFacts,
-  reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
 /**
@@ -23,32 +20,23 @@ import {
  * host display-only props). Every target is type-agnostic: it keys on the OPAQUE
  * host mount kind only (G1-clean).
  *
- * THE TARGET SAYS NOTHING ABOUT ITSELF (cinatra#3080, the ratified drawing at
- * the pin this route's conformance suite records). The panel used to draw a
- * RENDERER-PROVENANCE row beneath the header — the type chip again, the runtime
- * package's identity, and a `build-time · <slot>` / `runtime · <slot>`
- * resolution line. The drawing forbids that twice over: the renderer resolution
- * "is NOT put on screen: a display shows the work and nothing about itself — no
- * renderer name, no package identity, no provenance line — because the reader is
- * deciding on the work, not on what drew it", and it draws a build-time target
- * and a runtime one identically for exactly that reason; the markdown display's
- * own header is "the two tabs, and the saving indicator below, and nothing else
- * — no renderer chip and no provenance line, here or on any other surface this
- * display is drawn". The row is gone from every resolved renderer.
+ * NOTHING IS DRAWN ABOVE THE WORK ANY MORE. The panel used to open a
+ * renderer-provenance region over every rendered target — a type chip, a package
+ * chip for a runtime tier, and a mono `build-time · detail` line. §V of the
+ * ratified artifact-review drawing forbids it outright: the resolution "is not
+ * put on screen: a display shows the work and nothing about itself — no renderer
+ * name, no package identity, no provenance line". §V.1 repeats it for the display
+ * in the slot, and the lifecycle-cards drawing §III says it a third time.
  *
- * THE FLOOR STILL SPEAKS — "and only because a reader must be told a render
- * failed". A target that resolved to no renderer keeps the drawing's own floor
- * mark (`Floor` over `structured data`) above the mount's sanitized
- * package · slot · reason diagnostic. That is the failure state's reading, not a
- * provenance line: it says the work could not be drawn, never who would have
- * drawn it.
+ * THE ISSUE QUOTED AN OLDER SENTENCE. cinatra#3141's own wording asks for a chip
+ * here, which is what the drawing said at the commit this repository's pin names.
+ * The drawing at its default branch is the text that governs the branch under
+ * proof, and it decides against the region.
  *
- * Conformance anchors (design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f): the panel is `review-target`; the
- * ONE region beneath the header is `review-target-floor`, drawn for a floor
- * mount alone. `review-provenance-native` (build-time) and
- * `review-provenance-marketplace` (runtime) are the older revision's anchors for
- * regions the newer drawing forbids: the model still classifies a mount into
- * them, and nothing renders them.
+ * Conformance anchors: the panel is `review-target`; the ONE region left is
+ * `review-target-floor`, which the drawing keeps and requires — "the one that
+ * does speak on a surface is the floor, and only because a reader must be told a
+ * render failed".
  *
  * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
  * used to pass a generic "no type renderer resolved" card — a sentence, a table
@@ -76,11 +64,7 @@ export function ReviewTargetPanel({
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
-  const { target, props, mount } = prepared;
-  const title = props?.artifact.title ?? target.artifactId;
-  const objectType = props?.artifact.objectType ?? "";
-  const typeLabel = objectType ? reviewTypeLabel(objectType) : "Artifact";
-  const revision = reviewRevisionMarker(target.representationRevisionId);
+  const { props, mount } = prepared;
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
@@ -90,34 +74,31 @@ export function ReviewTargetPanel({
       data-field="name=type.displayName"
       className="overflow-hidden rounded-control border border-line bg-surface-strong"
     >
-      {/* §II — the immutable target header (inert). */}
-      <div className="border-b border-line px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-sans text-sm font-bold text-foreground">{title}</span>
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-xs font-semibold text-blue">
-            {typeLabel}
-          </span>
-        </div>
-        <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
-          {objectType ? <span>{objectType} · </span> : null}
-          <span title={revision.full}>revision {revision.short}</span>
-          <span className="text-mustard-ink"> · pinned</span>
-          {props ? (
-            <>
-              {" · "}
-              {reviewTargetRowFacts(props.artifact).join(" · ")}
-            </>
-          ) : null}
-        </p>
-      </div>
+      {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
+          The header used to be drawn here, inside the island document, which is
+          the one part of the review a reader only sees once an iframe has
+          painted: while the frame was still arriving the card drew a skeleton
+          over it, and past the island's bounded wait it drew a recovery panel,
+          and neither carried a title, a type or a revision. A pending gate on
+          the run page drew with no header at all.
 
-      {/* §III — the FLOOR's own mark, and nothing else. A resolved renderer
-          draws no region here at all: the reader is deciding on the work, not
-          on what drew it. A floor keeps its mark because a reader must be told
-          a render failed, and the sanitized diagnostic follows inside the slot
-          below. (The host's own text rendering has no region either, and never
-          did — cinatra#2931 W4.) */}
-      {provenanceConformanceId === "review-target-floor" && provenance !== null ? (
+          `ReviewTargetHeader`, in the card, draws it in every one of those
+          states — so what stays here is the part that genuinely needs the
+          server: the provenance reading and the representation itself. Exactly
+          one header per pinned target, and the card is the only place one can
+          come from. */}
+      {/* §V — THE FLOOR'S REGION, AND NO OTHER. The model gives every rendered
+          rung a null region id, so this one null check IS the floor gate: a
+          resolved renderer draws no region here at all — the reader is deciding
+          on the work, not on what drew it. A floor keeps its mark because a
+          reader must be told a render failed, and the sanitized diagnostic
+          follows inside the slot below. A resolved renderer draws no
+          region here at all: the reader is deciding on the work, not on what
+          drew it. A floor keeps its mark because a reader must be told a render
+          failed, and the sanitized diagnostic follows inside the slot below.
+          (The host's own text rendering has no region either, and never did —
+          cinatra#2931 W4.) */}
+      {provenanceConformanceId !== null && provenance !== null ? (
         <div
           data-conformance-id={provenanceConformanceId}
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"

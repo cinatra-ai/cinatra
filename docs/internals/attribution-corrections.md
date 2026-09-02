@@ -1344,4 +1344,3 @@ The correction commit states no verification line of its own: the verification a
 correction is composed at its merge, by the merge tooling, from the maintainer's approval standing
 on the correction pull request, and a later mirror commit appends the merge record's composed arm
 lines to this entry.
-||||||| 757ab2a91b

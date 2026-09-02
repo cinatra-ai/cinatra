@@ -215,10 +215,16 @@ describe("the floor's own words, everywhere a review is read (cinatra#3080)", ()
     // THE DEFECT: at 1440x900 the docked composer painted over the lower part of
     // the chat review card's decision floor, so Comment/Regenerate/Continue could
     // not be reached. The list cleared the composer with a fixed `pb-24` guess.
+    // The measurement that answers it now is the shared reservation main
+    // landed for cinatra#3044: the stream reserves the composer's own measured
+    // box (with the old constant kept only as the floor), re-read on layout and
+    // on every resize. Same invariant, one implementation.
     const code = stripComments(CONVERSATION_COLUMN);
-    expect(code).toMatch(/composerDockRef/);
-    expect(code).toMatch(/COMPOSER_CLEARANCE_GAP_PX/);
-    expect(code).toMatch(/paddingBottom: composerClearance/);
+    expect(code).toMatch(/composerRef/);
+    expect(code).toMatch(/composerReservedSpacePx\(el\.offsetHeight\)/);
+    expect(code).toMatch(/paddingBottom: `\$\{composerReservedSpace\}px`/);
+    // and the guess it replaced is gone from the stream's class string
+    expect(code).not.toMatch(/overflow-y-auto pb-24/);
   });
 });
 

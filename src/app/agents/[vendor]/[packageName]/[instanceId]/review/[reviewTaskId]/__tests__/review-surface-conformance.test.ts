@@ -50,7 +50,10 @@ const RUN_SURFACE = readRepo("packages/agents/src/instance-screens.tsx");
 const RUN_STEP_RAIL = readRepo("packages/agents/src/run-step-rail-panel.tsx");
 const RUN_CHIP_ROW = readRepo("packages/agents/src/run-recommendation-chip-row.tsx");
 const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts");
-const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
+// THE WINDOW IS PART OF THE GATE NOW (cinatra#3141 item 1) — the drawing draws
+// it inside the gate's frame, so it is drawn by the one card every surface
+// mounts rather than by this route. The anchor and its action travelled with it.
+const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
 // gate-region COMPOSITION (header + target stack + one floor) moved out of this
@@ -92,8 +95,6 @@ const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
  */
 const SPEC_CONFORMANCE = {
   "review-target": ["loading", "error"],
-  "review-provenance-native": ["loading", "error"],
-  "review-provenance-marketplace": ["loading", "error"],
   "review-target-floor": ["error"],
   "review-decision-bar": [],
   "review-decision-disabled": ["loading"],
@@ -118,6 +119,19 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
+  // cinatra#3141 item 7 — §IV's target HEADER, drawn by the card. The header is
+  // the older spec's own ("Every target opens with a header that names what is
+  // under review and fixes it in place"), and it used to be part of
+  // `review-target` inside the island document; it is anchored separately now
+  // because it has to be drawn in the states where that document has not
+  // painted at all — the loading skeleton and the preview-recovery panel — and
+  // an anchor is what makes "exactly one header per pinned target" checkable.
+  "review-target-header",
+  // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
+  // it is the SAME `review-prompt-window` the run-embedded closed set below
+  // already carries, and it appears in this list only because the window moved
+  // out of this route and into the card, which this scan reads as chrome.
+  "review-prompt-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
   // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are
@@ -275,21 +289,47 @@ describe("§II — the immutable target header is inert (no edit control, no rev
   });
 });
 
-describe("§III — renderer provenance is host-derived; the floor is never blank", () => {
-  it("maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor", () => {
-    expect(MODEL).toMatch(/"review-provenance-native"/);
-    expect(MODEL).toMatch(/"review-provenance-marketplace"/);
+describe("§V — a display says nothing about itself; only the floor speaks", () => {
+  it("names no provenance anchor but the floor's", () => {
+    expect(MODEL).not.toMatch(/review-provenance-native/);
+    expect(MODEL).not.toMatch(/review-provenance-marketplace/);
     expect(MODEL).toMatch(/"review-target-floor"/);
-    // build-map → native, runtime → marketplace, floor → floor.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
-    expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+  });
+
+  // §V, read at the ratified drawings' default branch: "It is not put on screen:
+  // a display shows the work and nothing about itself — no renderer name, no
+  // package identity, no provenance line". The panel drew a type chip, a package
+  // chip and a `build-time · <slot>` mono line above every rendered target.
+  it("the target panel prints no renderer name, no package identity, no provenance line", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/build-time/);
+    expect(panel).not.toMatch(/runtime ·/);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+    expect(panel).not.toMatch(/reviewTypeLabel/);
   });
 
   // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
   // all above the reviewed work for the built-in markdown / plain-text
-  // rendering. The host's own text rendering names no package and did render
-  // the work, so it takes no region and is given no fourth one.
+  // rendering. §V's three drawn provenance regions belong to the two renderer
+  // tiers a PACKAGE supplies and to the floor; the host's own text rendering
+  // takes none of them and is given no fourth one. The strip is therefore
+  // OPTIONAL in the panel — rendered only when there is a provenance to state.
+  it("every rendered rung renders NO region — the panel gates the whole strip", () => {
+    // build-map, form and runtime share one arm now: the drawing lets none of
+    // the three name what drew the work.
+    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/);
+    const panel = stripComments(TARGET_PANEL);
+    // The strip exists only behind a null check on the resolved region id.
+    expect(panel).toMatch(/provenanceConformanceId !== null/);
+  });
+
+  it("the floor's region carries the Floor pill over its structured-data reading", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/Floor/);
+    expect(panel).toMatch(/structured data/);
+  });
+
   it("the form rung renders NO provenance region", () => {
     expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
   });
@@ -314,7 +354,11 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
 
   it("gates the ONE region it draws on the floor anchor alone", () => {
     const panel = stripComments(TARGET_PANEL);
-    expect(panel).toMatch(/provenanceConformanceId === "review-target-floor"/);
+    // The merged panel gates on the null check main pins; the floor-only reading
+    // is enforced where it is decided — the model hands back "review-target-floor"
+    // and nothing else, so that one check IS the floor gate.
+    expect(panel).toMatch(/provenanceConformanceId !== null/);
+    expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor";/);
     expect(panel).not.toMatch(/data-conformance-id="review-provenance/);
   });
 

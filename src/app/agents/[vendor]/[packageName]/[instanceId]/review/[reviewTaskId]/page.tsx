@@ -42,6 +42,7 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 
@@ -70,7 +71,6 @@ import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
-import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
@@ -407,6 +407,10 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   // access) and only this surface hands it down: the prompt is
                   // edited here, beside the picture, where Regenerate is.
                   picturePrompt={surface.kind === "ready" ? surface.picturePrompt : null}
+                  // §VI — the gate's own conversational prompt window keeps its
+                  // exchange with the RUN (cinatra#3141 item 1); the card draws
+                  // the window now, so the page names the run and mounts none.
+                  runId={runId}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>
@@ -432,52 +436,48 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
         })()}
       </div>
 
-      {/* owner ruling (1) — the REAL conversational prompt window (the
-          changes-request channel). Sticky, portalled into <main>; mounted only when
-          the reviewer may Comment (respond access) on a gate that is still OPEN.
-          A settled gate carries no comment channel and no permission answer to
-          read one from: the loader resolves the decision axis for a pending gate
-          only, and the card's own settled branch draws no floor either, so the
-          foot of the page agrees with the card above it. */}
-      {surface.kind === "ready" ? (
-        <ReviewPromptWindow
-          submitAction={submitAction}
-          canComment={surface.permissions.canComment}
-          runId={runId}
-          boundCardRef={gateCardRef}
-          storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
-        />
-      ) : null}
+      {/* §VI's conversational prompt window IS THE GATE'S, and the gate is the
+          card (cinatra#3141 item 1). It used to be mounted here, at page level
+          and outside the card — which is why the run page's own review gate
+          carried no window at all while this page carried one. The drawing puts
+          it inside the gate's frame, beneath the decision bar, so `ReviewGateCard`
+          draws it on every surface the gate opens on and this page mounts none:
+          one card per gate is one window per gate, and the review page cannot
+          draw a second. */}
     </ReviewShell>
   );
 }
 
 /**
- * The canonical review shell (§III) — the app's single light treatment and the
- * shared shell, and NOTHING the drawing does not draw.
+ * The review shell — the app's single light treatment and the shared shell
+ * (Main + PageContent), and NO page-title block.
  *
- * NO EYEBROW, NO HEADING, NO INSTRUCTIONAL SENTENCE (cinatra#3080, the fourth
- * reproduction of the real road). This shell used to open with "Agent run" over
- * "Review" over "Comment on what an agent produced, Regenerate it, or Continue
- * the run." — a page-title block that appears nowhere in the ratified drawing
- * and that an independent grade charged as an unspecified element. The drawing
- * is explicit about what this route is: "When a run pauses on a review gate, the
- * reviewer opens it at /agents/[vendor]/[package]/[runId]/review/[reviewTaskId]
- * — a route WITHIN the run. The run's step rail stays on the left with the gated
- * step highlighted and resolved gates above it as history; the gate itself —
- * header, the one review target, decision bar and the run's prompt window —
- * fills the run detail on the right. There is no standalone review document; the
- * reviewer decides in the run, with its steps in view." The gate's own header
- * ("Review requested" over "Awaiting your decision") is the reading at the top
- * of the detail column, and the card draws it. A second heading above it was the
- * page announcing itself, which is the one thing this surface must not do.
+ * THE GATE IS THE WHOLE SURFACE. §III of the ratified artifact-review drawing:
+ * "the gate itself — header, the one review target, decision bar and the run's
+ * prompt window — fills the run detail on the right. There is no standalone
+ * review document." The shell used to open with an eyebrow ("Agent run"), a page
+ * heading ("Review") and a subtitle above the gate; the drawing gives the run
+ * detail none of the three, and the graded proof frames measured all three. The gate's
+ * own header — "Review requested" over the awaiting-your-decision pill — is the
+ * heading this surface has, and the card draws it on every host.
  *
- * The refusal readings below KEEP their header: a viewer who may not see the run
- * is owed a page that names itself, and no gate is drawn there to do it.
+ * The not-authorized panel below keeps its own header: that reading is not the
+ * gate at all (§VII), and a refusal with no title names nothing.
+ *
+ * WHAT THE BLOCK CARRIED THAT IS NOT PIXELS STAYS. The drawing fixes what is
+ * DRAWN; it does not ask this route to stop naming itself to a screen reader or
+ * to the breadcrumb. The page-title block was also the surface's only `h1` and
+ * the only thing broadcasting a leaf-crumb title, so removing it outright left
+ * the reading with no heading at all and left the breadcrumb humanising the raw
+ * review-task id (`buildBreadcrumbTrail` falls through to `idSegmentPlaceholder`
+ * with no page title on the bus). Both are kept here with zero drawn pixels: an
+ * `sr-only` heading and the same title broadcast the removed header mounted.
  */
 function ReviewShell({ children }: { children: React.ReactNode }) {
   return (
     <Main className="min-h-screen">
+      <h1 className="sr-only">Review</h1>
+      <PageHeaderTitleSync title="Review" />
       <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
         {children}
       </PageContent>
