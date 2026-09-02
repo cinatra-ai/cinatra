@@ -5,8 +5,8 @@
  * metadata: package manifest (`package.json` `cinatra.produces`) →
  * `readAgentProducesFromPackageManifest` → the producer-assertion plan. This
  * asserts the published blog agents expose `produces:` in their manifest AND
- * resolve to the expected artifact type, and that the text-only image-prompt
- * agent resolves to none because it emits prompts, not artifacts.
+ * resolve to the expected artifact type, and that the image generator resolves
+ * to none because a picture has no write road yet.
  *
  *   pnpm --filter @cinatra-ai/extensions exec vitest run \
  *     src/__tests__/blog-agent-produces-plumbing.test.ts
@@ -47,10 +47,21 @@ describe("produces: plumbing — package.json → readAgentProducesFromPackageMa
     ]);
   });
 
-  it("blog-image-prompt-agent → NONE (text-only; no produces)", () => {
-    const out = readAgentProducesFromPackageManifest(manifest("blog-image-prompt-agent"));
+  it("blog-image-generator-agent → NONE (the picture's write road is not built)", () => {
+    // The prompt writer this package replaces declared nothing because it made
+    // nothing. This one MAKES a picture, and still declares nothing: a produces
+    // entry is a promise a run keeps, and the fleet's blocking adoption gate
+    // refuses one no materialization road reaches. The three roads it
+    // recognises — an EndNode output binding, an `artifact_materialize` node,
+    // an `artifact_authoring_emit` claim — are each scoped to text-authorable
+    // MIMEs, so a picture has none an agent can take. The entry arrives with
+    // the road; the EDGE is already declared, and
+    // `blog-agent-declarations.test.ts` pins it.
+    const out = readAgentProducesFromPackageManifest(manifest("blog-image-generator-agent"));
     expect(out).toEqual([]);
-    const pkg = manifest("blog-image-prompt-agent") as any;
+    const pkg = manifest("blog-image-generator-agent") as {
+      cinatra: { produces?: unknown };
+    };
     expect(pkg.cinatra.produces).toBeUndefined();
   });
 
