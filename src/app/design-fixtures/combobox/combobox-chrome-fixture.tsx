@@ -118,6 +118,23 @@ export function ComboboxChromeFixture() {
         </Label>
         <Input id="input-chrome" className="w-64" defaultValue="Salesforce Connector" />
       </div>
+
+      {/* An ORDINARY empty field, so the spec can check that painting the
+          list's search row was not paid for by every other field in the app:
+          this one must still hide its prompt under the caret while it holds
+          focus, which is what the app does everywhere else on purpose. The
+          probe above it carries a value and therefore draws no prompt at all,
+          so the rule cannot be read off it. */}
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="input-prompt-probe" className="font-normal">
+          Ordinary field, prompt showing
+        </Label>
+        <Input
+          id="input-prompt-probe"
+          className="w-64"
+          placeholder="Search connectors…"
+        />
+      </div>
     </main>
   );
 }

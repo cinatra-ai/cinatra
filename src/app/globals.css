@@ -936,6 +936,17 @@ input:focus::placeholder,
 textarea:focus::placeholder {
   color: transparent;
 }
+/* …except the flat search row inside an open list, which is drawn WITH its
+   prompt text — the Combobox drawing puts a 13px glyph and, beside it, the
+   prompt itself in `var(--muted)` on that row. The rule above was written for
+   a field a reader chooses to focus; this row is focused the instant it
+   exists, because the open list puts the caret in it, so "hidden while
+   focused" and "never drawn at all" are the same picture here and the prompt
+   the drawing draws was never painted in any frame. Scoped to the flush row so
+   every ordinary field keeps hiding its placeholder under the caret. */
+[data-slot="command-input-wrapper"][data-chrome="flush"] input:focus::placeholder {
+  color: var(--muted-foreground);
+}
 
 /* Chat fenced code blocks — shiki injects its own <pre> without layout classes;
    this rule normalises both the sync cache-hit and the async-hydrated paths. */

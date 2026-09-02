@@ -142,3 +142,57 @@ describe("the open list's type-to-filter row", () => {
     expect(input.getAttribute("placeholder")).toBe("Search connectors…")
   })
 })
+
+// THE TRIGGER KNOWS WHICH EDGE IT MEETS ITS LIST ON (cinatra#3142).
+//
+// The drawing draws the joined pair once, opening downward, and squares only
+// the seam. The placement is not the trigger's to choose — the popover layer
+// flips the list above the trigger whenever there is no room beneath it — so a
+// trigger that squares its BOTTOM corners on `data-[state=open]` alone squares
+// the wrong edge for half the placements the layer can produce, which is what
+// the third proof round measured. The side the list actually took is therefore
+// carried back onto the trigger, and the seam is drawn from that.
+//
+// The geometry itself is a real-boot reading (the popover layer positions
+// nothing in jsdom); what is settleable here is that the trigger publishes the
+// side at all, and only while the list is open.
+describe("the open trigger's seam follows the list's placement", () => {
+  it("carries the side its list took while the list is open", () => {
+    render(<Combobox id="under-test" value="gmail" options={OPTIONS} />)
+    const trigger = document.getElementById("under-test") as HTMLElement
+    expect(
+      trigger.getAttribute("data-join"),
+      "a closed trigger draws no seam at all, so it must publish no side",
+    ).toBeNull()
+
+    fireEvent.click(trigger)
+    const content = document.querySelector(
+      '[data-slot="combobox-content"]',
+    ) as HTMLElement
+    expect(content, "the combobox must open its list").not.toBeNull()
+
+    const side = content.getAttribute("data-side")
+    expect(
+      side,
+      "the popover layer publishes the side it placed the list on",
+    ).not.toBeNull()
+    expect(
+      trigger.getAttribute("data-join"),
+      `the list was placed on the ${side} side while the trigger squares its ` +
+        `seam from "${trigger.getAttribute("data-join")}" — a trigger that ` +
+        "cannot see the placement squares the wrong edge whenever the list flips",
+    ).toBe(side)
+  })
+
+  it("stops publishing a side once the list closes", () => {
+    render(<Combobox id="under-test" value="gmail" options={OPTIONS} />)
+    const trigger = document.getElementById("under-test") as HTMLElement
+    fireEvent.click(trigger)
+    expect(trigger.getAttribute("data-join")).not.toBeNull()
+    fireEvent.click(trigger)
+    expect(
+      trigger.getAttribute("data-join"),
+      "the closed trigger keeps squaring a seam against a list that is gone",
+    ).toBeNull()
+  })
+})

@@ -69,6 +69,34 @@ function Combobox({
   "aria-label"?: string
 }) {
   const [open, setOpen] = React.useState(false)
+  // THE SEAM IS WHICHEVER EDGE THE TWO HALVES MEET ON.
+  //
+  // The drawing draws the joined pair once, opening downward, and squares only
+  // the seam. Which side the list takes is not the trigger's to choose — the
+  // popover layer flips it above the trigger whenever there is no room
+  // beneath — so a trigger that squares its BOTTOM corners on "open" alone
+  // squares the wrong edge for half the placements that layer can produce, and
+  // the pair then reads as two controls with a notch between them. The layer
+  // publishes its choice as `data-side` on the content; it is read from there
+  // and carried back here, so the trigger squares the edge it actually meets.
+  const [side, setSide] = React.useState<string | null>(null)
+  const observer = React.useRef<MutationObserver | null>(null)
+  const watchSide = React.useCallback((node: HTMLDivElement | null) => {
+    observer.current?.disconnect()
+    observer.current = null
+    if (!node) {
+      setSide(null)
+      return
+    }
+    const read = () => setSide(node.getAttribute("data-side"))
+    read()
+    // The layer re-places the list on scroll and resize, so the side can change
+    // while the list is open; the seam follows it rather than the first answer.
+    const watch = new MutationObserver(read)
+    watch.observe(node, { attributes: true, attributeFilter: ["data-side"] })
+    observer.current = watch
+  }, [])
+  React.useEffect(() => () => observer.current?.disconnect(), [])
   const listId = React.useId()
   const selected = options.find((option) => option.value === value)
   const label = selected ? (selected.label ?? selected.value) : undefined
@@ -122,8 +150,18 @@ function Combobox({
           // A trigger with nothing bound is marked, so it takes the muted
           // placeholder ink the select family already uses for that state.
           data-placeholder={label === undefined ? "" : undefined}
+          // The side the open list took, or nothing at all while it is closed:
+          // a closed trigger meets no list and draws no seam.
+          data-join={open && side ? side : undefined}
+          // `h-8` and `rounded-[7px]`: the Input's own, because the drawing
+          // says so twice — "Trigger mirrors Input chrome" over the family, and
+          // its own Combobox picture writing the trigger out at
+          // `height: 32px` with `border-radius: 7px 7px 0 0`. The shared
+          // `rounded-md` token this used to take is derived from a `--radius`
+          // the two palettes set differently, so the pair rounded 6px in one
+          // and 8px in the other where the drawing draws one number.
           className={cn(
-            "flex h-9 w-fit items-center justify-between gap-2 rounded-md border border-input bg-surface-strong px-3 py-2 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[state=open]:rounded-b-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
+            "flex h-8 w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong px-3 py-1 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[join=bottom]:rounded-b-none data-[join=top]:rounded-t-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
             className,
           )}
         >
@@ -162,6 +200,7 @@ function Combobox({
         // control in BOTH palettes. Either way it is no longer the divider
         // hairline, which is what made the list read as a separate object.
         sideOffset={0}
+        ref={watchSide}
         data-slot="combobox-content"
         className={cn(
           // `ring-0`: the shared popover layer rings its content in a
@@ -172,13 +211,26 @@ function Combobox({
           // seam the border-top is dropped to open — putting back the very
           // low-alpha line that made the list read as a separate object.
           "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0 ring-0",
-          // The seam, drawn only on the side the drawing draws. A list with no
-          // room beneath its trigger still flips above it — that is the
-          // collision fallback rather than the drawing, so it keeps a whole
-          // outline and its own gap instead of pretending to join an edge it
-          // meets from the other side.
+          // The outer radius and the drop shadow the drawing declares on this
+          // list in full — `border-radius: 0 0 7px 7px` and
+          // `box-shadow: 0 10px 26px -10px rgba(21,33,58,0.22)`, the "slightly
+          // higher shadow" the Select family's prose gives an open popover.
+          // Both are literals in the drawing, so both are literals here rather
+          // than the shared popover layer's palette-varying token and its
+          // ordinary `shadow-md`.
+          "rounded-[7px] shadow-[0_10px_26px_-10px_rgba(21,33,58,0.22)]",
+          // THE SEAM, ON WHICHEVER EDGE THE PAIR ACTUALLY MEETS ON.
+          //
+          // The drawing writes one join, the downward one, and writes no second
+          // block for a list that has no room beneath its trigger. What it does
+          // state is what the pair IS — one control, one continuous outline,
+          // `border-top: 0` on the half that meets the other, and nothing at
+          // all between them. A flipped list still meets its trigger on an
+          // edge, so that sentence is applied to the edge it actually meets:
+          // the join is MIRRORED rather than dropped, which is the reading the
+          // drawing's own picture asks for in the placement it does draw.
           "data-[side=bottom]:rounded-t-none data-[side=bottom]:border-t-0",
-          "data-[side=top]:mb-1",
+          "data-[side=top]:rounded-b-none data-[side=top]:border-b-0",
           contentClassName,
         )}
       >
