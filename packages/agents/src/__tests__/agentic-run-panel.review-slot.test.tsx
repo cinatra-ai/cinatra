@@ -20,8 +20,11 @@
  * What is pinned here, on the REAL component, on BOTH surfaces:
  *
  *   1. WHILE THE AGENT WORKS the card is the placeholder — the spinner and the
- *      empty review screen — and it says nothing else: no heading, no status
- *      word, no transcript.
+ *      empty review screen — and it says nothing but its own NAME: no status
+ *      word, no transcript. (The name is the heading the ratified drawing's own
+ *      placeholder example puts at the card's head; cinatra#3044, the eleventh
+ *      set. This pin used to read "no heading" — that was the earlier reading of
+ *      a sentence the drawn example settles.)
  *   2. WHEN THE WORK OPENS A REVIEW the SAME slot holds the review screen, and
  *      the placeholder is gone. Nobody asked for it and no new turn happened:
  *      the panel read the run's own state and swapped.
@@ -260,8 +263,10 @@ describe("while the agent works, the card is the placeholder", () => {
       expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
         "working",
       );
+      // The card's own name is at its head — the drawn placeholder's first
+      // child, fixed on every run.
+      expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
       // And nothing the words do not allow.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/Waiting to start/i)).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();

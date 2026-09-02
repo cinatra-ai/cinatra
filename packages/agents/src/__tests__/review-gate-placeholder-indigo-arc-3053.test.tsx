@@ -121,7 +121,7 @@ describe("the token the arc now takes", () => {
 //
 // TWO THINGS, and the sentence enumerates them: the card frame, and a spinning
 // icon. The drawing's own placeholder example draws exactly that - the card box
-// with one centred arc in it - and nothing more. A ninth graded set measured a
+// with one centred arc in it, under the card's own name - and nothing more. A ninth graded set measured a
 // block of bars beside the arc, two in a header band over three in a body band,
 // which is a third thing no sentence and no drawing gives.
 
@@ -149,6 +149,16 @@ describe("the placeholder draws the card frame and a spinning icon, and nothing 
     expect(placeholder!.querySelectorAll("svg").length).toBe(1);
     // "It names no status, reports no result and draws nothing to press."
     expect(placeholder!.querySelectorAll("button").length).toBe(0);
-    expect(placeholder!.textContent?.trim()).toBe("");
+    // THE CARD'S OWN NAME IS NOT ONE OF THOSE THREE (cinatra#3044, the eleventh
+    // set). This line read the sentence above as "no text at all". The same
+    // section's drawn placeholder example is markup, and its first child is the
+    // heading "Agentic Run Progress" — so the sentence's three clauses are about
+    // a STATUS word, a RESULT and a CONTROL, none of which a fixed card name is.
+    // What the placeholder must never carry is a run's state word, and that is
+    // what is pinned here now.
+    expect(placeholder!.textContent?.trim()).toBe("Agentic Run Progress");
+    expect(placeholder!.textContent).not.toMatch(
+      /queued|running|working|waiting|pending|complete|failed|done/i,
+    );
   });
 });

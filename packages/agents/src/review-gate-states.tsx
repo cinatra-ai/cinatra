@@ -156,10 +156,12 @@ export function ReviewGateLoading() {
  *    with the 'Review requested' screen."
  *
  * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
- * nothing else. There is no heading, no status word, no progress sentence and no
- * step list, because the words authorize none of those and the card they
- * describe is defined by what it does NOT say: it is the review screen's own
- * frame, empty, while the screen is still coming.
+ * nothing else, under the card's own NAME. The section's worked example draws
+ * that fixed name as the box's first child, so the heading stays; what the prose
+ * forbids is a status word, a result and a control, and a fixed card name is
+ * none of the three. There is no status word, no progress sentence and no step
+ * list, because the words authorize none of those: it is the review screen's own
+ * frame, empty but named, while the screen is still coming.
  *
  * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
  * of the review screen's states — the one before the gate exists — and it is
@@ -172,6 +174,16 @@ export function ReviewGateLoading() {
  * claims they are -- no minimum-height contract exists on this slot, and a
  * placeholder that reserved the finished screen's height would be reporting a
  * result it does not have.
+ *
+ * AND IT CARRIES THE CARD'S OWN NAME (cinatra#3044, the eleventh set). The
+ * drawing's placeholder example is markup, and its first child is the heading
+ * "Agentic Run Progress" at weight 700, 14px, `var(--ink)`. The same section's
+ * prose says the placeholder "names no status, reports no result and draws
+ * nothing to press", and an earlier set read that as "no text at all". The two
+ * readings settle once each clause's subject is read: what is forbidden is a
+ * STATUS word, a RESULT and a CONTROL. A fixed card name is none of the three —
+ * it is the name §II itself uses for this card in prose. So the card names
+ * itself and still names no status.
  *
  * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
  * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif
@@ -208,13 +220,26 @@ export function ReviewGatePlaceholder() {
       data-conformance-id="review-gate-placeholder"
       // A busy REGION, named for a reader who cannot see the spin. The label is
       // not copy on the card — nothing is drawn from it — it is the accessible
-      // name of a region that is deliberately wordless.
+      // name of a region whose only words are the card's own fixed name.
       role="status"
       aria-busy="true"
       aria-label="Working"
       className="flex w-full flex-col gap-3"
     >
-      <div className="flex flex-wrap items-center gap-2.5">
+      {/* THE CARD'S OWN NAME, the heading the drawn placeholder puts at its
+          head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
+          a status word and not a result — it is the fixed name §II uses for
+          this card in its own prose ("the run progress card"), identical on
+          every run. The drawing's `--ink` is #15213a, and the token registered
+          at that value here is `--foreground`. */}
+      <div className="text-sm font-bold text-foreground">Agentic Run Progress</div>
+      {/* THE ARC SITS ON THE CARD'S CENTRE. The drawn band is
+          `display:grid; place-items:center; padding:26px 0 22px` — the full
+          width of the card with the arc in the middle of it. It used to be a
+          left-aligned `flex flex-wrap items-center` row, which put the arc hard
+          against the card's leading edge. Nothing else goes in this band: a
+          sibling here pulls the arc off the centre exactly as the row did. */}
+      <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
         <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-primary">
           <LoadingSpinner className="size-4" />
         </span>
