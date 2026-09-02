@@ -120,6 +120,7 @@ import {
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
 import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "./run-surface-rail";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -1291,7 +1292,7 @@ function StepperColumn({
                               : undefined
                       }
                     >
-                      <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+                      <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                         {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
                       </StepperIndicator>
                       <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">

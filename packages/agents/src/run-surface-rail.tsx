@@ -109,16 +109,30 @@ export function useRunStepSelection() {
  * vendored primitives. `ghost` plus the size/hover neutralisers is what keeps a
  * rail ROW looking like a rail row rather than a pill: no chrome at rest, no
  * muted fill while it is selected.
+ *
+ * `border-0` IS THE DRAWING'S RHYTHM (cinatra#3188 item 2, forward + fix leg 1).
+ * The drawing's rail is two boxes and the mark's own margin between them --
+ * ".rail .step { ... padding: 2px 0; ... }" over the 24px circle is a 28px
+ * entry, and ".rail .sep { ... margin: 4px 0 4px 11px; ... }" is the only
+ * whitespace between two of them. The design-system Button draws a 1px
+ * TRANSPARENT border on every side: invisible, and still in the box. It made
+ * each row 30px and put an extra pixel of whitespace above and below every
+ * mark -- the surplus the first proof round measured at 7.5px above and 6.5px
+ * below the drawing's own 4px and 4px. Nothing about the row's padding was
+ * wrong, so the fix is the box: the rail row carries no border, exactly as the
+ * drawing's `.rail .step` carries none. THE ROW KEEPS ITS FOCUS INDICATOR --
+ * the base's `focus-visible:ring-3` ring is what draws focus on this control,
+ * and a 1px border that is transparent at rest never drew it.
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
-  "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
 
 /**
  * The same row, for one that cannot be opened: neither the hover affordance nor
  * the press animation of a row that does something (cinatra#2970).
  */
 export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
-  "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
+  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
@@ -136,6 +150,22 @@ export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
  * remember is a rule one of them would forget: pass the settled answer and the
  * circle cannot come out filled.
  */
+/*
+ * THE GROUND IS THE DESIGN SYSTEM'S OWN MUTED INK, AND THAT IS NAMED RATHER
+ * THAN SILENTLY DIFFERENT (cinatra#3188, item 4 of the first proof round's
+ * record).
+ *
+ * The drawing writes the ground as a literal -- "background:
+ * rgba(92,103,121,0.4)" -- and the rail takes it from the token instead:
+ * `bg-muted-foreground/40`, whose ink is the system's own muted `--muted`,
+ * `#5a6477` = rgb(90,100,119). At four tenths the two compose one unit apart
+ * per channel, which is the distance between a drawing that quotes a colour
+ * and a page that owns one. THE TOKEN IS KEPT: a rail that hard-coded the
+ * literal would be the one element on the page that stopped following the
+ * theme, and the drawing's own rule reads the paper through `var(--paper)` for
+ * exactly that reason. The one-unit gap is a named deviation, not a defect to
+ * close.
+ */
 export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
   return cn(
     "relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs",
@@ -144,6 +174,43 @@ export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
       : "bg-muted-foreground/40 text-background",
   );
 }
+
+/**
+ * THE SAME RULE, FOR THE ROWS THE RUN PAGE DRAWS THROUGH THE SHARED STEPPER
+ * (cinatra#3188 item 1, forward + fix leg 1).
+ *
+ * The run page's own rail rows -- the panel rail's steps, the resolved-gate /
+ * verification / lifecycle rows beside them, and the live rail inside the
+ * orchestrator panel -- mount the design system's `StepperIndicator`, whose own
+ * default puts a COMPLETED step on the indigo fill. The first proof round
+ * photographed exactly that: "The one completed rail entry a real run reached:
+ * a 24x24 circle, primary-fill background, white check."
+ *
+ * The ratified drawing names the entry already passed and the entry still ahead
+ * in ONE rule -- ".rail .step.upcoming .glyph, .rail .step.settled .glyph {
+ * background: rgba(92,103,121,0.4); color: var(--paper); }" -- and it is a rule
+ * about THE RAIL, not about one component of it. So both states take the muted
+ * ground here, and the indigo fill is left to the ACTIVE state alone: the entry
+ * the reader is standing on.
+ *
+ * WHY HERE AND NOT IN THE PRIMITIVE: `StepperIndicator` is a vendored
+ * design-system primitive, and its consumers are not all rails. The rule is the
+ * RAIL's, so it is applied where the rail is drawn -- and held in ONE class, for
+ * the same reason `runSurfaceRailIndicatorClass` holds it for the run-surface
+ * rail: a rule three modules each had to remember is a rule one of them would
+ * forget.
+ *
+ * ONE ROW IS DELIBERATELY LEFT ON THE OLD READING, and it is named rather than
+ * quietly changed: the review task screen's own step list draws this same rail
+ * vocabulary and still puts a passed step on the indigo fill. It is the same
+ * defect at a fourth site, and it is NOT this leg's: the checklist asks for the
+ * glyphs THE RUN PAGE draws, the proof round for this leg photographs the run
+ * page, and a visual change to a screen this leg never pictures would be a
+ * departure from the issue it is proving. It is carried as a named deviation
+ * and takes the same one-line class when the surface that shows it is graded.
+ */
+export const RUN_PAGE_RAIL_INDICATOR_CLASS =
+  "data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background data-[state=completed]:bg-muted-foreground/40 data-[state=completed]:text-background";
 
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {

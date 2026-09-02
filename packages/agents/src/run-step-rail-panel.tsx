@@ -13,6 +13,7 @@ import {
 } from "@/components/reui/stepper";
 
 import type { RunStepRailEntry } from "./run-step-rail";
+import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "./run-surface-rail";
 import { RailExtraEntry } from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -132,7 +133,7 @@ export function RunStepRailPanel({
             );
 
             const indicatorNode = (
-              <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+              <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                 {displayStep}
               </StepperIndicator>
             );

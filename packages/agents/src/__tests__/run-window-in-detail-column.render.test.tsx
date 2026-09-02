@@ -36,6 +36,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
+import { RunSurfaceRail, RunSurfaceRailRow } from "../run-surface-rail";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 /**
@@ -347,6 +348,49 @@ function renderInDetailColumn(node: React.ReactElement) {
   return render(<div data-run-detail-column="">{node}</div>);
 }
 
+/**
+ * THE SAME READING ON THE FRAME ITSELF (cinatra#3188 item 3, forward + fix
+ * leg 1).
+ *
+ * The stand-in above is the column's ANCHOR, which is what the mount is written
+ * against. The frame that actually draws that anchor is `RunSurfaceRail`, and
+ * until the run's first step joined the rail the run page had no such frame at
+ * all — which is why the first proof round could read the window as
+ * "not docked" on the run page and still not prove the drawing's other clause:
+ *
+ *   "Beneath the form the run's prompt window (Section IX) sits where it always
+ *    sits -- below the scheduler, in the same column."
+ *
+ * "The same column" is a two-column statement: it is only sayable where there
+ * is a rail column to be the other one. So the reading is taken here on the
+ * real frame — the window inside the column the frame draws, and never inside
+ * the rail beside it.
+ */
+function renderInRunFrame(node: React.ReactElement) {
+  return render(
+    <RunSurfaceRail
+      steps={[
+        {
+          key: "schedule",
+          row: (
+            <RunSurfaceRailRow
+              selectionKey="schedule"
+              label="Idea"
+              displayStep={1}
+              conformanceId="run-surface-rail-step"
+              action="open-input-step"
+              settled
+            />
+          ),
+          surface: null,
+        },
+      ]}
+      detail={node}
+      initialSelection="detail"
+    />,
+  );
+}
+
 describe("the window is drawn inside the detail column, under the step's work", () => {
   for (const s of COLUMN_SURFACES) {
     it(`${s.name} lands its window in the column, not in the frame outside it`, async () => {
@@ -376,6 +420,31 @@ describe("the window is drawn inside the detail column, under the step's work", 
       expect(panel).not.toBeNull();
       expect(panel.className).not.toContain("sticky");
       expect(panel.className).not.toContain("bottom-0");
+    });
+  }
+});
+
+describe("the same column, read on the run frame the rail draws (item 3)", () => {
+  for (const s of COLUMN_SURFACES) {
+    it(`${s.name} keeps its window in the frame's own detail column`, async () => {
+      const { container } = renderInRunFrame(await s.mount(true));
+      await settle();
+
+      const win = screen.getByTestId("run-window-prompt");
+      const column = container.querySelector<HTMLElement>("[data-run-detail-column]")!;
+      const rail = container.querySelector<HTMLElement>(
+        '[data-conformance-id="run-step-rail-column"]',
+      )!;
+
+      // The frame really is the two-column frame the drawing's clause needs.
+      expect(column).not.toBeNull();
+      expect(rail).not.toBeNull();
+      expect(rail.querySelectorAll("[data-run-surface-rail-step]").length).toBeGreaterThan(0);
+
+      // "in the same column" — under the step's own work, in the detail column.
+      expect(column.contains(win)).toBe(true);
+      // ...and never in the rail beside it.
+      expect(rail.contains(win)).toBe(false);
     });
   }
 });

@@ -32,7 +32,12 @@ import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-import { RunSurfaceRail, RunSurfaceRailRow } from "../run-surface-rail";
+import {
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RunSurfaceRail,
+  RunSurfaceRailRow,
+  runSurfaceRailIndicatorClass,
+} from "../run-surface-rail";
 import { RecommendationRailStepRow } from "../recommendation-rail-step";
 import type { RunSurfaceRailStep } from "../run-surface-rail-step";
 
@@ -239,5 +244,99 @@ describe("a separator stands between adjacent entries (item 2)", () => {
     );
 
     expect(container.querySelectorAll(SEP_SEL).length).toBe(0);
+  });
+});
+
+describe("the rail's own vertical rhythm is the drawing's (item 2, forward + fix leg 1)", () => {
+  /**
+   * The first proof round measured the separator's own box exactly right and
+   * the WHITESPACE around it wrong: 7.5px above the mark and 6.5px below,
+   * against the drawing's 4px and 4px.
+   *
+   * The drawing's rail is two boxes and nothing else between them:
+   *
+   *   ".rail .step { ... padding: 2px 0; ... }"
+   *   ".rail .sep { width: 2px; height: 8px; margin: 4px 0 4px 11px; ... }"
+   *
+   * so an entry's box is the 24px circle with 2px above and below it — 28px —
+   * and the only whitespace between two entries is the mark's own 4px and 4px.
+   *
+   * The rail's row is the design-system `Button`, whose base draws a 1px
+   * TRANSPARENT border on every side. That border is invisible and it is still
+   * in the box: it made each row 30px where the drawing's step is 28px, and it
+   * put an extra pixel of whitespace above and below every mark — the surplus
+   * the round measured. Nothing about the row's own padding was wrong, so the
+   * fix is the box: the rail row carries no border, exactly as the drawing's
+   * `.rail .step` carries none.
+   *
+   * The row keeps its focus indicator: the base's `focus-visible:ring-3` ring
+   * is what draws focus on this control, and it is untouched.
+   */
+  it("gives the rail row the drawing's own step box — no border in it", () => {
+    const { container } = renderRail();
+
+    for (const row of rows(container)) {
+      // Red before the fix: the Button base's `border border-transparent`
+      // survives into the row and inflates the box by 1px above and below.
+      expect(row.className).not.toMatch(/(?:^|\s)border(?:\s|$)/);
+      expect(row.className).toContain("border-0");
+      // The 2px above and below the circle the drawing's `.rail .step` carries.
+      expect(row.className).toContain("py-0.5");
+    }
+  });
+
+  it("keeps that box on a row that cannot be opened", () => {
+    // The rail draws two row classes — one for a row that opens a step and one
+    // for a row that does not — and a rhythm only one of them holds is not the
+    // rail's rhythm.
+    const { container } = renderRail();
+    const closed = rows(container)[2]!;
+
+    expect(closed.getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(closed.className).not.toMatch(/(?:^|\s)border(?:\s|$)/);
+    expect(closed.className).toContain("border-0");
+  });
+
+  it("adds no spacing of the column's own on top of the mark's", () => {
+    // The whole gap between two entries lives INSIDE the mark. A column gap
+    // would stack on top of it and space the rail at more than the drawing's
+    // rhythm.
+    const { container } = renderRail();
+    const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
+
+    expect(column.className).not.toMatch(/(?:^|\s)gap-/);
+    expect(column.className).not.toMatch(/(?:^|\s)space-y-/);
+  });
+});
+
+describe("the muted ground is the system's token, and the gap to the drawing's literal is named (item 4)", () => {
+  /**
+   * The first proof round measured the upcoming entry's ground at four tenths
+   * of the shared muted ink where the drawing's own rule computes one unit
+   * away per channel:
+   *
+   *   ".rail .step.upcoming .glyph, .rail .step.settled .glyph {
+   *      background: rgba(92,103,121,0.4); color: var(--paper); }"
+   *
+   * The ink the rail draws is the design system's own muted token -- `--muted`
+   * is `#5a6477` = rgb(90,100,119) -- so the two compose one unit apart and the
+   * difference is imperceptible. The token is KEPT and the gap is named: a rail
+   * that hard-coded the drawing's literal would be the one element on the page
+   * that stopped following the theme, where the drawing's own rule reads the
+   * paper through a token for exactly the same reason.
+   */
+  it("draws both muted states from the token, never from a hard-coded colour", () => {
+    const { container } = renderRail();
+
+    for (const row of rows(container)) {
+      const circle = indicatorOf(row);
+      expect(circle.className).not.toMatch(/rgba?\(/);
+      expect(circle.className).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+    }
+
+    // The one rule, in both of the states the drawing names, from one token.
+    expect(runSurfaceRailIndicatorClass(false)).toContain(MUTED_GROUND);
+    expect(runSurfaceRailIndicatorClass(true, true)).toContain(MUTED_GROUND);
+    expect(RUN_PAGE_RAIL_INDICATOR_CLASS).not.toMatch(/rgba?\(|#[0-9a-fA-F]{3,8}/);
   });
 });

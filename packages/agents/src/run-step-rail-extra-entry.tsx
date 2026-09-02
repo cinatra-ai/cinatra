@@ -4,6 +4,8 @@ import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
+
+import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "./run-surface-rail";
 import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
@@ -86,7 +88,7 @@ export function RailExtraEntry({
   );
 
   const indicatorNode = (
-    <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+    <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
       {isVerification ? (
         <ScanSearch className="h-3 w-3" />
       ) : isGate ? (
