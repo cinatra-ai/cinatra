@@ -216,8 +216,26 @@ async function runArtifactRead(
 // with the same calling extension.
 // ---------------------------------------------------------------------------
 
-/** The blog-idea artifact type the listing filters on. */
-const BLOG_IDEA_ARTIFACT_TYPE = "@cinatra-ai/blog-idea-artifact:idea";
+/**
+ * THE CALLING EXTENSION NAMES THE TYPE, NEVER THIS FILE. Core code may not
+ * hard-code an extension instance (the core-to-extension instance-coupling ban),
+ * and it does not need to: the type an idea is filed under is the caller's own
+ * declared dependency, so the flow node passes it and the admission above refuses
+ * anything the extension has not declared. A call that names no type is refused
+ * rather than widened to every type the extension may read — the offer would then
+ * be a list of posts and pictures.
+ */
+function requireIdeaType(raw: Record<string, unknown>): string {
+  const ideaType = typeof raw.ideaType === "string" ? raw.ideaType.trim() : "";
+  if (ideaType.length === 0) {
+    throw new ExtensionDataRefusal(
+      "invalid-request",
+      "blog_pipeline_ideas: `ideaType` is required — the calling extension names the artifact type " +
+        "its ideas are filed under, and it must be one of its own declared dependencies",
+    );
+  }
+  return ideaType;
+}
 
 async function runStoredIdeasGate(
   context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
@@ -233,12 +251,13 @@ async function runStoredIdeasGate(
     "@/lib/blog/stored-ideas-gate"
   );
 
+  const ideaType = requireIdeaType(input.input);
   const listPage = (cursor?: string) =>
     runArtifactRead(context, {
       ...input,
       tool: "artifacts_list",
       input: {
-        types: [BLOG_IDEA_ARTIFACT_TYPE],
+        types: [ideaType],
         limit: 100,
         ...(cursor ? { cursor } : {}),
       },
