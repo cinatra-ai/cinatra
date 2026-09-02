@@ -181,6 +181,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS } from "./trigger-recurrence";
@@ -381,6 +382,31 @@ export function ScheduleProposalCard({
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
 
+  // THE CARD TELLS THE TURN WHAT IT IS READING (cinatra#3044).
+  //
+  // The line above this card was minted at dispatch and frozen into the turn,
+  // and the ratified drawing's section VI gives the spent one-off its own
+  // words. Only this card can say the reading is that one: `released` is the
+  // firing (`markTriggerReleased` stamps it and the resolver reads the stamp),
+  // and `triggerType` is what keeps a RECURRING schedule out -- it "is never
+  // spent by firing: its past runs are history and its runs still to come stay
+  // changeable", so its rows still take a change and its line must not say it
+  // was spent. It is the same pair `frozen` is decided by in the settled phase
+  // below, which is what keeps the sentence and the floor from disagreeing.
+  //
+  // REPORTED IN EVERY STATE, including the ones that draw nothing, so the turn
+  // hears the neutral reading rather than keeping a stale one. Called before
+  // this component's own early returns for the ordinary reason: a hook may not
+  // be skipped.
+  useReportScheduleReading(
+    body !== null &&
+      body.phase === "settled" &&
+      body.triggerType !== "recurring" &&
+      body.released
+      ? "spent-one-off"
+      : "other",
+  );
+
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
   const decide = useCallback(
@@ -501,13 +527,28 @@ function ProposalPhase({
   const confirm = async () => {
     setRefusal(null);
     setPending(true);
+    // TWO SUBJECTS, TWO ROADS, ONE CONTROL (cinatra#3044).
+    //
+    // A WAITING RUN takes ONE request carrying the rows. There is no token to
+    // re-mint and no run to create — the run already exists and is parked at its
+    // schedule step — so the press goes straight onto the run-trigger path with
+    // whatever the reader has in front of them. Asking for a re-propose first
+    // would ask it of a proposal that never existed, and the press would die on
+    // that leg; the server refuses the composite on this ref for the same
+    // reason. Edited or not is not a question here: the rows always travel, so
+    // the server never has to guess what the reader was looking at.
+    //
     // AN EDITED PROPOSAL IS RE-PROPOSED BEFORE IT IS CONFIRMED, in that order,
     // on the new ref — the same composite §2.2's typed "…and confirm" performs.
     // A proposal is single-use, so confirming the ORIGINAL ref would arm the
     // schedule the reader just corrected away from. This is what replaced the
     // Adjust button: the re-propose still happens, and the reader never has to
     // know it did.
-    const outcome = edited ? await onAdjustAndConfirm(draft) : await onDecide("confirm");
+    const outcome = body.runPending
+      ? await onDecide("confirm", draft)
+      : edited
+        ? await onAdjustAndConfirm(draft)
+        : await onDecide("confirm");
     setPending(false);
     if (outcome.kind === "not-permitted" || outcome.kind === "error") {
       setRefusal(outcome.message);
@@ -644,6 +685,9 @@ function SettledPhase({
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
+  // THE CARD'S OWN READING OF WHAT IS ARMED — the schedule `draft` started from
+  // and the ONE thing an edit is measured against (cinatra#3053).
+  const [baseline, setBaseline] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState<null | "save" | "cancel">(null);
   const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -657,9 +701,30 @@ function SettledPhase({
   // label; its one control is **Cancel schedule** … there is no Run now".
   const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
 
+  // AN EDIT IS THE READER'S, AND THE THREAD DOES NOT GET A VOTE (cinatra#3053).
+  //
+  // This used to read `draft` against `body.schedule` — a PROP the conversation
+  // refreshes underneath a card that is never remounted. `useLifecycleCardResolve`
+  // re-reads on the window `focus` event, which is THREAD-WIDE: every mounted
+  // lifecycle card shares it, so a SECOND run dispatched into the same thread
+  // re-resolved this settled card too. And a re-resolve does not have to answer
+  // byte-alike for one unchanged armed schedule — `selectionsFromInstalled`
+  // re-derives a one-off's `runAt` off the clock whenever the installed row
+  // carries no instant. So a benign refresh moved `body.schedule` out from under
+  // a `draft` seeded once at mount, `edited` went true with nothing touched, and
+  // an untouched card drew **Save changes** at full strength: the card claiming
+  // unsaved changes the reader never made.
+  //
+  // The comparison is now against the card's OWN baseline: the reading this card
+  // opened on, moved by ONE thing only — this card's own landed save. Nothing
+  // that merely arrives in the thread can reach it, and a refresh is not allowed
+  // to rewrite the rows under the reader either: the draft is left exactly where
+  // it was, as it always has been on this phase, so a re-derived read-back can
+  // neither invent an edit nor churn a run time the reader is looking at
+  // (cinatra#3053 convergence).
   const edited = useMemo(
-    () => JSON.stringify(draft) !== JSON.stringify(body.schedule),
-    [draft, body.schedule],
+    () => JSON.stringify(draft) !== JSON.stringify(baseline),
+    [draft, baseline],
   );
 
   // WHEN THE SCHEDULER STOPS BEING EDITABLE (plan (A) §7.2 and §7.4 as-designed
@@ -724,8 +789,13 @@ function SettledPhase({
     setPending("save");
     const outcome = await onDecide("save", draft);
     setPending(null);
-    if (outcome.kind === "saved") setSaved(true);
-    else if (outcome.kind === "not-permitted" || outcome.kind === "error") {
+    if (outcome.kind === "saved") {
+      setSaved(true);
+      // WHAT WAS SAVED IS WHAT IS ARMED. The re-resolve confirms it, but the
+      // baseline moves here so the control goes quiet the moment the save lands
+      // rather than waiting on a read that may answer with a re-derived field.
+      setBaseline(draft);
+    } else if (outcome.kind === "not-permitted" || outcome.kind === "error") {
       setRefusal(outcome.message);
     }
   };

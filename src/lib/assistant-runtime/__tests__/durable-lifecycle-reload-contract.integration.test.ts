@@ -2368,6 +2368,8 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
 // all: the turn dispatched a run and said nothing, the run reached its moment,
 // and the outbox wrote the card. What is asserted is what a person would see
 // after a refresh — the card, in its producing step, from Postgres alone.
+import { decodeScheduleRunRef, encodeScheduleRunRef } from "@/lib/lifecycle/lifecycle-card-ref";
+
 describe("a card the PLATFORM injected survives store → reload", () => {
   // Driven by the SCHEDULE moment. The REVIEW moment is driven by its own two
   // cases below, because cinatra#2997 gave the review gate a second mount — the
@@ -2378,7 +2380,10 @@ describe("a card the PLATFORM injected survives store → reload", () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const dispatchCall = `call-${randomUUID()}`;
-    const cardRef = `sched-${randomUUID()}`;
+    // THE REFERENCE IS MINTED, NOT INVENTED (cinatra#3044) — the same
+    // run-scoped schedule ref the executor mints when it opens the moment, so
+    // what this tier persists and reloads is what production actually writes.
+    const cardRef = encodeScheduleRunRef({ runId })!;
 
     // The turn as the stream route persists it: the run's own dispatch, and
     // nothing the model asked for.
@@ -2418,6 +2423,15 @@ describe("a card the PLATFORM injected survives store → reload", () => {
     expect(producing!.views).toEqual([
       { viewType: "trigger_schedule_proposal", schemaVersion: 1, ref: cardRef },
     ]);
+    // …AND WHAT CAME BACK ADDRESSES THE RUN (cinatra#3044). This fixture used to
+    // pass a reference of its own invention straight into the outbox, so it
+    // proved the transport and nothing about the subject: a card whose ref
+    // decodes to nothing resolves `absent` and draws no DOM at all, which is
+    // what every real conversation was showing. The ref is the run-scoped one
+    // the executor mints, and the reload has to bring THAT back.
+    expect(
+      decodeScheduleRunRef(String((producing!.views as Array<{ ref: string }>)[0].ref)),
+    ).toEqual({ runId });
     // NO ASSISTANT TOOL CALL: the only call in the turn is the run's dispatch.
     expect(parts.filter((p) => p.kind === "tool_call").map((p) => p.name)).toEqual([
       "agent_run",
@@ -2490,7 +2504,10 @@ describe("a card the PLATFORM injected survives store → reload", () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const dispatchCall = `call-${randomUUID()}`;
-    const cardRef = `sched-${randomUUID()}`;
+    // THE REFERENCE IS MINTED, NOT INVENTED (cinatra#3044) — the same
+    // run-scoped schedule ref the executor mints when it opens the moment, so
+    // what this tier persists and reloads is what production actually writes.
+    const cardRef = encodeScheduleRunRef({ runId })!;
     persistThroughTheRealStore({
       threadId,
       userText: "run it again",

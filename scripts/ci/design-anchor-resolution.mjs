@@ -29,17 +29,32 @@
 // MATCHING IS EXACT, NOT SUBSTRING. A raw text search over a drawing admits
 // false positives: a selector quoted in prose or shown in a code sample would
 // "resolve". This checker parses each drawing's TAGS, ignoring comments and the
-// contents of pre/code/script/style, and matches an attribute NAME and VALUE
-// exactly against the selector's one attribute predicate.
+// contents of pre/code/script/style, and matches attribute NAMES and VALUES
+// exactly, element by element.
 //
-// A SELECTOR FORM BEYOND ONE ATTRIBUTE PREDICATE IS A HARD FAILURE, never a
-// silent pass and never an approximated match: it is REPORTED, by name, as
-// `refused`, and the run exits 2 — the "could not run honestly" convention —
-// because a selector this matcher cannot decide is one it may not certify in
-// either direction. The rest of the set is still read and still printed, so a
-// refusal names itself instead of hiding what the run did decide. The recorded
-// set carries such a form today (a class selector among the frame-wide capture
-// requirements), and its suite pins that.
+// THREE SELECTOR FORMS ARE DECIDED, and together they are every form the
+// recorded set carries:
+//
+//   · ONE ATTRIBUTE PREDICATE — `[a]`, `[a="v"]` — resolved against the
+//     drawing's attributes;
+//   · a COMPOUND of attribute predicates — `[a][b="v"]` — resolved against ONE
+//     ELEMENT satisfying every term, never against terms scattered over
+//     different elements;
+//   · a single CLASS TOKEN — `.frame` — resolved against the elements whose
+//     class list carries that token, as a token and not as a substring.
+//
+// The last two are why a drawing is indexed per element as well as flat: a flat
+// attribute index answers each term of a compound on its own, and a matcher
+// that read it would certify an anchor no single element draws.
+//
+// EVERY OTHER SELECTOR FORM IS A HARD FAILURE, never a silent pass and never an
+// approximated match — a descendant combinator, a tag or id selector, a
+// compound of classes, a class beside an attribute predicate, an operator other
+// than `=`, an unquoted value. It is REPORTED, by name, as `refused`, and the
+// run exits 2 — the "could not run honestly" convention — because a selector
+// this matcher cannot decide is one it may not certify in either direction. The
+// rest of the set is still read and still printed, so a refusal names itself
+// instead of hiding what the run did decide, and its suite pins that.
 //
 // WHAT IT PRINTS. Kind names, origins, the selectors it was given, and which
 // GOVERNED DRAWING (by its position in the pin's own set) resolved each one.
@@ -100,24 +115,55 @@ export { GLOBAL_PATHS, MAP_PATH };
 
 export class UnsupportedSelectorError extends Error {}
 
-const SELECTOR_RE = /^\[([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:=(?:"([^"]*)"|'([^']*)'))?\]$/;
+// One `[name]` or `[name="value"]` term, matched STICKILY so a compound is read
+// term by term and anything between two terms — a space, a dot, a combinator —
+// ends the parse instead of being skipped over.
+const ATTRIBUTE_TERM_RE = /\[([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:=(?:"([^"]*)"|'([^']*)'))?\]/y;
+const CLASS_SELECTOR_RE = /^\.(-?[_a-zA-Z][-_a-zA-Z0-9]*)$/;
 
 /**
- * The ONE selector form this matcher supports: a single attribute predicate,
- * with or without a quoted value. Everything else — a compound, a descendant, a
- * tag/class/id, an operator other than `=`, an unquoted value — is refused.
+ * The three selector forms this matcher decides, as a parsed shape:
+ *
+ *   `[a]` / `[a="v"]`   -> { form: "attribute", attribute, value, terms: [term] }
+ *   `[a][b="v"]`        -> { form: "compound", terms: [term, term, …] }
+ *   `.token`            -> { form: "class", className }
+ *
+ * `attribute` and `value` stay on the single-predicate shape so that form reads
+ * exactly as it always has. Everything else — a descendant combinator, a tag or
+ * id selector, a compound of classes, a class beside an attribute predicate, an
+ * operator other than `=`, an unquoted value, an empty selector — is refused,
+ * because approximating it would be a verdict this matcher did not reach.
  */
 export function parseAnchorSelector(selector) {
   if (typeof selector !== "string") throw new UnsupportedSelectorError("a selector must be text");
-  const match = SELECTOR_RE.exec(selector.trim());
-  if (!match) {
+  const text = selector.trim();
+  const refuse = () => {
     throw new UnsupportedSelectorError(
-      `the selector ${selector} is not a single attribute predicate; this matcher refuses a form ` +
-        "it would have to approximate",
+      `the selector ${selector} is outside the forms this matcher decides — one attribute ` +
+        "predicate, a compound of attribute predicates, or one class token; this matcher " +
+        "refuses a form it would have to approximate",
     );
+  };
+
+  if (text.startsWith(".")) {
+    const match = CLASS_SELECTOR_RE.exec(text);
+    if (!match) refuse();
+    return { form: "class", className: match[1], attribute: null, value: null, terms: [] };
   }
-  const value = match[2] ?? match[3] ?? null;
-  return { attribute: match[1], value };
+
+  if (!text.startsWith("[")) refuse();
+  const terms = [];
+  ATTRIBUTE_TERM_RE.lastIndex = 0;
+  while (ATTRIBUTE_TERM_RE.lastIndex < text.length) {
+    const match = ATTRIBUTE_TERM_RE.exec(text);
+    if (!match) refuse();
+    terms.push({ attribute: match[1], value: match[2] ?? match[3] ?? null });
+  }
+  if (terms.length === 0) refuse();
+  if (terms.length === 1) {
+    return { form: "attribute", attribute: terms[0].attribute, value: terms[0].value, terms };
+  }
+  return { form: "compound", attribute: null, value: null, terms };
 }
 
 // ---------------------------------------------------------------------------
@@ -130,18 +176,29 @@ const TAG = /<([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g;
 const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
 /**
- * Index one drawing as `Map<attribute, Set<value|null>>`, reading TAGS only.
+ * Index one drawing, reading TAGS only, in two shapes over the SAME parse:
+ *
+ *   `attributes` — `Map<attribute, Set<value|null>>` for the whole drawing,
+ *                  which decides a single attribute predicate;
+ *   `elements`   — one `{ attributes: Map<name, value|null>, classes: Set }`
+ *                  per tag, which is what a compound predicate and a class
+ *                  token are questions ABOUT: both ask what ONE element
+ *                  carries, and the flat index cannot answer that.
+ *
  * Comments and the contents of pre/code/script/style are removed first: a
  * selector shown as a code sample is documentation, not a drawn anchor, and a
  * matcher that counted it would certify an anchor nothing draws.
  */
-export function attributeIndexOf(text) {
+export function drawingIndexOf(text) {
   const scrubbed = String(text)
     .replace(COMMENTS, " ")
     .replace(HIDDEN_BLOCKS, (_all, tag, attrs) => `<${tag}${attrs}></${tag}>`);
-  const index = new Map();
+  const attributes = new Map();
+  const elements = [];
   for (const tag of scrubbed.matchAll(TAG)) {
     const attrs = tag[2] ?? "";
+    const own = new Map();
+    const classes = new Set();
     for (const attr of attrs.matchAll(ATTR)) {
       // HTML attribute names are case-insensitive, so the index folds them.
       // A drawing written `DATA-CONFORMANCE=` draws the same anchor as one
@@ -150,19 +207,83 @@ export function attributeIndexOf(text) {
       // VALUE is case-sensitive and a conformance id is one.
       const name = attr[1].toLowerCase();
       const value = attr[2] ?? attr[3] ?? attr[4] ?? null;
-      if (!index.has(name)) index.set(name, new Set());
-      index.get(name).add(value);
+      if (!attributes.has(name)) attributes.set(name, new Set());
+      attributes.get(name).add(value);
+      // A repeated attribute on one tag is the FIRST one, which is what an HTML
+      // parser keeps; the flat index above still records both values, because
+      // there it is a question about the drawing rather than about an element.
+      const firstOnThisElement = !own.has(name);
+      if (firstOnThisElement) own.set(name, value);
+      if (name === "class" && firstOnThisElement && value !== null) {
+        // A class attribute is a TOKEN LIST. Splitting it is the difference
+        // between `.cw-frame` resolving against `class="cw-frame is-open"` and
+        // resolving against `class="cw-frame-outer"`, which it must not.
+        //
+        // Only the FIRST `class` on an element is tokenized, for the same
+        // reason the first value is the one kept: an HTML parser drops a
+        // second `class` attribute, so tokenizing it would answer for a
+        // class the DOM does not carry.
+        //
+        // The split is ASCII whitespace ONLY - space, tab, line feed, form
+        // feed, carriage return - which is what HTML calls a class-token
+        // separator. A `\s` split would also break on a no-break space,
+        // and `class="a\u00a0b"` is ONE token in the DOM, not two.
+        for (const token of value.split(/[ \t\n\f\r]+/)) if (token !== "") classes.add(token);
+      }
     }
+    elements.push({ attributes: own, classes });
   }
-  return index;
+  return { attributes, elements };
 }
 
-/** Does `selector` resolve in an indexed drawing? Exact, name and value. */
+/**
+ * The flat half of the index, on its own. Kept because a single attribute
+ * predicate is a question about the DRAWING and reads no elements — the form
+ * this matcher has always decided, decided exactly as it was.
+ */
+export function attributeIndexOf(text) {
+  return drawingIndexOf(text).attributes;
+}
+
+/**
+ * Does `selector` resolve in an indexed drawing? Exact, name and value, and —
+ * for the two per-element forms — exact about WHICH element carries what.
+ *
+ * `index` is a drawing index from `drawingIndexOf`, or the flat map
+ * `attributeIndexOf` returns, which can only answer for one attribute
+ * predicate and says so rather than guessing.
+ */
 export function resolvesIn(index, selector) {
-  const { attribute, value } = parseAnchorSelector(selector);
-  const values = index.get(attribute.toLowerCase());
-  if (!values) return false;
-  return value === null ? true : values.has(value);
+  const parsed = parseAnchorSelector(selector);
+  const attributes = index instanceof Map ? index : index.attributes;
+  const elements = index instanceof Map ? null : index.elements;
+
+  if (parsed.form === "attribute") {
+    const values = attributes.get(parsed.attribute.toLowerCase());
+    if (!values) return false;
+    return parsed.value === null ? true : values.has(parsed.value);
+  }
+
+  if (elements === null) {
+    throw new UnsupportedSelectorError(
+      `the selector ${selector} is decided one element at a time, and this index carries only ` +
+        "the drawing's attributes; index the drawing with drawingIndexOf",
+    );
+  }
+
+  if (parsed.form === "class") {
+    return elements.some((element) => element.classes.has(parsed.className));
+  }
+
+  // A compound resolves against ONE element satisfying EVERY term. Terms found
+  // on different elements are not a match, and that is the whole point of it.
+  return elements.some((element) =>
+    parsed.terms.every((term) => {
+      const name = term.attribute.toLowerCase();
+      if (!element.attributes.has(name)) return false;
+      return term.value === null ? true : element.attributes.get(name) === term.value;
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -220,8 +341,8 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
  * into exit 2.
  */
 export function checkAnchorResolution({ pin, anchors, governed, others = [], siblingsKnown = true }) {
-  const governedIndexes = governed.map((d) => attributeIndexOf(d.text));
-  const otherIndexes = others.map((d) => attributeIndexOf(d.text));
+  const governedIndexes = governed.map((d) => drawingIndexOf(d.text));
+  const otherIndexes = others.map((d) => drawingIndexOf(d.text));
   const results = [];
   for (const anchor of anchors) {
     try {

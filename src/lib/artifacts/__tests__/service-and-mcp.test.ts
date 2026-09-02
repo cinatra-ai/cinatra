@@ -352,11 +352,11 @@ describe("Media route purge gate", () => {
       // directly.
       "artifact-url-import.ts",
       // Blog materializers — SERVICE-LAYER lib modules that push
-      // agent-produced blog idea / image / post-body bytes through
+      // agent-produced blog image / post-body bytes through
       // createSemanticArtifact + assertSemanticType (same single-write-path
       // invariants), one artifact per call. They are part of the canonical
-      // write path, not alternate writers.
-      "blog-idea-artifact-materializer.ts",
+      // write path, not alternate writers. The idea module keeps only its
+      // reader (cinatra#3034) and no longer writes at all.
       "blog-image-materializer.ts",
       "blog-post-artifact-materializer.ts",
       // Declarative run-completion materializer (cinatra#923) — the
