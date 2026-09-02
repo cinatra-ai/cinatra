@@ -12,6 +12,7 @@ import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
+import { readReviewTargetHeaders } from "@/lib/lifecycle/lifecycle-target-headers";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
 import {
   mintWidgetReviewIslandUrl,
@@ -303,6 +304,24 @@ export async function POST(request: Request): Promise<Response> {
     parsed.data.ref,
   );
 
+  // §IV's TARGET HEADER(S) (cinatra#3141 item 7). Composed HERE for the same
+  // reason the chips and the settled outcome are, and the reason is the same
+  // sentence: the resolver is on the route-locked module budgets through the MCP
+  // pull, which uses it as the authorization ladder and never draws a header.
+  //
+  // The state is again the authorization — the ladder's own answer for this
+  // reader and this ref, with every denial already collapsed into `absent`,
+  // which carries no header — and the artifact read behind it is actor-scoped on
+  // top of that. The header rides the resolve answer rather than the wire
+  // payload, so the DATA_PART in the persisted, LLM-visible transcript still
+  // carries a ref and nothing else.
+  const targetHeaders = await readReviewTargetHeaders({
+    viewType: parsed.data.viewType,
+    ref: parsed.data.ref,
+    state: withOutcome,
+    actorCtx,
+  });
+
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
   // only on the widget arm. A first-party answer omits the key entirely, so the
   // three cookie hosts receive the byte-identical response they received
@@ -317,6 +336,7 @@ export async function POST(request: Request): Promise<Response> {
       state: withOutcome,
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
+      ...(targetHeaders ? { targetHeaders } : {}),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

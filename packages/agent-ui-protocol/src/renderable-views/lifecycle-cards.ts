@@ -1109,6 +1109,84 @@ export type LifecycleCardBodyByKind = {
  */
 export const LIFECYCLE_ISLAND_SRC_MAX_LENGTH = 2048;
 
+/**
+ * ONE reviewed target's HEADER, as a card may draw it (cinatra#3141 item 7).
+ *
+ * WHY THE CARD NEEDS IT AT ALL. §IV of the review drawing gives every target a
+ * header that "names what is under review and fixes it in place: the artifact's
+ * display title over a mono meta line carrying its type, the pinned
+ * representation revision (shown as a mono revision id with a pinned marker),
+ * and the read-only row facts the host authorized". That header was rendered by
+ * the SERVER, inside the island document the card frames — so until that frame
+ * painted there was no header on the card at all, and past the island's bounded
+ * wait the card drew a recovery panel with none either. A pending gate on the
+ * run page could and did draw with nothing naming what was under review. The
+ * header therefore belongs to the CARD, which is drawn in every island state,
+ * and the card has to be told what it says.
+ *
+ * IT RIDES THE RESOLVE ANSWER, NEVER THE WIRE PAYLOAD — the same seam, for the
+ * same reason, as the suggestion chips, the settled outcome and the island URL
+ * above it. The persisted, model-visible DATA_PART still carries a ref and
+ * nothing else; this is composed for a reader whose run READ the resolution
+ * ladder has already granted, on the one endpoint that draws a card.
+ *
+ * EVERY FIELD IS ALREADY ON SCREEN FOR THIS READER. Title, type, pinned revision
+ * and the authorized row facts are exactly what the island's own header drew to
+ * the same reader a moment later; nothing here widens the audience or the
+ * disclosure, it only moves where the sentence is composed. `facts` arrives
+ * pre-composed as display strings so the card — which owns no artifact vocabulary
+ * — cannot word them differently from the surface that composed them.
+ */
+export type LifecycleTargetHeader = {
+  /** The artifact's display title, or its id when the row carries no title. */
+  title: string;
+  /** The type's short display label ("Email"), never a renderer identity. */
+  typeLabel: string;
+  /** The type id the mono line opens with ("@cinatra-ai/email:draft"). */
+  objectType: string;
+  /** The revision the gate PINNED — the one revision this surface may show. */
+  revisionId: string;
+  /** The authorized row facts, already worded for display. */
+  facts: string[];
+};
+
+/** Ceilings on one header. Bounded like every other field on this wire. */
+export const LIFECYCLE_TARGET_HEADER_MAX_TEXT = 200;
+/** Ceiling on the number of headers one gate may carry. */
+export const LIFECYCLE_TARGET_HEADERS_MAX = 12;
+/** Ceiling on the facts one header's mono line may carry. */
+export const LIFECYCLE_TARGET_HEADER_FACTS_MAX = 8;
+
+const boundedText = z.string().min(1).max(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+
+export const lifecycleTargetHeaderSchema: z.ZodType<LifecycleTargetHeader> = z
+  .object({
+    title: boundedText,
+    typeLabel: boundedText,
+    objectType: z.string().max(LIFECYCLE_TARGET_HEADER_MAX_TEXT),
+    revisionId: boundedText,
+    facts: z.array(boundedText).max(LIFECYCLE_TARGET_HEADER_FACTS_MAX),
+  })
+  .strict();
+
+export const lifecycleTargetHeadersSchema = z
+  .array(lifecycleTargetHeaderSchema)
+  .max(LIFECYCLE_TARGET_HEADERS_MAX);
+
+/**
+ * The headers, read as ONE shape. `null` means the answer carried none — which
+ * is legal and is not a signal: an answer composed before this field existed, a
+ * gate whose rows could not be read, and a resolver that was not asked all say
+ * the same thing, and the card then draws no header rather than an invented one.
+ * `undefined` means the answer carried something that is not ours, and REFUSES
+ * the envelope — the same fail-closed posture the island URL takes.
+ */
+function readTargetHeaders(raw: unknown): LifecycleTargetHeader[] | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  const parsed = lifecycleTargetHeadersSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** The discriminated answer one lifecycle resolve returns. */
 export type LifecycleResolveEnvelope = {
   [K in LifecycleDataPartViewType]: {
@@ -1145,6 +1223,9 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
   LifecycleResolveEnvelopeFor<K> & {
     islandSrc: string | null;
     aside: LifecycleCardAsideByKind[K] | null;
+    /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
+     * answer carried none. See {@link LifecycleTargetHeader}. */
+    targetHeaders: LifecycleTargetHeader[] | null;
   };
 
 /**
@@ -1269,14 +1350,28 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const bodyPresent = rawBody !== undefined && rawBody !== null;
     const islandSrc = readIslandSrc(record.islandSrc);
     if (islandSrc === undefined) return null;
+    const targetHeaders = readTargetHeaders(record.targetHeaders);
+    if (targetHeaders === undefined) return null;
+    // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
+    // a wrong body is. Only the review gate has a review target, so a header
+    // arriving beside a verification summary or a schedule proposal is an answer
+    // to a question that kind never asks — a shape this build cannot have
+    // composed, and therefore one it will not read.
+    if (expectedKind !== "artifact_review_gate" && targetHeaders !== null) return null;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
-      if (bodyPresent || islandSrc !== null) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc: null, aside: null } as
-        LifecycleResolveAnswerFor<K>;
+      if (bodyPresent || islandSrc !== null || targetHeaders !== null) return null;
+      return {
+        kind: expectedKind,
+        state: state.data,
+        body: null,
+        islandSrc: null,
+        targetHeaders: null,
+        aside: null,
+      } as LifecycleResolveAnswerFor<K>;
     }
 
     // THE ASIDE IS READ ONLY ONCE THE STATE ALLOWS ONE. `absent` returned
@@ -1288,15 +1383,27 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
     if (schema === null) {
       if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc, aside } as
-        LifecycleResolveAnswerFor<K>;
+      return {
+        kind: expectedKind,
+        state: state.data,
+        body: null,
+        islandSrc,
+        targetHeaders,
+        aside,
+      } as LifecycleResolveAnswerFor<K>;
     }
 
     if (!bodyPresent) return null;
     const body = schema.safeParse(rawBody);
     if (!body.success) return null;
-    return { kind: expectedKind, state: state.data, body: body.data, islandSrc, aside } as
-      LifecycleResolveAnswerFor<K>;
+    return {
+      kind: expectedKind,
+      state: state.data,
+      body: body.data,
+      islandSrc,
+      targetHeaders,
+      aside,
+    } as LifecycleResolveAnswerFor<K>;
   } catch {
     // A throwing getter is a hostile shape; it draws nothing, like every other
     // answer this parser refuses.
