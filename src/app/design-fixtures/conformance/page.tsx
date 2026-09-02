@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,24 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation lifecycle drawing — one-off surfaces (surfaces:
+              review-target-in-thread, run-progress-placeholder-in-thread,
+              review-states-outside-chat, presence-matrix, reader-state-matrix)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3165, epic #3155 W9: the REAL review-target header, the
+                REAL gate loading and "no longer open" readings, the REAL run
+                progress placeholder, and the two §IX matrices drawn by handing
+                the shipped chip row the four host declarations and the three
+                reader readings. No transport substitution anywhere. */}
+            <LifecycleOneOffFixtures />
           </CardContent>
         </Card>
       </PageContent>
