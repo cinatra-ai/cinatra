@@ -30,7 +30,12 @@ import {
   sha256Hex,
   type ManifestSurface,
 } from "./manifest-loader";
-import { ensureSeeded, SURFACE_DRIVERS } from "./contract";
+import {
+  COMPOSER_FAMILY_DEFERRED_ASPECTS,
+  COMPOSER_FAMILY_DRIVERS,
+  ensureSeeded,
+  SURFACE_DRIVERS,
+} from "./contract";
 
 const pins = loadSpecPins();
 const manifests = loadPinnedManifests(pins);
@@ -99,6 +104,73 @@ test.describe("conformance manifest consumption", () => {
       }
     }
   });
+
+  /**
+   * A driven surface drives EVERY aspect it declares, or says which it does not.
+   *
+   * On an unpinned manifest a declared aspect with no driver entry is skipped in
+   * silence, so a surface can be counted as covered while part of its contract
+   * is never tested — and then red the moment the drawing is pinned. This makes
+   * the composer family's omissions explicit: an aspect is either driven or
+   * named on the wave's declared-deferral list, and adding a driver later
+   * without clearing the list is a failure too.
+   */
+  test("every composer-family aspect is driven or declared deferred", () => {
+    const declaredById = new Map(
+      [...manifests.map((pm) => pm.manifest), ...unpinnedManifests].flatMap((manifest) =>
+        manifest.surfaces.map((surface) => [surface.id, surface] as const),
+      ),
+    );
+    const isDriven = (
+      driver: (typeof COMPOSER_FAMILY_DRIVERS)[string],
+      aspect: string,
+    ): boolean => {
+      const [kind, ...rest] = aspect.split(":");
+      const name = rest.join(":");
+      if (kind === "field") return driver.fields[name] !== undefined;
+      if (kind === "action") return driver.actions[name] !== undefined;
+      return driver.states[name] !== undefined;
+    };
+
+    for (const [surfaceId, driver] of Object.entries(COMPOSER_FAMILY_DRIVERS)) {
+      const surface = declaredById.get(surfaceId);
+      expect(
+        surface !== undefined,
+        `contract.ts drives "${surfaceId}", which no committed manifest declares`,
+      ).toBe(true);
+      const deferred = new Set(COMPOSER_FAMILY_DEFERRED_ASPECTS[surfaceId] ?? []);
+      for (const aspect of surfaceAspects(surface!)) {
+        expect(
+          isDriven(driver, aspect) || deferred.has(aspect),
+          `"${surfaceId}" declares ${aspect}, which has no driver in contract.ts and is not on the wave's declared-deferral list — an unpinned manifest SKIPS it in silence and the pin gate then reds on it`,
+        ).toBe(true);
+      }
+    }
+
+    for (const [surfaceId, aspects] of Object.entries(COMPOSER_FAMILY_DEFERRED_ASPECTS)) {
+      const surface = declaredById.get(surfaceId);
+      expect(
+        surface !== undefined,
+        `the declared-deferral list names "${surfaceId}", which no committed manifest declares`,
+      ).toBe(true);
+      const driver = COMPOSER_FAMILY_DRIVERS[surfaceId];
+      expect(
+        driver !== undefined,
+        `the declared-deferral list names "${surfaceId}", which this family does not drive — a deferral only narrows a driven surface`,
+      ).toBe(true);
+      const declared = surfaceAspects(surface!);
+      for (const aspect of aspects) {
+        expect(
+          declared.has(aspect),
+          `the declared-deferral list names "${surfaceId}" aspect "${aspect}", which the manifest does not declare — remove the stale entry`,
+        ).toBe(true);
+        expect(
+          isDriven(driver!, aspect),
+          `"${surfaceId}" aspect "${aspect}" is BOTH driven and declared deferred — delete it from the deferral list`,
+        ).toBe(false);
+      }
+    }
+  });
 });
 
 
@@ -117,6 +189,14 @@ test.describe("conformance manifest consumption", () => {
  * Only EXACT duplicates collapse. A genuinely polymorphic action (the
  * notifications spec's whole-card "activate": -> navigated with an href,
  * -> toggled without) keeps both declarations, because they are two contracts.
+ *
+ * The key is the aspect's WHOLE identity, tuple-encoded. A field is identified
+ * by (field, source) and an action by (action, outcome) — never by the name
+ * alone: two declarations of one field name bound to two DIFFERENT sources are
+ * two contracts, and collapsing them on the name would delete one of them
+ * outright, including under a PINNED manifest where every declared aspect is a
+ * required test. Tuple-encoded rather than concatenated because neither a field
+ * source nor an outcome is forbidden to contain the separator.
  */
 function distinctBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   const seen = new Set<string>();
@@ -193,7 +273,7 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
       await driver.present(page, driver.root(page));
     });
 
-    for (const field of distinctBy(surface.fields, (f) => f.field)) {
+    for (const field of distinctBy(surface.fields, (f) => JSON.stringify([f.field, f.source]))) {
       const fieldDriver = driver.fields[field.field];
       if (!fieldDriver && !requireEveryAspect) continue;
       test(`field "${field.field}" renders bound to ${field.source}`, async ({ page }) => {
@@ -215,7 +295,7 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
       });
     }
 
-    for (const action of distinctBy(surface.actions, (a) => `${a.action} -> ${a.outcome}`)) {
+    for (const action of distinctBy(surface.actions, (a) => JSON.stringify([a.action, a.outcome]))) {
       const actionEntry = driver.actions[action.action];
       if (!actionEntry && !requireEveryAspect) continue;
       test(`action "${action.action}" -> ${action.outcome}`, async ({ page }) => {

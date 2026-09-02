@@ -3336,6 +3336,11 @@ async function expectReading(
   root: Locator,
   reading: { bound: boolean; ambiguous: boolean; sentence: string },
 ): Promise<void> {
+  // ONE row per mount. `composerRow` takes the first match so a group root can
+  // still be read through, which means the COUNT has to be asserted here: a
+  // double mount would otherwise let every reading below, and every press, run
+  // against a copy while the other row went unchecked.
+  await expect(root.locator('[data-conformance-id="review-composer-focus"]')).toHaveCount(1);
   const row = composerRow(root);
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-composer-bound", String(reading.bound));
@@ -3469,14 +3474,29 @@ const REVIEW_COMPOSER_UNBOUND_CARD_DRIVER: SurfaceDriver = {
     // is the reading whose control takes the binding for the reader.
     "focus-review-composer": {
       outcome: "bound",
+      // BOTH drawn controls, in one test. The drawing draws this example as two
+      // rows and the manifest declares the control on it TWICE, once per row;
+      // the generated battery collapses two identical declarations into one
+      // test, so unless this one test presses both, the second row's control is
+      // never exercised and could be missing, misnamed or dead while the
+      // surface stayed green. The two rows are separate mounts holding their own
+      // shipped stores, so neither press moves the other row's reading — which
+      // is itself asserted at the end.
       run: async (page, root) => {
         const choosing = root.locator('[data-surface-id="composer-row-choosing"]');
+        const elsewhere = root.locator('[data-surface-id="composer-row-elsewhere"]');
+        // The row that is WAITING to be told which review.
         await focusComposerAction(COMPOSER_AMBIGUOUS).run(page, choosing);
         // And the ambiguity is answered: the prompt is gone from the row that
         // now holds the binding.
         await expect(
           composerRow(choosing).locator('[data-conformance-id="review-composer-ambiguous"]'),
         ).toHaveCount(0);
+        // The row whose binding was GIVEN BACK, drawn beside it: its own
+        // control, its own press, the manifest's second declaration.
+        await focusComposerAction(COMPOSER_UNBOUND).run(page, elsewhere);
+        // One press did not move the other row's reading.
+        await expectReading(choosing, COMPOSER_BOUND);
       },
     },
   },
@@ -3532,6 +3552,30 @@ export const COMPOSER_FAMILY_DRIVERS: Readonly<Record<string, SurfaceDriver>> = 
   "review-composer-ambiguous": composerRowDriver("composer-row-choosing", COMPOSER_AMBIGUOUS),
   "review-composer-unbound": composerRowDriver("composer-row-elsewhere", COMPOSER_UNBOUND),
   "chat-composer-primary": CHAT_COMPOSER_PRIMARY_DRIVER,
+};
+
+/**
+ * Aspects a manifest surface this family DRIVES declares, and this wave does
+ * NOT drive — named here, with the reason, instead of being left to the skip.
+ *
+ * An unpinned manifest SKIPS a declared aspect with no driver entry silently, so
+ * an omission inside an otherwise-covered surface is invisible until the pin
+ * lands and turns it into a red. Naming it makes the omission a decision on the
+ * record and, through the check in functional-acceptance.spec.ts, makes any
+ * FUTURE omission fail the battery rather than disappear into the skip.
+ *
+ * `review-composer-unbound-card`'s three states are the CARD's states, not the
+ * row's: the surface's control lives on the two rows this family mounts, but
+ * `empty`, `kind:artifact` and `loading` are readings of the review card those
+ * rows sit above, and the card cannot be composed outside itself. That is the
+ * same wall the rest of this wave's deferred surfaces meet, and it is on the
+ * wave's surface-readiness list.
+ *
+ * This is NOT an allowlist entry and buys no exemption at the pin gate: it is a
+ * statement of what is still owed before this drawing can be pinned.
+ */
+export const COMPOSER_FAMILY_DEFERRED_ASPECTS: Readonly<Record<string, readonly string[]>> = {
+  "review-composer-unbound-card": ["state:empty", "state:kind:artifact", "state:loading"],
 };
 
 // Every surface the mount table names has a driver, and every driver names a
