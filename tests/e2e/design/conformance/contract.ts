@@ -18,7 +18,7 @@
  * A manifest surface with NO driver and NO allowlist entry is a RED — the
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
-import { expect, request as playwrightRequest, type Locator, type Page } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 
 import {
   CONFORMANCE_BUTTON_VARIANTS,
@@ -53,6 +53,18 @@ import {
   type LifecycleSuggestionChipFixture,
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
+import {
+  LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
+  LIFECYCLE_REVIEW_TARGET_HEADER_NOW,
+  type LifecycleReviewTargetHeaderFixture,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-review-target-header-fixture-data";
+// The PRODUCT's own readings, read here so the driver's expectation is derived
+// the way the shipped composer derives it and never restated by the test.
+import {
+  reviewRevisionMarker,
+  reviewTargetRowFacts,
+  reviewTypeLabel,
+} from "../../../../src/lib/artifacts/review-surface-model";
 import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
@@ -459,6 +471,183 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
         },
       },
     },
+    states: {},
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// The ARTIFACT-KIND card family (cinatra#3157, epic #3155 W1)
+// ---------------------------------------------------------------------------
+//
+// Every artifact kind the drawing draws in a conversation opens the same way.
+//
+// The rule is worded on the review screen's drawing, §IV (the review target —
+// immutable header & representation): "Every target opens with a header that
+// names what is under review and fixes it in place: the artifact's display title
+// over a mono meta line carrying its type, the pinned representation revision
+// (shown as a mono revision id with a pinned marker), and the read-only row facts
+// the host authorized — owner level / visibility, MIME, and updated time. The
+// header is inert: it exposes no edit control and no revision picker, because the
+// target is versioned and frozen."
+//
+// THIS MANIFEST'S OWN DRAWING draws that same header over every kind, and says in
+// so many words that it is the one thing the kinds share. §XIII.1 draws the
+// states once over the email body and rules: "Nothing in either drawing is
+// particular to email except the panel in the middle: put any other review
+// target's display, §XIII.2 to §XIII.7, in its place and the turn, the floor, the
+// marker and the words around them are unchanged." Each kind section after it
+// "draws its rendering alone".
+//
+// So the kinds differ BELOW that line and are identical on it, and they are one
+// family over one fixture list — the same shape `cardDriver` and
+// `suggestionChipDriver` already give their families. A later wave adds rows.
+//
+// WHAT THIS FAMILY ASSERTS, AND WHAT IT DELIBERATELY DOES NOT.
+//
+//   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
+//     (attribute AND visible text, both derived by the product's own
+//     `reviewTypeLabel` from the row's type id), the type id on the meta line,
+//     the pinned revision (addressed by the exact id, read as the elided marker
+//     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
+//     each authorized row fact as the product's own `reviewTargetRowFacts`
+//     composes it from the stored row, and the inertness — no control, no link,
+//     no revision picker anywhere inside it.
+//
+//     THE FIXTURE SEEDS THE ARTIFACT, NOT THE READING. A row carries only what a
+//     stored artifact row carries; both readings the header draws over it are
+//     composed by the two product functions the server-side composer calls. That
+//     is what keeps this a driver and not an echo test: a fixture that named a
+//     finished fact could assert a line the shipped composer cannot produce, and
+//     the assertion would pass on the component printing its own props back.
+//
+//   • It does NOT assert the plural ORDERING of several pinned targets. Every
+//     surface of this wave pins one target: the mixed-kind gate draws the same
+//     artifact at the same revision under two content forms, and target
+//     normalization (src/lib/artifacts/artifact-review-target.ts) treats that as
+//     one target, so seeding two would seed a gate the product does not compose.
+//     Reported with it: `ReviewTargetHeaders` keys its list on
+//     `${revisionId}:${objectType}` alone (packages/agents/src/review-gate-card.tsx),
+//     which omits the artifact id that is part of a target's identity, so two
+//     distinct artifacts sharing a type and a revision string would collide.
+//     That is a product change, not a drivers-wave change; it is on the wave's
+//     readiness list with the ordering reading that would exercise it.
+//
+//   • TWO DRAWN READINGS IT REPORTS RATHER THAN ASSERTS, because the shipped
+//     composer has no reading for them: the scope pair's CASING (the drawing
+//     prints "Team · Private"; `reviewTargetRowFacts` returns the row's stored
+//     values verbatim, in lower case), and the CMS page's PLATFORM and page
+//     ADDRESS (its drawn identity line carries both; the composer composes owner
+//     level, visibility, MIME and updated time for every kind alike). Asserting
+//     either against a hand-written fixture fact would report conformance the
+//     product does not have.
+//
+//   • It declares NO field driver. Every one of these surfaces binds its field
+//     to a `representation.*` source — the email body, the content form, the
+//     capture URL, the pinned configuration, the portlet entry — and the
+//     representation is server-rendered inside the island document, which ships
+//     no per-kind rendering on the default branch. An unshipped binding is on
+//     this wave's readiness list, not approximated through the header.
+//
+//   • It declares NO action driver. Six of these surfaces declare
+//     `continue-review -> resolved` as their only action and no shipped control
+//     carries it (open pull request #3100 is the one that lands it, and it lands
+//     the name `regenerate-review -> changes-requested`, which has to be
+//     reconciled with the manifest before either can be driven at all). The CMS
+//     page declares `open-in-cms -> cms-opened` instead, which the drawing puts
+//     UNDER the representation rather than in the header, and which no shipped
+//     control carries anywhere.
+//
+//   • It declares NO state driver. `loading` and `error` are the island's two
+//     non-loaded readings, drawn by `ReviewTargetIsland`, which is not exported
+//     and frames a real document; driving them would need a harness mount this
+//     wave does not build and a src this wave will not invent.
+//
+// THE ONE SURFACE OF THIS WAVE THE FAMILY DOES NOT TAKE.
+// `drupal-pointer-never-a-review-target` is drawn as a page and never as a
+// review: "It is not pinnable and it is never a review target: no gate opens on
+// it and no floor is ever drawn beneath it." Its drawn identity line carries
+// `not pinnable` exactly where every other kind's carries `revision … · pinned`,
+// and the shipped header has no such reading — it draws the pinned marker
+// unconditionally. Putting the pointer through this family would therefore assert
+// a pinned header the drawing says the pointer never has, so it stays unmapped
+// this wave rather than mapped falsely, and no allowlist entry is added for it
+// either (the ratchet is shrink-only, and a whole-surface exemption is exactly
+// what this epic refuses).
+//
+// Under the committed-but-unpinned rule (cinatra#3156) an aspect no wave has
+// landed simply has no test, and the pin is exactly what this epic withholds
+// until every one of them does.
+
+/** The one header the shipped card draws per pinned target. */
+function targetHeaders(root: Locator): Locator {
+  return root.locator('[data-conformance-id="review-target-header"]');
+}
+
+export function reviewTargetHeaderDriver(
+  fixture: LifecycleReviewTargetHeaderFixture,
+): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.surfaceId}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const headers = targetHeaders(root);
+      // ONE HEADER PER PINNED TARGET, in gate order. Every row of this wave
+      // pins one target; the plural ordering reading is on the readiness list
+      // (see the fixture type's own note) rather than seeded with a target the
+      // drawing does not draw.
+      await expect(headers).toHaveCount(fixture.headers.length);
+      const now = new Date(LIFECYCLE_REVIEW_TARGET_HEADER_NOW);
+
+      for (const [index, seed] of fixture.headers.entries()) {
+        const header = headers.nth(index);
+        // "the artifact's display title …"
+        await expect(header).toContainText(seed.title);
+        // "… over a mono meta line carrying its type …". The TAG carries the
+        // label, the line carries the id. The expected label is derived by the
+        // PRODUCT's own `reviewTypeLabel` from the row's type id — the call the
+        // server-side composer makes — so a harness that ever worded a label of
+        // its own is red here, and the tag is asserted on BOTH readings: the
+        // attribute value and the text a reader actually sees.
+        const tag = header.locator("[data-review-target-type]");
+        await expect(tag).toHaveCount(1);
+        await expect(tag).toHaveAttribute(
+          "data-review-target-type",
+          reviewTypeLabel(seed.objectType),
+        );
+        await expect(tag).toHaveText(reviewTypeLabel(seed.objectType));
+        await expect(header).toContainText(seed.objectType);
+        // "… the pinned representation revision (shown as a mono revision id
+        // with a pinned marker) …". Addressed by the EXACT revision the gate
+        // pinned, so a card drawing a different revision cannot resolve at all,
+        // while the VISIBLE reading is the elided one the product draws — the
+        // shipped truncation rule (`reviewRevisionMarker`), not the full id,
+        // which for an id past the bound is not what the header prints at all.
+        const revision = header.locator(
+          `[data-review-target-revision="${seed.revisionId}"]`,
+        );
+        await expect(revision).toHaveCount(1);
+        await expect(revision).toHaveText(
+          `revision ${reviewRevisionMarker(seed.revisionId).short}`,
+        );
+        await expect(header).toContainText("· pinned");
+        // "… and the read-only row facts the host authorized". The expected
+        // line is composed from the row by the PRODUCT's own
+        // `reviewTargetRowFacts` against the harness's fixed instant, so this
+        // asserts the shipped chain composer → component and not a fact the
+        // fixture handed the component to print back.
+        for (const fact of reviewTargetRowFacts(seed.row, now)) {
+          await expect(header).toContainText(fact);
+        }
+        // "The header is inert: it exposes no edit control and no revision
+        // picker, because the target is versioned and frozen."
+        await expect(header.locator("button, a, input, select, textarea")).toHaveCount(0);
+      }
+    },
+    fields: {},
+    actions: {},
     states: {},
   };
 }
@@ -1582,6 +1771,333 @@ const BREADCRUMB_ENTITY_RESOLUTION_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// The §X Workspace surfaces of the application drawing, adopted with the
+// ratification that made the entity-page tablist a five-entry strip
+// (epic cinatra#2806, part of cinatra#3144).
+//
+// The mechanisms these three surfaces name — the Workspace nav entry, the
+// Workspace scope page and its empty tab — are NOT on the default branch. They
+// arrive with the per-scope surfaces change (cinatra#3152, open at the time of
+// writing), and until that lands there is nothing on the conformance harness to
+// assert against.
+//
+// Two things follow, and both are deliberate:
+//
+//   - The app pin is NOT advanced here. A pin advance is a claim that this
+//     branch's code satisfies the drawing at the new revision, and for these
+//     three surfaces it does not. The advance, its exact values and its
+//     preconditions are recorded (and checked) in
+//     scripts/design/__tests__/conformance-pin-advance-record.test.mjs.
+//   - The drivers below are nonetheless written in full, against the ratified
+//     manifest's own field sources, action outcomes and state variants. They are
+//     what the advance is waiting for. Nothing here stands in for the surface: a
+//     driver whose surface the harness does not mount SKIPS with the reason, and
+//     the same assertions run for real — unchanged — the moment the mount exists.
+// ---------------------------------------------------------------------------
+
+/** Why an awaiting-mount driver skips, named on every skipped test. */
+const AWAITING_PER_SCOPE_SURFACES =
+  "the real component is not on the default branch yet — it arrives with the " +
+  "per-scope surfaces change (cinatra#3152) — so the conformance harness mounts " +
+  "no such surface. Every assertion in this driver is written and runs unchanged " +
+  "the moment the mount exists.";
+
+/**
+ * Wrap a fully written driver whose SURFACE is not on the default branch yet.
+ *
+ * The guard is the harness mount itself, never a branch name or a revision: while
+ * nothing on the harness carries the surface id the whole battery SKIPS with the
+ * reason above; the moment a mount does, every assertion runs for real. That is
+ * why this is not a stub — it asserts nothing it cannot see, and it hides nothing
+ * it can.
+ */
+/**
+ * A surface the conformance harness has mounted since long before this change.
+ * It is the proof that the harness itself rendered, and it is what makes the
+ * guard below fail-CLOSED: a blank page, a boot error or a route regression
+ * would otherwise look exactly like "the surface is not on the branch yet", and
+ * the whole battery would skip instead of failing.
+ */
+const HARNESS_ANCHOR_SURFACE_ID = "status-pills";
+
+/**
+ * How long the harness is given to settle before absence is read as absence.
+ * The suite navigates with `waitUntil: "domcontentloaded"`, so an instantaneous
+ * count would race a surface that mounts a tick later and skip a shipped screen.
+ */
+const AWAITING_MOUNT_SETTLE_MS = 5_000;
+
+function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver {
+  const guard = async (page: Page): Promise<void> => {
+    await expect(
+      page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
+      `the conformance harness itself did not render — this is a real failure, never a surface awaiting cinatra#3152`,
+    ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
+
+    let mounted = true;
+    try {
+      await page
+        .locator(`[data-surface-id="${surfaceId}"]`)
+        .first()
+        .waitFor({ state: "attached", timeout: AWAITING_MOUNT_SETTLE_MS });
+    } catch {
+      mounted = false;
+    }
+    test.skip(!mounted, `${surfaceId}: ${AWAITING_PER_SCOPE_SURFACES}`);
+  };
+  return {
+    ...driver,
+    present: async (page, root) => {
+      await guard(page);
+      await driver.present(page, root);
+    },
+    fields: Object.fromEntries(
+      Object.entries(driver.fields).map(([name, field]) => [
+        name,
+        {
+          source: field.source,
+          assert: async (page: Page, root: Locator) => {
+            await guard(page);
+            await field.assert(page, root);
+          },
+        },
+      ]),
+    ),
+    actions: Object.fromEntries(
+      Object.entries(driver.actions).map(([name, entry]) => [
+        name,
+        (Array.isArray(entry) ? entry : [entry]).map((candidate) => ({
+          outcome: candidate.outcome,
+          run: async (page: Page, root: Locator) => {
+            await guard(page);
+            await candidate.run(page, root);
+          },
+        })),
+      ]),
+    ),
+    states: Object.fromEntries(
+      Object.entries(driver.states).map(([name, assertState]) => [
+        name,
+        async (page: Page, root: Locator) => {
+          await guard(page);
+          await assertState(page, root);
+        },
+      ]),
+    ),
+  };
+}
+
+/**
+ * sidebar-workspace-entry — the Workspace nav entry the amended §IX strip adds.
+ * The manifest binds its title to `nav.title` and its one action to
+ * `open-workspace -> workspace`; both literals are the conformance contract the
+ * real entry must carry, exactly as the Assistants entry above carries its own.
+ */
+const SIDEBAR_WORKSPACE_ENTRY_DRIVER: SurfaceDriver = awaitingMount("sidebar-workspace-entry", {
+  path: HARNESS_PATH,
+  root: harnessRoot("sidebar-workspace-entry"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-conformance-id="sidebar-workspace-entry"]')).toBeVisible();
+    await expect(root.locator('[data-action="open-workspace -> workspace"]')).toBeVisible();
+    await expect(root.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
+  },
+  fields: {
+    // title = nav.title — the entry renders the navigation title, not a scope
+    // name and not a route segment.
+    title: {
+      source: "nav.title",
+      assert: async (_page, root) => {
+        await expect(
+          root.locator('[data-conformance-id="sidebar-workspace-entry"]'),
+        ).toHaveText("Workspace");
+      },
+    },
+  },
+  actions: {
+    "open-workspace": outcomeAction("workspace", "Workspace"),
+  },
+  states: {},
+});
+
+/**
+ * workspace-scope-page — the Workspace scope page the amended drawing adds to
+ * the scopes. Its one field binds the page's name to the scope identity's
+ * DISPLAY NAME; the three state variants are the drawing's own.
+ */
+const WORKSPACE_SCOPE_PAGE_DRIVER: SurfaceDriver = awaitingMount("workspace-scope-page", {
+  path: HARNESS_PATH,
+  root: harnessRoot("workspace-scope-page"),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-conformance-id="workspace-scope-page"]')).toBeVisible();
+    await expect(root.locator('[data-testid="workspace-scope-name"]')).toBeVisible();
+  },
+  fields: {
+    // name = identity.displayName — the page names the scope by its display
+    // name and NEVER by the id it was resolved from (the same floor rule the
+    // breadcrumb driver above holds). The mount publishes both on the surface
+    // root, so asserting the wrong source cannot accidentally pass.
+    name: {
+      source: "identity.displayName",
+      assert: async (_page, root) => {
+        const displayName = await root.getAttribute("data-identity-display-name");
+        expect(
+          displayName,
+          'the harness mount for "workspace-scope-page" must publish the seeded identity display name as data-identity-display-name, so this assertion names a source of truth rather than whatever the page rendered',
+        ).toBeTruthy();
+        const name = root.locator('[data-testid="workspace-scope-name"]');
+        await expect(name).toHaveText(displayName!);
+        const identityId = await root.getAttribute("data-identity-id");
+        if (identityId) await expect(name).not.toContainText(identityId);
+      },
+    },
+  },
+  actions: {},
+  states: {
+    empty: variantSlotState("workspace-scope-page", "empty", "empty"),
+    error: variantSlotState("workspace-scope-page", "error", "alert"),
+    loading: variantSlotState("workspace-scope-page", "loading", "skeleton"),
+  },
+});
+
+/**
+ * workspace-scope-empty-tab — a tab of the five-entry strip that the Workspace
+ * scope has nothing to show in. The drawing gives it exactly one state, and the
+ * whole point of the surface is that the empty state is a real, drawn treatment
+ * rather than a blank panel.
+ */
+const WORKSPACE_SCOPE_EMPTY_TAB_DRIVER: SurfaceDriver = awaitingMount("workspace-scope-empty-tab", {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="workspace-scope-empty-tab"][data-variant="empty"]'),
+  present: async (_page, root) => {
+    await expect(root.locator('[data-slot="empty"]')).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    empty: variantSlotState("workspace-scope-empty-tab", "empty", "empty"),
+  },
+});
+
+
+/**
+ * The ratified entity-page tab strip: five entries, in this order, on EVERY
+ * scope. Settings is not a member of it — where a scope has one it is appended
+ * AFTER these five, which is exactly what the amendment changed (Settings used
+ * to be the second entry, and a personal scope used to carry Dashboards alone).
+ */
+const SCOPE_TAB_STRIP = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"];
+
+/**
+ * Action driver for a surface whose control declares its own manifest action.
+ *
+ * The conformance harness marks such a control `data-action="<action> -> <outcome>"`
+ * (the notifications and suggestion-chip mounts already do), which binds the
+ * click to the manifest entry rather than to a copy string this file would
+ * otherwise have to guess. The assertion is the surface root reaching that
+ * outcome, the same evidence `outcomeAction` takes.
+ */
+function declaredAction(
+  action: string,
+  outcome: string,
+): { outcome: string; run: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    outcome,
+    run: async (_page, root) => {
+      await clickUntil(root.locator(`[data-action="${action} -> ${outcome}"]`), async () => {
+        await expect(root).toHaveAttribute("data-outcome", outcome, { timeout: 2_000 });
+      });
+    },
+  };
+}
+
+/**
+ * scope-dashboards-tab — the entity-page tab the same ratification amended, in
+ * section IX of the artifacts drawing.
+ *
+ * Measured against the two published artifacts, the amendment moved the drawing
+ * bytes and moved NO declared aspect of this surface: its one field, its three
+ * actions and its four states are identical before and after. So the strip
+ * itself needs an assertion the manifest cannot ask for, and `present` makes it
+ * — the five entries in the ratified order, with Settings appended LAST where a
+ * scope has one and absent where it has none. The declared aspects are driven on
+ * the harness instrumentation this file already uses everywhere else: the field
+ * element names its own binding (`data-field="name=identity.displayName"`, the
+ * convention the shipped dashboard row carries), and each action is the control
+ * that declares that action and outcome.
+ *
+ * Like the three surfaces above, none of this is on the default branch: the
+ * scope surfaces arrive with cinatra#3152, so the whole battery SKIPS with the
+ * reason until the harness mounts the surface, and runs unchanged afterwards.
+ */
+const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboards-tab", {
+  path: HARNESS_PATH,
+  root: harnessRoot("scope-dashboards-tab"),
+  present: async (page) => {
+    // "on every scope, Settings appended last only where a scope has one" is a
+    // statement about a SET of scopes, so it is graded over every mount of the
+    // surface, and each mount has to declare which half of the rule it stands
+    // for. `data-scope-has-settings` is that declaration, in the same shape as
+    // the `data-field` / `data-action` instrumentation this file already reads;
+    // an undeclared mount FAILS rather than being read charitably.
+    const mounts = page.locator(`[data-surface-id="scope-dashboards-tab"]`);
+    const mountCount = await mounts.count();
+    expect(mountCount, "no scope-dashboards-tab mount on the harness").toBeGreaterThan(0);
+
+    const withSettings: boolean[] = [];
+    for (let index = 0; index < mountCount; index += 1) {
+      const mount = mounts.nth(index);
+      const declared = await mount.getAttribute("data-scope-has-settings");
+      expect(
+        declared,
+        `every scope-dashboards-tab mount declares data-scope-has-settings="true" or "false" — the tested scope's own answer to the conditional half of the ratified strip. Mount ${index} declares ${JSON.stringify(declared)}.`,
+      ).toMatch(/^(true|false)$/);
+      const hasSettings = declared === "true";
+      const entries = (await mount.locator('[role="tablist"] [role="tab"]').allInnerTexts()).map(
+        (entry) => entry.trim(),
+      );
+      expect(
+        entries,
+        `the entity-page tablist is the five-entry strip in the ratified order — Dashboards, Assistants, Agents, Artifacts, Skills — with Settings appended LAST where the scope has one and absent where it has none (mount ${index}, data-scope-has-settings=${declared})`,
+      ).toEqual(hasSettings ? [...SCOPE_TAB_STRIP, "Settings"] : [...SCOPE_TAB_STRIP]);
+      withSettings.push(hasSettings);
+    }
+
+    expect(
+      withSettings.includes(true) && withSettings.includes(false),
+      `the ratified strip is conditional, so both halves must be mounted: a scope that HAS Settings and a scope that has none. The harness mounts ${JSON.stringify(withSettings)}.`,
+    ).toBe(true);
+  },
+  fields: {
+    // name = identity.displayName — the listing row names the entity by its
+    // display name. The element declares its own binding, so a mount that bound
+    // the wrong source cannot satisfy this locator by accident.
+    name: {
+      source: "identity.displayName",
+      assert: async (_page, root) => {
+        await expect(
+          root.locator('[data-field="name=identity.displayName"]').first(),
+        ).toBeVisible();
+      },
+    },
+  },
+  actions: {
+    "open-add-picker": declaredAction("open-add-picker", "add-picker-open"),
+    "open-dashboard": declaredAction("open-dashboard", "dashboard-canonical"),
+    "remove-listing": declaredAction("remove-listing", "listing-removed"),
+  },
+  states: {
+    empty: variantSlotState("scope-dashboards-tab", "empty", "empty"),
+    error: variantSlotState("scope-dashboards-tab", "error", "alert"),
+    loading: variantSlotState("scope-dashboards-tab", "loading", "skeleton"),
+    // kind:artifact — the listing row's own kind declaration, the same
+    // `kind:` state shape the extension-detail and connector drivers assert.
+    "kind:artifact": async (_page, root) => {
+      await expect(root.locator('[data-kind="artifact"]').first()).toBeVisible();
+    },
+  },
+});
 
 // ---------------------------------------------------------------------------
 // /notifications unified-surface drivers (cinatra#1549 E11-AC2) — the nine
@@ -2996,6 +3512,18 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
+  // The Workspace surfaces the ratified drawing adds (epic cinatra#2806). Their
+  // manifest is not pinned yet, so these generate no test today; they are what
+  // the recorded pin advance is waiting for, and they SKIP with a reason until
+  // the harness mounts the real surface (cinatra#3152).
+  "sidebar-workspace-entry": SIDEBAR_WORKSPACE_ENTRY_DRIVER,
+  "workspace-scope-page": WORKSPACE_SCOPE_PAGE_DRIVER,
+  "workspace-scope-empty-tab": WORKSPACE_SCOPE_EMPTY_TAB_DRIVER,
+  // The entity-page tab the same ratification amended (section IX of the
+  // artifacts drawing). Its manifest is STAGED, not pinned, so only the
+  // aspects driven here generate a test; each SKIPS with a reason until the
+  // harness mounts the surface (cinatra#3152).
+  "scope-dashboards-tab": SCOPE_DASHBOARDS_TAB_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
   ),
@@ -3005,6 +3533,15 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
       SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
       suggestionChipDriver(fixture),
+    ]),
+  ),
+  // The in-conversation artifact-kind cards (cinatra#3157, epic #3155 W1). One
+  // family factory over one fixture list — the surfaces differ below §IV's
+  // header and are identical on it, so the later waves add rows, not drivers.
+  ...Object.fromEntries(
+    LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES.map((fixture) => [
+      fixture.surfaceId,
+      reviewTargetHeaderDriver(fixture),
     ]),
   ),
 };

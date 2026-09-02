@@ -146,6 +146,20 @@ ships AND the floor action it declares ships; until then it is
 surface-readiness work rather than driver work, however complete the drawing
 around it is.
 
+What IS drivable over these cards today is the part that is not per-kind at all:
+the immutable target header, which the card draws itself above the island and
+draws identically over every kind. W1 drives it for seven of the eight surfaces
+through one family factory over one fixture list, mounted props-only over the
+shipped header component. The rows seed a stored artifact row and never a
+finished reading — the product's own surface model words the type tag, elides
+the pinned revision and composes the authorized row facts — so the driver
+exercises the chain composer to component rather than a component printing back
+what it was handed. The eighth surface stays out of the family on purpose: a
+pointer's drawn identity says it is not pinnable and is never a review target,
+while the shipped header draws the pinned marker unconditionally, so driving it
+here would assert of it a header the drawing says it never has. It takes no
+driver and no allowlist entry.
+
 ### The readiness list is data, and it is checked
 
 A readiness list is a claim about the PRODUCT — "no control carries this action
@@ -157,10 +171,21 @@ grounded and could not drive, and
 against the tree on every root run:
 
 - a listed surface is a real surface of the manifest its wave names;
-- a listed surface is not ALSO covered — a readiness entry and a driver are
-  mutually exclusive readings of the same surface;
-- a listed surface is not driven either: the suite's driver map does not name
-  it;
+- a listed surface is never ALLOWLISTED — a whole-surface exemption is the one
+  thing no driver makes acceptable — and never carries a driver written for it
+  alone, which could bind any aspect it liked;
+- a listed surface MAY be driven for a reading that is not one of the aspects it
+  lists. W1 is the first case: seven of its eight surfaces are driven for the
+  immutable target header the review screen's drawing declares at §IV, the one
+  reading those kinds share and the one the default branch already draws. Where
+  that happens the guard re-proves three things from source — the driver is the
+  shared header-only family, the surface's testid coverage is that family's
+  shared anchor and nothing of its own, and the family declares no field, action
+  or state binding whatsoever — so a driver that ever grew one goes red here
+  instead of quietly contradicting an entry that still calls the aspect
+  unshipped. The wave records what it drives in its `driven` block, and that
+  block is held to the family's actual registration in both directions, so it
+  can neither miss a surface the family took nor claim one it did not;
 - a listed action is genuinely unshipped: no first-party product module spells
   out the action-and-outcome attribute the manifest declares, in the same
   literal form the testid contract requires everywhere else. The moment one

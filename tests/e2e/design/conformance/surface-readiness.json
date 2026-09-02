@@ -1,11 +1,27 @@
 {
-  "$comment": "THE SURFACE-READINESS LIST (epic cinatra#3155). A wave of the lifecycle-drawing driver program may drive only what the DEFAULT BRANCH ships. Every aspect a wave grounded and could NOT drive is recorded here, with the reason and, where there is one, the pull request that lands it — never stubbed, never approximated through a different control. scripts/design/__tests__/surface-readiness.test.mjs re-proves every entry against the tree on every run, so an entry that has become false (the control shipped) is a RED rather than a stale note: the list retires itself.",
+  "$comment": "THE SURFACE-READINESS LIST (epic cinatra#3155). A wave of the lifecycle-drawing driver program may drive only what the DEFAULT BRANCH ships. Every aspect a wave grounded and could NOT drive is recorded here, with the reason and, where there is one, the pull request that lands it — never stubbed, never approximated through a different control. A wave MAY still drive a reading that is not one of those aspects at all — a shared identity the default branch already draws — and records it in that wave's `driven` block; a driver recorded there binds no field, no action and no state, so it never contradicts an entry below it. scripts/design/__tests__/surface-readiness.test.mjs re-proves every entry against the tree on every run, so an entry that has become false (the control shipped) is a RED rather than a stale note: the list retires itself.",
   "waves": [
     {
       "wave": "W1",
       "issue": 3157,
       "manifest": "app-lifecycle-cards.json",
-      "summary": "The eight in-conversation review cards for an individual artifact kind. Grounded one aspect at a time against the default branch: no first-party control carries either floor action the drawing declares, no per-kind card is drawn anywhere, and the per-kind readings that do exist are drawn inside the review card's credentialed island frame. The wave therefore adds no driver and records what each aspect is waiting for.",
+      "summary": "The eight in-conversation review cards for an individual artifact kind. Grounded one aspect at a time against the default branch: no first-party control carries either floor action the drawing declares, no per-kind card is drawn anywhere, and the per-kind readings that do exist are drawn inside the review card's credentialed island frame. What the wave CAN drive, it drives: seven of the eight surfaces take the header-only driver family recorded in `driven` below, which machine-checks the immutable target header the review screen's drawing declares at §IV — the one reading every kind shares, and the one the default branch already ships. That driver binds no field, no action and no state, so every entry below stands exactly as it was: the fields, actions and states recorded here are still unshipped, still re-proved against the tree on every run, and still wait for the landings each entry names. Nothing is stubbed and nothing is approximated through the header. The eighth surface, drupal-pointer-never-a-review-target, takes no driver and no allowlist exemption.",
+      "driven": {
+        "aspect": "identity",
+        "reading": "The immutable target header of the review screen's drawing, §IV: the artifact's display title, the type tag and the type id on the mono meta line beneath it, the pinned representation revision with its pinned marker, every row fact the host authorized, and the header's inertness — no edit control, no link, no revision picker inside it.",
+        "driver": "reviewTargetHeaderDriver",
+        "anchor": "review-target-header",
+        "surfaces": [
+          "review-card-email-body",
+          "review-card-mixed-kind",
+          "review-card-screenshot",
+          "review-card-slide-deck",
+          "review-card-dashboard",
+          "review-card-portlet",
+          "review-card-cms-page"
+        ],
+        "why": "The header is the one reading these seven kinds share and the only one of their readings the default branch already draws, so it is driven over the SHIPPED component through a props-only mount whose rows seed a stored artifact row and never a finished reading — the product's own composer words the type tag, the elided revision and every row fact, so the driver exercises the chain composer to component rather than a component printing its own props back. It is not one of the aspects a readiness entry is about: the family declares no field, no action and no state binding at all, and the guard re-proves that from the driver source rather than taking it on trust. drupal-pointer-never-a-review-target is deliberately outside the family: its drawn identity line says it is not pinnable and is never a review target, while the shipped header draws the pinned marker unconditionally, so putting it through this family would assert of it a pinned header the drawing says it never has."
+      },
       "surfaces": [
         "review-card-email-body",
         "review-card-mixed-kind",

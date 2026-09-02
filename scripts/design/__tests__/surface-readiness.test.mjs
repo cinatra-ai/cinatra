@@ -16,9 +16,15 @@
  * every claim in it against the tree on every run:
  *
  *   1. a listed surface is a REAL surface of the manifest it names;
- *   2. a listed surface is NOT also covered — a readiness entry, a driver in
- *      SURFACE_DRIVERS and an allowlist exemption are mutually exclusive
- *      readings of the same surface;
+ *   2. a listed surface is never allowlisted, and never driven for a LISTED
+ *      aspect. It may be driven for a reading that is not one of those aspects
+ *      at all — this wave drives the immutable target header seven of its eight
+ *      surfaces share — and where it is, the driver has to be the header-only
+ *      family, its testid coverage has to be that family's shared anchor, and
+ *      the family has to declare no field, action or state binding whatsoever.
+ *      All three are re-proved from source below, so a driver that ever grew an
+ *      aspect binding would go red here rather than quietly contradicting an
+ *      entry that still says the aspect is unshipped;
  *   3. a listed ACTION is genuinely unshipped: no first-party module carries
  *      the action-and-outcome pair the manifest declares, and the entry repeats
  *      the manifest's own outcome rather than one of its own invention. THE
@@ -140,6 +146,33 @@ const SOURCE = firstPartySourceFiles().map((file) => ({
  */
 const ASPECTS = new Set(["action", "field", "state"]);
 
+/**
+ * THE HEADER-ONLY DRIVER FAMILY (cinatra#3157 W1). Seven of this wave's eight
+ * surfaces are driven for exactly one thing: the immutable target header the
+ * review screen's drawing declares at §IV. The family is registered by spreading
+ * its fixture list into SURFACE_DRIVERS, so the surface ids never appear in
+ * contract.ts as literal keys — reading contract.ts for a key would therefore
+ * report "not driven" for a surface that IS driven. The fixture list is the
+ * registration, so it is what this guard reads.
+ */
+const HEADER_FAMILY_FIXTURES = readText(
+  path.join(
+    REPO_ROOT,
+    "src",
+    "app",
+    "design-fixtures",
+    "conformance",
+    "lifecycle-review-target-header-fixture-data.ts",
+  ),
+);
+/** The shared testid-contract anchor the family drives, its factory, its list. */
+const HEADER_FAMILY_ANCHOR = "review-target-header";
+const HEADER_FAMILY_FACTORY = "reviewTargetHeaderDriver";
+const HEADER_FAMILY_FIXTURE_LIST = "LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES";
+const HEADER_FAMILY_SURFACES = new Set(
+  [...HEADER_FAMILY_FIXTURES.matchAll(/surfaceId:\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+);
+
 const REASON_TOKENS = new Set([
   // The reading is drawn by a SERVER component inside the review card's own
   // credentialed island frame, so no props-only harness mount can reach it.
@@ -217,29 +250,137 @@ describe("surface-readiness.json is still true of this tree", () => {
     }
   });
 
-  it("a listed surface is not also covered — readiness and coverage are exclusive", () => {
-    const covered = new Set(Object.keys(testidContract.surfaces));
+  it("a listed surface is never allowlisted, and is covered only through the header-only family", () => {
+    const covered = testidContract.surfaces;
     const allowed = new Set(allowlist.map((e) => e.surface));
     // Walk each wave's OWN surface list rather than the flattened entries: a
     // surface a wave declares but writes no entry for is still a surface the
-    // wave says it could not drive, and it must not be covered, allowlisted or
-    // driven either. Every entry's surface is one of these, proved above.
-    const listedSurfaces = readiness.waves.flatMap((wave) =>
-      wave.surfaces.map((surface) => ({ surface })),
-    );
-    for (const entry of listedSurfaces) {
-      expect(covered.has(entry.surface), `${entry.surface} is both listed and covered`).toBe(false);
-      expect(allowed.has(entry.surface), `${entry.surface} is both listed and allowlisted`).toBe(
-        false,
-      );
-      // A driver is the thing a readiness entry says does not exist yet. The
-      // driver map is keyed by the surface id, so its presence in contract.ts
-      // as a key is the check — a wave cannot claim a surface is undrivable
-      // while the suite drives it.
+    // wave says it could not drive for any listed aspect. Every entry's surface
+    // is one of these, proved above.
+    const listedSurfaces = readiness.waves.flatMap((wave) => wave.surfaces);
+    for (const surface of listedSurfaces) {
+      // An allowlist exemption is a whole-surface pass. It is exactly what this
+      // epic refuses, and no driver of any kind makes it acceptable.
+      expect(allowed.has(surface), `${surface} is both listed and allowlisted`).toBe(false);
+      // A BESPOKE driver — one written for this surface alone — could bind any
+      // aspect it liked, so a listed surface may never have one. The family
+      // registers its members by spreading a fixture list, so a literal key in
+      // contract.ts is a driver of the other kind.
       expect(
-        contractSource.includes(`"${entry.surface}":`),
-        `${entry.surface} is on the readiness list, but contract.ts names it as a driver key`,
+        contractSource.includes(`"${surface}":`),
+        `${surface} is on the readiness list, but contract.ts names it as a driver key of its own`,
       ).toBe(false);
+
+      const entry = covered[surface];
+      if (!HEADER_FAMILY_SURFACES.has(surface)) {
+        // Not in the family and listed: it must be covered by nothing at all.
+        expect(
+          entry,
+          `${surface} is on the readiness list with no driver, but the testid contract covers it`,
+        ).toBeUndefined();
+        continue;
+      }
+      // In the family: covered, and covered ONLY through the family's shared
+      // anchor. A surface that grew a coverage entry of its own would be
+      // asserting controls of its own, which is the thing its entries deny.
+      expect(
+        entry,
+        `${surface} is driven by the header family, but the testid contract does not cover its anchor`,
+      ).toBeDefined();
+      expect(
+        Object.keys(entry),
+        `${surface} may be covered only as a reference to ${HEADER_FAMILY_ANCHOR}`,
+      ).toEqual(["$ref"]);
+      expect(entry.$ref).toBe(HEADER_FAMILY_ANCHOR);
+    }
+  });
+
+  it("the header-only family binds no field, no action and no state", () => {
+    // This is the assertion that lets a listed surface be driven at all: the
+    // family drives an identity the product already draws, and NOTHING the
+    // readiness entries below are about. Read from the driver source, so the
+    // day someone gives the family an aspect binding, this goes red and the
+    // entry that still calls that aspect unshipped has to be settled first.
+    const at = contractSource.indexOf(`export function ${HEADER_FAMILY_FACTORY}(`);
+    expect(at, `${HEADER_FAMILY_FACTORY} is not exported from contract.ts`).toBeGreaterThan(-1);
+    const rest = contractSource.slice(at);
+    const end = rest.indexOf("\n}\n");
+    expect(end, `${HEADER_FAMILY_FACTORY} has no readable body`).toBeGreaterThan(-1);
+    const body = rest.slice(0, end);
+    for (const aspect of ASPECTS) {
+      expect(
+        new RegExp(`\\n\\s*${aspect}s:\\s*\\{\\s*\\},`).test(body),
+        `${HEADER_FAMILY_FACTORY} does not declare an EMPTY ${aspect} map — it binds a ${aspect}, which every listed entry says is unshipped`,
+      ).toBe(true);
+    }
+  });
+
+  it("the driver map registers the header family through the header-only factory", () => {
+    // Membership is read from the FIXTURE LIST above, and emptiness from the
+    // FACTORY below. Neither on its own says the driver map actually PAIRS the
+    // two: a spread that mapped this fixture list through some other factory
+    // would bind whatever that factory binds, for exactly these listed
+    // surfaces, while both of those checks stayed green. So prove the pairing.
+    expect(
+      contractSource,
+      `contract.ts does not import ${HEADER_FAMILY_FIXTURE_LIST} from the fixture file this guard reads`,
+    ).toMatch(
+      new RegExp(
+        `import\\s*\\{[^}]*${HEADER_FAMILY_FIXTURE_LIST}[^}]*\\}\\s*from\\s*"[^"]*lifecycle-review-target-header-fixture-data"`,
+      ),
+    );
+    const mapAt = contractSource.indexOf("export const SURFACE_DRIVERS");
+    expect(mapAt, "contract.ts exports no SURFACE_DRIVERS map").toBeGreaterThan(-1);
+    const map = contractSource.slice(mapAt);
+    const spreads = [...map.matchAll(/\.\.\.Object\.fromEntries\(([\s\S]*?)\n {2}\),/g)].map(
+      (m) => m[1],
+    );
+    const family = spreads.filter((s) => s.includes(HEADER_FAMILY_FIXTURE_LIST));
+    expect(
+      family.length,
+      `${HEADER_FAMILY_FIXTURE_LIST} is spread into SURFACE_DRIVERS ${family.length} times, not once`,
+    ).toBe(1);
+    const factories = [
+      ...new Set([...family[0].matchAll(/\b(\w*[Dd]river)\(/g)].map((m) => m[1])),
+    ].sort();
+    expect(
+      factories,
+      `the header family's fixture list is registered through something other than ${HEADER_FAMILY_FACTORY}`,
+    ).toEqual([HEADER_FAMILY_FACTORY]);
+    // And the KEY is the surface id, which is what makes the fixture list the
+    // membership the exclusivity test above is entitled to read.
+    expect(family[0]).toContain("fixture.surfaceId");
+  });
+
+  it("a wave's driven block names exactly the surfaces the driver family takes", () => {
+    for (const wave of readiness.waves) {
+      const driven = wave.surfaces.filter((surface) => HEADER_FAMILY_SURFACES.has(surface));
+      if (driven.length === 0) {
+        expect(
+          wave.driven ?? null,
+          `${wave.wave} drives none of its listed surfaces, but records a driven block`,
+        ).toBe(null);
+        continue;
+      }
+      expect(
+        wave.driven,
+        `${wave.wave} drives ${driven.length} of its listed surfaces and says nothing about it`,
+      ).toBeDefined();
+      // The words are held to the registration, in both directions, so the
+      // summary can neither miss a surface the family took nor claim one it did
+      // not — which is how the eighth surface stays honestly undriven.
+      expect(wave.driven.surfaces).toEqual(driven);
+      expect(wave.driven.anchor).toBe(HEADER_FAMILY_ANCHOR);
+      expect(wave.driven.driver).toBe(HEADER_FAMILY_FACTORY);
+      // A driven reading may never be one of the aspects a readiness entry is
+      // about; if it were, the wave would be claiming and denying the same
+      // thing on one page.
+      expect(
+        ASPECTS.has(wave.driven.aspect),
+        `${wave.wave}: the driven block claims the listed aspect ${wave.driven.aspect}`,
+      ).toBe(false);
+      expect(typeof wave.driven.why).toBe("string");
+      expect(wave.driven.why.length).toBeGreaterThan(0);
     }
   });
 
