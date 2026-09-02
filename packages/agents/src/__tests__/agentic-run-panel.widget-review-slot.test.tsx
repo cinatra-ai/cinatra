@@ -292,7 +292,7 @@ afterEach(() => {
 });
 
 describe("the placeholder, on the widget", () => {
-  it("draws while the run works — the spinner and the empty review screen", async () => {
+  it("draws while the run works — the card's name and its centred arc", async () => {
     stubFetch(() => seedBody(), () => PENDING);
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(
@@ -309,6 +309,12 @@ describe("the placeholder, on the widget", () => {
       return el;
     });
     expect(placeholder.querySelector("svg.animate-spin")).not.toBeNull();
+    // The same card the run page draws, named the same way (cinatra#3051): the
+    // widget mounts the one component, so the drawing reaches both hosts at
+    // once. The anatomy itself is pinned in
+    // `review-gate-placeholder-as-drawn.test.tsx`.
+    expect(placeholder.textContent).toBe("Agentic Run Progress");
+    expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).toBeNull();
     expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
       "working",
     );

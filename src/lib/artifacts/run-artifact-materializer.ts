@@ -693,6 +693,50 @@ export async function materializeRunArtifacts(input: {
         error,
       });
     }
+    // cinatra#3051 — THE TWO READINGS DISAGREED, AND THE SILENCE WAS THE BUG.
+    //
+    // The locally-persisted authority was compiled from this package's own
+    // service description at install and says, at THIS run's pin, that the
+    // package declares at least one artifact binding. The read above resolved
+    // the package for the same pin and found none, with nothing to report: no
+    // grammar error, no parity error — an unreadable payload in the resolved
+    // copy, or a document the collector walks and finds nothing in, both come
+    // back as an empty, errorless result.
+    //
+    // Until now that returned an EMPTY outcome list, which the run-completion
+    // gate reads as "this run owed no artifact" and lands `completed`. The
+    // eighth proof round of cinatra#3051 measured what that costs: two real runs
+    // completed cleanly, wrote a full draft, materialized nothing, opened no
+    // review gate, and no line anywhere named a reason.
+    //
+    // It is the #2486 contract that decides this, in its own words: "We cannot
+    // prove the run owed no artifact, so we do not claim success." A registry
+    // that does not answer already fails the run for exactly this reason. A
+    // registry that answers with a copy declaring nothing, while the template
+    // says it declares something, is the same ignorance wearing a 200.
+    //
+    // NARROW ON PURPOSE. Only a PROVABLE disagreement is loud: `true` at this
+    // run's own version pin. `false` short-circuits above (the run owes nothing,
+    // provably, and never reads the registry at all); `null` — an unbackfilled
+    // legacy row, or a flag that no longer describes this pin — proves no
+    // disagreement and keeps the existing posture untouched.
+    if (
+      hasArtifactBindings === true &&
+      bindings.length === 0 &&
+      loaded.errors.length === 0
+    ) {
+      outcomes.push({
+        ok: false,
+        outputId: "(binding-disagreement)",
+        nodeId: null,
+        extension: null,
+        error:
+          `the template records has_artifact_bindings=true for ${packageName}@` +
+          `${input.packageVersion ?? "(unpinned)"}, but the package resolved for this run ` +
+          "declares no artifact binding at all. The two readings of one package disagree, " +
+          "so this run cannot be shown as a clean success having materialized nothing.",
+      });
+    }
   } catch (err) {
     // Package/binding resolution failed wholesale (registry unreachable,
     // template gone). One synthetic failure outcome, carrying the POSITIVE

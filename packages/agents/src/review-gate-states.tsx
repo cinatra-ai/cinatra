@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
-import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
+import { SpinnerArc } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -144,35 +144,51 @@ export function ReviewGateLoading() {
 
 
 /**
- * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997).
+ * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997, redrawn to the
+ * ratified drawing in cinatra#3051 after the eighth proof round graded it).
  *
- * The maintainer's words are the whole specification, so they are quoted rather
- * than paraphrased:
+ * THE DRAWING IS THE SPECIFICATION, so its sentences are quoted rather than
+ * paraphrased — Agent run & review, "the run progress card":
  *
- *   "The 'Agentic Run Progress' card should basically just be a card (maybe even
- *    an empty review screen) with a spinning icon which is a temporary
- *    placeholder for the review screen. Once the agent is done and the output
- *    generated, that 'Agentic Run Progress' card is being automatically replaced
- *    with the 'Review requested' screen."
+ *   "While the run works, the detail carries a placeholder. A run that will ask
+ *    for a review carries, in the run detail, the run progress card — and while
+ *    the run is working that card is a placeholder for the review screen: the
+ *    card frame, and a spinning icon, the indigo arc of Components § Skeleton /
+ *    Spinner. It names no status, reports no result and draws nothing to press."
  *
- * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
- * nothing else. There is no heading, no status word, no progress sentence and no
- * step list, because the words authorize none of those and the card they
- * describe is defined by what it does NOT say: it is the review screen's own
- * frame, empty, while the screen is still coming.
+ *   "It is replaced, in place, when the output is generated. The placeholder
+ *    becomes the Review requested gate above — the same detail, under the same
+ *    rail. It happens on its own: there is nothing for the reader to open or
+ *    press to bring it."
  *
- * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
- * of the review screen's states — the one before the gate exists — and it is
- * built from the two pieces the review screen is already built from: the same
- * 30px header tile the gate header draws its clipboard mark in, and the shipped
- * `ReviewGateLoading` bar motif. Keeping it here is what makes the swap read as
- * one card changing rather than two cards trading places, and it is why the
- * replacement needs no new geometry: the placeholder and the screen that
- * replaces it are the same box.
+ * AND THE DRAWN ANATOMY at the anchors `run-progress-placeholder` (Agent run &
+ * review) and `run-progress-placeholder-in-thread` (Lifecycle cards § I), which
+ * draw the SAME card as each other: the card, a title in the sans face at 14px /
+ * weight 700 / ink reading "Agentic Run Progress", then ONE arc — centred, 22px,
+ * stroked in the indigo accent, spinning 1s linear — and nothing else.
  *
- * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
- * — the same component the orchestrator stepper's executing card spins — not a
- * second spinner drawn here.
+ * WHAT THIS USED TO DRAW, AND WHY IT WAS WRONG. It drew no title at all, a small
+ * ink-toned spinner inside a 30px top-left tile, and the shipped
+ * `ReviewGateLoading` five-bar skeleton as a nested panel under it. That reading
+ * came from the request that opened cinatra#2997 — "maybe even an empty review
+ * screen" — which the drawing has since settled: §IV's loading skeleton is a
+ * DIFFERENT state, drawn while the host prepares a target that already exists,
+ * and Components § Skeleton / Spinner steers against pairing the two marks in
+ * one slot. The eighth proof round read all three back off the pixels in both
+ * palettes; they are pinned now in
+ * `__tests__/review-gate-placeholder-as-drawn.test.tsx`.
+ *
+ * THE TITLE BELONGS TO THIS COMPONENT, not to its hosts. All four mounts — the
+ * run page's panel, the setup run page's review step, the orchestrator stepper's
+ * terminal card and the conversation column inside the site widget — wrap it in
+ * a card frame that draws no title of its own, so the card is named once here
+ * and every host reads the same drawing.
+ *
+ * THE ARC IS THE DESIGN SYSTEM'S. `SpinnerArc` from `@cinatra-ai/sdk-ui` is
+ * Components § Skeleton / Spinner drawn once — the ratified path
+ * (`M21 12a9 9 0 1 1-6.219-8.56`) with no ring behind it, which is what "the
+ * indigo arc" means and what the sibling `LoadingSpinner` (arc over a
+ * 25%-opacity track ring) is not.
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
@@ -180,20 +196,22 @@ export function ReviewGatePlaceholder() {
   return (
     <div
       data-conformance-id="review-gate-placeholder"
-      // A busy REGION, named for a reader who cannot see the spin. The label is
-      // not copy on the card — nothing is drawn from it — it is the accessible
-      // name of a region that is deliberately wordless.
+      // A busy REGION, named for a reader who cannot see the spin. The card now
+      // names itself on screen, so the region takes its accessible name from the
+      // title rather than carrying a second, invisible one.
       role="status"
       aria-busy="true"
-      aria-label="Working"
-      className="flex w-full flex-col gap-3"
+      className="w-full"
     >
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-          <LoadingSpinner className="size-4" />
-        </span>
+      <p
+        data-placeholder-title="agentic-run-progress"
+        className="font-sans text-sm font-bold text-foreground"
+      >
+        Agentic Run Progress
+      </p>
+      <div className="grid place-items-center pb-[22px] pt-[26px]">
+        <SpinnerArc className="size-[22px] text-primary" />
       </div>
-      <ReviewGateLoading />
     </div>
   );
 }
