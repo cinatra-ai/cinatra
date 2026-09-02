@@ -110,6 +110,7 @@ import { fieldRendererRegistry } from "../../../agents/src/field-renderer-regist
 import { RUN_SEED_ROUTE } from "../run-seed-request";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
 import { mountSurface } from "./conversation-column-harness";
+import { Input } from "@/components/ui/input";
 
 /**
  * A REAL FIELD, so the buffer under test is filled by keystrokes rather than by
@@ -129,7 +130,7 @@ function registerTypedAnswerRenderer(): void {
           ? ((value as { answer?: unknown }).answer ?? "")
           : (value ?? "");
       return (
-        <input
+        <Input
           data-testid="typed-answer"
           value={typeof held === "string" ? held : ""}
           onChange={(event) => onChange({ answer: event.currentTarget.value })}
