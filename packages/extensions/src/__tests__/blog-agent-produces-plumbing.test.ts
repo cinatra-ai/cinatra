@@ -22,15 +22,29 @@ function manifest(agent: string): unknown {
   return JSON.parse(readFileSync(join(EXT, agent, "package.json"), "utf8"));
 }
 
+// cinatra#3034 re-ratification: every blog producer's entry is now TYPED — it
+// names the exact object type the production lands on, not just the extension —
+// and the LinkedIn writer, which used to declare nothing, produces a LinkedIn
+// post draft.
 describe("produces: plumbing — package.json → readAgentProducesFromPackageManifest", () => {
-  it("blog-idea-generator-agent → @cinatra-ai/blog-idea-artifact", () => {
+  it("blog-idea-generator-agent → the blog-idea type", () => {
     const out = readAgentProducesFromPackageManifest(manifest("blog-idea-generator-agent"));
-    expect(out).toEqual([{ extension: "@cinatra-ai/blog-idea-artifact" }]);
+    expect(out).toEqual([
+      {
+        extension: "@cinatra-ai/blog-idea-artifact",
+        objectTypeId: "@cinatra-ai/blog-idea-artifact:blog-idea",
+      },
+    ]);
   });
 
-  it("blog-draft-writer-agent → @cinatra-ai/blog-post-artifact", () => {
+  it("blog-draft-writer-agent → the blog-post type", () => {
     const out = readAgentProducesFromPackageManifest(manifest("blog-draft-writer-agent"));
-    expect(out).toEqual([{ extension: "@cinatra-ai/blog-post-artifact" }]);
+    expect(out).toEqual([
+      {
+        extension: "@cinatra-ai/blog-post-artifact",
+        objectTypeId: "@cinatra-ai/blog-post-artifact:post",
+      },
+    ]);
   });
 
   it("blog-image-prompt-agent → NONE (text-only; no produces)", () => {
@@ -40,18 +54,25 @@ describe("produces: plumbing — package.json → readAgentProducesFromPackageMa
     expect(pkg.cinatra.produces).toBeUndefined();
   });
 
-  it("blog-linkedin-writer-agent → NONE (no produces)", () => {
+  it("blog-linkedin-writer-agent → the LinkedIn post-draft type", () => {
     const out = readAgentProducesFromPackageManifest(manifest("blog-linkedin-writer-agent"));
-    expect(out).toEqual([]);
+    expect(out).toEqual([
+      {
+        extension: "@cinatra-ai/linkedin-artifacts",
+        objectTypeId: "@cinatra-ai/linkedin:post-draft",
+      },
+    ]);
   });
 
   it("the OAS metadata.cinatra.produces mirrors the manifest array shape (consistency, not the source of truth)", () => {
-    for (const [agent, expected] of [
-      ["blog-idea-generator-agent", "@cinatra-ai/blog-idea-artifact"],
-      ["blog-draft-writer-agent", "@cinatra-ai/blog-post-artifact"],
+    for (const agent of [
+      "blog-idea-generator-agent",
+      "blog-draft-writer-agent",
+      "blog-linkedin-writer-agent",
     ] as const) {
       const oas = JSON.parse(readFileSync(join(EXT, agent, "cinatra", "oas.json"), "utf8"));
-      expect(oas.metadata.cinatra.produces).toEqual([{ extension: expected }]);
+      const pkg = manifest(agent) as { cinatra: { produces: unknown } };
+      expect(oas.metadata.cinatra.produces).toEqual(pkg.cinatra.produces);
     }
   });
 });

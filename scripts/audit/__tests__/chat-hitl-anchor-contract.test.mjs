@@ -113,6 +113,9 @@ describe("a changed design pin without a re-ratified anchor digest fails", () =>
           specCommit: movedPin,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          // the fourth input, recorded by the adoption road: a re-ratification
+          // that left it out would produce a digest over three of the four.
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     };
@@ -206,6 +209,20 @@ describe("the digest is a digest, not a formatting fingerprint", () => {
     expect(computeAnchorDigest(inputs)).toBe(computeAnchorDigest(clone(inputs)));
   });
 
+  it("the note says how many inputs the digest really has, and names them all", () => {
+    // The note is what a reader consults before touching this file, so a stale
+    // input count there sends them to re-ratify over the wrong inputs. The
+    // definition sentence is held to the shape the engine actually hashes:
+    // once anchorsUnresolvedAtPin is recorded it is an input like the others.
+    const definition = contract().note.slice(0, contract().note.indexOf("Moving the design pin"));
+    const recorded = Array.isArray(contract().anchorsUnresolvedAtPin);
+    expect(definition).toContain(recorded ? "exactly four inputs" : "exactly three inputs");
+    expect(definition).toContain("specCommit");
+    expect(definition).toContain("domExpectations");
+    expect(definition).toContain("chat-hitl-capture-recorder.mjs");
+    if (recorded) expect(definition).toContain("anchorsUnresolvedAtPin");
+  });
+
   it("the recorded digest is the one the inputs really produce", () => {
     expect(contract().digest).toBe(
       computeAnchorDigest(
@@ -213,6 +230,7 @@ describe("the digest is a digest, not a formatting fingerprint", () => {
           specCommit: manifest().specCommit,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     );
