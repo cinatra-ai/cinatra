@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,21 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Review gate states (surfaces: review-gate-loading, review-gate-blocked)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3163, epic #3155: the REAL ReviewGateLoading and
+                ReviewGateBlocked. Both are props-only, so nothing is intercepted;
+                the blocked reason comes from the closed set the surface model
+                owns and the panel writes its own words from it. */}
+            <ReviewGateStateConformanceFixtures />
           </CardContent>
         </Card>
       </PageContent>

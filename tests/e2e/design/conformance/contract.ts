@@ -54,6 +54,12 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  REVIEW_DECISION_FLOOR,
+  REVIEW_DECISION_FLOOR_ROWS,
+  type ReviewDecisionFloorRow,
+  type ReviewDecisionFloorSurfaceId,
+} from "./review-decision-floor";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -1619,11 +1625,15 @@ const HARNESS_ANCHOR_SURFACE_ID = "status-pills";
  */
 const AWAITING_MOUNT_SETTLE_MS = 5_000;
 
-function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver {
+function awaitingMount(
+  surfaceId: string,
+  driver: SurfaceDriver,
+  reason: string = AWAITING_PER_SCOPE_SURFACES,
+): SurfaceDriver {
   const guard = async (page: Page): Promise<void> => {
     await expect(
       page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
-      `the conformance harness itself did not render — this is a real failure, never a surface awaiting cinatra#3152`,
+      `the conformance harness itself did not render — this is a real failure, never a surface whose mount has not landed yet`,
     ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
 
     let mounted = true;
@@ -1635,7 +1645,7 @@ function awaitingMount(surfaceId: string, driver: SurfaceDriver): SurfaceDriver 
     } catch {
       mounted = false;
     }
-    test.skip(!mounted, `${surfaceId}: ${AWAITING_PER_SCOPE_SURFACES}`);
+    test.skip(!mounted, `${surfaceId}: ${reason}`);
   };
   return {
     ...driver,
@@ -3267,6 +3277,515 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
   states: {},
 };
 
+// ---------------------------------------------------------------------------
+// The REVIEW-TARGET / DECISION-FLOOR family (cinatra#3163, epic #3155 W7)
+// ---------------------------------------------------------------------------
+//
+// The fifteen surfaces of the artifact-review drawing that make up the review
+// target, the floor beneath it, the decision at its foot, the gate's own
+// readings, the conversation above the prompt window, and the promoted row.
+//
+// ONE LIST, ONE MAP. The rows live in review-decision-floor.ts, keyed by the
+// manifest surface id, and the map below is built FROM them: being listed is
+// being mapped, so there is no second place a surface could be forgotten. The
+// family factory takes its two parameters off the row — the gate state §VII
+// names (loading / blocked / disabled) and the provenance tier §V draws (a
+// build-time renderer / a runtime one / the floor) — exactly as cinatra#3163
+// asks for.
+//
+// TWO OF THE FIFTEEN ARE DRAWN TODAY, AND THIS WAVE DRIVES THEM FOR REAL. The
+// gate's LOADING skeleton and its BLOCKED panel are props-only components of the
+// one review renderer, and the harness mounts them
+// (src/app/design-fixtures/conformance/review-gate-state-fixtures.tsx). Their
+// drivers run on every boot: the skeleton's busy region and its silence, and the
+// blocked panel's reason from the drawing's own CLOSED SET together with the
+// refresh back to the live gate.
+//
+// THE OTHER THIRTEEN ARE NOT, and this wave does not pretend otherwise. Grounded
+// by reading the shipped tree, not assumed: the target panel, its floor region,
+// the decision bar, its disabled reason and the prompt window all ship — and
+// none of them can be composed here, because the repository's one-card gate
+// keeps the decision floor to the card and to the bar's own module (the
+// foundational wave of this epic moved its own proof off the floor for exactly
+// that reason), and the target panel is server-only and mounts a real type
+// renderer, which a core fixture may not name. Two of the bar's three
+// affordances are not on the default branch at all — the branch draws
+// reject-review and approve-review where the drawing draws Regenerate and
+// Continue — and land with open pull request 3100. The conversation panel ships
+// and draws the exchange, but carries no anchor for any of its three surfaces
+// and is filled by a request its parent owns. Nothing in the tree promotes a
+// row. So each of those thirteen is guarded by `awaitingMount` — the same guard,
+// and the same fail-closed harness anchor, the Workspace surfaces have used
+// since cinatra#3152 — and each names in its skip reason exactly what it is
+// waiting for. Nothing here stands in for a surface: every assertion is written
+// in full against the drawing's own declarations and runs unchanged, for real,
+// the moment a mount exists.
+
+/** A mount of one review-decision-floor surface, in one reading. */
+function reviewDecisionFloorMount(surface: string, variant: string): string {
+  return `[data-surface-id="${surface}"][data-variant="${variant}"]`;
+}
+
+/**
+ * The surface's own drawn panel inside its mount.
+ *
+ * A row whose `anchor` is null draws no panel of its own by design (§V's two
+ * renderer tiers, which the drawing forbids from naming themselves): those are
+ * read on the target they render, so the panel there IS the review target.
+ */
+function reviewDecisionFloorPanel(root: Locator, row: ReviewDecisionFloorRow): Locator {
+  return root.locator(`[data-conformance-id="${row.anchor ?? "review-target"}"]`);
+}
+
+/**
+ * Assert a manifest field is drawn BOUND to its declared source, addressed
+ * through the binding the surface names on itself — the
+ * `data-field="<name>=<source>"` convention the shipped review target already
+ * carries on its own root. A surface bound to the wrong source cannot resolve
+ * the locator at all. The union covers both shapes the convention allows: the
+ * panel itself carrying the binding, and a descendant of it carrying it.
+ */
+function reviewDecisionFloorField(
+  row: ReviewDecisionFloorRow,
+  field: { name: string; source: string },
+): { source: string; assert: (page: Page, root: Locator) => Promise<void> } {
+  const anchor = row.anchor ?? "review-target";
+  const binding = `${field.name}=${field.source}`;
+  return {
+    source: field.source,
+    assert: async (_page, root) => {
+      const bound = root.locator(
+        `[data-conformance-id="${anchor}"][data-field="${binding}"], ` +
+          `[data-conformance-id="${anchor}"] [data-field="${binding}"]`,
+      );
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+  };
+}
+
+/**
+ * THE GUARD EVERY ABSENCE READING TAKES FIRST.
+ *
+ * Several of this family's assertions are absences the drawing states in so many
+ * words — "nothing on either target says which resolved it", "there is no
+ * dedicated request changes button", "there is no panel above an empty
+ * exchange". An absence is evidence ONLY once the thing it is read on is proven
+ * drawn: on a missing mount a zero count proves nothing at all. So every such
+ * reading asserts its mount first, through this one helper.
+ */
+const REVIEW_DECISION_FLOOR_ABSENCE_GUARD = async (
+  page: Page,
+  surface: string,
+  variant: string,
+): Promise<Locator> => {
+  const mount = page.locator(reviewDecisionFloorMount(surface, variant));
+  await expect(mount).toHaveCount(1);
+  return mount;
+};
+
+/** The closed set §VII names for a gate that cannot be prepared or decided.
+ *  The drawing fixes the SET, so the driver reads membership of it and never
+ *  one chosen value: no-longer-pending, targets-mismatch, revision-not-live. */
+const REVIEW_BLOCKED_REASONS = ["no-longer-pending", "targets-mismatch", "revision-not-live"];
+
+/**
+ * A drawn state variant: its own mount, drawing the same surface in that
+ * reading.
+ *
+ * §V.1 is explicit about what a reading is NOT — a sentence about a failure
+ * "reports through the app's toast surface, never as a line written into the
+ * panel" — and §VIII is explicit about what no reading of this family may grow:
+ * "There is no control for no". So a state variant is the surface drawn
+ * differently, never a note or a control added to it.
+ */
+function reviewDecisionFloorState(row: ReviewDecisionFloorRow, variant: string): StateAssert {
+  return async (page) => {
+    const mount = await REVIEW_DECISION_FLOOR_ABSENCE_GUARD(page, row.surface, variant);
+    const panel = reviewDecisionFloorPanel(mount, row);
+    await expect(panel).toBeVisible();
+    if (row.gateState === "blocked") {
+      // §VII: "a single blocked state naming the reason from the closed set".
+      const reason = await panel.getAttribute("data-blocked-reason");
+      expect(
+        REVIEW_BLOCKED_REASONS,
+        `${row.surface}: a blocked gate names its reason from the closed set, and "${reason}" is not in it`,
+      ).toContain(reason);
+      // "A blocked gate offers a refresh back to the live gate."
+      await expect(panel.locator('[data-action="refresh-gate -> live-gate"]')).toBeVisible();
+      return;
+    }
+    if (row.gateState === "loading") {
+      // §VII: "a loading skeleton in the target slot — never a flash of empty
+      // chrome", and never a status word: a skeleton reports nothing.
+      await expect(panel).toHaveAttribute("aria-busy", "true");
+      await expect(panel).toHaveText(/^\s*$/);
+      return;
+    }
+    // Every other reading of this family: the failure sentence is a toast, never
+    // a line written into the panel.
+    await expect(panel.locator('[role="alert"]')).toHaveCount(0);
+    if (variant === "empty") {
+      await expect(panel).not.toHaveText(/^\s*$/);
+    }
+  };
+}
+
+/**
+ * The `kind:*` reading, which §XI.10's two promotion surfaces declare: the row
+ * carries the artifact kind it draws, the same way the extension listing card
+ * carries its catalog kind (`cardKindState`).
+ */
+function reviewDecisionFloorKindState(row: ReviewDecisionFloorRow, kind: string): StateAssert {
+  return async (_page, root) => {
+    await expect(reviewDecisionFloorPanel(root, row)).toHaveAttribute("data-kind", kind);
+  };
+}
+
+/**
+ * The shared review-decision-family factory, parameterized by the gate state and
+ * the provenance tier the row carries.
+ *
+ * What every surface in this family owes the drawing, and therefore what this
+ * factory asserts for all fifteen:
+ *
+ *   - the surface is drawn on its own mount, addressed by the anchor it carries
+ *     (or, for §V's two renderer tiers, on the target they render — the drawing
+ *     gives them no anchor of their own on purpose);
+ *   - §V: the resolution "is not put on screen: a display shows the work and
+ *     nothing about itself — no renderer name, no package identity, no
+ *     provenance line". The one region that speaks is the floor, and only there;
+ *   - §VIII: "There is no control for no" — no reading of this family draws a
+ *     turn-back decision;
+ *   - the fields the manifest binds, addressed through the binding the surface
+ *     names on itself, so a surface bound to the wrong source cannot resolve;
+ *   - the actions the manifest declares, pressed on the control that declares
+ *     exactly that action AND that outcome (`declaredAction`), so a driver
+ *     cannot press one control and report another one's outcome;
+ *   - every state variant the manifest declares.
+ */
+function reviewDecisionFloorDriver(row: ReviewDecisionFloorRow): SurfaceDriver {
+  const driver: SurfaceDriver = {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(reviewDecisionFloorMount(row.surface, "populated")),
+    present: async (page, root) => {
+      await REVIEW_DECISION_FLOOR_ABSENCE_GUARD(page, row.surface, "populated");
+      const panel = reviewDecisionFloorPanel(root, row);
+      await expect(panel).toBeVisible();
+      // Nothing about itself. The floor is the ONE region the drawing keeps, so
+      // it is the one surface allowed to carry that anchor.
+      if (row.provenance !== "floor") {
+        await expect(panel.locator('[data-conformance-id="review-target-floor"]')).toHaveCount(0);
+      }
+      // §VIII — there is no control for "no", anywhere in this family.
+      await expect(panel.locator('[data-action^="reject-review"]')).toHaveCount(0);
+      await expect(panel.locator('[data-action^="deny-review"]')).toHaveCount(0);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+
+  for (const field of row.fields) {
+    driver.fields[field.name] = reviewDecisionFloorField(row, field);
+  }
+
+  for (const action of row.actions) {
+    driver.actions[action.name] = declaredAction(action.name, action.outcome);
+  }
+
+  for (const state of row.states) {
+    driver.states[state] = state.startsWith("kind:")
+      ? reviewDecisionFloorKindState(row, state.slice("kind:".length))
+      : reviewDecisionFloorState(row, state);
+  }
+
+  return driver;
+}
+
+/**
+ * What each of the fifteen adds to the family shape — the sentences the drawing
+ * writes for that surface alone. Keyed by the surface union and NOT Partial, so
+ * dropping one is a compile error rather than a silently thinner driver.
+ */
+const REVIEW_DECISION_FLOOR_EXTRAS: Record<
+  ReviewDecisionFloorSurfaceId,
+  (base: SurfaceDriver) => SurfaceDriver
+> = {
+  // §IV — "The header is inert: it exposes no edit control and no revision
+  // picker, because the target is versioned and frozen." And the surface around
+  // the representation slot "adds no per-type controls of its own".
+  "review-target": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-target"]);
+      await expect(panel.locator('[data-conformance-id="review-target-revision-picker"]')).toHaveCount(0);
+      await expect(panel.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+      // The representation slot: one region, and the type renderer mounts in it.
+      await expect(panel.locator("[data-review-representation-slot]")).toHaveCount(1);
+    },
+  }),
+
+  // §V — a build-time renderer "is not put on screen". The reading IS the
+  // absence: the target renders, and nothing on it says what resolved it.
+  "review-provenance-native": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-provenance-native"]);
+      await expect(panel).toBeVisible();
+      // The absence the drawing actually forbids is a provenance REGION. Read it
+      // on the region ids the surface model owns, not only on attribute names —
+      // an absence read on a name the product never uses would pass while a
+      // provenance strip stood on screen.
+      await expect(
+        panel.locator('[data-conformance-id="review-provenance-native"]'),
+      ).toHaveCount(0);
+      await expect(
+        panel.locator('[data-conformance-id="review-provenance-marketplace"]'),
+      ).toHaveCount(0);
+      await expect(panel).not.toHaveText(/build-time|runtime/i);
+      await expect(panel.locator("[data-review-renderer-name]")).toHaveCount(0);
+      await expect(panel.locator("[data-review-renderer-package]")).toHaveCount(0);
+      await expect(panel.locator('[data-conformance-id="review-target-floor"]')).toHaveCount(0);
+    },
+  }),
+
+  // §V — and a runtime, marketplace-installed renderer is "drawn the same way",
+  // which is only proved by reading the same absence on the other tier.
+  "review-provenance-marketplace": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(
+        root,
+        REVIEW_DECISION_FLOOR["review-provenance-marketplace"],
+      );
+      await expect(panel).toBeVisible();
+      // Same reading on the other tier: the drawing says the two tiers are drawn
+      // the same way, so BOTH provenance regions must be absent here too.
+      await expect(
+        panel.locator('[data-conformance-id="review-provenance-marketplace"]'),
+      ).toHaveCount(0);
+      await expect(
+        panel.locator('[data-conformance-id="review-provenance-native"]'),
+      ).toHaveCount(0);
+      await expect(panel).not.toHaveText(/build-time|runtime/i);
+      await expect(panel.locator("[data-review-renderer-name]")).toHaveCount(0);
+      await expect(panel.locator("[data-review-renderer-package]")).toHaveCount(0);
+      await expect(panel.locator('[data-conformance-id="review-target-floor"]')).toHaveCount(0);
+    },
+  }),
+
+  // §V — "The floor is never a blank": a sanitized one-line diagnostic
+  // (package · slot · reason), over the generic read-only view of the
+  // representation, and never an empty panel where a target should be.
+  "review-target-floor": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-target-floor"]);
+      await expect(panel).not.toHaveText(/^\s*$/);
+      // A floor is a DISPLAY degrade, not a gate block: the blocked panel of
+      // §VII stops the whole surface and is never drawn in a floor's place.
+      await expect(panel.locator('[data-conformance-id="review-gate-blocked"]')).toHaveCount(0);
+    },
+  }),
+
+  // §VI — "It offers exactly three affordances: Continue (primary), Regenerate,
+  // and Comment", over ONE free-text note field, and "There is nothing to press
+  // for no". The three are the manifest's three actions, driven by the base.
+  "review-decision-bar": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-decision-bar"]);
+      for (const action of REVIEW_DECISION_FLOOR["review-decision-bar"].actions) {
+        await expect(
+          panel.locator(`[data-action="${action.name} -> ${action.outcome}"]`),
+        ).toHaveCount(1);
+      }
+      // "One note field, and it reads for both roads" — one, never a second
+      // input that appeared for one kind of artifact.
+      await expect(panel.locator("textarea")).toHaveCount(1);
+    },
+  }),
+
+  // §VI — "there is no dedicated request changes button": the window IS the
+  // request, so the only thing that carries the action is the window itself.
+  "review-prompt-window": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-prompt-window"]);
+      await expect(panel).toBeVisible();
+      await expect(panel.getByRole("button", { name: /request changes/i })).toHaveCount(0);
+    },
+  }),
+
+  // §VII — "A reviewer who may see the gate but not act on it gets the
+  // affordances disabled, with a one-line reason, rather than a live control
+  // that fails on click."
+  "review-decision-disabled": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-decision-disabled"]);
+      await expect(panel).not.toHaveText(/^\s*$/);
+      // The reason accompanies DISABLED controls, never live ones.
+      const bar = root.locator('[data-conformance-id="review-decision-bar"]');
+      await expect(bar.locator("button[disabled]").first()).toBeAttached();
+    },
+  }),
+
+  // §VII — the loading skeleton in the target slot. It is drawn today, and the
+  // shipped skeleton reports nothing at all: a busy region and no words.
+  "review-gate-loading": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-gate-loading"]);
+      await expect(panel).toHaveAttribute("aria-busy", "true");
+      // "never a flash of empty chrome" — the skeleton draws its own bands.
+      await expect(panel.locator("div")).not.toHaveCount(0);
+      // A skeleton names no status and offers nothing to press.
+      await expect(panel).toHaveText(/^\s*$/);
+      await expect(panel.locator("button")).toHaveCount(0);
+    },
+  }),
+
+  // §VII — the single blocked state: the reason from the closed set, and a
+  // refresh back to the live gate. Drawn today, and driven for real.
+  "review-gate-blocked": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-gate-blocked"]);
+      const reason = await panel.getAttribute("data-blocked-reason");
+      expect(
+        REVIEW_BLOCKED_REASONS,
+        `review-gate-blocked: the reason must come from the drawing's closed set, and "${reason}" is not in it`,
+      ).toContain(reason);
+      await expect(panel.locator('[data-action="refresh-gate -> live-gate"]')).toBeVisible();
+      // "it never lets a stale decision through" — a blocked gate draws no
+      // decision affordance beside its refresh.
+      await expect(panel.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+      await expect(panel).not.toHaveText(/^\s*$/);
+    },
+  }),
+
+  // §IX — "Each message is a bubble … carries no author label, no avatar and no
+  // timestamp — the side it sits on is who said it."
+  "per-run-conversation": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["per-run-conversation"]);
+      await expect(panel.locator("[data-conversation-bubble]").first()).toBeVisible();
+      await expect(panel.locator("[data-conversation-author]")).toHaveCount(0);
+      await expect(panel.locator("[data-conversation-timestamp]")).toHaveCount(0);
+      await expect(panel.locator("img")).toHaveCount(0);
+    },
+  }),
+
+  // §IX — "Beneath the last bubble, on the assistant's side, a small dot and the
+  // word Thinking… in muted; it is not a bubble." The field goes quiet with it.
+  "per-run-conversation-pending": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(
+        root,
+        REVIEW_DECISION_FLOOR["per-run-conversation-pending"],
+      );
+      const waiting = panel.locator("[data-conversation-waiting]");
+      await expect(waiting).toHaveCount(1);
+      // "it is not a bubble" — the wait is a turn of its own, never one of them.
+      await expect(waiting.locator("[data-conversation-bubble]")).toHaveCount(0);
+    },
+  }),
+
+  // §IX — "There is no panel above an empty exchange — the window is the field
+  // alone until the first message."
+  "per-run-conversation-empty": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(
+        root,
+        REVIEW_DECISION_FLOOR["per-run-conversation-empty"],
+      );
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-conversation-bubble]")).toHaveCount(0);
+    },
+  }),
+
+  // §X — "One thing is read per surface — the sentence in the empty field."
+  // Five readings of ONE window: the field, and the review reading's own words.
+  "prompt-window-readings": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["prompt-window-readings"]);
+      await expect(
+        panel.getByPlaceholder("Ask Cinatra about this review, or ask for changes to the work…"),
+      ).toBeVisible();
+      // "never five windows": one field per reading, never a second composer.
+      await expect(panel.locator("textarea")).toHaveCount(1);
+    },
+  }),
+
+  // §XI.10 — "Nothing is re-typed silently": promotion happens on the matcher's
+  // assertion at its threshold AND with the person's confirmation, which is why
+  // the confirmation says what the type becomes and what does not move.
+  "promotion-confirm": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["promotion-confirm"]);
+      await expect(panel.locator("[data-promotion-matcher-score]")).toHaveCount(1);
+      // The way out is drawn beside the confirmation: an association on its own
+      // promotes nothing, so leaving it as it is has to be offered.
+      await expect(panel.locator("[data-promotion-keep-as-is]")).toHaveCount(1);
+    },
+  }),
+
+  // §XI.10 — "the row reads as the claiming extension's row … and carries a
+  // Promoted reading with the base it came from", and the file kind never moves.
+  "promoted-row-state": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["promoted-row-state"]);
+      await expect(panel.locator("[data-promoted-marker]")).toBeVisible();
+      await expect(panel.locator("[data-promoted-from-file-kind]")).toBeVisible();
+    },
+  }),
+};
+
+/** Why a review-decision-floor driver skips, named on every skipped test. */
+function reviewDecisionFloorReadiness(row: ReviewDecisionFloorRow): string {
+  return (
+    `the surface drawn in §${row.section} of the artifact-review drawing is not ` +
+    `addressable on the default branch yet — ${row.readiness ?? ""}. Every assertion in ` +
+    `this driver is written against the drawing's own declarations and runs unchanged ` +
+    `the moment the mount exists.`
+  );
+}
+
+/** The fifteen drivers, built from the one row list. The two the harness draws
+ *  run for real; the other thirteen carry the guard and their own reason. */
+const REVIEW_DECISION_FLOOR_DRIVERS: Record<string, SurfaceDriver> = Object.fromEntries(
+  REVIEW_DECISION_FLOOR_ROWS.map((row) => {
+    const driver = REVIEW_DECISION_FLOOR_EXTRAS[row.surface](reviewDecisionFloorDriver(row));
+    return [
+      row.surface,
+      row.mounted ? driver : awaitingMount(row.surface, driver, reviewDecisionFloorReadiness(row)),
+    ];
+  }),
+);
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -3325,4 +3844,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
       suggestionChipDriver(fixture),
     ]),
   ),
+  // The review-target and decision-floor surfaces of the artifact-review drawing
+  // (cinatra#3163, epic #3155 W7). Built from ONE row list, so being listed is
+  // being mapped; the gate's loading and blocked readings run for real on the
+  // harness mount this wave lands, and the other thirteen SKIP with the reason
+  // each is waiting for.
+  ...REVIEW_DECISION_FLOOR_DRIVERS,
 };
