@@ -29,6 +29,9 @@ import {
   proposedScheduleSchema,
   triggerScheduleProposalSettledViewSchema,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+// The seam an older bundle reads the answer with, and the one this bundle reads
+// a version-1 answer with (cinatra#3193).
+import { parseLifecycleResolveEnvelope } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 const resolveProposalForReader = vi.fn();
 
@@ -266,7 +269,8 @@ describe("the pending card is untouched by any of this", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE DURABLE FIRED SIGNAL ON THE WIRE (cinatra#3174, criterion 4).
+// THE DURABLE FIRED SIGNAL, BESIDE THE BODY (cinatra#3174, criterion 4; put on
+// this road by cinatra#3193).
 // ---------------------------------------------------------------------------
 // The card's own section names "Fired, recurring - runs still to come" as a
 // reading of its own, and nothing else on the settled body can tell it from
@@ -274,47 +278,92 @@ describe("the pending card is untouched by any of this", () => {
 // moment **Cancel schedule** is pressed, so a stopped-after-firing card and a
 // never-fired one answered identically.
 //
-// The producer therefore forwards the resolver's OWN `firedOnce` - the trigger
-// row's `lastFiredAt` for a recurring schedule, its `releasedAt` for a one-off,
-// already read server-side for the floor - and forwards it under exactly the
-// rule `superseded` is under: OMITTED unless true, because this schema is
-// `.strict()` and a client on an older bundle would otherwise reject EVERY
-// settled payload rather than only the fired ones.
+// IT DOES NOT TRAVEL INSIDE THE BODY, AND THAT IS THE POINT OF THIS BLOCK.
+// #3174 first shipped it as a new optional key on the settled body under the
+// rule `superseded` is under - omitted unless true - and pinned, here, that a
+// version-1 parser therefore REFUSED a fired body. That pin was the defect. The
+// omission compromise is only honest where the new state is RARE: it trades a
+// blank card in a corner for a readable card everywhere else. A schedule that
+// has fired is not a corner - every recurring schedule that has ever run is in
+// it - so the trade would have blanked the common case on every bundle that had
+// not reloaded.
 //
-// This is the producer half. That the CARD then reads the key into one of the
+// And there is no version to bump into either: `version` is a `z.literal`, so a
+// bump makes a shipped parser refuse every card of every state at once.
+//
+// So the reading rides the resolve ANSWER, beside the body, which is the one
+// part of that answer a parser reads by name while ignoring what it does not
+// know (`parseLifecycleResolveEnvelope`). What this block pins is the property
+// that buys: BOTH directions read, with `.strict()` untouched on both schemas.
+//
+// This is the producer half. That the CARD then reads the aside into one of the
 // section's five readings is pinned in
 // `packages/agents/src/__tests__/schedule-card-reported-reading-3174.test.tsx`,
-// which mounts the real card; what is pinned HERE is that the key the card
-// reads is a key the resolver actually emits.
+// which mounts the real card.
 // ---------------------------------------------------------------------------
 
-describe("cinatra#3174 - the fired signal reaches the card", () => {
-  it("emits `firedOnce: true` when the resolver says the schedule has fired", async () => {
+/** A settled body exactly as a version-1 SERVER would have emitted it - the
+ *  fields the pre-#2859 schema declares and nothing else. Used to prove the
+ *  other direction: this bundle's parser still reads what an older one sends. */
+const VERSION_ONE_SETTLED_BODY = {
+  phase: "settled",
+  version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+  agentName: "Weekly digest",
+  runId: "run_1",
+  schedule: {
+    kind: "recurring" as const,
+    timezone: "Europe/Berlin",
+    selection: {
+      frequency: "weekly" as const,
+      interval: 1,
+      weekdays: [1, 2, 3, 4, 5],
+      dayOfMonth: 1,
+      monthlyMode: "date" as const,
+      nthWeek: 1 as const,
+      monthlyWeekday: 1,
+      quarterAnchor: "start" as const,
+      yearlyMonth: 1,
+      hour: 9,
+      minute: 0,
+    },
+  },
+  triggerType: "recurring",
+  scheduleCopy: "Every weekday at 09:00",
+  timezone: "Europe/Berlin",
+  gatedSteps: [],
+  released: false,
+  canSave: true,
+  canCancel: false,
+  canRelease: false,
+  arming: false,
+};
+
+describe("cinatra#3174 - the fired signal reaches the card, on the answer", () => {
+  it("answers `firedOnce` beside the body, and puts NO such key in the body", async () => {
     resolveProposalForReader.mockResolvedValue({
       ...settledResolution(false),
       firedOnce: true,
     });
 
-    const { view } = await resolveTriggerScheduleProposalCard(READER);
+    const card = await resolveTriggerScheduleProposalCard(READER);
 
-    expect(view).not.toBeNull();
-    expect((view as Record<string, unknown>).firedOnce).toBe(true);
-    // And it is a body the SHIPPED schema accepts, not a loose object.
-    expect(() => triggerScheduleProposalSettledViewSchema.parse(view)).not.toThrow();
+    // The reading is the resolver's, whole, and it reaches the card.
+    expect(card.firedOnce).toBe(true);
+    // And it is NOT in the body. Not `false`, not `undefined` - absent, which
+    // is the only shape a `.strict()` version-1 parser can accept.
+    expect("firedOnce" in (card.view as object)).toBe(false);
   });
 
-  it("emits NO `firedOnce` key for a schedule that has not fired", async () => {
+  it("answers `firedOnce: false` for a schedule that has not fired", async () => {
     resolveProposalForReader.mockResolvedValue(settledResolution(false));
 
-    const { view } = await resolveTriggerScheduleProposalCard(READER);
+    const card = await resolveTriggerScheduleProposalCard(READER);
 
-    // ABSENT, not `false` - the same rule `superseded` is under, and the only
-    // shape a `.strict()` parser that predates the key can accept.
-    expect("firedOnce" in (view as object)).toBe(false);
-    expect(() => preSupersededSettledViewSchema.parse(view)).not.toThrow();
+    expect(card.firedOnce).toBe(false);
+    expect("firedOnce" in (card.view as object)).toBe(false);
   });
 
-  it("keeps the fired body readable by the shipped parser AND unreadable by the older one", async () => {
+  it("a version-1 parser reads a FIRED card's body, whole", async () => {
     resolveProposalForReader.mockResolvedValue({
       ...settledResolution(false),
       firedOnce: true,
@@ -322,9 +371,86 @@ describe("cinatra#3174 - the fired signal reaches the card", () => {
 
     const { view } = await resolveTriggerScheduleProposalCard(READER);
 
-    // The point of the omission rule, stated both ways round: only a card that
-    // has actually fired is out of reach of a bundle that predates the key.
-    expect(() => triggerScheduleProposalSettledViewSchema.parse(view)).not.toThrow();
-    expect(() => preSupersededSettledViewSchema.parse(view)).toThrow();
+    // THE PIN THIS BLOCK EXISTS FOR, and the one that used to say the
+    // opposite. A bundle still running the shipped version-1 schema draws the
+    // fired card exactly as it draws every other settled card. It cannot know
+    // the schedule has fired - it has no reading for that - but it is not
+    // blanked, which is the whole difference between a client that is behind
+    // and a client that is broken.
+    expect(preSupersededSettledViewSchema.safeParse(view).success).toBe(true);
+    // And the shipped parser reads the same body, so nothing was traded away
+    // in the other direction to get it.
+    expect(triggerScheduleProposalSettledViewSchema.safeParse(view).success).toBe(true);
+  });
+
+  it("a STOPPED-after-firing card adds NOTHING to what a version-1 parser refuses", async () => {
+    // The reading `canCancel` cannot answer, and the one the fired signal was
+    // added for: pressing **Cancel schedule** takes `canCancel` false again, so
+    // a stopped-after-firing card and a never-fired one are indistinguishable
+    // on the body alone.
+    resolveProposalForReader.mockResolvedValue({
+      ...settledResolution(false),
+      firedOnce: true,
+      stopped: true,
+    });
+
+    const card = await resolveTriggerScheduleProposalCard(READER);
+
+    expect(card.firedOnce).toBe(true);
+    // `stopped` is its own pre-existing omitted-unless-true key (cinatra#2972),
+    // and a version-1 parser refuses it - that trade was made there, on a state
+    // that is genuinely rare, and this change neither widens nor revisits it.
+    // What is pinned here is that FIRING contributes no second such key: the
+    // only thing on this body a version-1 parser does not declare is `stopped`.
+    const bodyKeys = Object.keys(card.view as object);
+    const v1Keys = new Set(Object.keys(preSupersededSettledViewSchema.shape));
+    expect(bodyKeys.filter((key) => !v1Keys.has(key))).toEqual(["stopped"]);
+  });
+
+  it("this bundle's parser reads a VERSION-1 body, and reads it as not fired", () => {
+    // The other direction, and the reason the aside is read tolerantly rather
+    // than required: an answer from a server that predates the reading carries
+    // no such key at all, and must draw rather than refuse.
+    const parsed = triggerScheduleProposalSettledViewSchema.safeParse(
+      VERSION_ONE_SETTLED_BODY,
+    );
+    expect(parsed.success).toBe(true);
+
+    const answer = parseLifecycleResolveEnvelope("trigger_schedule_proposal", {
+      kind: "trigger_schedule_proposal",
+      state: { state: "settled" },
+      body: VERSION_ONE_SETTLED_BODY,
+    });
+    expect(answer).not.toBeNull();
+    expect(answer?.aside).toEqual({ firedOnce: false });
+  });
+
+  it("the answer's aside is what carries the reading across the seam", async () => {
+    resolveProposalForReader.mockResolvedValue({
+      ...settledResolution(false),
+      firedOnce: true,
+    });
+
+    const card = await resolveTriggerScheduleProposalCard(READER);
+    // The shape the route sends: omitted unless true, beside the body.
+    const answer = parseLifecycleResolveEnvelope("trigger_schedule_proposal", {
+      kind: "trigger_schedule_proposal",
+      state: card.state,
+      body: card.view,
+      ...(card.firedOnce ? { firedOnce: true } : {}),
+    });
+    expect(answer?.aside).toEqual({ firedOnce: true });
+    expect(answer?.body).toEqual(card.view);
+  });
+
+  it("neither schema was relaxed to buy any of this", () => {
+    // `.strict()` is the whole property on both sides, so both still refuse a
+    // key they do not declare. If either had been widened, the compatibility
+    // proved above would be worth nothing.
+    const withUnknownKey = { ...VERSION_ONE_SETTLED_BODY, firedOnce: true };
+    expect(preSupersededSettledViewSchema.safeParse(withUnknownKey).success).toBe(false);
+    expect(triggerScheduleProposalSettledViewSchema.safeParse(withUnknownKey).success).toBe(
+      false,
+    );
   });
 });

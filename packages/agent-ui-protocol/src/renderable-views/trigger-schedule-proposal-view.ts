@@ -264,24 +264,38 @@ export const triggerScheduleProposalSettledViewSchema = z
      *  instead (cinatra#2972). */
     released: z.boolean(),
     /**
-     * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)?
+     * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)? NOT HERE - IT IS
+     * CARRIED BESIDE THIS BODY (cinatra#3193).
      *
-     * The durable answer, off the trigger row's own stamps — `lastFiredAt` for
-     * a recurring schedule, `releasedAt` for a one-off — and already resolved
-     * server-side for the floor's own reading. What it adds here is the ONE
-     * distinction the card could not draw before: the section names "Fired,
-     * recurring — runs still to come" as a reading of its own, and the only
-     * other signal that could have carried it, `canCancel`, goes false the
+     * The reading itself is real and the card needs it: the section names
+     * "Fired, recurring - runs still to come" as a reading of its own, and the
+     * only other signal that could have carried it, `canCancel`, goes false the
      * moment the schedule is stopped, so a stopped-after-firing card and a
-     * never-fired one answered identically.
+     * never-fired one answer identically here.
      *
-     * OPTIONAL AND OMITTED unless true, exactly like `superseded` and
-     * `stopped` above and for the same reason: this schema is `.strict()`, so a
-     * client still running an older bundle would reject EVERY settled payload
-     * if the key were always sent. Omission confines that to a card that has
-     * actually fired.
+     * WHY IT IS NOT A KEY ON THIS OBJECT. This schema is `.strict()` and
+     * `version` is a `z.literal`, which between them leave a version-1 body
+     * exactly one compatible shape: the keys a version-1 parser already
+     * declares, and no others. A NEW key is rejected by every bundle still
+     * running the shipped schema, and a version BUMP is rejected by all of them
+     * for every state at once - so neither road keeps an older client drawing.
+     * `superseded` and `stopped` bought their way past that with omission,
+     * which confines the rejection to a state that is genuinely rare. A fired
+     * schedule is NOT rare: every recurring schedule that has ever run is in
+     * it, and omit-unless-true would therefore blank the common case rather
+     * than a corner of it. That is the whole finding, and it is why this field
+     * is gone from the body rather than made optional in it.
+     *
+     * WHERE IT WENT. `parseLifecycleResolveEnvelope` reads the resolve answer
+     * by NAME - kind, state, body, islandSrc - and ignores every other key on
+     * it, which is exactly the tolerance this `.strict()` object does not have
+     * and cannot be given. So the reading travels there, as a sibling of the
+     * body, the same road `islandSrc` already takes; see
+     * `LifecycleCardAsideByKind` in `lifecycle-cards.ts`. A version-1 parser
+     * then accepts every body this producer emits, and this parser accepts
+     * every version-1 body - both directions, with `.strict()` intact.
+     * Pinned in `trigger-schedule-proposal-card-wire.test.ts`.
      */
-    firedOnce: z.boolean().optional(),
     /**
      * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
      * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: it "stops the

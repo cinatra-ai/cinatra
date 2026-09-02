@@ -56,12 +56,31 @@ const ABSENT: LifecycleCardState = { state: "absent" };
 export type TriggerScheduleProposalCard = {
   state: LifecycleCardState;
   view: TriggerScheduleProposalViewBody | null;
+  /**
+   * THE DURABLE FIRED SIGNAL, BESIDE THE BODY AND NEVER IN IT (cinatra#3174,
+   * moved out by cinatra#3193). The resolver already reads it off the trigger
+   * row's own stamps for the floor; the card needs it too, because "Fired,
+   * recurring" is a reading of its own and nothing else the settled body
+   * carries can tell it from "Configured" once the schedule has been stopped.
+   *
+   * It is not a field of the version-1 body because it cannot be: that schema
+   * is `.strict()` and its version is a `z.literal`, so a new key blanks the
+   * card on every bundle still running the shipped schema and a version bump
+   * blanks every card on all of them. Omission - the compromise `superseded`
+   * and `stopped` take - narrows that harm to a rare state, and a schedule that
+   * has fired is the COMMON state. So the reading rides the resolve ANSWER, as
+   * a sibling of the body, on the seam that already tolerates one (see
+   * `parseLifecycleResolveEnvelope`, which reads the answer by name and ignores
+   * every other key). `false` for every phase but `settled`.
+   */
+  firedOnce: boolean;
 };
 
 /** The one "nothing to draw" answer. */
 export const ABSENT_PROPOSAL_CARD: TriggerScheduleProposalCard = {
   state: ABSENT,
   view: null,
+  firedOnce: false,
 };
 
 /**
@@ -158,7 +177,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         // WHICH ROAD THE PRESS TAKES — see the field's own note on the wire.
         runPending: true,
       };
-      return { state, view };
+      return { state, view, firedOnce: false };
     }
 
     // EXPIRED — a DRAWN reading, never an absence (cinatra#2836; plan (A) §7.2
@@ -212,7 +231,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         // expired" is worded exactly as "what was armed" would have been.
         scheduleCopy: describeProposalSchedule(resolved.proposal.schedule),
       };
-      return { state, view };
+      return { state, view, firedOnce: false };
     }
 
     if (resolved.phase === "proposal") {
@@ -255,7 +274,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         canConfirm: resolved.canConfirm,
         restrictedReason: resolved.restrictedReason,
       };
-      return { state, view };
+      return { state, view, firedOnce: false };
     }
 
     // Settled — §VI: "The settled card is the trigger's chrome." No floor to
@@ -299,13 +318,6 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // wrong: S2 mounts the shared step tree, which reads it authoritatively.
       gatedSteps: [],
       released: resolved.released,
-      // THE DURABLE FIRED SIGNAL, ON THE WIRE (cinatra#3174). The resolver
-      // already reads it off the trigger row's own stamps for the floor; the
-      // card needs it too, because "Fired, recurring" is a reading of its own
-      // and nothing else on this body can tell it from "Configured" once the
-      // schedule has been stopped. OMITTED UNLESS TRUE, for the reason
-      // `superseded` and `stopped` are.
-      ...(resolved.firedOnce ? { firedOnce: true as const } : {}),
       // OMITTED UNLESS TRUE, for the reason `superseded` is (cinatra#2972).
       ...(resolved.stopped ? { stopped: true as const } : {}),
       arming: resolved.arming,
@@ -344,7 +356,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         !resolved.stopped &&
         !resolved.arming,
     };
-    return { state: { state: "settled" }, view };
+    return { state: { state: "settled" }, view, firedOnce: resolved.firedOnce };
   } catch {
     // A store/transport failure must not become an existence signal either.
     return ABSENT_PROPOSAL_CARD;

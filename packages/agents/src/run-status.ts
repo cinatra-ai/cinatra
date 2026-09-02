@@ -673,11 +673,6 @@ const RUN_START_CLAUSES: Readonly<Record<AgentRunStatus, string>> = {
  * can be read by a test, by the primitive that mints it and by the surfaces that
  * pin it without any of them pulling a graph.
  */
-export const SCHEDULE_WAIT_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "armed",
-  "pending_trigger",
-]);
-
 export function describeStartedRun(input: {
   packageName: string;
   runId: string;
@@ -694,6 +689,25 @@ export function describeStartedRun(input: {
   // schedule has not started and is not queued, so neither word is said and
   // the status token — the one that read `queued` over a card still asking
   // "When should this run?" — is not printed at all.
+  //
+  // NARROWED TO THE READING THE DRAWING DRAWS, NOT TO A STATUS (cinatra#3174,
+  // criterion 3, as this branch reconciles with cinatra#3044). #3174 first
+  // keyed the plain-prose line on `armed` and `pending_trigger` alone, which is
+  // one status too wide: the immediate-trigger release road leaves a run
+  // `pending_trigger` with no lifecycle moment at all, there is no card beneath
+  // THAT turn, and its line is the only place a reader can pick the run up
+  // from. The reading the drawing draws is the one `runIsWaitingForItsSchedule`
+  // names, and it is this branch — already, on `main` — that the status token
+  // is not printed in.
+  //
+  // AND THE RUN ID STAYS, which is where criterion 3 stops. The two corrections
+  // this module mints are a CHAIN — a turn corrected to the wait is corrected
+  // again to the fired reading when the one-off fires — and the second pass
+  // finds the first pass's sentence through `platformStartSentencePattern`,
+  // which is keyed on the run id IN that sentence. That key is what keeps a
+  // correction narrow to one run in a turn that carries several. Taking the id
+  // out would leave a fired one-off's turn saying it is still waiting for its
+  // schedule, for ever, which is a worse untruth than a token in a line.
   if (runIsWaitingForItsSchedule({ status: input.status, moment: input.moment ?? null })) {
     return (
       `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`). ` +
@@ -707,21 +721,6 @@ export function describeStartedRun(input: {
   // cannot vouch for: the sentence still prints the status the answer named,
   // and the card beside the line is right where the two could disagree.
   const clause = RUN_START_CLAUSES[input.status as AgentRunStatus] ?? RUN_START_NOT_STARTED_CLAUSE;
-  // THE SCHEDULE-WAIT READINGS SAY IT IN PROSE (cinatra#3174, criterion 3).
-  //
-  // The card's own section draws its turns with plain assistant prose, and not
-  // one of its example lines carries a machine token beside the sentence. The
-  // two statuses a schedule waits in are exactly the readings those lines
-  // cover, so for them the parenthetical goes entirely — no `runId:`, no
-  // `status:` — and what is left is the sentence the section draws.
-  //
-  // NARROWED, NOT REWRITTEN. Every other status keeps the parenthetical it has
-  // always had: those readings are drawn nowhere in that section, their line is
-  // the only place a reader can pick the run up from, and taking the id out of
-  // them would be a loss with no drawing asking for it.
-  if (SCHEDULE_WAIT_RUN_STATUSES.has(input.status)) {
-    return `Dispatched \`${input.packageName}\`. ${clause}`;
-  }
   return (
     `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
     `status: \`${input.status}\`). ${clause}`

@@ -69,7 +69,10 @@ import {
 // The ONE renderer of `agent_hitl_screen`, reached by its own SUBPATH for the
 // same reason the §V renderer is: the barrel drags the whole agents client
 // graph into every consumer, and this leaf is all the transcript needs.
-import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
+import {
+  AgentHitlScreenCard,
+  type AgentHitlScreenCarry,
+} from "@cinatra-ai/agents/agent-hitl-screen-card";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -647,16 +650,27 @@ function AgentRunTurnSlot({
   // containers (cinatra#3174, criterion 2), because the schedule card's turn may
   // not carry a second decidable card beside it.
   //
-  // THE LIMIT, STATED RATHER THAN LEFT TO BE FOUND (convergence). The two
-  // placements have different parents, so this is not one component moving: the
-  // shape flipping unmounts one instance and mounts another, and the screen's
-  // own buffered answer does not survive that. It can only flip while a screen
-  // is open if a schedule card in the SAME turn settles after the screen was
-  // drawn, which is why the flip is pinned by a test rather than designed
-  // around: the criterion asks for the two roots to be in different containers,
-  // and there is no placement that is both a different container and the same
-  // parent.
-  const hitlScreen = <AgentHitlScreenCard runId={runId} wireRef={gateSignal} />;
+  // AND THE ANSWER TRAVELS WITH IT (cinatra#3193). The two placements have
+  // different parents, so this is not one component moving: React reconciles
+  // them as different trees and the shape flipping unmounts one instance and
+  // mounts another. There is no placement that is both a different container
+  // and the same parent, so the instance cannot be kept - what can be kept is
+  // everything the instance was holding.
+  //
+  // WHICH MATTERS BECAUSE THE FLIP CAN HAPPEN MID-ANSWER. A schedule card in
+  // this same turn settles when the run's own resolve says it has, which on a
+  // reload is after the screen has already drawn and can be long after the
+  // person started typing into it. Without the box below, that moment cost them
+  // the words they had not sent yet AND blanked the screen for as long as the
+  // new instance took to re-read its own authority.
+  //
+  // THE BOX IS THIS CONTAINER'S. It is scoped to this one run's turn, it is
+  // never read by anything else, and it dies with the turn - see
+  // `AgentHitlScreenCarry` for why that is deliberately not a cache.
+  const screenCarrier = useRef<AgentHitlScreenCarry | null>(null);
+  const hitlScreen = (
+    <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
+  );
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (

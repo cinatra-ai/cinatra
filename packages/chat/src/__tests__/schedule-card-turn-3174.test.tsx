@@ -157,6 +157,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
+import { RUN_SEED_ROUTE } from "../run-seed-request";
 import { mountSurface } from "./conversation-column-harness";
 
 /** A fired one-off schedule, settled — the section's fifth reading. */
@@ -171,7 +172,6 @@ const SETTLED_FIRED_ONE_OFF = {
   timezone: "Europe/Berlin",
   gatedSteps: [],
   released: true,
-  firedOnce: true,
   arming: false,
   canSave: false,
   canCancel: false,
@@ -188,11 +188,29 @@ beforeEach(() => {
         status,
         headers: { "Content-Type": "application/json" },
       });
+    // THE RUN'S OWN ROW (cinatra#3044). The conversation's run container reads
+    // it to learn which moment the run stands at; this run has already moved
+    // past its schedule, which is what leaves the spent card as a reading of
+    // its own and gives the run's progress panel back to criterion 1's rule.
+    // Without an answer here the container would still be LOOKING, and a
+    // container that is still looking withholds the panel outright - which
+    // would hide the difference criterion 1 measures.
+    if (url.startsWith(`${RUN_SEED_ROUTE}/`)) {
+      return json({
+        id: RUN_ID,
+        status: "completed",
+        lifecycleMoment: null,
+        lifecycleCard: null,
+      });
+    }
     if (url === LIFECYCLE_VIEW_RESOLVE_PATH) {
       return json({
         kind: "trigger_schedule_proposal",
         state: { state: "settled" },
         body: SETTLED_FIRED_ONE_OFF,
+        // THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3193) -
+        // the version-1 settled body is `.strict()` and carries no such key.
+        firedOnce: true,
       });
     }
     return json({}, 404);
@@ -241,6 +259,14 @@ function scheduleTurn(): UiMessage[] {
 
 async function mountScheduleTurn() {
   const result = await mountSurface("chat", { messages: scheduleTurn() });
+  // ONE WAIT FOR THE SETTLED SHAPE, WHOLE. The turn reaches it in three steps -
+  // the run's row answers that it has moved past its schedule, the spent card
+  // takes its own place as a reading, and the card reports that reading into
+  // the turn's register - and the container draws a different shape after each.
+  // Waiting for one of them and then querying is what turns the counts below
+  // into a race: the card is briefly between its two mounts. So the helper waits
+  // for the shape all three have landed in, and asserts nothing the tests do not
+  // assert again for themselves.
   await waitFor(() => {
     const card = result.container.querySelector(
       '[data-conformance-id="schedule-proposal-card"]',
@@ -249,12 +275,9 @@ async function mountScheduleTurn() {
     if (card.getAttribute("data-schedule-reading") !== "fired-one-off") {
       throw new Error("the card has not settled on its fired reading yet");
     }
-  });
-  // The card reports its reading to the turn through an effect, so the turn
-  // elects one commit AFTER the card first draws. Waiting for the elected shape
-  // is what makes the counts below a measurement rather than a race; it asserts
-  // nothing the tests do not assert again for themselves.
-  await waitFor(() => {
+    if (result.container.querySelector("[data-settled-moment-reading]") === null) {
+      throw new Error("the spent card has not taken its own place yet");
+    }
     if (result.container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`) === null) {
       throw new Error("the turn has not elected the settled shape yet");
     }

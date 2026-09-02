@@ -369,13 +369,21 @@ export type ScheduleReading =
  * `released` is still consulted for the one-off family: it IS that family's
  * firing, and a card resolved before this key reached the wire still has it.
  */
-export function scheduleReadingOf(body: TriggerScheduleProposalViewBody): ScheduleReading {
+export function scheduleReadingOf(
+  body: TriggerScheduleProposalViewBody,
+  /** The fired signal, off the resolve answer's own aside (cinatra#3193) — see
+   *  `LifecycleCardAsideByKind` for why it does not travel inside the body.
+   *  Absent, from a server that predates the reading, means "not fired", which
+   *  leaves the one-off family reading exactly off `released` as it always
+   *  did. */
+  firedOnce: boolean = false,
+): ScheduleReading {
   if (body.phase === "proposal") return "first-shown";
   if (body.phase === "expired") return "expired";
   if (body.triggerType === "recurring") {
-    return body.firedOnce === true ? "fired-recurring" : "configured";
+    return firedOnce ? "fired-recurring" : "configured";
   }
-  return body.released || body.firedOnce === true ? "fired-one-off" : "configured";
+  return body.released || firedOnce ? "fired-one-off" : "configured";
 }
 
 /**
@@ -418,6 +426,10 @@ export function ScheduleProposalCard({
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
+  // THE FIRED READING, OFF THE ANSWER'S OWN ASIDE (cinatra#3193). It is the
+  // resolver's whole answer, exactly as it was when it rode the body — what
+  // changed is only which half of the answer carries it, and why.
+  const firedOnce = resolved?.aside?.firedOnce === true;
 
   // THE TURN IS TOLD WHAT IT IS CARRYING (cinatra#3174, criteria 1 and 2).
   //
@@ -538,7 +550,7 @@ export function ScheduleProposalCard({
       // between the reader and the form." So this is a passive attribute,
       // exactly like the marks beside it: it names the reading for a test and
       // for a rendered reading of the screen, and it draws nothing.
-      data-schedule-reading={scheduleReadingOf(body)}
+      data-schedule-reading={scheduleReadingOf(body, firedOnce)}
       data-conformance-id="schedule-proposal-card"
     >
       {drawn}

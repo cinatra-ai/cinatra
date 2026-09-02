@@ -35,6 +35,7 @@ import {
   RUN_START_NOT_STARTED_CLAUSE,
   RUN_START_PARKED_CLAUSE,
   RUN_START_QUEUED_CLAUSE,
+  RUN_START_SCHEDULE_WAIT_CLAUSE,
   RUN_START_STARTED_CLAUSE,
   RUN_START_STOPPED_CLAUSE,
   RUN_START_TRIGGER_NOT_SET_CLAUSE,
@@ -352,37 +353,63 @@ describe("what a start that threw answers with", () => {
 // ---------------------------------------------------------------------------
 // The drawing's own example turns for this card carry plain assistant prose —
 // "The card is the scheduling step, in the turn — and it is the only thing
-// drawn" — and not one of them prints a machine token beside the sentence. The
-// two statuses a schedule waits in are exactly the readings those example lines
-// cover: `pending_trigger` (the rows are open and nothing is armed yet) and
-// `armed` (the schedule is set and the run is waiting on it). For both, the
-// line the assistant says back drops the parenthetical entirely: no `runId:`
-// token and no `status:` token.
+// drawn" — and not one of them prints a machine token beside the sentence. For
+// that reading the line drops the parenthetical entirely: no `runId:` token and
+// no `status:` token.
 //
-// Every OTHER status keeps the parenthetical it has always had. This is a
-// narrowing to the readings the drawing draws, not a rewrite of the line.
+// WHICH READING, EXACTLY. Not a status: the reading `runIsWaitingForItsSchedule`
+// names — a run standing AT its schedule moment. The immediate-trigger release
+// road leaves a run `pending_trigger` with no lifecycle moment at all, there is
+// no card beneath that turn, and its line is the only place a reader can pick
+// the run up from; #3044 pins that it keeps its parenthetical, and this
+// narrowing is what lets both readings be true at once.
+//
+// AND IT IS THE LINE A READER MEETS. The dispatch itself does not know the
+// moment — the schedule opens after the sentence is composed — so this is the
+// sentence the conversation's own correction re-mints through this same
+// function once the run states its moment.
+//
+// WHERE THE CRITERION STOPS, AND WHY. The run id STAYS in this line. The two
+// corrections this module mints are a chain — a turn corrected to the wait is
+// corrected again to the fired reading when the one-off fires — and the second
+// pass finds the first pass's sentence by the run id in it, which is also what
+// keeps a correction narrow to one run in a turn carrying several. A line with
+// no id cannot be found again, and a fired one-off's turn would then say it is
+// still waiting for its schedule for ever. The status token — the half the
+// graded pictures actually caught, reading `queued` over a card still asking
+// "When should this run?" — is gone, and that is the half this criterion buys.
+//
+// Every OTHER reading keeps the parenthetical it has always had. This is a
+// narrowing to the reading the drawing draws, not a rewrite of the line.
 // ---------------------------------------------------------------------------
 
-describe("cinatra#3174 — the schedule-wait line carries no machine tokens", () => {
+describe("cinatra#3174 — the schedule-wait line drops the status token", () => {
   const SCHEDULE_WAIT = ["armed", "pending_trigger"] as const;
 
-  it("prints neither a runId nor a status token for the readings the drawing draws", () => {
+  it("prints no status token for the reading the drawing draws", () => {
     for (const status of SCHEDULE_WAIT) {
-      const report = describeStartedRun({ ...STARTED, status });
-      expect(report).not.toMatch(/runId:/);
+      const report = describeStartedRun({ ...STARTED, status, moment: "schedule" });
       expect(report).not.toMatch(/status:/);
-      expect(report).not.toContain(STARTED.runId);
       expect(report).not.toContain(status);
     }
   });
 
-  it("pins the two sentences whole, so the shape cannot drift back", () => {
-    expect(describeStartedRun({ ...STARTED, status: "armed" })).toBe(
-      `Dispatched \`${STARTED.packageName}\`. ${RUN_START_AWAITING_TRIGGER_CLAUSE}`,
-    );
-    expect(describeStartedRun({ ...STARTED, status: "pending_trigger" })).toBe(
-      `Dispatched \`${STARTED.packageName}\`. ${RUN_START_TRIGGER_NOT_SET_CLAUSE}`,
-    );
+  it("pins the sentence whole, so the shape cannot drift back", () => {
+    for (const status of SCHEDULE_WAIT) {
+      expect(describeStartedRun({ ...STARTED, status, moment: "schedule" })).toBe(
+        `Dispatched \`${STARTED.packageName}\` (runId: \`${STARTED.runId}\`). ` +
+          RUN_START_SCHEDULE_WAIT_CLAUSE,
+      );
+    }
+  });
+
+  it("leaves a `pending_trigger` reached for another reason exactly as it was", () => {
+    // #3044's own pin, restated from this side: no schedule moment, no card
+    // beneath the turn, so the machine tokens stay.
+    const report = describeStartedRun({ ...STARTED, status: "pending_trigger" });
+    expect(report).toContain(`runId: \`${STARTED.runId}\``);
+    expect(report).toContain("status: `pending_trigger`");
+    expect(report).toContain(RUN_START_TRIGGER_NOT_SET_CLAUSE);
   });
 
   it("leaves every other status's line exactly as it was", () => {

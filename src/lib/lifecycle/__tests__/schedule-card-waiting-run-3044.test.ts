@@ -129,7 +129,7 @@ describe("the waiting run's card", () => {
 
     const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
 
-    expect(card).toEqual({ state: { state: "absent" }, view: null });
+    expect(card).toEqual({ state: { state: "absent" }, view: null, firedOnce: false });
   });
 });
 

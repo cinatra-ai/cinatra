@@ -19,6 +19,14 @@
 // `firedOnce`, off the trigger row's own stamp — and this issue puts it on the
 // wire and has the card report the reading it selects.
 //
+// IT RIDES THE ANSWER, BESIDE THE BODY (cinatra#3193). The settled body is a
+// versioned `.strict()` object, so a new key in it blanks the card on every
+// bundle still parsing the shipped schema — and a schedule that has fired is
+// the common case, not a corner of it. The reading therefore travels as a
+// sibling of the body on the resolve answer, which is the one part of that
+// answer an older parser reads by name and ignores what it does not know. The
+// fixtures below carry it exactly where the wire does.
+//
 // IT IS REPORTED, NOT DRAWN. The same section forbids the obvious alternative:
 // "No summary box is ever drawn, no status label, and nothing stands between
 // the reader and the form." So the reading rides a passive attribute on the
@@ -97,10 +105,14 @@ function settled(
   };
 }
 
-/** The five readings the section draws, as the bodies the resolver produces. */
-const BODIES: Record<string, TriggerScheduleProposalViewBody> = {
+/** One reading, as the resolve ANSWER carries it: the body, and the fired
+ *  signal beside it (cinatra#3193). */
+type Reading = { body: TriggerScheduleProposalViewBody; firedOnce?: boolean };
+
+/** The five readings the section draws, as the answers the resolver produces. */
+const BODIES: Record<string, Reading> = {
   // "First shown — nothing exists yet · editable · Confirm"
-  firstShown: {
+  firstShown: { body: {
     phase: "proposal",
     version: 1,
     agentName: "Weekly cohort sweep",
@@ -108,52 +120,64 @@ const BODIES: Record<string, TriggerScheduleProposalViewBody> = {
     durationCopy: "About 45s – 3.4 hr.",
     canConfirm: true,
     restrictedReason: null,
-  },
+  } },
   // "Expired — nothing was scheduled · editable · Confirm"
-  expired: {
+  expired: { body: {
     phase: "expired",
     version: 1,
     agentName: "Weekly cohort sweep",
     schedule: RECURRING,
     scheduleCopy: "Every weekday at 9:00 AM",
-  },
+  } },
   // "Configured — the schedule as it stands · editable · Save changes"
-  configured: settled({ canSave: true, canCancel: false }),
+  configured: { body: settled({ canSave: true, canCancel: false }) },
   // "Fired, one-off — the schedule was spent · read-only · none at all"
-  firedOneOff: settled({
-    triggerType: "scheduled",
-    schedule: ONE_OFF,
-    scheduleCopy: "Once, at 2026-07-14 09:00",
-    released: true,
+  firedOneOff: {
+    body: settled({
+      triggerType: "scheduled",
+      schedule: ONE_OFF,
+      scheduleCopy: "Once, at 2026-07-14 09:00",
+      released: true,
+      canSave: false,
+      canCancel: false,
+    }),
     firedOnce: true,
-    canSave: false,
-    canCancel: false,
-  }),
+  },
   // "Fired, recurring — runs still to come · editable · Save changes ·
   //  Cancel schedule"
-  firedRecurring: settled({ firedOnce: true, canSave: true, canCancel: true }),
+  firedRecurring: {
+    body: settled({ canSave: true, canCancel: true }),
+    firedOnce: true,
+  },
   // The same recurring schedule after Cancel schedule was pressed. It HAS
   // fired, so it is the same reading — and it is the case that proves the
   // reading rides `firedOnce` rather than the floor's own `canCancel`.
-  firedRecurringStopped: settled({
+  firedRecurringStopped: {
+    body: settled({ stopped: true, canSave: false, canCancel: false }),
     firedOnce: true,
-    stopped: true,
-    canSave: false,
-    canCancel: false,
-  }),
+  },
 };
 
-function mount(body: TriggerScheduleProposalViewBody) {
+function mount({ body, firedOnce }: Reading) {
   const state: LifecycleCardState =
     body.phase === "settled"
       ? { state: "settled" }
       : { state: "pending", canDecide: true, canComment: false };
   globalThis.fetch = vi.fn(
     async () =>
-      new Response(JSON.stringify({ kind: "trigger_schedule_proposal", state, body }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({
+          kind: "trigger_schedule_proposal",
+          state,
+          body,
+          // OMITTED UNLESS TRUE, exactly as the route emits it.
+          ...(firedOnce ? { firedOnce: true } : {}),
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
   ) as unknown as typeof fetch;
   return render(
     <LifecycleCardSurfaceProvider host="chat_thread">
@@ -162,8 +186,8 @@ function mount(body: TriggerScheduleProposalViewBody) {
   );
 }
 
-async function readingOf(body: TriggerScheduleProposalViewBody): Promise<string | null> {
-  const view = mount(body);
+async function readingOf(reading: Reading): Promise<string | null> {
+  const view = mount(reading);
   let card: Element | null = null;
   await waitFor(() => {
     card = view.container.querySelector('[data-conformance-id="schedule-proposal-card"]');
@@ -175,8 +199,8 @@ async function readingOf(body: TriggerScheduleProposalViewBody): Promise<string 
 describe("the card reports which of the section's five readings it is in", () => {
   it("names each of the five, and names them apart", async () => {
     const seen: Record<string, string | null> = {};
-    for (const [name, body] of Object.entries(BODIES)) {
-      seen[name] = await readingOf(body);
+    for (const [name, reading] of Object.entries(BODIES)) {
+      seen[name] = await readingOf(reading);
       cleanup();
     }
     expect(seen.firstShown).toBe("first-shown");
@@ -215,8 +239,8 @@ describe("the card reports which of the section's five readings it is in", () =>
   it("reports the reading without DRAWING one — no status label over the rows", async () => {
     // "No summary box is ever drawn, no status label, and nothing stands
     // between the reader and the form."
-    for (const body of [BODIES.firedRecurring, BODIES.configured]) {
-      const view = mount(body);
+    for (const reading of [BODIES.firedRecurring, BODIES.configured]) {
+      const view = mount(reading);
       await waitFor(() =>
         expect(
           view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),

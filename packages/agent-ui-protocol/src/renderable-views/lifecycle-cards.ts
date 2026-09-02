@@ -1142,7 +1142,50 @@ export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
  * A same-site host receives `null` here and keeps composing its own cookie URL.
  */
 export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
-  LifecycleResolveEnvelopeFor<K> & { islandSrc: string | null };
+  LifecycleResolveEnvelopeFor<K> & {
+    islandSrc: string | null;
+    aside: LifecycleCardAsideByKind[K] | null;
+  };
+
+/**
+ * WHAT A KIND CARRIES BESIDE ITS BODY, AND WHY THERE IS SUCH A PLACE AT ALL
+ * (cinatra#3193).
+ *
+ * A card body is a VERSIONED, `.strict()` object: a version-1 parser accepts
+ * the keys it declares and refuses every other, and the version is a
+ * `z.literal`, so bumping it makes the same parser refuse every card of every
+ * state. Between them those two properties leave a shipped body with exactly
+ * one compatible shape — the one it already has. A reading the card gains
+ * afterwards therefore has nowhere to go INSIDE the body that does not blank
+ * that body on a bundle which has not reloaded.
+ *
+ * The ANSWER around the body has never been strict. `parseLifecycleResolveEnvelope`
+ * reads it by NAME — the kind, the state, the body, the island URL — and
+ * ignores every other key on it, which is precisely the tolerance a `.strict()`
+ * object does not have. `islandSrc` (cinatra#2754) was the first key to use it;
+ * this map is that road, named, so the next one is a declared per-kind shape
+ * rather than a loose key somebody remembered to read.
+ *
+ * `null` means the kind carries nothing beside its body. The answer's `aside`
+ * is `null` for an `absent` state on every kind: an absence carries nothing
+ * beside itself, for the same reason it carries no body and no island URL.
+ */
+export type LifecycleCardAsideByKind = {
+  artifact_review_gate: null;
+  verification_summary: null;
+  /**
+   * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)? See the settled
+   * body's own note for why the answer is here and not in it: it is the reading
+   * "Fired, recurring — runs still to come" is drawn from, it is true for every
+   * recurring schedule that has ever run, and a version-1 body has no shape
+   * that can carry a new key without blanking itself on an older parser.
+   *
+   * ABSENT MEANS `false`, and that is what keeps the other direction open: an
+   * answer from a server that predates this reading carries no such key, and
+   * the reader below reads that as "not fired" rather than refusing the answer.
+   */
+  trigger_schedule_proposal: { firedOnce: boolean };
+};
 
 /**
  * The closed runtime registry behind the type map above. A kind with a `null`
@@ -1155,6 +1198,29 @@ const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
   verification_summary: verificationSummaryBodySchema,
   trigger_schedule_proposal: triggerScheduleProposalViewBodySchema,
 } as const satisfies Record<LifecycleDataPartViewType, z.ZodType | null>;
+
+/**
+ * How each kind reads its own aside off the answer (cinatra#3193).
+ *
+ * A closed registry over the kind set, exactly like the body schemas above, so
+ * a kind cannot gain an aside on the wire without declaring what it is.
+ *
+ * TOLERANT, WHERE THE BODY IS STRICT, AND DELIBERATELY SO. A reading beside the
+ * body exists to be added after the body shipped, so an answer that carries
+ * none — an older server, or a newer one that had nothing to say — must READ,
+ * not refuse. A missing key, and anything that is not the type declared, is the
+ * quiet default. Refusing here would re-open the exact harm the aside exists to
+ * close: a blanked card.
+ */
+const LIFECYCLE_RESOLVE_ASIDE_READERS: {
+  [K in LifecycleDataPartViewType]:
+    | ((record: Record<string, unknown>) => LifecycleCardAsideByKind[K])
+    | null;
+} = {
+  artifact_review_gate: null,
+  verification_summary: null,
+  trigger_schedule_proposal: (record) => ({ firedOnce: record.firedOnce === true }),
+};
 
 /**
  * The server-issued island `src`, read as ONE shape: a root-relative path on
@@ -1209,21 +1275,27 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
       if (bodyPresent || islandSrc !== null) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc: null } as
+      return { kind: expectedKind, state: state.data, body: null, islandSrc: null, aside: null } as
         LifecycleResolveAnswerFor<K>;
     }
+
+    // THE ASIDE IS READ ONLY ONCE THE STATE ALLOWS ONE. `absent` returned
+    // above with nothing beside it; everything below is a drawn card, and a
+    // drawn card may carry the reading its kind declares.
+    const readAside = LIFECYCLE_RESOLVE_ASIDE_READERS[expectedKind];
+    const aside = readAside === null ? null : readAside(record);
 
     const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
     if (schema === null) {
       if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc } as
+      return { kind: expectedKind, state: state.data, body: null, islandSrc, aside } as
         LifecycleResolveAnswerFor<K>;
     }
 
     if (!bodyPresent) return null;
     const body = schema.safeParse(rawBody);
     if (!body.success) return null;
-    return { kind: expectedKind, state: state.data, body: body.data, islandSrc } as
+    return { kind: expectedKind, state: state.data, body: body.data, islandSrc, aside } as
       LifecycleResolveAnswerFor<K>;
   } catch {
     // A throwing getter is a hostile shape; it draws nothing, like every other
