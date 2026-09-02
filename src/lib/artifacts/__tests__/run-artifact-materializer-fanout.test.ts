@@ -237,6 +237,31 @@ describe("materializeRunArtifacts — fan-out over plain-text members", () => {
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the list carries MORE members than the cap — nothing is written", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: {
+        ideas: Array.from({ length: 51 }, (_v, i) => `Title: idea ${i}\n\nbody`),
+      },
+    });
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.ok === false && outcomes[0]!.error).toContain("50-member cap");
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the members TOGETHER exceed the list byte cap", async () => {
+    const big = `Title: big\n\n${"a".repeat(6 * 1024 * 1024)}`;
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: { ideas: [big, big] },
+    });
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.ok === false && outcomes[0]!.error).toContain("byte list cap");
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed when a member is not a plain string", async () => {
     const outcomes = await materializeRunArtifacts({
       ...BASE_INPUT,
@@ -249,7 +274,9 @@ describe("materializeRunArtifacts — fan-out over plain-text members", () => {
   it("fails closed when the bound output is missing from the run's declared outputs — the fourth-round shape", async () => {
     const outcomes = await materializeRunArtifacts({
       ...BASE_INPUT,
-      endNodeOutputs: { ideaBatchTitle: "", ideaBatchDocument: "", notes: "n" },
+      // The measured answer carried NEITHER retired key — the bridge warned
+      // that both were "missing or unusable" — and no `ideas` either.
+      endNodeOutputs: { notes: "n" },
     });
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]!.ok).toBe(false);

@@ -83,6 +83,15 @@ export const ARTIFACT_BINDING_AUTHORABLE_MIMES: ReadonlySet<string> = new Set([
 export const BINDING_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
 /**
+ * A fanned-out member takes the ledger identity `${output}[${index}]`
+ * (run-artifact-materializer). An output that carries that shape in its OWN
+ * name would share the ledger's (run, output, extension, content-hash)
+ * identity with a member of a sibling fan-out, so the shape is RESERVED: a
+ * bound output may never be named that way.
+ */
+export const FAN_OUT_MEMBER_IDENTITY_RE = /\[\d+\]$/;
+
+/**
  * The fan-out block of a binding (cinatra#3034, plan item 0.27). `mode` is
  * `member` — one artifact per member of the bound array. `titleFrom` is
  * `first-line` — the member's own first line, behind `titlePrefix`, IS the
@@ -298,6 +307,17 @@ export function collectArtifactBindingsFromOasDocument(
         continue;
       }
       const binding = parsed.data;
+
+      // The member-identity shape is reserved (see
+      // FAN_OUT_MEMBER_IDENTITY_RE): a bound output named `x[0]` would alias a
+      // fanned-out member of `x` in the materialization ledger.
+      if (FAN_OUT_MEMBER_IDENTITY_RE.test(title)) {
+        errors.push(
+          `${where}: a bound output may not be named "${title}" — a trailing ` +
+            "[index] is reserved for the members of a fanned-out list",
+        );
+        continue;
+      }
 
       let referenceError = false;
       for (const [field, ref] of [

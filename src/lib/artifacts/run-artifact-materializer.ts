@@ -198,6 +198,16 @@ function resolveBindingMime(
 }
 
 /**
+ * Fan-out write-amplification caps (cinatra#3034). The scalar path writes ONE
+ * row per binding; a fan-out writes one per MEMBER and the member list arrives
+ * from a model's answer, so the list itself is bounded BEFORE any member is
+ * written. Both caps are fail-closed on the whole binding: an over-long list is
+ * refused, never silently trimmed to the cap.
+ */
+export const MAX_FAN_OUT_MEMBERS = 50;
+export const MAX_FAN_OUT_TOTAL_BYTES = MAX_AUTHORED_CONTENT_BYTES;
+
+/**
  * Read a fanned-out member's own title: its FIRST line, behind the declared
  * prefix. Fail-closed on both counts — an unmarked first line and an empty
  * title are refused rather than invented, and the member's bytes are written
@@ -833,6 +843,26 @@ export async function materializeRunArtifacts(input: {
           fail(
             `fan-out output "${binding.contentFrom}" resolved to an empty array — ` +
               "the run declared a produced artifact per member and produced none",
+          );
+          continue;
+        }
+        if (members.length > MAX_FAN_OUT_MEMBERS) {
+          fail(
+            `fan-out output "${binding.contentFrom}" carries ${members.length} members, ` +
+              `over the ${MAX_FAN_OUT_MEMBERS}-member cap — the whole list is refused, never trimmed`,
+          );
+          continue;
+        }
+        let fanOutTotalBytes = 0;
+        for (const candidate of members) {
+          if (typeof candidate === "string") {
+            fanOutTotalBytes += new TextEncoder().encode(candidate).byteLength;
+          }
+        }
+        if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
+          fail(
+            `fan-out output "${binding.contentFrom}" carries ${fanOutTotalBytes} bytes across ` +
+              `${members.length} members, over the ${MAX_FAN_OUT_TOTAL_BYTES}-byte list cap`,
           );
           continue;
         }

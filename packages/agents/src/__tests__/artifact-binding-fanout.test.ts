@@ -98,6 +98,31 @@ describe("collectArtifactBindingsFromOasDocument — fan-out member shape", () =
     });
   });
 
+  it("refuses a bound output whose OWN name reads as a fanned-out member identity", () => {
+    const result = collectArtifactBindingsFromOasDocument(
+      ideasEndNodeDoc([
+        PLAIN_STRING_IDEAS_OUTPUT,
+        { title: "ideaTitle", type: "string" },
+        {
+          title: "ideas[0]",
+          type: "string",
+          cinatra: {
+            artifact: {
+              extension: "@cinatra-ai/blog-idea-artifact",
+              contentFrom: "ideas[0]",
+              titleFrom: "ideaTitle",
+              declaredMime: "text/plain",
+            },
+          },
+        },
+      ]),
+      { produces: ["@cinatra-ai/blog-idea-artifact"] },
+    );
+    expect(result.bindings).toHaveLength(1);
+    expect(result.bindings[0]!.outputId).toBe("ideas");
+    expect(result.errors.join("\n")).toContain("[index] is reserved");
+  });
+
   it("errors when the fan-out output is not an array", () => {
     const result = collectArtifactBindingsFromOasDocument(
       ideasEndNodeDoc([
