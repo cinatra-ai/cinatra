@@ -548,6 +548,47 @@ export const RUN_START_PARKED_CLAUSE =
 export const RUN_START_STARTED_CLAUSE = "The run started.";
 
 /**
+ * The clause for a start whose run is waiting for its schedule (cinatra#3044).
+ *
+ * THE TURN THAT INTRODUCES THE CARD MAY NOT CONTRADICT IT. A run that reaches
+ * its schedule moment has not started: it stands at a card that is still asking
+ * "When should this run?", and a line above that card reading "The run started."
+ * — with a status token of `queued` beside it — is the one reading in the turn
+ * that is false. This clause says what is true of the run AND points at the
+ * thing that decides it, which is the card itself: where the sentence and the
+ * card could disagree, the card is right, so the sentence defers to it in words.
+ *
+ * IT STAYS TRUE FOR THE WHOLE WAIT. The wait does not end at Confirm — a
+ * confirmed schedule is armed, not started — so the same clause is correct
+ * while the card is pending and after it has settled, and the turn does not
+ * change its wording underneath a person who is reading it.
+ */
+export const RUN_START_SCHEDULE_WAIT_CLAUSE =
+  "The run has not started: it is waiting for its schedule, and the card in " +
+  "this conversation is where that schedule is decided.";
+
+/**
+ * Is this reading of a run one of a run WAITING FOR ITS SCHEDULE?
+ *
+ * ONE definition, so the sentence the start mints and the correction the
+ * conversation applies cannot disagree about which runs are waiting. The
+ * moment must be the schedule's own, and the run must be in one of the statuses
+ * it holds before it has ever run (`PRE_EXECUTION_RUN_STATUSES` above) — which
+ * is what keeps a `pending_trigger` reached for another reason, and a run that
+ * has moved on past its schedule, out of it.
+ */
+export function runIsWaitingForItsSchedule(reading: {
+  status: string | null | undefined;
+  moment: string | null | undefined;
+}): boolean {
+  return (
+    reading.moment === "schedule" &&
+    typeof reading.status === "string" &&
+    PRE_EXECUTION_RUN_STATUSES.has(reading.status)
+  );
+}
+
+/**
  * The clause for a start whose run was enqueued and has not been picked up.
  *
  * `queued` is pre-dispatch: the job is on the queue and no worker has taken it
@@ -675,7 +716,24 @@ export function describeStartedRun(input: {
   packageName: string;
   runId: string;
   status: string;
+  /**
+   * The lifecycle moment the run stands at, where the caller already knows it.
+   * Absent means "not known here", which is the ordinary dispatch case: the
+   * schedule moment opens later, and the turn's own correction below is what
+   * reconciles the sentence with the card when it does.
+   */
+  moment?: string | null;
 }): string {
+  // THE SENTENCE MAY NOT OUTRANK THE CARD BENEATH IT. A run waiting for its
+  // schedule has not started and is not queued, so neither word is said and
+  // the status token — the one that read `queued` over a card still asking
+  // "When should this run?" — is not printed at all.
+  if (runIsWaitingForItsSchedule({ status: input.status, moment: input.moment ?? null })) {
+    return (
+      `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`). ` +
+      RUN_START_SCHEDULE_WAIT_CLAUSE
+    );
+  }
   // The status decides, and every status the vocabulary knows has its own
   // sentence — no status falls through to another status's claim. `status` is
   // widened to `string` on this boundary (the answer crosses a wire), so a
@@ -687,4 +745,191 @@ export function describeStartedRun(input: {
     `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`, ` +
     `status: \`${input.status}\`). ${clause}`
   );
+}
+
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A FIRED ONE-OFF'S READING
+ * (cinatra#3044).
+ *
+ * Section VI's fifth reading gives the card its own words, and its example
+ * draws them as the assistant's whole line above the read-only rows:
+ *
+ *   "It ran at the time you set. A one-time schedule is spent once it fires, so
+ *    the rows below are the record of it and cannot be changed."
+ *
+ * IT REPLACES THE PLATFORM'S SENTENCE RATHER THAN CLAUSING IT. Every other
+ * correction in this module swaps the CLAUSE after a head that names the
+ * package and the run, because in each of those readings the run is still the
+ * subject: it is queued, waiting, parked. Over a spent one-off the subject is
+ * the schedule, and the drawing writes it as one standing sentence with no
+ * dispatch head at all -- so the head goes with the clause. A line that kept
+ * "Dispatched `pkg` (runId: `...`, status: `queued`)." over a schedule that has
+ * already run would be the same untruth this module exists to answer, said in
+ * the tense the drawing explicitly retires.
+ *
+ * ONLY A ONE-OFF EVER REACHES IT. "Only a one-off -- Run right after setup or
+ * Schedule for later -- reaches this reading. A recurring schedule is never
+ * spent by firing." The decision is not taken here: this leaf is pure and the
+ * one thing that knows a schedule was spent is the CARD's own resolved reading,
+ * which is what asks for this sentence.
+ */
+export const RUN_START_SCHEDULE_FIRED_SENTENCE =
+  "It ran at the time you set. A one-time schedule is spent once it fires, " +
+  "so the rows below are the record of it and cannot be changed.";
+
+/** Regex-escape a literal. */
+function escapeLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * THE PLATFORM'S OWN SENTENCE FOR ONE RUN, as a pattern.
+ *
+ * EVERY CLAUSE THIS MODULE MINTS, and nothing else. The set is read off the
+ * status table itself rather than listed by hand, so a status given its own
+ * sentence is correctable the day it is added: a platform sentence a corrector
+ * does not recognise is a sentence left claiming a tense the run's row does not
+ * support, which is the whole defect these functions answer, and a hand-kept
+ * list is how one gets missed.
+ *
+ * THE CORRECTED CLAUSES ARE IN THE SET TOO, which is what makes the corrections
+ * idempotent: a turn that has already been corrected matches WHOLE and is
+ * replaced by the identical bytes, rather than matching its head and growing a
+ * second clause.
+ *
+ * LONGEST FIRST. Alternation is ordered, and three of these clauses share the
+ * head "The run has not started"; a shorter one placed first would match that
+ * head and leave the rest of a longer clause standing beside the replacement.
+ *
+ * ONE definition, so the two corrections below cannot come to disagree about
+ * which sentences are the platform's to rewrite.
+ */
+function platformStartSentencePattern(runId: string): RegExp {
+  const clauses = [
+    ...new Set([
+      ...Object.values(RUN_START_CLAUSES),
+      RUN_START_NOT_STARTED_CLAUSE,
+      RUN_START_PARKED_CLAUSE,
+      RUN_START_SCHEDULE_WAIT_CLAUSE,
+    ]),
+  ]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeLiteral)
+    .join("|");
+  return new RegExp(
+    "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
+      escapeLiteral(runId) +
+      "`(?:,\\s*status:\\s*`[^`\\n]*`)?\\)\\.(?:[ \\t]*(" +
+      clauses +
+      "))?",
+    "g",
+  );
+}
+
+/**
+ * Rewrite the platform's own start sentence for ONE run, wherever it stands in
+ * a turn's text, and leave everything else byte-identical.
+ *
+ * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
+ * mints the head with no clause after it, and that door writes the sentence as
+ * the whole line. The same characters INSIDE prose are a quotation of the line,
+ * not the line, and a corrector that rewrote a quotation would be a second
+ * author of the turn -- so a clause-less match is taken only when nothing but
+ * whitespace shares its line.
+ */
+function rewritePlatformStartSentence(input: {
+  text: string;
+  runId: string;
+  replace: (packageName: string) => string;
+}): string {
+  return input.text.replace(
+    platformStartSentencePattern(input.runId),
+    (
+      match: string,
+      packageName: string,
+      clause: string | undefined,
+      offset: number,
+    ) => {
+      if (clause === undefined) {
+        const before = input.text.slice(0, offset);
+        const after = input.text.slice(offset + match.length);
+        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+        if (!ownsTheLine) return match;
+      }
+      return input.replace(packageName);
+    },
+  );
+}
+
+/**
+ * THE SENTENCE THE PLATFORM ALREADY MINTED, CORRECTED AT THE CARD
+ * (cinatra#3044).
+ *
+ * WHY A CORRECTION AND NOT A BETTER CHOICE AT THE START. The start answers the
+ * instant the run is dispatched, and the schedule moment opens later — after
+ * the setup card's own Continue, in the executor. The sentence is frozen into
+ * the turn before the park exists, so no clause chosen at that instant can know
+ * about it. What the conversation CAN know, at the moment it draws the card, is
+ * that this very run is standing at its schedule moment; so the turn's line is
+ * re-read against the run's own row there, and a line that claims a tense the
+ * row does not support is replaced with the one it does.
+ *
+ * NARROW BY CONSTRUCTION. It rewrites only the platform's OWN sentence, only
+ * for the run named in it, and only where that sentence carries one of the
+ * clauses this module mints. Prose the model wrote, another run's sentence, and
+ * a sentence already corrected are all returned untouched — a correction that
+ * could reach arbitrary text would be a second author of the turn.
+ *
+ * PURE, and in this leaf, so the surface that draws the card and the primitive
+ * that mints the sentence say the same words without either pulling a graph.
+ */
+export function correctRunStartSentenceForScheduleWait(input: {
+  text: string;
+  runId: string;
+}): string {
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: (packageName) =>
+      describeStartedRun({
+        packageName,
+        runId: input.runId,
+        status: "pending_trigger",
+        moment: "schedule",
+      }),
+  });
+}
+
+/**
+ * THE SAME SENTENCE, OVER A ONE-OFF THAT HAS ALREADY FIRED (cinatra#3044).
+ *
+ * The wait correction above answers a run standing AT its schedule. This one
+ * answers the reading after it: the one-off fired, the run moved on, and the
+ * card beneath the line settled into the record of a schedule that is spent.
+ * The line frozen into the turn at dispatch still said the run was queued and
+ * would start on its own, which is now false in both halves — it has started,
+ * and nothing is waiting to start it.
+ *
+ * IT IS THE DRAWING'S SENTENCE, WHOLE. See
+ * `RUN_START_SCHEDULE_FIRED_SENTENCE` for why the dispatch head goes with the
+ * clause rather than staying above it.
+ *
+ * IDEMPOTENT AND NARROW, on exactly the same terms as the wait correction: the
+ * replacement carries no dispatch head, so a corrected line no longer matches
+ * the platform's own pattern and a second pass changes nothing at all.
+ *
+ * THE TWO CORRECTIONS CANNOT BOTH APPLY TO ONE RUN. A run is either standing at
+ * its schedule or past it, and the container that reports these two answers
+ * reads both off the same reading — so whichever runs first, the other finds no
+ * platform sentence left for that run to rewrite.
+ */
+export function correctRunStartSentenceForFiredSchedule(input: {
+  text: string;
+  runId: string;
+}): string {
+  return rewritePlatformStartSentence({
+    text: input.text,
+    runId: input.runId,
+    replace: () => RUN_START_SCHEDULE_FIRED_SENTENCE,
+  });
 }

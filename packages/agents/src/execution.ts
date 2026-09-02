@@ -502,7 +502,10 @@ import { mintRunToken } from "@/lib/agent-run-token";
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
 // the review-gate + verification store graph into the run executor to mint one
 // string.
-import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  encodeLifecycleGateRef,
+  encodeScheduleRunRef,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
@@ -2937,7 +2940,34 @@ async function runAgentBuilderExecutionJobInner(
       // AT, and the two are not the same fact — the run page used to have only
       // the status to go on. Continue is `advanceAgentRun`, which clears this
       // before the run moves.
-      await stateRunScheduleMoment({ run, authority: executionAuthority });
+      //
+      // AND THE MOMENT CARRIES ITS CARD'S REFERENCE (cinatra#3044). The moment
+      // used to open with no reference at all, which is a complete account of
+      // why the conversation showed nothing: the coordinator recorded a NULL
+      // `lifecycle_card_ref`, and the run outbox writes no part for a moment
+      // that has no reference — "nothing here invents a reference it was not
+      // given" (`lifecycle-part-outbox.ts`). The reference is the run-scoped
+      // schedule ref the run page already mints for this same card, minted HERE
+      // on the run path exactly as the review gate's is minted at gate emission.
+      //
+      // FAIL CLOSED, WITHOUT A BRANCH. `encodeScheduleRunRef` answers `null`
+      // when the instance has no auth secret — the codec's own contract — and a
+      // null reference travels the road it has always travelled: the moment is
+      // still stated and the run is unaffected, and no card is drawn rather than
+      // one addressed by something the server did not mint.
+      await stateRunScheduleMoment({
+        run,
+        // AND IT RECORDS THAT THIS IS THE RUN'S OWN SCHEDULE STEP
+        // (cinatra#3044). This is the ONE minting site where the card in a
+        // conversation IS the schedule step — the rows are chosen on it,
+        // **Run right after setup** included — and the resolver has to keep
+        // drawing that card after the schedule is spent. The stamp is sealed
+        // inside the reference with the run it addresses, so it survives the
+        // moment ending, travels in the turn's durable content, and grants
+        // nothing on its own.
+        cardRef: encodeScheduleRunRef({ runId, fromScheduleStep: true }),
+        authority: executionAuthority,
+      });
       console.log(
         "[setup-interrupt-loop] setup finished with no trigger configured — awaiting the trigger choice for run",
         runId,
