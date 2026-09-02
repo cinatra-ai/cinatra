@@ -16,6 +16,13 @@
  * renderer identity is host-resolved from the artifact TYPE upstream and reaches
  * this model only as the opaque `ReviewTargetMount` kind.
  */
+// THE DEEP ENTRY, DELIBERATELY. This module is reachable from the chat
+// surface's own module graph, and the package barrel pulls the whole library in
+// behind one function — enough extra graph that the conversation column's
+// timing-sensitive first paint measurably slowed. One function is what is used
+// and one module is what is imported.
+import { formatDistance } from "date-fns/formatDistance";
+
 import type {
   PreparedReviewTarget,
   ReviewTargetMount,
@@ -124,59 +131,61 @@ export function reviewSettledCopy(
 }
 
 // ---------------------------------------------------------------------------
-// Renderer provenance (§III) — the surface shows HOW each target was rendered.
-// The conformance anchor is derived from the OPAQUE mount kind, never a type id.
+// Renderer provenance (§V) — host-resolved, and NOT PUT ON SCREEN. The one
+// region that survives is the floor's, and only because a render failed.
 // ---------------------------------------------------------------------------
 
-export type ReviewProvenanceConformanceId =
-  | "review-provenance-native"
-  | "review-provenance-marketplace"
-  | "review-target-floor";
+export type ReviewProvenanceConformanceId = "review-target-floor";
 
 /** The design conformance id for a target's provenance region, from its host
- * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
- * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). `null` means the target has NO provenance region — the strip is
- * not rendered at all.
+ * mount kind. `null` means the target has NO region — the strip is not rendered
+ * at all — which is now every mount but the floor.
  *
- * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
- * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
- * the work, or that nothing did. The host's own rendering of a declared text
- * form is neither: there is no package to name, and the work did render. Rather
- * than reuse a package tier that would name an extension that never ran, or
- * invent a fourth strip the drawing does not carry, the reviewer is shown the
- * draft with nothing above it. */
+ * THE DRAWING FORBIDS THE OTHER TWO. §V of the ratified artifact-review drawing,
+ * read at the drawings' default branch: the resolution "is not put on screen: a
+ * display shows the work and nothing about itself — no renderer name, no package
+ * identity, no provenance line — because the reader is deciding on the work, not
+ * on what drew it", and a build-time renderer and a runtime one "are drawn the
+ * same way, because nothing on either target says which resolved it". §V.1 says
+ * it again for the display that fills the slot: its header carries the tabs, the
+ * indicator "and nothing else — no renderer chip and no provenance line, here or
+ * on any other surface this display is drawn". The lifecycle-cards drawing §III
+ * is the same sentence in its own words.
+ *
+ * A build-map mount and a runtime mount therefore carry no region, exactly as
+ * the form rung already did (cinatra#2931 W4, for its own reason: there was no
+ * package to name and the work did render).
+ *
+ * ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor, and
+ * only because a reader must be told a render failed." */
 export function reviewProvenanceConformanceId(
   mount: ReviewTargetMount,
 ): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
-      return "review-provenance-native";
     case "form":
-      return null;
     case "runtime":
-      return "review-provenance-marketplace";
+      return null;
     case "floor":
       return "review-target-floor";
   }
 }
 
-/** The provenance label shown beside the chip (§III). build-time / runtime carry
- * the extension chip; a runtime additionally shows its package identity; a floor
- * reads "Floor". `null` for the form rung, which has no region to label at all
- * (see `reviewProvenanceConformanceId`). Pure copy — no type keying. */
+/** The label the one surviving region prints (§V) — a floor reads "Floor" over
+ * the generic read-only reading of the representation. `null` for every mount
+ * that draws no region: the two renderer tiers, which the drawing forbids from
+ * naming themselves, and the form rung, which never had one. Pure copy — no
+ * type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
-  kind: "build-time" | "runtime" | "floor";
+  kind: "floor";
   slot: string;
   packageName: string | null;
 } | null {
   switch (mount.kind) {
     case "build-map":
-      return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
     case "form":
-      return null;
     case "runtime":
-      return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
+      return null;
     case "floor":
       return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
   }
@@ -206,36 +215,63 @@ export function reviewTypeLabel(objectType: string): string {
 }
 
 /**
- * The read-only row facts the header's meta line carries (§II) — the ones the
+ * The read-only row facts the header's meta line carries (§IV) — the ones the
  * drawing names: "the read-only row facts the host authorized — owner level /
- * visibility, MIME, and updated time"
- * (design@fe2182547d4a specs/app-artifact-review.html §IV).
+ * visibility, MIME, and updated time".
  *
- * THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line printed the
- * two scope facts BARE, one after the other, so the ordinary case read
- * "organization · organization" — the same word twice for two facts that are not
- * the same thing at all: which scope HOLDS the artifact, and who can SEE it. The
- * plan's fix is that "the line gets labels or drops the storage fact". The
- * drawing keeps BOTH facts on the line ("… · Team · Private · text/html ·
- * updated 8 min ago", specs/app-lifecycle-cards.html §II), so dropping the
- * storage fact would delete a fact the drawing draws: the facts are LABELLED
- * instead, in the drawing's own order, with the label the host already uses for
- * ownership on its other screens.
+ * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
+ * meta line in the ratified drawings prints the two scope facts with no label at
+ * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
+ * line again over §V.1's read-only review target. The labelled form this line
+ * carried came from a local reading of a plan sentence ("the line gets labels or
+ * drops the storage fact") rather than from the drawing, and the graded proof frames
+ * measured it as a departure. The drawing decides: the labels go, both facts
+ * stay, and the order is the drawing's.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
-export function reviewTargetRowFacts(artifact: {
-  ownerLevel: string;
-  visibility: string;
-  mime: string;
-  updatedAt: string;
-}): string[] {
+export function reviewTargetRowFacts(
+  artifact: {
+    ownerLevel: string;
+    visibility: string;
+    mime: string;
+    updatedAt: string;
+  },
+  /** The instant the line is read against. An argument so the reading is
+   * deterministic under test; every caller omits it and reads the wall clock. */
+  now: Date = new Date(),
+): string[] {
   return [
-    `Ownership: ${artifact.ownerLevel}`,
-    `Visibility: ${artifact.visibility}`,
+    artifact.ownerLevel,
+    artifact.visibility,
     artifact.mime,
-    `updated ${artifact.updatedAt}`,
+    `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
   ];
+}
+
+/**
+ * The updated fact as a RELATIVE reading, which is what the drawing draws
+ * ("… · text/html · updated 8 min ago", specs/app-artifact-review.html §IV).
+ * The line used to interpolate the row's raw stored instant, so the header read
+ * "updated 2026-08-31T08:19:26.458Z" — a machine timestamp where the drawing
+ * asks how long ago.
+ *
+ * It reuses the app's own relative-time reading (date-fns' distance wording
+ * with a suffix), the same one the artifact library's rows read, so the two
+ * surfaces cannot word the same fact differently. The base instant is an
+ * argument rather than the wall clock so the reading is deterministic under
+ * test — `formatDistanceToNow` is exactly this call against `Date.now()`.
+ *
+ * A VALUE THAT IS NOT AN INSTANT IS PASSED THROUGH UNCHANGED. The row's column
+ * is an instant, but this function is pure and is fed by callers this module
+ * does not own; formatting a value it cannot read would either throw or invent
+ * one ("Invalid Date"), and printing back exactly what it was handed is the only
+ * honest degrade.
+ */
+function relativeUpdatedTime(updatedAt: string, now: Date): string {
+  const at = new Date(updatedAt);
+  if (Number.isNaN(at.getTime())) return updatedAt;
+  return formatDistance(at, now, { addSuffix: true });
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
