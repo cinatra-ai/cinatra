@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,20 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Run step rail (surface: run-step-rail)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3162, epic #3155 W6: the REAL RunStepRailPanel on a run
+                that carries every rail entry kind — a work step, the gate
+                already answered and kept as history, the gate the run is paused
+                on, and a step still ahead. The harness supplies the entries; the
+                shipped component draws every row. */}
+            <RunStepRailConformanceFixture />
           </CardContent>
         </Card>
       </PageContent>
