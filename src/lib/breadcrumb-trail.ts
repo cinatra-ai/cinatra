@@ -102,6 +102,70 @@ export function connectorCanonicalCrumbHref(
   return null;
 }
 
+// THE CONNECTOR ROUTE'S NAMED LEVELS (cinatra#3215).
+//
+// The ratified components drawing: "A crumb that stands for an entity id shows
+// that entity's display name — at every position, not only the last", and the
+// eight-characters-plus-ellipsis fallback it names is written for an ENTITY ID
+// — "never a title-cased raw id". A vendor slug and a connector slug are
+// neither ids nor the reader's own words, and `humanizePathSegment` turned them
+// into text the product shows nowhere else: "Cinatra Ai", "Google Appointment
+// Schedules Connector" — drawn beside a page header writing the connector's
+// real display name, "Google Appointment Schedules".
+//
+// The owning route publishes both display names as crumb contributions from its
+// server render, after its access checks, and that is what these crumbs
+// normally read. THIS is the floor under that — the reading with no
+// contribution published (a soft navigation before the island fires, a reader
+// with no access, any future route that forgets): the crumb shows the segment
+// VERBATIM, spelled the way the url spells it, and never a title-cased slug. So
+// the composer carries the guarantee, not one page.
+//
+// Verbatim, and not the id placeholder: the placeholder is the drawing's rule
+// for an id, and cutting "google-appointment-schedules-connector" to eight
+// characters would hide a word the reader can already read in the address bar.
+// Verbatim, and not dropped: the vendor and the connector are real levels of
+// the hierarchy the trail is required to reflect.
+//
+// Read at the VENDOR and CONNECTOR positions of the dispatch route only — a
+// path that carries both a vendor and a connector segment. The static connector
+// pages (`/connectors/email`, `drupal`, `resend`, `wordpress`) carry no such
+// pair and are untouched.
+export function connectorNameCrumbFallbackLabel(
+  segments: string[],
+  i: number,
+): string | null {
+  if (segments[0] !== "connectors") return null;
+  if (segments.length < 3) return null;
+  if (i !== 1 && i !== 2) return null;
+  return safelyDecodePathSegment(segments[i]);
+}
+
+// THE SELECTED TAB IS NOT A LEVEL OF THE HIERARCHY (cinatra#3215).
+//
+// The drawing fixes the trail as the navigation hierarchy — "the route the page
+// sits on, not the thing the page happens to be about" — and closes its
+// Breadcrumb section with "Never combine with tabs". The connector dispatch
+// route resolves ONLY at its canonical subroute, so that last segment is the
+// same fixed word on every connector page, never a distinguishing one; and the
+// surface underneath draws that word again as the first trigger of its own
+// Setup / Help tab strip. A crumb that names the tab the reader is already
+// looking at — and points at the very href the crumb above it points at — is
+// not a place above the page.
+//
+// So the subroute contributes NO crumb and the connector itself is the trail's
+// leaf: "Connectors > the vendor > the connector". Decided on the route SHAPE,
+// not on whether the surface happens to render a tab strip: a connector that
+// declares no extra tabs draws none, and the segment is no more a level of the
+// hierarchy there than it is beside one. Answers the crumb path to drop, or
+// null.
+export function connectorTabCrumbPathToDrop(segments: string[]): string | null {
+  if (segments[0] !== "connectors") return null;
+  if (segments.length !== 4) return null;
+  if (segments[3] !== CANONICAL_CONNECTOR_SUBROUTE) return null;
+  return "/" + segments.slice(0, 4).join("/");
+}
+
 // Whether the breadcrumb crumb for `segments[i]` points at a pageless routing
 // container that would 404 if linked — in which case it must render as a plain
 // label, not a link. The auto-breadcrumb otherwise turns every ancestor segment
@@ -338,7 +402,8 @@ export function buildBreadcrumbTrail(
         ? pageTitle.title
         : isIdLikeSegment(seg)
           ? idSegmentPlaceholder(seg)
-          : humanizePathSegment(seg));
+          : (connectorNameCrumbFallbackLabel(segments, i) ??
+            humanizePathSegment(seg)));
     // The connector ([slug]) level has no index page, but it links to its
     // canonical subroute (already present in the path); see
     // connectorCanonicalCrumbHref (#422). Other pageless containers (e.g.
@@ -378,6 +443,19 @@ export function buildBreadcrumbTrail(
 
   applyCrumbAppends(crumbs, crumbPaths, contributions);
 
+  // The connector page's selected tab is not a crumb (cinatra#3215 — see
+  // `connectorTabCrumbPathToDrop`). Dropped by PATH, and after the insertions
+  // and appends, so a crumb some publisher put at that position is the one that
+  // stays and the tab's own crumb is the one that goes.
+  const tabCrumbPath = connectorTabCrumbPathToDrop(segments);
+  if (tabCrumbPath !== null) {
+    const at = crumbPaths.indexOf(tabCrumbPath);
+    if (at !== -1) {
+      crumbPaths.splice(at, 1);
+      crumbs.splice(at, 1);
+    }
+  }
+
   // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
   if (crumbs.length <= 4) return crumbs;
   return [
@@ -389,14 +467,15 @@ export function buildBreadcrumbTrail(
 }
 
 // Stable React key for a crumb at position `i`. Keying by `href` alone collides
-// (#499): two distinct crumbs can legitimately share an href — on a valid
-// connector page the [slug] crumb canonical-links to its subroute (#422), which
-// is the very page the leaf crumb represents, so e.g.
-// `/connectors/cinatra-ai/openai-connector/setup` yields crumbs[2] and crumbs[3]
-// with the same href. The crumbs are still semantically distinct ("Openai
-// Connector" vs "Setup"), so the right fix is a positionally-unique key, not
-// dropping a crumb. Index-prefixing also keeps siblings unique for any future
-// same-href case (ellipsis already keyed by index).
+// (#499): two distinct crumbs can legitimately share an href, and a duplicate
+// key is a React warning and a mis-reconciled row. The case that first raised it
+// was the connector setup path, where the [slug] crumb canonical-links to its
+// subroute (#422) — the very page the trail's last crumb then stood for. That
+// particular pair is gone: the connector page's selected tab is no longer a
+// crumb at all (cinatra#3215), so the [slug] crumb IS the leaf and there is
+// nothing beside it to collide with. The positional key stays: it is the right
+// fix for the general case, and cheaper than proving no two crumbs can ever
+// share an href again (ellipsis already keyed by index).
 export function breadcrumbCrumbKey(crumb: BreadcrumbCrumb, i: number): string {
   return crumb.ellipsis ? `ellipsis-${i}` : `${i}-${crumb.href}`;
 }
