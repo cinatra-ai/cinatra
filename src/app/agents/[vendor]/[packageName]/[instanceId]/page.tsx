@@ -18,6 +18,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     packageName,
     instanceId,
     screenSlot: "instanceSetup",
+    // The screen this route dispatches also answers not-found for a run
+    // that is not there (fix leg 11 convergence round), so the tab makes that
+    // determination too rather than naming the run's kind above a page that
+    // reads "Page not found".
+    notFoundWhenRunMissing: true,
   });
 }
 

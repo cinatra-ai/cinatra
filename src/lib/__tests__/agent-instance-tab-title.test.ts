@@ -373,3 +373,120 @@ describe("the instance position never shows the typed address", () => {
     );
   });
 });
+
+/**
+ * THE RUN'S OWN ABSENCE IS A NOT-FOUND READING TOO (fix leg 11 convergence
+ * round).
+ *
+ * The screens dispatch resolves for a REAL agent, so the guard above passes and
+ * the address the proof round typed - a real agent, a run that is not there -
+ * still resolved a name for its tab while its screen answered `notFound()`.
+ * The screens of the run's own page, /trigger and /permissions all guard the
+ * run the same way: `if (!template) notFound(); ... if (!run) notFound();`, with
+ * a refusal carrying 404 folded into that answer and a refusal carrying 403
+ * drawing the not-authorized panel instead - a page that IS there. Those three
+ * routes ask for the determination; the data route redirects and does not.
+ */
+describe("the tab on a route whose screen guards the run", () => {
+  const GUARDED = { ...BASE, instanceId: "no-such-run", screenSlot: "instanceSetup", notFoundWhenRunMissing: true };
+
+  beforeEach(() => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    resolveAgentScreensWithA2AFallback.mockResolvedValue({
+      instanceSetup: () => null,
+      instanceTrigger: () => null,
+      instancePermissions: () => null,
+    });
+  });
+
+  it("reads Page not found for a run that is not there", async () => {
+    readAgentRunById.mockResolvedValue(null);
+    await expect(resolveAgentInstanceMetadata(GUARDED)).resolves.toEqual({
+      title: PAGE_NOT_FOUND_CRUMB_LABEL,
+    });
+  });
+
+  it("reads Page not found when no template resolves for this actor", async () => {
+    readAgentTemplateBySlug.mockResolvedValue(null);
+    await expect(resolveAgentInstanceMetadata(GUARDED)).resolves.toEqual({
+      title: PAGE_NOT_FOUND_CRUMB_LABEL,
+    });
+    expect(readAgentRunById).not.toHaveBeenCalled();
+  });
+
+  it("reads Page not found for a refusal that HID the run (404)", async () => {
+    readAgentRunById.mockRejectedValue(Object.assign(new Error("denied"), { statusCode: 404 }));
+    await expect(resolveAgentInstanceMetadata(GUARDED)).resolves.toEqual({
+      title: PAGE_NOT_FOUND_CRUMB_LABEL,
+    });
+  });
+
+  it("does NOT read Page not found for a refusal that left the page standing (403)", async () => {
+    readAgentRunById.mockRejectedValue(Object.assign(new Error("forbidden"), { statusCode: 403 }));
+    await expect(resolveAgentInstanceMetadata(GUARDED)).resolves.toEqual({
+      title: AGENT_INSTANCE_GENERIC_TAB_TITLE,
+    });
+  });
+
+  it("does NOT read Page not found when the store simply fell over", async () => {
+    readAgentRunById.mockRejectedValue(new Error("connection lost"));
+    await expect(resolveAgentInstanceMetadata(GUARDED)).resolves.toEqual({
+      title: AGENT_INSTANCE_GENERIC_TAB_TITLE,
+    });
+  });
+
+  it("never answers not-found for the creation route, which has no run yet", async () => {
+    await expect(
+      resolveAgentInstanceMetadata({ ...GUARDED, instanceId: "new" }),
+    ).resolves.toEqual({ title: AGENT_INSTANCE_GENERIC_TAB_TITLE });
+    expect(readAgentRunById).not.toHaveBeenCalled();
+  });
+
+  it("makes the determination on a sub-route that draws its own crumb, and still takes no name from it", async () => {
+    readAgentRunById.mockResolvedValue(null);
+    await expect(
+      resolveAgentInstanceMetadata({
+        ...GUARDED,
+        subRoute: "trigger",
+        screenSlot: "instanceTrigger",
+      }),
+    ).resolves.toEqual({ title: PAGE_NOT_FOUND_CRUMB_LABEL });
+
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "Blog Pipeline Agent (1)",
+      status: "armed",
+      templateId: "tpl-1",
+      runBy: "user-1",
+    });
+    await expect(
+      resolveAgentInstanceMetadata({
+        ...GUARDED,
+        instanceId: RUN_ID,
+        subRoute: "trigger",
+        screenSlot: "instanceTrigger",
+      }),
+    ).resolves.toEqual({ title: "Schedule" });
+  });
+
+  it("still mirrors the run's name once the run is there", async () => {
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "Blog Pipeline Agent (1)",
+      status: "armed",
+      templateId: "tpl-1",
+      runBy: "user-1",
+    });
+    await expect(
+      resolveAgentInstanceMetadata({ ...GUARDED, instanceId: RUN_ID }),
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
+  });
+
+  it("leaves a route that does not ask for the determination unchanged", async () => {
+    readAgentRunById.mockResolvedValue(null);
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, instanceId: "no-such-run", screenSlot: "instanceSetup" }),
+    ).resolves.toEqual({ title: AGENT_INSTANCE_GENERIC_TAB_TITLE });
+  });
+});

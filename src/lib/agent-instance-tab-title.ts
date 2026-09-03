@@ -56,6 +56,20 @@ export type AgentInstanceRouteParams = {
    * not made at all and the route keeps the naming behaviour it had.
    */
   screenSlot?: string;
+  /**
+   * THIS ROUTE'S SCREEN ANSWERS NOT-FOUND FOR A RUN THAT IS NOT THERE
+   * (cinatra#2934, fix leg 11 convergence round).
+   *
+   * Given, the metadata repeats the screen's OWN run guard as well as its
+   * screens-dispatch guard: `if (!template) notFound(); ... if (!run)
+   * notFound();`, with a refusal that hid the run's existence (404) counted as
+   * not-found and a refusal that left the page standing (403) counted as
+   * nothing at all. Set ONLY on the routes whose screen provably guards this
+   * way — the run's own page (Setup), /trigger (Schedule) and /permissions.
+   * The data route redirects rather than answering not-found, so it does not
+   * set it, and a route whose screen this module cannot read does not either.
+   */
+  notFoundWhenRunMissing?: boolean;
 };
 
 /** The run instance's own path — the crumb prefix a contribution targets. */
@@ -123,9 +137,25 @@ export async function resolveAgentInstanceMetadata(
   const subRouteDrawsItsOwnCrumb =
     params.subRoute != null &&
     agentInstanceSubRouteCrumbLabel(params.subRoute) !== null;
-  const resolvedInstanceLabel = subRouteDrawsItsOwnCrumb
-    ? null
-    : await readAgentInstanceCrumbLabel(params);
+  // THE RUN'S OWN ABSENCE IS ALSO A NOT-FOUND READING (fix leg 11 convergence
+  // round). The screens-dispatch guard above catches only an agent whose
+  // screens do not resolve; the address the proof round typed reached a real
+  // agent and named a run that is not there, and the SCREEN answers not-found
+  // for that - so the tab that ships with the first byte still read a run's
+  // kind above a page that renders "Page not found". The same read this module
+  // already performs for the crumb now reports WHICH answer it got, and on a
+  // route that guards the run it decides the title before any name is used.
+  // A sub-route that draws its own crumb still takes no name from the read.
+  let resolvedInstanceLabel: string | null = null;
+  if (params.notFoundWhenRunMissing || !subRouteDrawsItsOwnCrumb) {
+    const reading = await readAgentInstanceIdentity(params);
+    if (params.notFoundWhenRunMissing && reading.kind === "not-found") {
+      return { title: PAGE_NOT_FOUND_CRUMB_LABEL };
+    }
+    if (!subRouteDrawsItsOwnCrumb && reading.kind === "named") {
+      resolvedInstanceLabel = reading.label;
+    }
+  }
   return { title: agentInstanceTabTitle({ ...params, resolvedInstanceLabel }) };
 }
 
@@ -156,25 +186,37 @@ async function agentInstanceRouteAnswersNotFound(
 }
 
 /**
- * The run's identity, read behind the run's own access gate — the same pair of
+ * The run's identity, read behind the run's own access gate - the same pair of
  * reads the run screen performs (the template by slug for this actor, then the
  * run with the actor and their role hints so the run-visibility policy
- * applies). `null` on anything at all: no session, no template, a refusal, a
- * store that fell over. It never throws; a metadata read must not decide
- * whether a page renders.
+ * applies), and now reporting WHICH answer it got rather than only a name:
+ *
+ *   `not-found`  what the screen itself answers not-found for: no template for
+ *                this actor, no run, or a refusal that HID the run's existence.
+ *   `unknown`    nothing was determined: no session, a store that fell over, or
+ *                a refusal that left the page standing (403, the not-authorized
+ *                panel). The caller names the kind, exactly as before.
+ *   `named`      the run resolved; `label` is its title, else the template's.
+ *
+ * It never throws; a metadata read must not decide whether a page renders.
  */
-async function readAgentInstanceCrumbLabel(
+type AgentInstanceIdentityReading =
+  | { kind: "unknown" }
+  | { kind: "not-found" }
+  | { kind: "named"; label: string | null };
+
+async function readAgentInstanceIdentity(
   params: AgentInstanceRouteParams,
-): Promise<string | null> {
+): Promise<AgentInstanceIdentityReading> {
   // `/agents/<vendor>/<package>/new` creates a run and redirects; there is no
-  // instance to name yet.
-  if (params.instanceId === "new") return null;
+  // instance to name yet, and no absent run to read as not-found either.
+  if (params.instanceId === "new") return { kind: "named", label: null };
   try {
     const { getAuthSession, isPlatformAdmin, resolveOrgRoleForSession } = await import(
       "@/lib/auth-session"
     );
     const session = await getAuthSession();
-    if (!session) return null;
+    if (!session) return { kind: "unknown" };
     const actorUserId = session.user?.id ?? null;
     const { readAgentTemplateBySlug, readAgentRunById } = await import(
       "@cinatra-ai/agents/store"
@@ -183,20 +225,25 @@ async function readAgentInstanceCrumbLabel(
       params.vendor + "/" + params.packageName,
       { actorUserId, includeNonPublished: true },
     );
-    if (!template) return null;
-    const run = await readAgentRunById(
-      params.instanceId,
-      { actorType: "human", source: "ui", userId: actorUserId ?? undefined },
-      {
-        platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
-        orgRole: await resolveOrgRoleForSession({
-          user: { id: session.user.id },
-          session: session.session,
-        }),
-        actorOrganizationId: session.session?.activeOrganizationId ?? undefined,
-      },
-    );
-    if (!run) return null;
+    if (!template) return { kind: "not-found" };
+    let run;
+    try {
+      run = await readAgentRunById(
+        params.instanceId,
+        { actorType: "human", source: "ui", userId: actorUserId ?? undefined },
+        {
+          platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
+          orgRole: await resolveOrgRoleForSession({
+            user: { id: session.user.id },
+            session: session.session,
+          }),
+          actorOrganizationId: session.session?.activeOrganizationId ?? undefined,
+        },
+      );
+    } catch (err) {
+      return runReadHidTheRun(err) ? { kind: "not-found" } : { kind: "unknown" };
+    }
+    if (!run) return { kind: "not-found" };
     // The screen's own precedence, MINUS its write. The run screen auto-names a
     // started run as it renders, and that naming PERSISTS. A metadata read runs
     // on every request - including one whose page then answers not-found, and
@@ -207,8 +254,23 @@ async function readAgentInstanceCrumbLabel(
     // run screen stays the one place a run is named, and the shell's own trail
     // effect carries the numbered name into the tab the moment the screen
     // publishes it.
-    return run.title?.trim() || template.name || null;
+    return { kind: "named", label: run.title?.trim() || template.name || null };
   } catch {
-    return null;
+    return { kind: "unknown" };
   }
+}
+
+/**
+ * The screens' own refusal mapping, read structurally so that this module does
+ * not pull the screen bundle into a metadata read: a refusal carrying 404 HID
+ * the run's existence and the screen answers not-found; 403 leaves the page
+ * standing and is not a not-found reading; anything without that code is not a
+ * permission answer at all.
+ */
+function runReadHidTheRun(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { statusCode?: unknown }).statusCode === 404
+  );
 }

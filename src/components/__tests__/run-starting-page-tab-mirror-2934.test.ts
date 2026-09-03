@@ -40,6 +40,33 @@ describe("the run-starting page: trail and tab say the same word", () => {
     expect(documentTitleLabelFromTrail(trail)).toBe(AGENT_RUN_LABEL);
   });
 
+  it("reads that way BEFORE the page publishes anything (convergence round)", () => {
+    // The first trail drawn for this page - the one the shell mirrors on its
+    // very first render, and again on every soft navigation onto the page -
+    // has no published page title yet. It used to read "Agents" alone, so the
+    // shell wrote the AREA's word over the route's already-correct title until
+    // the page published a frame later. The drawing states this page's reading
+    // outright, so the trail states it from the first render.
+    const trail = buildBreadcrumbTrail(RUN_STARTING_PAGE);
+    expect(trail.map((c) => c.label)).toEqual(["Agents", AGENT_RUN_LABEL]);
+    expect(documentTitleLabelFromTrail(trail)).toBe(AGENT_RUN_LABEL);
+  });
+
+  it("a page that publishes a different word still wins, and no other area root gains a crumb", () => {
+    const renamed = buildBreadcrumbTrail(RUN_STARTING_PAGE, {
+      pageTitle: { title: "Start a run", pathname: RUN_STARTING_PAGE },
+    });
+    expect(renamed.map((c) => c.label)).toEqual(["Agents", "Start a run"]);
+    expect(buildBreadcrumbTrail("/connectors").map((c) => c.label)).toEqual([
+      "Connectors",
+    ]);
+  });
+
+  it("a not-found reading of this page still draws the one crumb, and no run word", () => {
+    const trail = buildBreadcrumbTrail(RUN_STARTING_PAGE, { notFound: true });
+    expect(trail.map((c) => c.label)).not.toContain(AGENT_RUN_LABEL);
+  });
+
   it("the route's own server title is that leaf, not the area word", () => {
     // Read on the source, not through an import: this route mounts the whole
     // plugin route tree, and the tab title is a one-line export that the

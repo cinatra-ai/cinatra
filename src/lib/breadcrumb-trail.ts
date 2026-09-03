@@ -553,8 +553,22 @@ export function buildBreadcrumbTrail(
   // The area root's own page, appended beneath the area crumb (see above). A
   // contribution on that crumb still wins outright — the route itself said so —
   // and a title that only repeats the area's own word adds no crumb.
-  if (isAreaRoot && pageTitle && pageTitle.pathname === pathname) {
-    const title = pageTitle.title.trim();
+  // WITHOUT WAITING FOR THE PAGE TO SPEAK, ON THE RUN-STARTING PAGE (fix leg 11
+  // convergence round). This append used to need the client page's published
+  // title, so the FIRST trail drawn for "/agents" read "Agents" alone and the
+  // shell mirrored that into the tab, replacing the route's own already-correct
+  // title until the page published a frame later. The drawing states this one
+  // page's reading outright - the page that starts a run reads "Agents > Agent
+  // run" - so the trail states it too, from the first render, and the page's
+  // own title still wins wherever it says something different.
+  const areaRootOwnPageTitle =
+    isAreaRoot && pageTitle && pageTitle.pathname === pathname
+      ? pageTitle.title
+      : isAreaRoot && pathname === "/agents"
+        ? AGENT_RUN_LABEL
+        : null;
+  if (areaRootOwnPageTitle !== null) {
+    const title = areaRootOwnPageTitle.trim();
     if (title && !replacementFor(crumbPaths[0]) && title !== crumbs[0].label) {
       crumbPaths.push(pathname);
       crumbs.push({ label: title, href: pathname, nonNavigable: false });
