@@ -40,13 +40,19 @@
  *   cd packages/agents && pnpm exec vitest run \
  *     src/__tests__/run-page-rail-settled-glyph.test.tsx
  */
+import { existsSync, readFileSync } from "node:fs";
+
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
 import { RunStepRailPanel } from "../run-step-rail-panel";
 import type { RunStepRailEntry } from "../run-step-rail";
-import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "../run-surface-rail";
+import {
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "../run-step-rail-extra-entry";
 
 afterEach(() => {
   cleanup();
@@ -111,6 +117,21 @@ function groundFor(className: string, state: string): string {
     .pop();
   if (scoped) return scoped.slice(`data-[state=${state}]:`.length);
   return className.split(/\s+/).filter((token) => /^bg-/.test(token)).pop() ?? "";
+}
+
+/**
+ * The module's own file on disk. Read from the working directory rather than
+ * from `import.meta.url`, which the test transform rewrites to a served path.
+ */
+function railModulePath(fileName: string): string {
+  const cwd = process.cwd();
+  for (const candidate of [
+    `${cwd}/src/${fileName}`,
+    `${cwd}/packages/agents/src/${fileName}`,
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`rail module not found on disk: ${fileName}`);
 }
 
 describe("the run page's panel rail draws a passed step on the drawing's muted ground", () => {
@@ -187,5 +208,95 @@ describe("the run page's panel rail draws a passed step on the drawing's muted g
     // The indigo fill stays with the entry the reader is standing on: the rule
     // says nothing about the ACTIVE state, so the primitive keeps it.
     expect(RUN_PAGE_RAIL_INDICATOR_CLASS).not.toContain("data-[state=active]:");
+  });
+});
+
+describe("the run page's own rail carries the drawing's rhythm too (item 2, convergence)", () => {
+  /**
+   * WHY THIS BLOCK EXISTS. The first proof round measured 7.5px above the mark
+   * and 6.5px below against the drawing's 4px and 4px, on the rail the setup
+   * surface draws. After the run page gained its two-column frame it draws a
+   * SECOND rail through the vendored `Stepper` -- this panel -- and the second
+   * proof round photographs that one. A rhythm only one of the two rails holds
+   * is not the rail's rhythm, so the same two drawing sentences are read here:
+   *
+   *   ".rail .step { ... padding: 2px 0; ... }"
+   *   ".rail .sep { width: 2px; height: 8px; margin: 4px 0 4px 11px; ... }"
+   */
+  function renderPanel() {
+    return render(
+      <RunStepRailPanel
+        entries={[
+          stepEntry("Step 1", 1, "completed"),
+          stepEntry("Step 2", 2, "pending"),
+          resolvedGateEntry(),
+        ]}
+        activeOrdinal={2}
+        reviewHrefBase="/agents/v/p/i"
+      />,
+    );
+  }
+
+  it("gives every row the drawing's step box, with no border in it", () => {
+    const { container } = renderPanel();
+    const rows = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-slot="stepper-trigger"]'),
+    );
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      // Red before this change: `StepperTrigger` renders the design-system
+      // Button, whose base draws a 1px TRANSPARENT border on every side --
+      // invisible, and still in the box.
+      expect(row.className).not.toMatch(/(?:^|\s)border(?:\s|$)/);
+      expect(row.className).toContain("border-0");
+      // The 2px above and below the circle the drawing's `.rail .step` carries.
+      expect(row.className).toContain("py-0.5");
+    }
+  });
+
+  it("puts the drawing's own two numbers on the mark between two entries", () => {
+    const { container } = renderPanel();
+    const marks = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-slot="stepper-separator"]'),
+    );
+
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks) {
+      // 4px above and below -- the whole gap between two entries. Red before
+      // this change: the vendored separator's own `m-0.5` stood at 2px and the
+      // rail overrode only the height and the ink.
+      expect(mark.className).toContain("my-1");
+      // 11px in from the column edge, which is where the drawing puts it.
+      expect(mark.className).toContain("ms-[11px]");
+      expect(mark.className).not.toMatch(/(?:^|\s)ms-3(?:\s|$)/);
+      // The 8px height the drawing states.
+      expect(mark.className).toContain("!h-2");
+    }
+  });
+
+  it("holds the row and the mark in ONE declaration each, for all three rows", () => {
+    // The run page draws rail rows from three modules. The glyph rule already
+    // lives in one class; so must the box and the mark, or the second proof
+    // round grades three rails that agree only by accident.
+    expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("border-0");
+    expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("py-0.5");
+    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("my-1");
+    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("ms-[11px]");
+
+    for (const module of [
+      "run-step-rail-panel.tsx",
+      "run-step-rail-extra-entry.tsx",
+      "orchestrator-stepper-panel.tsx",
+    ]) {
+      const source = readFileSync(railModulePath(module), "utf8");
+      // No module re-declares the anatomy. `orchestrator-stepper-panel` is the
+      // one rail this suite cannot render (it needs a live run stream), so its
+      // reading is taken here rather than assumed.
+      expect(source).not.toMatch(/className="ms-3 !h-2 bg-border"/);
+      expect(source).not.toMatch(/className="gap-2 px-0 py-0.5"/);
+      expect(source).not.toMatch(/data-\[state=completed\]:bg-primary/);
+      expect(source).toContain("RUN_PAGE_RAIL_INDICATOR_CLASS");
+    }
   });
 });

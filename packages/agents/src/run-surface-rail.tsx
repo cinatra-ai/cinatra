@@ -175,43 +175,12 @@ export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
   );
 }
 
-/**
- * THE SAME RULE, FOR THE ROWS THE RUN PAGE DRAWS THROUGH THE SHARED STEPPER
- * (cinatra#3188 item 1, forward + fix leg 1).
- *
- * The run page's own rail rows -- the panel rail's steps, the resolved-gate /
- * verification / lifecycle rows beside them, and the live rail inside the
- * orchestrator panel -- mount the design system's `StepperIndicator`, whose own
- * default puts a COMPLETED step on the indigo fill. The first proof round
- * photographed exactly that: "The one completed rail entry a real run reached:
- * a 24x24 circle, primary-fill background, white check."
- *
- * The ratified drawing names the entry already passed and the entry still ahead
- * in ONE rule -- ".rail .step.upcoming .glyph, .rail .step.settled .glyph {
- * background: rgba(92,103,121,0.4); color: var(--paper); }" -- and it is a rule
- * about THE RAIL, not about one component of it. So both states take the muted
- * ground here, and the indigo fill is left to the ACTIVE state alone: the entry
- * the reader is standing on.
- *
- * WHY HERE AND NOT IN THE PRIMITIVE: `StepperIndicator` is a vendored
- * design-system primitive, and its consumers are not all rails. The rule is the
- * RAIL's, so it is applied where the rail is drawn -- and held in ONE class, for
- * the same reason `runSurfaceRailIndicatorClass` holds it for the run-surface
- * rail: a rule three modules each had to remember is a rule one of them would
- * forget.
- *
- * ONE ROW IS DELIBERATELY LEFT ON THE OLD READING, and it is named rather than
- * quietly changed: the review task screen's own step list draws this same rail
- * vocabulary and still puts a passed step on the indigo fill. It is the same
- * defect at a fourth site, and it is NOT this leg's: the checklist asks for the
- * glyphs THE RUN PAGE draws, the proof round for this leg photographs the run
- * page, and a visual change to a screen this leg never pictures would be a
- * departure from the issue it is proving. It is carried as a named deviation
- * and takes the same one-line class when the surface that shows it is graded.
- */
-export const RUN_PAGE_RAIL_INDICATOR_CLASS =
-  "data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background data-[state=completed]:bg-muted-foreground/40 data-[state=completed]:text-background";
-
+// THE RUN PAGE'S OWN RAIL ROWS ARE NOT DECLARED HERE. The rows the run page
+// draws through the vendored `Stepper` -- the panel rail's steps, the rows
+// beside them and the live rail inside the orchestrator panel -- read the same
+// drawing anatomy from `run-step-rail-extra-entry`, the module all three
+// already import. Held here, that declaration pulled this frame into the module
+// graph of four route-budgeted routes and the route-graph ratchet refused it.
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {
   return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");

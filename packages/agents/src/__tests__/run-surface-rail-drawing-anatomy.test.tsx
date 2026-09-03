@@ -33,11 +33,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
 import {
-  RUN_PAGE_RAIL_INDICATOR_CLASS,
   RunSurfaceRail,
   RunSurfaceRailRow,
   runSurfaceRailIndicatorClass,
 } from "../run-surface-rail";
+import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "../run-step-rail-extra-entry";
 import { RecommendationRailStepRow } from "../recommendation-rail-step";
 import type { RunSurfaceRailStep } from "../run-surface-rail-step";
 

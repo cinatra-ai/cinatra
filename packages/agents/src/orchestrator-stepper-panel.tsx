@@ -119,8 +119,12 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
-import { RailExtraEntry } from "./run-step-rail-extra-entry";
-import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "./run-surface-rail";
+import {
+  RailExtraEntry,
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -1279,7 +1283,7 @@ function StepperColumn({
                     data-rail-replay={replayAffordance}
                   >
                     <StepperTrigger
-                      className="gap-2 px-0 py-0.5"
+                      className={RUN_PAGE_RAIL_ROW_CLASS}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={
@@ -1318,7 +1322,7 @@ function StepperColumn({
                       </Tooltip>
                     )}
                   </div>
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             })}
@@ -1344,7 +1348,7 @@ function StepperColumn({
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
                   />
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             })}

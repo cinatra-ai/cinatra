@@ -13,8 +13,12 @@ import {
 } from "@/components/reui/stepper";
 
 import type { RunStepRailEntry } from "./run-step-rail";
-import { RUN_PAGE_RAIL_INDICATOR_CLASS } from "./run-surface-rail";
-import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import {
+  RailExtraEntry,
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
 // through the `./run-step-rail-panel` subpath can TYPE the entries it passes
@@ -121,7 +125,7 @@ export function RunStepRailPanel({
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
                   />
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             }
@@ -156,12 +160,12 @@ export function RunStepRailPanel({
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                 >
-                  <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
+                  <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} tabIndex={-1}>
                     {indicatorNode}
                     {titleNode}
                   </StepperTrigger>
                 </div>
-                {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
               </StepperItem>
             );
           })}
