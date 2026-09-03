@@ -21,10 +21,19 @@
 // over the host's own writes.
 //
 // THE TWO BLOG WRITES STAY. This slice does not remove them — the plan gives
-// their removal to W10 (`the selected-idea save and the persisted draft
-// projection`), and cinatra#2960 closes only when both halves have landed. What
-// this slice adds is that they are DECLARED and the audit NAMES them, so the
-// removal is measurable rather than remembered.
+// their removal to the pipeline's own wave (`the selected-idea save and the
+// persisted draft projection`), and cinatra#2960 closes only when both halves
+// have landed. What this slice adds is that they are DECLARED and the audit
+// NAMES them, so the removal is measurable rather than remembered.
+//
+// THE COUNTDOWN NAMES W11, NOT W10. The removal was written down here as W10's
+// (cinatra#3034) when this module shipped. W10 closed WITHOUT carrying it: its
+// own record puts "the removal of the selected-idea save and the persisted
+// draft projection" in "the pipeline's own wave" — W11, cinatra#3035, which is
+// open. The entries below therefore count down to W11. The stale pointer causes
+// nothing on its own — the two surviving saves are what the boundary refuses —
+// but a countdown that names a CLOSED wave misreports their retirement status,
+// and reads as a removal that already landed while the save is still refused.
 //
 // PURE: no `server-only`, no registry import. The two registry questions arrive
 // as ports, exactly as the classifier takes them.
@@ -73,7 +82,7 @@ export const PASSTHROUGH_SHAPER_DECLARATIONS: readonly PassthroughShaperDeclarat
     // The gate's chosen idea, reshaped and written back. A run value's
     // transform, persisted.
     persistsRunValueTransform: true,
-    retiredBy: "cinatra#3034",
+    retiredBy: "cinatra#3035",
   },
   {
     shaperId: "blog-pipeline-seam:blog_pipeline_draft_projection",
@@ -81,7 +90,7 @@ export const PASSTHROUGH_SHAPER_DECLARATIONS: readonly PassthroughShaperDeclarat
     savesTypes: ["@dynamic/types:blog-pipeline-draft-projection"],
     // The draft, projected into three strings and written back.
     persistsRunValueTransform: true,
-    retiredBy: "cinatra#3034",
+    retiredBy: "cinatra#3035",
   },
   {
     shaperId: "route:campaigns_context_setup",
