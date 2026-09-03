@@ -670,7 +670,12 @@ export function AppShell({
     const agentLabel = isAgentInstance
       ? crumbContributions.find(
           (c) =>
-            !c.insertBefore && c.prefix === "/" + segments.slice(0, 4).join("/"),
+            // Position-targeted entries are not replacements (cinatra#3068 fix
+            // leg 2 convergence) -- an appended step crumb must never become
+            // the browser-tab title of the run it was appended to.
+            !c.insertBefore &&
+            !c.appendAfter &&
+            c.prefix === "/" + segments.slice(0, 4).join("/"),
         )?.label
       : undefined;
     if (isChatThread && chatThreadTitle) {

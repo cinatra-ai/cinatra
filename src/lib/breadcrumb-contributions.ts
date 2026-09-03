@@ -37,6 +37,14 @@ export type CrumbContribution = {
    *  (cinatra#1738 ancestry). Applied only while the publishing route is the
    *  current route. */
   readonly insertBefore?: string;
+  /** Append a NEW crumb AFTER the crumb whose path equals this prefix
+   *  (cinatra#3068 fix leg 2 -- the run page names the step the run detail is
+   *  showing, which has no path segment of its own). The mirror of
+   *  `insertBefore` in every respect: it targets a POSITION rather than a crumb
+   *  identity, so it is exempt from the per-prefix dedupe, and it is applied
+   *  only while the publishing route is the current route -- a step synthesized
+   *  for one route must never leak into another. */
+  readonly appendAfter?: string;
 };
 
 export type CrumbSnapshot = {
@@ -60,9 +68,9 @@ export function publishCrumbContributions(
   // not a crumb identity).
   const deduped: CrumbContribution[] = [];
   for (const entry of entries) {
-    if (!entry.insertBefore) {
+    if (!entry.insertBefore && !entry.appendAfter) {
       const existing = deduped.findIndex(
-        (e) => !e.insertBefore && e.prefix === entry.prefix,
+        (e) => !e.insertBefore && !e.appendAfter && e.prefix === entry.prefix,
       );
       if (existing !== -1) deduped.splice(existing, 1);
     }
@@ -142,7 +150,7 @@ export function selectCrumbContributions(
   if (!snapshot || snapshot.epoch !== currentEpoch) return [];
   const samePath = snapshot.pathname === pathname;
   return snapshot.entries.filter((entry) => {
-    if (entry.insertBefore) return samePath;
+    if (entry.insertBefore || entry.appendAfter) return samePath;
     return pathname === entry.prefix || pathname.startsWith(entry.prefix + "/");
   });
 }

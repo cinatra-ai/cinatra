@@ -12,6 +12,9 @@
  * arm — and due in the seconds between — never runs and never reports that it
  * did not. Expose-then-arm is what the shipped `setRunTriggerForActor` does;
  * this drain deliberately inverts it, and an inversion here would be silent.
+ * (cinatra#3054 closed the other half of that sentence: the setter still exposes
+ * first, but an exposure whose arm does not settle no longer stands — it is
+ * taken back down and the call refuses.)
  *
  * The IMMEDIATE arm is proven to delegate to the RESHAPED ladder (#2615) rather
  * than restate it, including that its honest refusals stay honest.
@@ -212,6 +215,26 @@ describe("scheduled / recurring: ARM before EXPOSE", () => {
       );
       vi.clearAllMocks();
     }
+  });
+
+  // cinatra#3054 — the SAME question the shared trigger setter now asks, pinned
+  // on this road too: whatever else the installer records, it must never report
+  // the schedule as armed for a run that has moved on. The armed stamp is not
+  // written, no schedule is exposed, and no row is left naming a scheduler.
+  it("never reports a schedule as armed on a run that moved on (cinatra#3054)", async () => {
+    const svc = await loadService();
+    await staleCas();
+    readAgentRunById
+      .mockResolvedValueOnce({ id: "run-1", orgId: "org-1", status: "pending_input" })
+      .mockResolvedValueOnce({ id: "run-1", orgId: "org-1", status: "stopped" });
+
+    const outcome = await svc.installScheduleForIntent(INTENT);
+
+    expect(outcome).toBe("failed");
+    expect(markInstallIntentArmed).not.toHaveBeenCalled();
+    expect(calls).not.toContain("stamp:armed");
+    expect(calls).not.toContain("expose:scheduleTrigger");
+    expect(calls).not.toContain("row:with-scheduler");
   });
 
   it("CLOSES rather than re-installs when a schedule we already armed has since fired — codex round-2 finding", async () => {

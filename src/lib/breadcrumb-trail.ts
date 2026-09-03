@@ -342,6 +342,45 @@ const UNRESOLVED_AGENT_INSTANCE_LABEL = "Agent run";
 // readings that still draw a trail" and this one draws none.
 export const PAGE_NOT_FOUND_CRUMB_LABEL = "Page not found";
 
+/**
+ * POSITION APPENDS (cinatra#3068 fix leg 2): a contribution with `appendAfter`
+ * puts a NEW crumb immediately after the crumb whose path equals that prefix,
+ * in publisher declaration order; an absent target skips the append. The mirror
+ * of the ancestry insertion below it, and applied on both branches so a
+ * publisher's crumb can never be silently dropped by the trail it was published
+ * for. Mutates both arrays in step, so a later append targets the trail as it
+ * now stands.
+ */
+function applyCrumbAppends(
+  crumbs: BreadcrumbCrumb[],
+  crumbPaths: string[],
+  contributions: readonly CrumbContribution[],
+): void {
+  // PUBLISHER ORDER, NOT ITS REVERSE (cinatra#3068 fix leg 2 convergence). The
+  // insertion below walks the same way and stays ordered for free -- each
+  // insert at `at` pushes the TARGET right, so the next one lands after it.
+  // An append lands at `at + 1`, which is the SAME slot every time: a second
+  // append for one target would push the first one down and read backwards. So
+  // each target counts the crumbs already appended to it and the next append
+  // takes the slot after them. The target's own index is re-read every pass, so
+  // an append for a different target inserted earlier cannot stale it.
+  const appendedPerTarget = new Map<string, number>();
+  for (const c of contributions) {
+    if (!c.appendAfter) continue;
+    const target = crumbPaths.indexOf(c.appendAfter);
+    if (target === -1) continue;
+    const already = appendedPerTarget.get(c.appendAfter) ?? 0;
+    const at = target + already;
+    appendedPerTarget.set(c.appendAfter, already + 1);
+    crumbPaths.splice(at + 1, 0, c.prefix);
+    crumbs.splice(at + 1, 0, {
+      label: c.label,
+      href: c.href ?? c.prefix,
+      ...(c.nonNavigable !== undefined ? { nonNavigable: c.nonNavigable } : {}),
+    });
+  }
+}
+
 export function buildBreadcrumbTrail(
   pathname: string,
   opts: {
@@ -374,7 +413,12 @@ export function buildBreadcrumbTrail(
     // callers passing raw arrays).
     for (let j = contributions.length - 1; j >= 0; j--) {
       const c = contributions[j];
-      if (!c.insertBefore && c.prefix === crumbPath) return c;
+      // A POSITION-TARGETED entry is never a replacement (cinatra#3068 fix leg
+      // 2 convergence). `insertBefore` was already excluded; `appendAfter` is
+      // its mirror and must be excluded with it, or an append whose prefix
+      // happens to equal a real crumb path would BOTH relabel that crumb and be
+      // appended beside it -- one contribution drawn twice.
+      if (!c.insertBefore && !c.appendAfter && c.prefix === crumbPath) return c;
     }
     return undefined;
   };
@@ -421,14 +465,20 @@ export function buildBreadcrumbTrail(
         ...(unresolvedInstance ? { nonNavigable: true } : {}),
       },
     ];
+    const agentCrumbPaths = ["/agents", instancePath];
     if (segments.length >= 5) {
-      // `null` where the sub-route draws no crumb of its own — the review,
+      // `null` where the sub-route draws no crumb of its own -- the review,
       // which is read under its run's trail (see the set above).
       const subRouteLabel = agentInstanceSubRouteCrumbLabel(segments[4]);
       if (subRouteLabel !== null) {
         crumbs.push({ label: subRouteLabel, href: pathname });
+        agentCrumbPaths.push(pathname);
       }
     }
+    // AND THE STEP THE RUN DETAIL IS SHOWING, where the page named one. The
+    // run's first step answers on the run's own path and has no segment above
+    // to be named by, so it arrives as an append after the run's own crumb.
+    applyCrumbAppends(crumbs, agentCrumbPaths, contributions);
     return crumbs;
   }
 
@@ -508,6 +558,8 @@ export function buildBreadcrumbTrail(
       ...(c.nonNavigable !== undefined ? { nonNavigable: c.nonNavigable } : {}),
     });
   }
+
+  applyCrumbAppends(crumbs, crumbPaths, contributions);
 
   // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
   if (crumbs.length <= 4) return crumbs;
