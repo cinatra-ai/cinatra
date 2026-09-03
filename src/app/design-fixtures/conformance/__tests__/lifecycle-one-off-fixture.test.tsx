@@ -24,7 +24,6 @@ vi.mock("next/navigation", () => ({
 
 import { LifecycleOneOffFixtures } from "../lifecycle-one-off-fixtures";
 import {
-  LIFECYCLE_PRESENCE_HOSTS,
   LIFECYCLE_READER_STATES,
   LIFECYCLE_REVIEW_TARGET_FIXTURE,
   LIFECYCLE_REVIEW_TARGET_TYPE_LABEL,
@@ -104,33 +103,19 @@ describe("the harness mounts for the drawing's one-off surfaces", () => {
     expect(placeholder).not.toBeNull();
     expect(placeholder!.getAttribute("role")).toBe("status");
     expect(placeholder!.getAttribute("aria-busy")).toBe("true");
-    expect(placeholder!.textContent).toContain("Agentic Run Progress");
-    // Names no status, reports no result, draws nothing to press.
+    // The card's own fixed name is the WHOLE of the words on it: a status word,
+    // a progress line or an early result would be drawn beside it and a
+    // contains-check would pass with them there.
+    expect(placeholder!.textContent).toBe("Agentic Run Progress");
+    // Names no status, reports no result, draws nothing to press — and there is
+    // exactly one arc.
     expect(placeholder!.querySelectorAll("button").length).toBe(0);
     expect(placeholder!.querySelectorAll("a").length).toBe(0);
+    expect(placeholder!.querySelectorAll("svg").length).toBe(1);
     expect(placeholder!.querySelector("svg.animate-spin")).not.toBeNull();
   });
 
-  it("draws the SAME card in every host cell of the presence matrix", () => {
-    const root = populated(mount(), "presence-matrix");
-    expect(root!.querySelectorAll("[data-presence-host]").length).toBe(
-      LIFECYCLE_PRESENCE_HOSTS.length,
-    );
-    for (const host of LIFECYCLE_PRESENCE_HOSTS) {
-      const cell = root!.querySelector(`[data-presence-host="${host}"]`);
-      const row = cell!.querySelector('[data-conformance-id="suggestion-chips"]');
-      expect(row, `§IX: the card is drawn on "${host}"`).not.toBeNull();
-      // The same reading on every host — including the brokered one, whose
-      // declaration must carry its credential or the provider declares no host
-      // at all and the cell would draw nothing.
-      expect(row!.getAttribute("data-suggestion-chips-mode")).toBe("live");
-      expect(
-        cell!.querySelector('[data-action="dismiss-suggestion -> dismissed"]'),
-      ).not.toBeNull();
-    }
-  });
-
-  it("draws the reader matrix's three readings from three INPUTS, never from three styles", () => {
+  it("draws the reader matrix's mounted readings from INPUTS, never from styles", () => {
     const root = populated(mount(), "reader-state-matrix");
     expect(root!.querySelectorAll("[data-reader-state]").length).toBe(
       LIFECYCLE_READER_STATES.length,
@@ -150,9 +135,12 @@ describe("the harness mounts for the drawing's one-off surfaces", () => {
     // The reason is the component's own sentence, and it is on screen.
     expect(viewsRow.textContent).toContain("Deciding these needs approve access on this run.");
 
-    // Absent is NO CARD DOM AT ALL — no panel, no placeholder, no reason.
-    const withheld = root!.querySelector('[data-reader-state="may-not-read"]')!;
-    expect(withheld.querySelector('[data-conformance-id="suggestion-chips"]')).toBeNull();
-    expect(withheld.querySelectorAll("[data-conformance-id]").length).toBe(0);
+    // The withheld reading is NOT mounted from an empty suggestion set: that
+    // would pin what an empty list does, not what a denied reader gets. It is on
+    // the wave's readiness list, and this is the assertion that keeps a later
+    // hand from quietly re-adding the look-alike.
+    expect(root!.querySelector('[data-reader-state="may-not-read"]')).toBeNull();
+    // Neither reading is ever drawn as a disabled press target.
+    expect(root!.querySelectorAll("button[disabled]").length).toBe(0);
   });
 });

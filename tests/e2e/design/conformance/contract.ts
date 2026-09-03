@@ -54,7 +54,6 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
-  LIFECYCLE_MATRIX_SUGGESTION,
   LIFECYCLE_PRESENCE_HOSTS,
   LIFECYCLE_READER_STATES,
   LIFECYCLE_REVIEW_BLOCKED_REASON,
@@ -3294,24 +3293,29 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
 // drawing says once. There is deliberately no factory here — a factory over
 // twelve unlike shapes would be a parameter list pretending to be a pattern.
 //
-// FIVE ARE DRIVEN FOR REAL, from the components that SHIP them: the review
+// FOUR ARE DRIVEN FOR REAL, from the components that SHIP them: the review
 // target's header and its two other readings (§II / §IV), the run-progress
 // placeholder (§II), the same review states outside a conversation (§XIII.1),
-// and §IX's two matrices — presence across the four hosts, and the reader's
-// three readings — drawn with the one card piece a harness may mount as the
-// product mounts it.
+// and §IX's READER matrix — the two readings the review card itself produces by
+// handing the chip row a mark handler exactly when the reader may decide, drawn
+// with the one card piece a harness may mount as the product mounts it.
 //
-// SEVEN ARE ON THE SURFACE-READINESS LIST below, written in full against the
+// EIGHT ARE ON THE SURFACE-READINESS LIST below, written in full against the
 // manifest's own field sources, action outcomes and state variants, and guarded
 // by the harness mount itself. While nothing on the harness carries the surface
 // id the whole battery SKIPS with the reason; the moment a mount does, every
 // assertion runs for real. Nothing here stands in for a surface, and no aspect
 // is asserted at half strength through a different control.
 //
-// NO ALLOWLIST ENTRY IS ADDED, and none could be: `allowlist.json` is validated
-// against the PINNED manifests, and this drawing is deliberately unpinned until
-// every one of its 69 surfaces is covered. The readiness list is where an
-// unaddressable aspect is recorded, and it names what will land it.
+// NO ALLOWLIST ENTRY IS ADDED, and none could be — but the gate that would
+// refuse one is the ACCEPTANCE SUITE, not the static checker. The static checker
+// (scripts/design/check-conformance-testids.mjs) deliberately admits the
+// surfaces of a committed-but-unpinned manifest, so an entry naming one passes
+// there; functional-acceptance.spec.ts builds its `allSurfaceIds` from the
+// PINNED manifests only, so the same entry reds its "allowlist entries reference
+// real manifest surfaces/aspects" test while this drawing is unpinned. The
+// readiness list below is the only truthful route for an unaddressable aspect,
+// and it names what will land it.
 
 /** The shipped anchor of the reviewed target's inert header (§IV). */
 const REVIEW_TARGET_HEADER_SEL = '[data-conformance-id="review-target-header"]';
@@ -3435,11 +3439,18 @@ const RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER: SurfaceDriver = {
   present: async (_page, root) => {
     const placeholder = root.locator('[data-conformance-id="review-gate-placeholder"]');
     await expect(placeholder).toBeVisible();
-    // The card's own fixed name — the one thing the drawing draws in words.
-    await expect(placeholder).toContainText("Agentic Run Progress");
+    // The card's own fixed name is the WHOLE of the words on it. Asserted as the
+    // placeholder's entire text rather than as a substring, because the drawing's
+    // rule here is an absence: a status word ("Running"), a progress line or any
+    // early reading of the result would be drawn beside the name and a
+    // contains-check would pass with it there.
+    await expect(placeholder).toHaveText("Agentic Run Progress");
     // Nothing to press, and nothing to follow.
     await expect(placeholder.getByRole("button")).toHaveCount(0);
     await expect(placeholder.getByRole("link")).toHaveCount(0);
+    // ONE arc, and nothing else drawn: a second graphic in this band is a second
+    // reading of the same wait.
+    await expect(placeholder.locator("svg")).toHaveCount(1);
   },
   fields: {},
   actions: {},
@@ -3473,7 +3484,20 @@ const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
     await expect(header.getByRole("button")).toHaveCount(0);
   },
   fields: {},
-  actions: {},
+  // The manifest declares `continue-review -> resolved` for this surface, and an
+  // aspect a driver does not name at all is dropped SILENTLY by the acceptance
+  // generator while the drawing is unpinned — no test, no skip, no record. So the
+  // action is declared here and skips with its own readiness reason: the ratified
+  // terminal control arrives with open pull request cinatra#3100, and the floor
+  // may be composed only by the review card itself.
+  actions: {
+    "continue-review": {
+      outcome: "resolved",
+      run: async () => {
+        test.skip(true, `review-states-outside-chat: ${AWAITING_RATIFIED_REVIEW_FLOOR}`);
+      },
+    },
+  },
   states: {
     loading: reviewGateLoadingState("review-states-outside-chat"),
     error: reviewGateBlockedState("review-states-outside-chat"),
@@ -3509,13 +3533,21 @@ function matrixChipRow(cell: Locator): Locator {
  * presence-matrix — §IX: "Every card appears on every host, and it is the same
  * card wherever it appears … Only the frame changes."
  *
- * The matrix is drawn by handing the SAME card piece to each of the four real
- * host declarations and reading what each one produces. That is the strongest
- * form of this claim a harness can make: a host declaration that dropped the
- * card, or drew it in a different reading, fails the cell rather than the table.
- * A cell that declares its host wrongly produces no card at all (the provider
- * refuses a brokered host with no credential), so a mis-declared cell is a red
- * here too rather than a silent pass.
+ * ON THE READINESS LIST, and the reason is the claim itself. The matrix is about
+ * what the HOST DECLARATION does to a card, so the only mount that can grade it
+ * is a card that READS that declaration — every shipped one does it the same
+ * way (`useLifecycleCardHost`, then `data-lifecycle-card-host` and the host
+ * frame), and every shipped one resolves its body through the lifecycle-card
+ * transport before it draws anything at all. A harness may not stand a transport
+ * up, and the one piece it can mount props-only — the suggestion chip row — does
+ * not read the host: dropped into four providers it draws four identical rows
+ * whatever the declaration says, so a matrix built from it would stay green
+ * through a card that had stopped rendering on a host entirely. That is coverage
+ * of the harness, not of the drawing, so nothing is mounted for this surface.
+ *
+ * The assertions below are written against what a host-aware mount publishes:
+ * one cell per host, each drawing the card ITSELF and naming the host it was
+ * declared under. They run unchanged the moment such a mount exists.
  */
 const PRESENCE_MATRIX_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
@@ -3524,20 +3556,26 @@ const PRESENCE_MATRIX_DRIVER: SurfaceDriver = {
     await expect(root.locator("[data-presence-host]")).toHaveCount(
       LIFECYCLE_PRESENCE_HOSTS.length,
     );
+    // "It is the SAME card wherever it appears": the kind and the drawn state
+    // are read off the first cell and then required of every other one, so a
+    // per-host variant of the card is a red rather than a cell that happens to
+    // hold something.
+    const first = root.locator("[data-lifecycle-card]").first();
+    const kind = await first.getAttribute("data-lifecycle-card");
+    const drawnState = await first.getAttribute("data-lifecycle-card-state");
     for (const host of LIFECYCLE_PRESENCE_HOSTS) {
       const cell = root.locator(`[data-presence-host="${host}"]`);
-      const row = matrixChipRow(cell);
+      // The card the cell drew, and the host IT read — not the host the harness
+      // wrote on the cell. A card that stopped drawing under a declaration, or
+      // one that read a different one, fails its own cell.
+      const card = cell.locator("[data-lifecycle-card]");
       await expect(
-        row,
+        card,
         `§IX: every card appears on every host — nothing is drawn on "${host}"`,
       ).toBeVisible();
-      // The SAME reading on every host: the same mode, the same drawn state,
-      // the same data on screen and the same control offered.
-      await expect(row).toHaveAttribute("data-suggestion-chips-mode", "live");
-      const chip = cell.locator('[data-conformance-id="suggestion-accepted"]');
-      await expect(chip).toHaveAttribute("data-suggestion-state", "accepted");
-      await expect(chip).toContainText(LIFECYCLE_MATRIX_SUGGESTION.label);
-      await expect(cell.locator('[data-action="dismiss-suggestion -> dismissed"]')).toHaveCount(1);
+      await expect(card).toHaveAttribute("data-lifecycle-card-host", host);
+      await expect(card).toHaveAttribute("data-lifecycle-card", kind ?? "");
+      await expect(card).toHaveAttribute("data-lifecycle-card-state", drawnState ?? "");
     }
   },
   fields: {},
@@ -3550,9 +3588,20 @@ const PRESENCE_MATRIX_DRIVER: SurfaceDriver = {
  * host", and the three readings are never drawn for each other.
  *
  * Each row is a different INPUT to the shipped component, never a different
- * presentation chosen by the harness — which is what makes the last row real:
- * a reader who may not read the target gets NO card DOM at all, and the driver
- * asserts the absence as hard as it asserts the two cards.
+ * presentation chosen by the harness, and the two inputs are the product's own:
+ * the review card passes `onToggleMark` exactly when the reader `canDecide`
+ * (packages/agents/src/review-gate-card.tsx), so a mark handler and no mark
+ * handler ARE the two readings, and the mode, the press target and the reason
+ * sentence are all computed from them by the shipped component.
+ *
+ * THE THIRD READING IS ON THE READINESS LIST, deliberately. "May not read the
+ * target" is not an empty suggestion set — an empty set only proves that a row
+ * with nothing in it draws nothing. The real absence is decided inside
+ * `ReviewGateCard`, which withholds ALL card DOM before an authorized resolve
+ * and again when the reader may not read the target, and reaching either needs
+ * the transport this harness may not stand up. Drawing the withheld reading here
+ * from an empty list would have graded the harness's own input, so the row is
+ * not mounted and is recorded below instead.
  */
 const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
@@ -3577,12 +3626,9 @@ const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
     await expect(viewRow.locator('[data-conformance-id="suggestion-accepted"]')).toBeVisible();
     await expect(viewRow).toContainText("Deciding these needs approve access on this run.");
 
-    // May not read the target — no card DOM at all. No panel, no placeholder
-    // and no reason; a withheld card is never drawn as a disabled one.
-    const withheld = root.locator('[data-reader-state="may-not-read"]');
-    await expect(withheld).toBeAttached();
-    await expect(matrixChipRow(withheld)).toHaveCount(0);
-    await expect(withheld.locator("[data-conformance-id]")).toHaveCount(0);
+    // The two readings are never drawn for each other: read-only is a plain
+    // element, and there is no disabled press target anywhere in the matrix.
+    await expect(root.locator("button:disabled")).toHaveCount(0);
   },
   fields: {},
   actions: {},
@@ -3607,6 +3653,20 @@ const AWAITING_RATIFIED_REVIEW_FLOOR =
   "page-direct decision composition, and a conformance harness is such a page), " +
   "so the harness mounts no such surface. Every assertion in this driver is " +
   "written and runs unchanged the moment the mount exists.";
+
+/**
+ * Awaiting a card mount that READS the host declaration (§IX presence), and the
+ * withheld reader reading that goes with it.
+ */
+const AWAITING_HOST_AWARE_CARD_MOUNT =
+  "§IX is a claim about what the HOST DECLARATION does to a card, and every " +
+  "shipped card that reads it (`useLifecycleCardHost`) resolves its body " +
+  "through the lifecycle-card transport before drawing anything — which a " +
+  "conformance harness may not stand up. The one piece mountable props-only, " +
+  "the suggestion chip row, does not read the host at all, so a matrix built " +
+  "from it would grade the harness rather than the drawing. Nothing is mounted " +
+  "for this surface. Every assertion in this driver is written and runs " +
+  "unchanged the moment a host-aware mount exists.";
 
 /** Awaiting stable anchors on the shipped conversation column. */
 const AWAITING_CONVERSATION_ANCHORS =
@@ -3936,7 +3996,11 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "review-target-in-thread": REVIEW_TARGET_IN_THREAD_DRIVER,
   "run-progress-placeholder-in-thread": RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER,
   "review-states-outside-chat": REVIEW_STATES_OUTSIDE_CHAT_DRIVER,
-  "presence-matrix": PRESENCE_MATRIX_DRIVER,
+  "presence-matrix": awaitingMount(
+    "presence-matrix",
+    PRESENCE_MATRIX_DRIVER,
+    AWAITING_HOST_AWARE_CARD_MOUNT,
+  ),
   "reader-state-matrix": READER_STATE_MATRIX_DRIVER,
   "chat-thread": CHAT_THREAD_DRIVER,
   "chat-composer": CHAT_COMPOSER_DRIVER,

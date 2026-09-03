@@ -4,11 +4,22 @@
 // Functional-acceptance harness for the ONE-OFF surfaces of the in-conversation
 // lifecycle drawing (cinatra#3165, epic #3155 W9).
 //
-// Five of this wave's twelve surfaces are addressable on the default branch,
+// Four of this wave's twelve surfaces are addressable on the default branch,
 // and each is mounted here from the component that SHIPS it — the review
 // target's header, the gate's loading skeleton, the gate's "no longer open"
-// panel, the run-progress placeholder, and the chip row the two §IX matrices
-// are drawn with. Nothing is reimplemented, restyled or approximated.
+// panel, the run-progress placeholder, and the chip row §IX's READER matrix is
+// drawn with. Nothing is reimplemented, restyled or approximated.
+//
+// WHY THERE IS NO PRESENCE MATRIX HERE. §IX's presence claim is about what the
+// HOST DECLARATION does to a card, so only a card that READS that declaration
+// can grade it — and every shipped one resolves its body through the
+// lifecycle-card transport before it draws at all. The chip row this file can
+// mount props-only does not read the host: dropped into four providers it draws
+// four identical rows whatever the declaration says. A matrix built from it
+// would grade this harness, not the drawing, so `presence-matrix` is on the
+// wave's surface-readiness list instead. The withheld reader reading goes with
+// it, for the same reason: an empty suggestion set is not a reader who may not
+// read the target.
 //
 // NOTHING IS INTERCEPTED. There is no transport substitution of any kind: no
 // fetch wrapper, no route stub, no seeded server answer. Every component
@@ -36,17 +47,15 @@
 // tests/e2e/design/conformance/functional-acceptance.spec.ts.
 // ---------------------------------------------------------------------------
 
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewTargetHeader, SuggestionChips } from "@cinatra-ai/agents/review-gate-card";
 import { ReviewGateBlocked, ReviewGateLoading, ReviewGatePlaceholder } from "@cinatra-ai/agents/review-gate-states";
-import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
 
 import {
   LIFECYCLE_MATRIX_SUGGESTION,
-  LIFECYCLE_PRESENCE_HOSTS,
   LIFECYCLE_READER_STATES,
   LIFECYCLE_REVIEW_BLOCKED_REASON,
   LIFECYCLE_REVIEW_TARGET_FIXTURE,
@@ -66,37 +75,19 @@ const REVIEW_TARGET_HEADER = {
   facts: [...LIFECYCLE_REVIEW_TARGET_FIXTURE.facts],
 };
 
-/**
- * A host declaration for one cell of the §IX presence matrix.
- *
- * A NON-COOKIE HOST MUST DECLARE ITS CREDENTIAL, and the provider refuses a
- * declaration that does not: `site_widget` is a brokered surface, so it carries
- * `credentials: "omit"` exactly as the embed does. Getting this wrong would not
- * fail loudly — the subtree would simply declare NO host — which is why the
- * matrix driver asserts the card is drawn in every cell.
- */
-function HostCell({ host, children }: { host: LifecycleCardHost; children: ReactNode }): ReactElement {
-  if (host === "site_widget") {
-    return (
-      <LifecycleCardSurfaceProvider host={host} auth={{ headers: () => ({}), credentials: "omit" }}>
-        {children}
-      </LifecycleCardSurfaceProvider>
-    );
-  }
-  return <LifecycleCardSurfaceProvider host={host}>{children}</LifecycleCardSurfaceProvider>;
-}
-
 /** The chip row one matrix cell draws, in the reading that cell stands for. */
 function ReaderCell({ reader }: { reader: LifecycleReaderState }): ReactElement {
-  // The three readings are three different INPUTS to the shipped component, not
-  // three presentations chosen here:
+  // The two readings are two different INPUTS to the shipped component, and they
+  // are the PRODUCT's own two: the review card hands the chip row `onToggleMark`
+  // exactly when the reader may decide, and omits it otherwise.
   //   may-view-and-act  — a mark handler, so the row is live and its chip is a
   //                       real press target;
   //   may-view-not-act  — no mark handler, so the row is read-only: plain
   //                       elements with no press target and the component's own
-  //                       reason sentence;
-  //   may-not-read      — nothing surfaced, so the component draws NO DOM at
-  //                       all (§IX: absent is no card, never a disabled one).
+  //                       reason sentence.
+  // The third reading of §IX — a reader who may not read the target at all — is
+  // NOT drawn here from an empty suggestion set: that would assert what an empty
+  // list does, not what a denied reader gets. It is on the readiness list.
   return (
     <div data-reader-state={reader}>
       {reader === "may-view-and-act" ? (
@@ -105,10 +96,8 @@ function ReaderCell({ reader }: { reader: LifecycleReaderState }): ReactElement 
           dismissed={{}}
           onToggleMark={() => {}}
         />
-      ) : reader === "may-view-not-act" ? (
-        <SuggestionChips suggestions={[LIFECYCLE_MATRIX_SUGGESTION]} dismissed={{}} />
       ) : (
-        <SuggestionChips suggestions={[]} dismissed={{}} />
+        <SuggestionChips suggestions={[LIFECYCLE_MATRIX_SUGGESTION]} dismissed={{}} />
       )}
     </div>
   );
@@ -168,26 +157,9 @@ export function LifecycleOneOffFixtures(): ReactElement {
         </div>
       </LifecycleCardSurfaceProvider>
 
-      {/* §IX — presence. The SAME card, drawn under each of the four host
-          declarations. Only the frame changes; the matrix fixes that the card
-          appears at all, on every one of them. */}
-      <div data-surface-id="presence-matrix" data-variant="populated" className="flex flex-col gap-4">
-        {LIFECYCLE_PRESENCE_HOSTS.map((host) => (
-          <div key={host} data-presence-host={host}>
-            <HostCell host={host}>
-              <SuggestionChips
-                suggestions={[LIFECYCLE_MATRIX_SUGGESTION]}
-                dismissed={{}}
-                onToggleMark={() => {}}
-              />
-            </HostCell>
-          </div>
-        ))}
-      </div>
-
       {/* §IX — the reader matrix. What holds a card back is the reader, and the
-          three readings are the shipped component's own, computed from three
-          different inputs. */}
+          two readings mounted here are the shipped component's own, computed
+          from the two inputs the review card itself hands it. */}
       <LifecycleCardSurfaceProvider host="chat_thread">
         <div data-surface-id="reader-state-matrix" data-variant="populated" className="flex flex-col gap-4">
           {LIFECYCLE_READER_STATES.map((reader) => (

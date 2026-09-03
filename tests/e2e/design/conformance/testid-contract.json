@@ -101,31 +101,9 @@
         }
       ]
     },
-    "presence-matrix": {
-      "manifest": "app-lifecycle-cards",
-      "selector": "[data-surface-id=\"presence-matrix\"][data-variant=\"populated\"] [data-presence-host] — one cell per host of §IX's four-column matrix (chat_thread, site_widget, run_card, page_gate_region), each drawing the SAME shipped chip row inside the REAL LifecycleCardSurfaceProvider declaration for that host. The driver reads every cell: the card is drawn, in the same live mode, in the same drawn state, with the same data and the same control offered. A cell that declared its host wrongly draws no card at all (the provider refuses a brokered host with no credential), so a mis-declared cell is a red rather than a silent pass.",
-      "requires": [
-        {
-          "file": "packages/agents/src/review-gate-card.tsx",
-          "literals": [
-            "data-conformance-id=\"suggestion-chips\"",
-            "data-suggestion-chips-mode={recorded ? \"recorded\" : interactive ? \"live\" : \"read-only\"}",
-            "conformanceId: \"suggestion-accepted\"",
-            "action: \"dismiss-suggestion -> dismissed\"",
-            "Deciding these needs approve access on this run."
-          ]
-        },
-        {
-          "file": "packages/agents/src/lifecycle-card-runtime.tsx",
-          "literals": [
-            "export function LifecycleCardSurfaceProvider("
-          ]
-        }
-      ]
-    },
     "reader-state-matrix": {
       "manifest": "app-lifecycle-cards",
-      "selector": "[data-surface-id=\"reader-state-matrix\"][data-variant=\"populated\"] [data-reader-state] — §IX's three reader readings, produced by handing the shipped chip row the three different inputs a real host hands it: a mark handler (live, a real press target), no mark handler (read-only — plain elements with no press target and the component's own reason sentence), and nothing surfaced (the component draws NO DOM at all). Restricted and absent are never drawn for each other, and the driver asserts the absence as hard as the two cards.",
+      "selector": "[data-surface-id=\"reader-state-matrix\"][data-variant=\"populated\"] [data-reader-state] — §IX's two MOUNTED reader readings, produced by handing the shipped chip row the two different inputs the review card itself hands it (`onToggleMark` exactly when the reader may decide): a mark handler (live, a real press target) and no mark handler (read-only — plain elements with no press target and the component's own reason sentence). Restricted is never drawn as a disabled card. The matrix's third row — a reader who may not read the target — is on the wave's surface-readiness list: that absence is decided inside the review card behind an authorized resolve, and an empty suggestion set is not a stand-in for it.",
       "requires": [
         {
           "file": "packages/agents/src/review-gate-card.tsx",
@@ -133,14 +111,8 @@
             "data-conformance-id=\"suggestion-chips\"",
             "data-suggestion-chips-mode={recorded ? \"recorded\" : interactive ? \"live\" : \"read-only\"}",
             "conformanceId: \"suggestion-accepted\"",
-            "action: \"dismiss-suggestion -> dismissed\"",
+            "onToggleMark={state.canDecide ? onToggleMark : undefined}",
             "Deciding these needs approve access on this run."
-          ]
-        },
-        {
-          "file": "packages/agents/src/lifecycle-card-runtime.tsx",
-          "literals": [
-            "export function LifecycleCardSurfaceProvider("
           ]
         }
       ]
