@@ -166,6 +166,74 @@ async function classifyBindingResolutionFailure(
   }
 }
 
+/**
+ * Resolve a binding's MIME from `declaredMime` or the named `mimeFrom` output,
+ * then gate it on the text-authorable universe. Shared by the scalar and the
+ * fan-out roads so both report the same sentence.
+ */
+function resolveBindingMime(
+  binding: CollectedArtifactBinding["binding"],
+  outputs: Record<string, unknown>,
+): { ok: true; mime: string } | { ok: false; error: string } {
+  let mime: string;
+  if (binding.declaredMime !== undefined) {
+    mime = binding.declaredMime;
+  } else {
+    const mimeRaw = outputs[binding.mimeFrom as string];
+    if (typeof mimeRaw !== "string" || mimeRaw.length === 0) {
+      return {
+        ok: false,
+        error: `mimeFrom output "${binding.mimeFrom}" did not resolve to a non-empty string`,
+      };
+    }
+    mime = mimeRaw;
+  }
+  if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(mime)) {
+    return {
+      ok: false,
+      error: `resolved MIME "${mime}" is not text-authorable — declarative bindings are v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
+    };
+  }
+  return { ok: true, mime };
+}
+
+/**
+ * Fan-out write-amplification caps (cinatra#3034). The scalar path writes ONE
+ * row per binding; a fan-out writes one per MEMBER and the member list arrives
+ * from a model's answer, so the list itself is bounded BEFORE any member is
+ * written. Both caps are fail-closed on the whole binding: an over-long list is
+ * refused, never silently trimmed to the cap.
+ */
+export const MAX_FAN_OUT_MEMBERS = 50;
+export const MAX_FAN_OUT_TOTAL_BYTES = MAX_AUTHORED_CONTENT_BYTES;
+
+/**
+ * Read a fanned-out member's own title: its FIRST line, behind the declared
+ * prefix. Fail-closed on both counts — an unmarked first line and an empty
+ * title are refused rather than invented, and the member's bytes are written
+ * verbatim (the marker line stays part of the artifact's text).
+ */
+function readFanOutMemberTitle(
+  member: string,
+  titlePrefix: string,
+): { ok: true; title: string } | { ok: false; error: string } {
+  const firstLine = member.split("\n", 1)[0] ?? "";
+  if (!firstLine.startsWith(titlePrefix)) {
+    return {
+      ok: false,
+      error: `its first line does not open with the declared title prefix "${titlePrefix}"`,
+    };
+  }
+  const title = firstLine.slice(titlePrefix.length).trim();
+  if (title.length === 0) {
+    return {
+      ok: false,
+      error: `its first line carries no non-empty title behind "${titlePrefix}"`,
+    };
+  }
+  return { ok: true, title };
+}
+
 function pool(): Pool {
   return getPooledDb({
     name: "run-artifact-materializer",
@@ -867,34 +935,147 @@ export async function materializeRunArtifacts(input: {
         );
         continue;
       }
-      const titleRaw = outputs[binding.titleFrom];
+      // ------------------------------------------------------------------
+      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list of
+      // plain-text members and each member becomes ITS OWN artifact, titled
+      // from its own first line behind the declared prefix. One ledger
+      // identity, one outcome and one row per member — never a batch.
+      // ------------------------------------------------------------------
+      if (binding.fanOut !== undefined) {
+        const fanMime = resolveBindingMime(binding, outputs);
+        if (!fanMime.ok) {
+          fail(fanMime.error);
+          continue;
+        }
+        const members = outputs[binding.contentFrom];
+        if (!Array.isArray(members)) {
+          fail(
+            `fan-out output "${binding.contentFrom}" did not resolve to an array` +
+              (members === undefined || members === null
+                ? " (output missing from the run's declared outputs)"
+                : ` (got ${typeof members})`),
+          );
+          continue;
+        }
+        if (members.length === 0) {
+          fail(
+            `fan-out output "${binding.contentFrom}" resolved to an empty array — ` +
+              "the run declared a produced artifact per member and produced none",
+          );
+          continue;
+        }
+        if (members.length > MAX_FAN_OUT_MEMBERS) {
+          fail(
+            `fan-out output "${binding.contentFrom}" carries ${members.length} members, ` +
+              `over the ${MAX_FAN_OUT_MEMBERS}-member cap — the whole list is refused, never trimmed`,
+          );
+          continue;
+        }
+        let fanOutTotalBytes = 0;
+        for (const candidate of members) {
+          if (typeof candidate === "string") {
+            fanOutTotalBytes += new TextEncoder().encode(candidate).byteLength;
+          }
+        }
+        if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
+          fail(
+            `fan-out output "${binding.contentFrom}" carries ${fanOutTotalBytes} bytes across ` +
+              `${members.length} members, over the ${MAX_FAN_OUT_TOTAL_BYTES}-byte list cap`,
+          );
+          continue;
+        }
+        const resolvedFan = await resolveBoundArtifactTarget({
+          orgId: input.orgId,
+          extension: binding.extension,
+          bindingObjectTypeId: binding.objectTypeId,
+          producesObjectTypeId:
+            producesObjectTypeIdForExtension(producesRefs, binding.extension) ?? undefined,
+        });
+        if (!resolvedFan.ok) {
+          fail(resolvedFan.error);
+          continue;
+        }
+        for (let index = 0; index < members.length; index += 1) {
+          const memberOutputId = `${outputId}[${index}]`;
+          const failMember = (error: string): void => {
+            outcomes.push({
+              ok: false,
+              outputId: memberOutputId,
+              nodeId,
+              extension: binding.extension,
+              error,
+            });
+          };
+          const member = members[index];
+          if (typeof member !== "string") {
+            failMember(
+              `member ${index} of "${binding.contentFrom}" is not a plain string ` +
+                `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
+            );
+            continue;
+          }
+          const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
+          if (!memberTitle.ok) {
+            failMember(`member ${index} of "${binding.contentFrom}": ${memberTitle.error}`);
+            continue;
+          }
+          const memberBytes = new TextEncoder().encode(member).byteLength;
+          if (memberBytes > MAX_AUTHORED_CONTENT_BYTES) {
+            failMember(
+              `member ${index} of "${binding.contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+            );
+            continue;
+          }
+          const memberResult = await writeClaimedArtifact({
+            runId: input.runId,
+            orgId: input.orgId,
+            createdBy: input.createdBy,
+            outputId: memberOutputId,
+            nodeId,
+            path: "end_node_binding",
+            extension: binding.extension,
+            title: memberTitle.title,
+            mime: fanMime.mime,
+            content: member,
+            ownership,
+            resolvedTarget: resolvedFan.target,
+            mimeDescription: "the binding resolved MIME",
+          });
+          if (!memberResult.ok) {
+            failMember(memberResult.error);
+            continue;
+          }
+          outcomes.push({
+            ok: true,
+            outputId: memberOutputId,
+            nodeId,
+            extension: binding.extension,
+            artifactId: memberResult.artifactId,
+            representationRevisionId: memberResult.representationRevisionId,
+            deduped: memberResult.deduped,
+          });
+        }
+        continue;
+      }
+
+      // The grammar (artifact-binding) guarantees titleFrom XOR fanOut, so a
+      // binding that reaches here names a run-level title output.
+      const titleFromOutput = binding.titleFrom as string;
+      const titleRaw = outputs[titleFromOutput];
       if (typeof titleRaw !== "string" || titleRaw.trim().length === 0) {
         fail(
-          `titleFrom output "${binding.titleFrom}" did not resolve to a non-empty string`,
+          `titleFrom output "${titleFromOutput}" did not resolve to a non-empty string`,
         );
         continue;
       }
       const title = titleRaw.trim();
 
-      let mime: string;
-      if (binding.declaredMime !== undefined) {
-        mime = binding.declaredMime;
-      } else {
-        const mimeRaw = outputs[binding.mimeFrom as string];
-        if (typeof mimeRaw !== "string" || mimeRaw.length === 0) {
-          fail(
-            `mimeFrom output "${binding.mimeFrom}" did not resolve to a non-empty string`,
-          );
-          continue;
-        }
-        mime = mimeRaw;
-      }
-      if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(mime)) {
-        fail(
-          `resolved MIME "${mime}" is not text-authorable — declarative bindings are v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
-        );
+      const scalarMime = resolveBindingMime(binding, outputs);
+      if (!scalarMime.ok) {
+        fail(scalarMime.error);
         continue;
       }
+      const mime = scalarMime.mime;
 
       const contentRaw = outputs[binding.contentFrom];
       let content: string;

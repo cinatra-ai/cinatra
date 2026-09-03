@@ -126,6 +126,14 @@ export default defineConfig({
         root,
         "packages/agents/src/llm-provider-policy.ts",
       ),
+      // cinatra#3044 — the zero-dependency run-status leaf: the message list
+      // reads the ONE wording a start answers with from it, so the turn's
+      // sentence and the card beneath it cannot disagree. Subpath key, so it
+      // stays above the bare entry.
+      "@cinatra-ai/agents/run-status": path.join(
+        root,
+        "packages/agents/src/run-status.ts",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",

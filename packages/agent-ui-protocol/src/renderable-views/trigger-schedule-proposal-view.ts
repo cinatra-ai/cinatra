@@ -174,6 +174,27 @@ export const triggerScheduleProposalPendingViewSchema = z
     /** Surface-safe phrase about the READER's own standing when `canConfirm`
      *  is false. Never names the agent, the org, or a policy. */
     restrictedReason: z.string().min(1).max(200).nullable(),
+    /**
+     * THIS PENDING CARD IS A RUN THAT IS ALREADY WAITING (cinatra#3044).
+     *
+     * The phase draws identically either way — the same rows, the same one
+     * Confirm — but the two subjects take two different roads on the press, and
+     * only the server can tell them apart from a ref. A PROPOSAL is single-use,
+     * so an edited Confirm has to re-propose and confirm the replacement; a
+     * WAITING RUN has no token to re-mint and no run to create, so its Confirm
+     * is one op carrying the rows, straight onto the existing run-trigger path.
+     * Sending the composite at a waiting run would ask a re-propose of a
+     * proposal that never existed.
+     *
+     * OMITTED UNLESS TRUE, and deliberately NOT a version bump — the same
+     * reasoning `superseded` records on the settled body. A stale client bundle
+     * parsing this schema with `.strict()` rejects a payload carrying a key it
+     * does not know, so emitting the marker on EVERY pending card would blank
+     * every ordinary proposal card on such a tab. Emitted only when true, the
+     * one card a stale bundle cannot draw is the one that did not exist before
+     * this change.
+     */
+    runPending: z.literal(true).optional(),
   })
   .strict();
 

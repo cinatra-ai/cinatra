@@ -181,6 +181,11 @@ describe("the widget arm carries the island credential", () => {
     const answer = (await (await POST(post({ widget: true }))).json()) as Record<string, unknown>;
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
     expect("islandSrc" in answer).toBe(false);
+    // AND IT DOES NOT ASK AGAIN. A ref that did not decode is an answer, not a
+    // missing one: the header composer is handed that answer and stops, rather
+    // than decoding a second time to be told the same thing.
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
+    expect("targetHeaders" in answer).toBe(false);
   });
 
   it("stays silent when the credential cannot be expressed — the card still draws", async () => {
@@ -190,6 +195,18 @@ describe("the widget arm carries the island credential", () => {
     const answer = (await (await POST(post({ widget: true }))).json()) as Record<string, unknown>;
     expect(answer.state).toEqual({ state: "pending", canDecide: true, canComment: true });
     expect("islandSrc" in answer).toBe(false);
+  });
+
+  it("decodes the ref ONCE on this arm too — the header and the credential read one decode", async () => {
+    // TWO readings of this answer are addressed by the gate the ref names:
+    // §IV's target header, which every host draws, and the island credential,
+    // which only this arm mints. The ref is opaque and its decode is a pure
+    // read, so a second decode is not unsafe — it is redundant, and it is a
+    // second place the two could disagree about which gate this answer is
+    // about. So the answer decodes once and hands the same payload to each.
+    await POST(post({ widget: true }));
+    expect(mintWidgetReviewIslandUrl).toHaveBeenCalledTimes(1);
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -238,17 +255,15 @@ describe("the cookie arm is untouched — the credential is ADDITIVE", () => {
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
   });
 
-  it("decodes the ref ONCE — for the rows every host draws — and mints nothing", async () => {
-    // Until cinatra#3051 the cookie arm decoded nothing at all, because the ref
-    // was only ever decoded to mint an address this arm has no use for. The
-    // answer now also carries the gate's own target rows, which EVERY host draws
-    // its §IV header and §V floor from, so the ref is decoded here too — ONCE,
-    // by the one hoisted decode both compositions are addressed from. What stays
-    // true is the sentence this case was written for: the credential is
-    // ADDITIVE, and nothing is minted on this arm.
+  it("decodes the ref ONCE, for the reading it composes — never a second time for a credential it will not mint", async () => {
     await POST(post({ widget: false }));
-    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
+    // The credential branch is not entered at all on this arm, so it decodes
+    // nothing. The ONE decode this answer makes is §IV's target header
+    // (cinatra#3141 item 7), which is addressed by the gate the ref names and is
+    // composed on both arms alike; a second decode here would be the mint's,
+    // and there is none.
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -7,7 +7,6 @@ import {
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
-  type ReviewTargetRow,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   decodeLifecycleGateRef,
@@ -16,8 +15,8 @@ import {
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
+import { readReviewTargetHeaders } from "@/lib/lifecycle/lifecycle-target-headers";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
-import { resolveReviewTargetRows } from "@/lib/lifecycle/lifecycle-review-target-rows";
 import {
   mintWidgetReviewIslandUrl,
   resolveWidgetLifecycleActorContext,
@@ -166,43 +165,32 @@ async function resolveWidgetBranchActor(
  * `loading="lazy"` — a URL that expires cannot wait for a scroll.
  */
 /**
- * The gate's own pinned target rows for an answer that draws a target
- * (cinatra#3051).
+ * THE ONE DISCRIMINANT — which answers draw a target at all.
  *
- * THE SAME DISCRIMINANT the island's mint reads, in the same shape, so the two
- * can never disagree about which reading has a target to name — and so a state
- * that draws no target (and `absent` above all) carries no rows.
+ * Exactly the states whose card draws a target, read off the same discriminant
+ * the card branches on. Two readings of this answer hang off it — §IV's target
+ * HEADER, which the card draws in every island state, and (on the widget arm)
+ * the island's own CREDENTIAL — and asking it once is what keeps the two from
+ * disagreeing about which answer has a target to name. `absent` above all
+ * carries neither.
  */
-async function resolveTargetRowsForAnswer(
-  actorCtx: ReviewActorContext,
-  gate: LifecycleGateRefPayload | null,
-  state: LifecycleCardState,
-): Promise<readonly ReviewTargetRow[] | null> {
-  if (!gate) return null;
-  const drawsTarget =
+function drawsATarget(viewType: LifecycleDataPartViewType, state: LifecycleCardState): boolean {
+  if (viewType !== "artifact_review_gate") return false;
+  return (
     state.state === "pending" ||
     state.state === "restricted" ||
-    (state.state === "settled" && state.outcome !== undefined);
-  if (!drawsTarget) return null;
-  const rows = await resolveReviewTargetRows(gate, actorCtx);
-  return rows && rows.length > 0 ? rows : null;
+    (state.state === "settled" && state.outcome !== undefined)
+  );
 }
 
 function mintIslandSrcForWidget(
   branch: WidgetBranch,
-  gate: LifecycleGateRefPayload | null,
   ref: string,
-  state: LifecycleCardState,
+  gate: LifecycleGateRefPayload | null,
 ): string | null {
+  // The ref is decoded ONCE, by the caller, and both readings are handed the
+  // same payload (cinatra#3058, fix leg 8).
   if (!gate) return null;
-  // Exactly the states whose card frames an island — read off the same
-  // discriminant the card branches on, so the two cannot disagree about which
-  // reading has a frame to authenticate.
-  const framesIsland =
-    state.state === "pending" ||
-    state.state === "restricted" ||
-    (state.state === "settled" && state.outcome !== undefined);
-  if (!framesIsland) return null;
   return mintWidgetReviewIslandUrl({
     claims: branch.claims,
     ref,
@@ -316,48 +304,43 @@ export async function POST(request: Request): Promise<Response> {
     parsed.data.ref,
   );
 
-  // §IV's TARGET ROWS (cinatra#3051). Composed HERE, beside the island's
-  // credential, for the reason the chips and the settled outcome are: the
-  // resolver is on all five route-locked module budgets through the MCP pull,
-  // which uses it as the authorization ladder and never draws a header.
+  // §IV's TARGET HEADER(S) (cinatra#3141 item 7). Composed HERE for the same
+  // reason the chips and the settled outcome are, and the reason is the same
+  // sentence: the resolver is on the route-locked module budgets through the MCP
+  // pull, which uses it as the authorization ladder and never draws a header.
   //
-  // WHY THEY EXIST. Until this slice the review card's target panel had no
-  // reading of its own — the immutable header and the never-blank floor were
-  // both inside the island document — so a frame that had not painted (still
-  // loading, past its bound, or one this host cannot authenticate) left the
-  // reader looking at a panel that named nothing about what they were being
-  // asked to decide. The header's fields are facts of the gate's own pinned
-  // rows, so they travel with the answer that authorized the card.
-  //
-  // FOR EVERY HOST, FROM ONE READ. The cookie hosts and the widget arm receive
-  // the same rows, from the same loader the island renders from, so no host is
-  // a special case and the card's header cannot disagree with the frame's.
-  //
-  // ONLY FOR A STATE THAT DRAWS A TARGET — the same three the island is minted
-  // for, read off the same discriminant. A state that draws no target has
-  // nothing to name, and `absent` carries no rows at all (the parse refuses
-  // them there, exactly as it refuses an address).
-  // THE GATE THIS ANSWER IS ABOUT, decoded ONCE. Both compositions below are
-  // addressed to it — the rows every host draws its header from, and the widget
-  // arm's island address — so a second decode would only be a second place for
-  // them to disagree. A kind that is not the review gate decodes nothing.
-  const gateRef =
-    parsed.data.viewType === "artifact_review_gate"
-      ? decodeLifecycleGateRef(parsed.data.ref)
-      : null;
-  const targetRows = await resolveTargetRowsForAnswer(actorCtx, gateRef, withOutcome);
+  // The state is again the authorization — the ladder's own answer for this
+  // reader and this ref, with every denial already collapsed into `absent`,
+  // which carries no header — and the artifact read behind it is actor-scoped on
+  // top of that. The header rides the resolve answer rather than the wire
+  // payload, so the DATA_PART in the persisted, LLM-visible transcript still
+  // carries a ref and nothing else.
+  // ONE DECODE, FOR BOTH READINGS. The header is addressed by the gate the ref
+  // names, and so is the island credential minted for the same gate on the
+  // widget arm; the answer decodes the ref once, for the states that have a
+  // target at all, and hands the same payload to each.
+  const gateRef = drawsATarget(parsed.data.viewType, withOutcome)
+    ? decodeLifecycleGateRef(parsed.data.ref)
+    : null;
+  const targetHeaders = await readReviewTargetHeaders({
+    viewType: parsed.data.viewType,
+    ref: parsed.data.ref,
+    state: withOutcome,
+    actorCtx,
+    gate: gateRef,
+  });
 
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
   // only on the widget arm. A first-party answer omits the key entirely and the
   // three cookie hosts keep composing their own island URL.
   //
   // (Their response is no longer byte-identical to the pre-#2754 one, and has
-  // not been since cinatra#3051 above: every host's answer now also carries the
-  // gate's own target rows, because every host draws the header from them. What
-  // is still true is the sentence this comment was written for — the CREDENTIAL
-  // is the widget arm's alone, and a cookie host receives no island key at all.)
+  // not been since cinatra#3141 item 7 above: every host's answer now also
+  // carries §IV's target header, because every host draws it. What is still
+  // true is the sentence this comment was written for — the CREDENTIAL is the
+  // widget arm's alone, and a cookie host receives no island key at all.)
   const islandSrc = widgetBranch
-    ? mintIslandSrcForWidget(widgetBranch, gateRef, parsed.data.ref, withOutcome)
+    ? mintIslandSrcForWidget(widgetBranch, parsed.data.ref, gateRef)
     : null;
 
   return Response.json(
@@ -366,7 +349,7 @@ export async function POST(request: Request): Promise<Response> {
       state: withOutcome,
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
-      ...(targetRows ? { targets: targetRows } : {}),
+      ...(targetHeaders ? { targetHeaders } : {}),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

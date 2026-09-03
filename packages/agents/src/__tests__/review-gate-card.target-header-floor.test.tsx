@@ -35,7 +35,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import type {
   LifecycleCardHost,
   LifecycleCardState,
-  ReviewTargetRow,
+  LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 vi.mock("next/navigation", () => ({
@@ -63,18 +63,17 @@ const WIDGET_AUTH = {
 const SEALED = "AAAA-sealed_credential-BBBB";
 const WIDGET_ISLAND_SRC = `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=${SEALED}`;
 
-/** The gate's own pinned row, exactly as the resolve answers it. */
-const ROW: ReviewTargetRow = {
-  artifactId: "artifact-1",
-  representationRevisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+/** The gate's own pinned target header, exactly as the resolve answers it.
+ *  Composed SERVER-SIDE (`readReviewTargetHeaders`) out of the same reads and
+ *  the same surface-model wording the island's own header uses, so the card
+ *  words no fact itself: the scope words arrive in the host's own vocabulary
+ *  and the stored instant arrives already read as a relative time. */
+const HEADER: LifecycleTargetHeader = {
   title: "Launch post draft",
+  typeLabel: "Blog Post Artifact",
   objectType: "@cinatra-ai/blog-post-artifact:post",
-  ownerLevel: "organization",
-  visibility: "organization",
-  mime: "text/markdown",
-  // An INSTANT, as the gate's row carries it — the header reads it as a time.
-  updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-  packageName: "@cinatra-ai/blog-post-artifact",
+  revisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+  facts: ["Organization", "Organization", "text/markdown", "updated 8 minutes ago"],
 };
 
 /** Every host that draws this card (§IX). */
@@ -87,7 +86,7 @@ const HOSTS: LifecycleCardHost[] = [
 
 function mockResolve(
   state: LifecycleCardState,
-  targets: readonly ReviewTargetRow[] | null,
+  targetHeaders: readonly LifecycleTargetHeader[] | null,
   islandSrc: string | null,
 ): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(
@@ -98,7 +97,7 @@ function mockResolve(
           state,
           body: null,
           ...(islandSrc ? { islandSrc } : {}),
-          ...(targets ? { targets } : {}),
+          ...(targetHeaders ? { targetHeaders } : {}),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -111,13 +110,13 @@ async function renderOn(
   host: LifecycleCardHost,
   options: {
     state?: LifecycleCardState;
-    targets?: readonly ReviewTargetRow[] | null;
+    headers?: readonly LifecycleTargetHeader[] | null;
   } = {},
 ): Promise<HTMLElement> {
   const widget = host === "site_widget";
   mockResolve(
     options.state ?? PENDING,
-    options.targets === undefined ? [ROW] : options.targets,
+    options.headers === undefined ? [HEADER] : options.headers,
     widget ? WIDGET_ISLAND_SRC : null,
   );
   const { container } = render(
@@ -213,18 +212,24 @@ describe("the header and the floor are on screen at the FIRST render, on every h
       expect(
         head!.querySelector("[title]")?.getAttribute("title"),
         `${host}: full revision`,
-      ).toBe(ROW.representationRevisionId);
+      ).toBe(HEADER.revisionId);
 
       // §V — the one sanitized line, package · slot · reason.
       const line = floor(root);
       expect(line, `${host}: the floor line is drawn`).not.toBeNull();
       expect(line!.getAttribute("data-review-target-floor"), host).toBe("preview-loading");
-      expect(line!.getAttribute("data-review-floor-package"), host).toBe(
-        "@cinatra-ai/blog-post-artifact",
-      );
+      // AMENDED (cinatra#3058, fix leg 8). This pin used to read the artifact
+      // TYPE's defining package onto the line. §V fixes where that name may come
+      // from — "The resolution is host-derived, never a claim the client or the
+      // model can forge" — and this overlay is the card's own, drawn for a frame
+      // that never reached a renderer. So the line drops the half it cannot
+      // know and keeps the two it can. See the floor-line component for the
+      // whole reasoning, and `drawing-departures-3141` for the shared-package
+      // control.
+      expect(line!.getAttribute("data-review-floor-package"), host).toBe("");
       expect(line!.getAttribute("data-review-floor-slot"), host).toBe("detail");
       expect(line!.textContent, host).toBe(
-        'package "@cinatra-ai/blog-post-artifact" · slot "detail" · reason "preview-loading"',
+        'slot "detail" · reason "preview-loading"',
       );
       cleanup();
     }
@@ -256,8 +261,10 @@ describe("past the island's bound, the panel still names its target", () => {
     expect(header(root)?.textContent).toContain("Launch post draft");
     expect(header(root)?.textContent).toContain("revision ea615d36-2ad");
     expect(floor(root)?.getAttribute("data-review-target-floor")).toBe("preview-unavailable");
+    // The same amendment as the loading reading above: no package half, because
+    // the card reached no renderer resolution to report (§V).
     expect(floor(root)?.textContent).toBe(
-      'package "@cinatra-ai/blog-post-artifact" · slot "detail" · reason "preview-unavailable"',
+      'slot "detail" · reason "preview-unavailable"',
     );
     // The decision floor below is untouched and still live.
     expect(root.querySelector('[data-action="approve-review -> resolved"]')).not.toBeNull();
@@ -266,7 +273,7 @@ describe("past the island's bound, the panel still names its target", () => {
 
 describe("never blank", () => {
   it("draws the §V line even when the answer carried no rows at all", async () => {
-    const root = await renderOn("site_widget", { targets: null });
+    const root = await renderOn("site_widget", { headers: null });
     const line = floor(root);
     expect(line, "the floor is never absent").not.toBeNull();
     expect(line!.textContent).toBe('slot "detail" · reason "preview-loading"');
@@ -280,8 +287,8 @@ describe("never blank", () => {
   // named nothing. The header is STRUCTURAL now — present in every state the
   // card's own overlay draws — while its facts are still never invented. See
   // `review-gate-card.header-at-first-paint.test.tsx` for the full contract.
-  it("still names the panel when the answer carried no rows", async () => {
-    const root = await renderOn("site_widget", { targets: null });
+  it("still names the panel when the answer carried no headers", async () => {
+    const root = await renderOn("site_widget", { headers: null });
     const named = header(root);
     expect(named, "the panel is named even before its facts arrive").not.toBeNull();
     expect(
@@ -290,27 +297,26 @@ describe("never blank", () => {
     ).toBe("");
   });
 
-  it("names a target by its id when the artifact could not be read", async () => {
-    const root = await renderOn("site_widget", {
-      targets: [
-        {
-          ...ROW,
-          title: null,
-          objectType: null,
-          ownerLevel: null,
-          visibility: null,
-          mime: null,
-          updatedAt: null,
-          packageName: null,
-        },
-      ],
-    });
+  // RETIRED BY THE DRAWING (cinatra#3058, fix leg 8). This pin used to read
+  // "names a target by its id when the artifact could not be read", and drew a
+  // header out of the gate's own ids for a row the reader may not read. §IV
+  // fixes the header's facts as "the read-only row facts THE HOST AUTHORIZED",
+  // and on a pending reading the host authorizes none for an unknown, tombstoned
+  // or read-refused row — that reading floors the target and "shows no title,
+  // type, ownership, visibility, MIME or update time for it". A header composed
+  // out of ids beside it would be the side door onto a deleted row that the
+  // composer exists to close. What the drawing DOES require is that the panel
+  // still opens with a header, and that is the factless one below.
+  it("names the READING, not the row, when the answer could compose no header", async () => {
+    const root = await renderOn("site_widget", { headers: null });
     const text = header(root)?.textContent ?? "";
-    expect(text).toContain("artifact-1");
-    expect(text).toContain("Artifact");
-    expect(text).toContain("pinned");
-    // No fact is printed as an absence.
+    expect(text, "the panel is named").toContain("Review target");
+    // No fact of a row the host did not authorize, and no absence printed as one.
+    expect(text).not.toContain("artifact-1");
+    expect(text).not.toContain("pinned");
     expect(text).not.toContain("null");
+    expect(text).not.toContain("undefined");
+    // §V still holds under it: the line drops only the half it cannot name.
     expect(floor(root)?.getAttribute("data-review-floor-package")).toBe("");
   });
 });
@@ -339,16 +345,28 @@ describe("a frame that LOADED is not necessarily a frame that PAINTED", () => {
     expect(root.textContent).toContain("The preview did not load");
   });
 
-  it("stands down the moment the island's own BODY arrives", async () => {
+  // REWRITTEN BY THE DRAWING (cinatra#3058, fix leg 8). This pin used to read
+  // "the frame carries its own §IV header now; a second copy would be two", and
+  // expected the card's reading to disappear once the island painted. The header
+  // does not live in the island any more: §IV's header belongs to the target on
+  // every reading, and the CARD is the one surface drawn in every island state,
+  // so the island document draws none and there is no second copy to avoid.
+  // What DOES stand down is the floor — §V.2: "A display and a floor are never
+  // drawn for each other", and a painted island is the display.
+  it("keeps the header and stands the FLOOR down the moment the island's own BODY arrives", async () => {
     const root = await renderOn("site_widget");
     await frameLoads(root, "review-target-island-body");
     expect(
       root.querySelector('[data-conformance-id="review-target-island"]')
         ?.getAttribute("data-island-load-state"),
     ).toBe("loaded");
-    // The frame carries its own §IV header now; a second copy would be two.
-    expect(reading(root)).toBeNull();
-    expect(header(root)).toBeNull();
+    expect(reading(root), "the target is still named over its own preview").not.toBeNull();
+    expect(header(root)?.textContent).toContain("Launch post draft");
+    expect(
+      root.querySelectorAll("[data-review-target-header]").length,
+      "never nothing, and never both",
+    ).toBe(1);
+    expect(floor(root), "the floor is not drawn over a display that resolved").toBeNull();
   });
 
   it("keeps naming the target for a document it does not recognize", async () => {

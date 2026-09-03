@@ -11,13 +11,12 @@
 // later, once the island painted. For those twenty seconds the reader was
 // offered Approve/Reject over a panel that named nothing.
 //
-// THE CAUSE. The header was drawn from the resolve answer's own rows and from
-// nothing else, so an answer that carried no rows drew no header at all
-// (`ReviewTargetRows`, the `rows.length === 0` arm). And the answer legitimately
-// carries no rows: the server races the gate's target read against a two-second
-// deadline (`REVIEW_TARGET_ROWS_DEADLINE_MS`) and answers with none when it
-// loses — which on the widget's slower path is the ordinary case, not the
-// exception.
+// THE CAUSE. The header was drawn from the resolve answer's composed header and
+// from nothing else, so an answer that carried none drew no header at all. And
+// the answer legitimately carries none: the composer refuses to name a target it
+// could not read — an artifact that is gone, tombstoned or read-refused for this
+// reader yields no header rather than an invented one — and on the widget's
+// slower path an answer with no header is the ordinary case, not the exception.
 //
 // WHAT IS PINNED HERE. The header ANCHOR is present at the first paint in every
 // state the card's own overlay draws — `loading` and `timed-out` — whether or
@@ -35,7 +34,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import type {
   LifecycleCardHost,
   LifecycleCardState,
-  ReviewTargetRow,
+  LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 vi.mock("next/navigation", () => ({
@@ -61,16 +60,12 @@ const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComm
 const SEALED = "AAAA-sealed_credential-BBBB";
 const WIDGET_ISLAND_SRC = `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=${SEALED}`;
 
-const ROW: ReviewTargetRow = {
-  artifactId: "artifact-1",
-  representationRevisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+const HEADER: LifecycleTargetHeader = {
   title: "Launch post draft",
+  typeLabel: "Blog Post Artifact",
   objectType: "@cinatra-ai/blog-post-artifact:post",
-  ownerLevel: "organization",
-  visibility: "organization",
-  mime: "text/markdown",
-  updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-  packageName: "@cinatra-ai/blog-post-artifact",
+  revisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+  facts: ["Organization", "Organization", "text/markdown", "updated 8 minutes ago"],
 };
 
 /** Every host that draws this card — no host is a special case. */
@@ -83,7 +78,7 @@ const HOSTS: LifecycleCardHost[] = [
 
 async function renderOn(
   host: LifecycleCardHost,
-  targets: readonly ReviewTargetRow[] | null,
+  targetHeaders: readonly LifecycleTargetHeader[] | null,
 ): Promise<HTMLElement> {
   const widget = host === "site_widget";
   const islandSrc = widget ? WIDGET_ISLAND_SRC : null;
@@ -95,7 +90,7 @@ async function renderOn(
           state: PENDING,
           body: null,
           ...(islandSrc ? { islandSrc } : {}),
-          ...(targets ? { targets } : {}),
+          ...(targetHeaders ? { targetHeaders } : {}),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -174,25 +169,31 @@ describe("the header is present at the first paint, with or without rows", () =>
   });
 
   it("carries the row's own facts the moment the answer has them", async () => {
-    const root = await renderOn("site_widget", [ROW]);
+    const root = await renderOn("site_widget", [HEADER]);
     const header = headers(root)[0]!;
     expect(header.getAttribute("data-review-target-header-pending")).toBeNull();
     expect(header.textContent).toContain("Launch post draft");
   });
 
-  it("hands the header over to the island and never draws both", async () => {
-    const root = await renderOn("site_widget", null);
+  // REWRITTEN BY THE DRAWING (cinatra#3058, fix leg 8). This pin used to read
+  // "hands the header over to the island and never draws both", and it was
+  // written when the island document rendered §IV's header itself. It does not
+  // any more: §IV gives EVERY target a header that "names what is under review
+  // and fixes it in place", and the only surface drawn in every island state is
+  // the card, so the card owns the one header and the island document draws
+  // none. The invariant the pin exists for — never nothing, and never two — is
+  // unchanged and is what this measures; only which document holds the one
+  // header has moved.
+  it("keeps the ONE header once the island paints — never nothing, never both", async () => {
+    const root = await renderOn("site_widget", [HEADER]);
     const frame = root.querySelector("iframe")!;
     const doc = frame.contentDocument!;
     doc.open();
-    // The island paints its OWN header — so the count that matters is the one
-    // across BOTH documents. Writing a target with no header inside it would
-    // only have proved the overlay left, not that anything replaced it.
+    // The island's own painted body, exactly as the server renders it: the
+    // representation, and NO header of its own.
     doc.write(
       `<html><body><div data-conformance-id="${ISLAND_BODY_ANCHOR}"></div>` +
-        '<div data-conformance-id="review-target">' +
-        '<div data-review-target-header="">Launch post draft</div>' +
-        "</div></body></html>",
+        '<div data-conformance-id="review-target"></div></body></html>',
     );
     doc.close();
     await act(async () => {
@@ -201,11 +202,12 @@ describe("the header is present at the first paint, with or without rows", () =>
     await waitFor(() => expect(islandState(root)).toBe("loaded"));
     expect(
       headers(root).length,
-      "the card's own overlay header is gone once the island paints",
-    ).toBe(0);
+      "the card's header stays over the preview it named before it arrived",
+    ).toBe(1);
+    expect(headers(root)[0]!.textContent).toContain("Launch post draft");
     expect(
       doc.querySelectorAll("[data-review-target-header]").length,
-      "and the island's own header is the one on screen — never nothing, never both",
-    ).toBe(1);
+      "and the island document draws none — never nothing, never both",
+    ).toBe(0);
   });
 });

@@ -20,8 +20,11 @@
  * What is pinned here, on the REAL component, on BOTH surfaces:
  *
  *   1. WHILE THE AGENT WORKS the card is the placeholder — the spinner and the
- *      empty review screen — and it says nothing else: no heading, no status
- *      word, no transcript.
+ *      empty review screen — and it says nothing but its own NAME: no status
+ *      word, no transcript. (The name is the heading the ratified drawing's own
+ *      placeholder example puts at the card's head; cinatra#3044, the eleventh
+ *      set. This pin used to read "no heading" — that was the earlier reading of
+ *      a sentence the drawn example settles.)
  *   2. WHEN THE WORK OPENS A REVIEW the SAME slot holds the review screen, and
  *      the placeholder is gone. Nobody asked for it and no new turn happened:
  *      the panel read the run's own state and swapped.

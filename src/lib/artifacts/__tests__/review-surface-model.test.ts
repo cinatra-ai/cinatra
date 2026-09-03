@@ -56,10 +56,21 @@ const floor: ReviewTargetMount = {
   reason: "requires-rebuild",
 };
 
-describe("§III — provenance conformance id from the OPAQUE mount kind", () => {
-  it("build-map → native, runtime → marketplace, floor → generic-floor anchor", () => {
-    expect(reviewProvenanceConformanceId(buildMap)).toBe("review-provenance-native");
-    expect(reviewProvenanceConformanceId(runtime)).toBe("review-provenance-marketplace");
+describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
+  // THE DRAWING FORBIDS A PROVENANCE REGION ON A RENDERED TARGET (§V of the
+  // ratified artifact-review drawing, read at its default branch): "It is not
+  // put on screen: a display shows the work and nothing about itself — no
+  // renderer name, no package identity, no provenance line — because the reader
+  // is deciding on the work, not on what drew it", and a build-time renderer and
+  // a runtime one "are drawn the same way, because nothing on either target says
+  // which resolved it". The lifecycle-cards drawing §III says the same in its own
+  // words: "no chip, no package identity, no provenance line".
+  //
+  // ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor,
+  // and only because a reader must be told a render failed."
+  it("build-map and runtime carry NO region; only a floor keeps its anchor", () => {
+    expect(reviewProvenanceConformanceId(buildMap)).toBeNull();
+    expect(reviewProvenanceConformanceId(runtime)).toBeNull();
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
   });
 
@@ -73,9 +84,9 @@ describe("§III — provenance conformance id from the OPAQUE mount kind", () =>
     expect(reviewProvenanceConformanceId(form)).toBeNull();
   });
 
-  it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
-    expect(reviewProvenanceLabel(buildMap)).toMatchObject({ kind: "build-time" });
-    expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
+  it("only a floor has a label to print — a rendered target names nothing", () => {
+    expect(reviewProvenanceLabel(buildMap)).toBeNull();
+    expect(reviewProvenanceLabel(runtime)).toBeNull();
     expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
   });
 
@@ -380,6 +391,83 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     expect(line).not.toContain("T03:07");
     expect(line).not.toContain("Z");
     expect(line).toBe("Organization · Organization · text/markdown · updated 8 minutes ago");
+  });
+
+  // THE DRAWING DRAWS THE PAIR BARE. Section IV names the facts and every
+  // example line in the ratified drawing prints them with no label at all:
+  // "... Team / Private / text/html / updated 8 min ago". The labelled form
+  // shipped here was a local reading of a plan sentence; the drawing decides,
+  // so the labels go and both facts stay. The drawing writes the two scope
+  // words CAPITALISED, which is what the host's own vocabulary prints.
+  it("prints the two scope facts BARE, in the drawing's order", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
+    const line = facts.join(" · ");
+    expect(line).toBe("Organization · Organization · text/markdown · updated 8 minutes ago");
+    expect(line).not.toContain("Ownership:");
+    expect(line).not.toContain("Visibility:");
+  });
+
+  it("keeps BOTH facts, in the order the drawing draws them", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 minutes ago"]);
+  });
+
+  // The drawing draws a RELATIVE time on the header's mono line
+  // ("... text/html / updated 8 min ago"); the line printed the raw ISO
+  // timestamp the row carries instead.
+  it("draws a relative updated time, never the raw ISO timestamp", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
+  });
+
+  it("the bare scope pair and the relative time stand on the same line", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 minutes ago"]);
+  });
+
+  it("falls back to the value it was handed when that value is not a readable instant", () => {
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "user",
+      visibility: "private",
+      mime: "text/plain",
+      updatedAt: "not-an-instant",
+    });
+    expect(facts[3]).toBe("updated not-an-instant");
   });
 
   it("keeps every fact the drawing draws, in the drawing's order", () => {

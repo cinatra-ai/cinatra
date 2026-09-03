@@ -209,18 +209,33 @@ describe("resolveCanonicalAgentPackage — I/O composition", () => {
   });
 });
 
-describe("write-target eligibility — assistant / non-agent refused", () => {
+describe("write-target eligibility — assistants ADMITTED, everything else fail-closed", () => {
   it("admits an agent-kind, non-assistant package", () => {
     expect(evaluateAgentWriteTarget({ kind: "agent", isAssistant: false })).toEqual({ ok: true });
   });
 
-  it("REFUSES an assistant even when its kind reads 'agent'", () => {
-    // Authoritative assistant data wins: the assistant injection branch ignores
-    // the recommendation channel this epic feeds, so an assignment there could
-    // never be delivered.
-    expect(evaluateAgentWriteTarget({ kind: "agent", isAssistant: true })).toEqual({
+  it("ADMITS an assistant package (cinatra#2813 S1, epic #2812)", () => {
+    // The refusal that used to live here was correct while the assistant
+    // execution branch ignored the assigned-skills channel entirely: an
+    // assignment nothing could deliver is worse than no assignment. The epic
+    // makes assistants first-class assignment targets — "assistants take skills
+    // only" — so the admission moves here and the DELIVERY seam is the runtime
+    // slice's to build. Refusing at the write gate would make the assistant
+    // Skills tab unbuildable.
+    expect(evaluateAgentWriteTarget({ kind: "assistant", isAssistant: true })).toEqual({ ok: true });
+  });
+
+  it("ADMITS an assistant whose kind reads 'agent' (authoritative assistant data wins)", () => {
+    expect(evaluateAgentWriteTarget({ kind: "agent", isAssistant: true })).toEqual({ ok: true });
+  });
+
+  it("still fails CLOSED on an unreadable kind, even for an assistant", () => {
+    // Order matters: an unreadable kind is refused BEFORE the assistant fact is
+    // consulted, so a package whose kind could not be read is never admitted on
+    // the strength of an assistant flag resolved from a different source.
+    expect(evaluateAgentWriteTarget({ kind: null, isAssistant: true })).toEqual({
       ok: false,
-      reason: "assistant",
+      reason: "eligibility-unreadable",
     });
   });
 
@@ -258,7 +273,15 @@ describe("write-target eligibility — assistant / non-agent refused", () => {
         readPackageKind: async () => "agent",
         isAssistantPackage: async () => true,
       }),
-    ).resolves.toEqual({ ok: false, reason: "assistant" });
+    ).resolves.toEqual({ ok: true });
+    // The composition still refuses what it always refused: a kind neither
+    // agent nor assistant.
+    await expect(
+      assertAgentWriteTarget("@cinatra-ai/connector-pkg", {
+        readPackageKind: async () => "connector",
+        isAssistantPackage: async () => false,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not-an-agent" });
     await expect(
       assertAgentWriteTarget("@cinatra-ai/web-scrape-agent", {
         readPackageKind: async () => "agent",

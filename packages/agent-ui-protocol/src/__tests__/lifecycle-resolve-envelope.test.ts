@@ -104,7 +104,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
     const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", wire);
     // The answer adds the one field the envelope itself does not carry: the
     // server-minted island URL (cinatra#2754), `null` when none was sent.
-    expect(parsed).toEqual({ ...wire, islandSrc: null, targets: null });
+    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -126,7 +126,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual({ ...wire, islandSrc: null, targets: null });
+    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
   });
 
   it("verification_summary tells `null` advisory comments apart from none", () => {
@@ -164,7 +164,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
           "trigger_schedule_proposal",
           JSON.parse(JSON.stringify(wire)),
         ),
-      ).toEqual({ ...wire, islandSrc: null, targets: null });
+      ).toEqual({ ...wire, islandSrc: null, targetHeaders: null });
     }
   });
 
@@ -358,6 +358,96 @@ describe("an unknown or undeclared kind fails closed", () => {
 // `absent` privacy
 // ---------------------------------------------------------------------------
 
+describe("a target header belongs to the review gate and to no other kind", () => {
+  const HEADER = {
+    title: "Q3 re-engagement email",
+    typeLabel: "Email",
+    objectType: "@cinatra-ai/email:draft",
+    revisionId: "rev_8f3a1c2d4e5f6a7b",
+    facts: ["team", "private", "text/html", "updated 8 minutes ago"],
+  };
+
+  it("reads it on the REVIEW GATE, which is the one kind that has a target", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true, canComment: true },
+      body: null,
+      targetHeaders: [HEADER],
+    });
+    expect(parsed?.targetHeaders).toEqual([HEADER]);
+  });
+
+  it("an answer that carries NONE is legal, and says nothing by carrying none", () => {
+    // `null`, omitted, and "the composer could not name this target" are ONE
+    // answer on this wire and must stay one: a gate whose rows could not be
+    // read, an answer composed before the field existed and a resolver that was
+    // not asked all leave the card with no header to draw, and the card draws
+    // its factless reading rather than an invented one.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "pending" as const, canDecide: true, canComment: true },
+      body: null,
+    };
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", answer)?.targetHeaders).toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: null })
+        ?.targetHeaders,
+    ).toBeNull();
+  });
+
+  it("REFUSES a MALFORMED header rather than drawing part of one", () => {
+    // The control first: this exact answer, with a well-formed header, parses.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "pending" as const, canDecide: true, canComment: true },
+      body: null,
+    };
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: [HEADER] }),
+    ).not.toBeNull();
+    for (const bad of [
+      // Not an array of headers at all.
+      { targetHeaders: HEADER },
+      // A field the header does not carry — a producer this card does not trust.
+      { targetHeaders: [{ ...HEADER, artifactId: "artifact-1" }] },
+      // The one field that may be empty is `objectType`; a title that is not a
+      // string, and one that is empty, are both refused.
+      { targetHeaders: [{ ...HEADER, title: 7 }] },
+      { targetHeaders: [{ ...HEADER, title: "" }] },
+      // Facts are display strings, never a shape the card would have to word.
+      { targetHeaders: [{ ...HEADER, facts: [{ label: "Team" }] }] },
+      // OVER THE WIRE'S OWN CEILINGS. Bounded like every other field here: one
+      // header's text and the number of headers a gate may carry are both
+      // capped, and an answer over either cap is refused rather than trimmed —
+      // a trimmed header would name the target with a value nobody composed.
+      { targetHeaders: [{ ...HEADER, title: "T".repeat(500) }] },
+      { targetHeaders: Array.from({ length: 13 }, () => HEADER) },
+    ]) {
+      expect(
+        parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, ...bad }),
+        JSON.stringify(bad),
+      ).toBeNull();
+    }
+  });
+
+  it("REFUSES one on another kind — an answer to a question that kind never asks", () => {
+    // The control first: this exact answer, WITHOUT the header, parses. So the
+    // refusal below is the header's doing and not a body that was wrong anyway.
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "settled" as const },
+      body: VERIFICATION_BODY,
+    };
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", {
+        ...answer,
+        targetHeaders: [HEADER],
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("`absent` reveals nothing about the target", () => {
   it("parses for every kind, and carries no body", () => {
     for (const kind of LIFECYCLE_DATA_PART_VIEW_TYPES) {
@@ -371,13 +461,17 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: null,
         islandSrc: null,
-        targets: null,
+        // `absent` CARRIES NOTHING BESIDE ITSELF, the target header included
+        // (cinatra#3141 item 7): a header names an artifact, so one arriving
+        // next to the collapse of every denial would be the oracle the collapse
+        // exists to close.
+        targetHeaders: null,
       });
       // The body key may also be omitted entirely — same answer, byte for byte.
       expect(
         parseLifecycleResolveEnvelope(kind, { kind, state: { state: "absent" } }),
         kind,
-      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null, targets: null });
+      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null, targetHeaders: null });
     }
   });
 
@@ -397,6 +491,42 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: SCHEDULE_SETTLED_BODY,
       }),
+    ).toBeNull();
+  });
+
+  it("REFUSES an `absent` that arrives with a target header — a denial NAMES nothing", () => {
+    // `absent` is the collapse of every denial into one answer, and a header is
+    // the one field on this wire that NAMES an artifact. An `absent` carrying
+    // one would therefore be the oracle the collapse exists to close: it would
+    // tell a reader who may not know the gate exists what the gate is about.
+    // The refusal is the whole envelope's, not the header's — a producer that
+    // attached it is a producer whose other answers cannot be trusted either.
+    //
+    // The control first: this exact `absent`, WITHOUT the header, parses.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "absent" as const },
+      body: null,
+    };
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        ...answer,
+        targetHeaders: [
+          {
+            title: "Q3 re-engagement email",
+            typeLabel: "Email",
+            objectType: "@cinatra-ai/email:draft",
+            revisionId: "rev_8f3a1c2d4e5f6a7b",
+            facts: ["Team", "Private"],
+          },
+        ],
+      }),
+    ).toBeNull();
+    // An EMPTY set is refused on the same reading: it is still a `targetHeaders`
+    // key on a denial, and `null`/omitted is the one shape `absent` may carry.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: [] }),
     ).toBeNull();
   });
 });
@@ -530,7 +660,7 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
         state,
         body: null,
       }),
-    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null, targets: null });
+    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null, targetHeaders: null });
   });
 
   it("REFUSES an outcome this build cannot read, rather than dropping it", () => {
@@ -573,83 +703,6 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
 // ---------------------------------------------------------------------------
 // The gate's own TARGET ROWS ride the answer (cinatra#3051)
 // ---------------------------------------------------------------------------
-
-describe("the target rows ride the answer", () => {
-  const ROW = {
-    artifactId: "artifact-1",
-    representationRevisionId: "rev-1",
-    title: "Launch post draft",
-    objectType: "@cinatra-ai/blog-post-artifact:post",
-    ownerLevel: "organization",
-    visibility: "organization",
-    mime: "text/markdown",
-    updatedAt: "8 min ago",
-    packageName: "@cinatra-ai/blog-post-artifact",
-  };
-  const PENDING = { state: "pending", canDecide: true, canComment: true } as const;
-
-  it("round-trips the rows a review answer carried", () => {
-    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
-      kind: "artifact_review_gate",
-      state: PENDING,
-      body: null,
-      targets: [ROW],
-    });
-    expect(parsed?.targets).toEqual([ROW]);
-  });
-
-  it("is `null` when the answer carried none — an older producer draws the floor", () => {
-    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
-      kind: "artifact_review_gate",
-      state: PENDING,
-      body: null,
-    });
-    expect(parsed?.targets).toBeNull();
-  });
-
-  it("REFUSES the whole answer for rows that are not ours", () => {
-    for (const targets of [
-      "not-an-array",
-      [{ artifactId: "" , representationRevisionId: "rev-1" }],
-      [{ artifactId: "a", representationRevisionId: "rev-1", title: "t" }],
-      [{ ...ROW, extra: "field" }],
-      [{ ...ROW, title: 7 }],
-      [{ ...ROW, artifactId: "x".repeat(500) }],
-      Array.from({ length: 9 }, () => ROW),
-    ]) {
-      expect(
-        parseLifecycleResolveEnvelope("artifact_review_gate", {
-          kind: "artifact_review_gate",
-          state: PENDING,
-          body: null,
-          targets,
-        }),
-        JSON.stringify(targets).slice(0, 60),
-      ).toBeNull();
-    }
-  });
-
-  it("REFUSES an `absent` that arrives with rows — a denial names nothing", () => {
-    expect(
-      parseLifecycleResolveEnvelope("artifact_review_gate", {
-        kind: "artifact_review_gate",
-        state: { state: "absent" },
-        body: null,
-        targets: [ROW],
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps carrying them beside a body-carrying kind's body", () => {
-    const parsed = parseLifecycleResolveEnvelope("verification_summary", {
-      kind: "verification_summary",
-      state: { state: "advisory" },
-      body: VERIFICATION_BODY,
-      targets: [ROW],
-    });
-    expect(parsed?.targets).toEqual([ROW]);
-  });
-});
 
 describe("the island URL rides the answer", () => {
   const pending = (islandSrc: unknown) => ({
@@ -711,7 +764,6 @@ describe("the island URL rides the answer", () => {
       state: { state: "advisory" },
       body: VERIFICATION_BODY,
       islandSrc: null,
-      targets: null,
     });
     expect(parsed?.body).toEqual(VERIFICATION_BODY);
     expect(parsed?.islandSrc).toBeNull();

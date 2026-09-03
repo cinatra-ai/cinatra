@@ -242,22 +242,21 @@ function seedBody(over: Record<string, unknown> = {}) {
 
 const PENDING = { state: "pending", canDecide: true, canComment: true };
 
-/** The gate's own pinned row, as the resolve answers it — the facts the card's
- *  target header and floor are drawn from, and the ones the capture found
- *  missing at the pending instant. */
-const TARGET_ROW = {
-  artifactId: "artifact-3051",
-  representationRevisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+/** The gate's own pinned target HEADER, as the resolve answers it — the facts
+ *  the card's target header and floor are drawn from, and the ones the proof
+ *  round found missing at the pending instant.
+ *
+ *  It arrives already WORDED: the server composes it out of the same reads and
+ *  the same surface-model functions the island's own header uses, so the stored
+ *  instant the earlier reading printed raw ("updated 2026-08-29T03:07:18.778Z")
+ *  is read as a time before it ever reaches the wire, and the card — which owns
+ *  no artifact vocabulary — cannot word it differently. */
+const TARGET_HEADER = {
   title: "Launch post draft",
+  typeLabel: "Blog Post Artifact",
   objectType: "@cinatra-ai/blog-post-artifact:post",
-  ownerLevel: "organization",
-  visibility: "organization",
-  mime: "text/markdown",
-  // THE ROW CARRIES AN INSTANT, which is what the store holds and what the
-  // capture photographed printed raw into the header ("updated
-  // 2026-08-29T03:07:18.778Z"). The header reads it as a time instead.
-  updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-  packageName: "@cinatra-ai/blog-post-artifact",
+  revisionId: "ea615d36-2ad7-4a11-9f0e-8c1b2d3e4f56",
+  facts: ["Organization", "Organization", "text/markdown", "updated 8 minutes ago"],
 };
 
 /** What the panel must read at ANY moment the frame has not painted: the header
@@ -281,10 +280,18 @@ function expectTargetNamed(root: HTMLElement, when: string): void {
   expect(text, `${when}: no labelled enum in the header`).not.toContain("Ownership:");
   const floor = root.querySelector("[data-review-target-floor]");
   expect(floor, `${when}: the never-blank floor`).not.toBeNull();
-  expect(floor!.getAttribute("data-review-floor-package"), when).toBe(
-    "@cinatra-ai/blog-post-artifact",
-  );
+  // AMENDED (cinatra#3058, fix leg 8). The line's `package` half is DROPPED on
+  // the card's own overlay: §V fixes the renderer resolution as "host-derived,
+  // never a claim the client or the model can forge", and this overlay is drawn
+  // on the client for a frame that reached no renderer at all. Reading the
+  // artifact type's defining package off the type id in its place would name a
+  // package that had no part in the failure. What #3051 needs from this line is
+  // unchanged and is what is measured here: it is DRAWN, in every reading,
+  // inside the widget — never a blank — with the two parts that are true of it.
+  expect(floor!.getAttribute("data-review-floor-package"), when).toBe("");
   expect(floor!.getAttribute("data-review-floor-slot"), when).toBe("detail");
+  expect(floor!.textContent, when).toContain('slot "detail"');
+  expect(floor!.textContent, when).not.toContain("package");
   // The sentence the capture photographed is a preview state, never a reason the
   // reviewer cannot decide — and it never stands alone any more.
   expect(root.textContent, `${when}: the decision floor is live`).toContain("Approve");
@@ -308,10 +315,10 @@ function installTurnServer(state: {
       kind: "artifact_review_gate",
       state: state.gate(),
       body: null,
-      // The gate's own rows ride the answer that authorized the card
-      // (cinatra#3051), which is what lets the panel name its target before the
-      // island has loaded anything.
-      targets: [TARGET_ROW],
+      // The gate's own target header rides the answer that authorized the card
+      // (cinatra#3051, #3141 item 7), which is what lets the panel name its
+      // target before the island has loaded anything.
+      targetHeaders: [TARGET_HEADER],
     }),
   });
   const inner = globalThis.fetch;

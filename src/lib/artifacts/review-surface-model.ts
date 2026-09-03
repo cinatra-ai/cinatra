@@ -131,59 +131,61 @@ export function reviewSettledCopy(
 }
 
 // ---------------------------------------------------------------------------
-// Renderer provenance (§III) — the surface shows HOW each target was rendered.
-// The conformance anchor is derived from the OPAQUE mount kind, never a type id.
+// Renderer provenance (§V) — host-resolved, and NOT PUT ON SCREEN. The one
+// region that survives is the floor's, and only because a render failed.
 // ---------------------------------------------------------------------------
 
-export type ReviewProvenanceConformanceId =
-  | "review-provenance-native"
-  | "review-provenance-marketplace"
-  | "review-target-floor";
+export type ReviewProvenanceConformanceId = "review-target-floor";
 
 /** The design conformance id for a target's provenance region, from its host
- * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
- * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). `null` means the target has NO provenance region — the strip is
- * not rendered at all.
+ * mount kind. `null` means the target has NO region — the strip is not rendered
+ * at all — which is now every mount but the floor.
  *
- * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
- * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
- * the work, or that nothing did. The host's own rendering of a declared text
- * form is neither: there is no package to name, and the work did render. Rather
- * than reuse a package tier that would name an extension that never ran, or
- * invent a fourth strip the drawing does not carry, the reviewer is shown the
- * draft with nothing above it. */
+ * THE DRAWING FORBIDS THE OTHER TWO. §V of the ratified artifact-review drawing,
+ * read at the drawings' default branch: the resolution "is not put on screen: a
+ * display shows the work and nothing about itself — no renderer name, no package
+ * identity, no provenance line — because the reader is deciding on the work, not
+ * on what drew it", and a build-time renderer and a runtime one "are drawn the
+ * same way, because nothing on either target says which resolved it". §V.1 says
+ * it again for the display that fills the slot: its header carries the tabs, the
+ * indicator "and nothing else — no renderer chip and no provenance line, here or
+ * on any other surface this display is drawn". The lifecycle-cards drawing §III
+ * is the same sentence in its own words.
+ *
+ * A build-map mount and a runtime mount therefore carry no region, exactly as
+ * the form rung already did (cinatra#2931 W4, for its own reason: there was no
+ * package to name and the work did render).
+ *
+ * ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor, and
+ * only because a reader must be told a render failed." */
 export function reviewProvenanceConformanceId(
   mount: ReviewTargetMount,
 ): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
-      return "review-provenance-native";
     case "form":
-      return null;
     case "runtime":
-      return "review-provenance-marketplace";
+      return null;
     case "floor":
       return "review-target-floor";
   }
 }
 
-/** The provenance label shown beside the chip (§III). build-time / runtime carry
- * the extension chip; a runtime additionally shows its package identity; a floor
- * reads "Floor". `null` for the form rung, which has no region to label at all
- * (see `reviewProvenanceConformanceId`). Pure copy — no type keying. */
+/** The label the one surviving region prints (§V) — a floor reads "Floor" over
+ * the generic read-only reading of the representation. `null` for every mount
+ * that draws no region: the two renderer tiers, which the drawing forbids from
+ * naming themselves, and the form rung, which never had one. Pure copy — no
+ * type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
-  kind: "build-time" | "runtime" | "floor";
+  kind: "floor";
   slot: string;
   packageName: string | null;
 } | null {
   switch (mount.kind) {
     case "build-map":
-      return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
     case "form":
-      return null;
     case "runtime":
-      return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
+      return null;
     case "floor":
       return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
   }
@@ -213,10 +215,9 @@ export function reviewTypeLabel(objectType: string): string {
 }
 
 /**
- * The read-only row facts the header's meta line carries (§II) — the ones the
+ * The read-only row facts the header's meta line carries (§IV) — the ones the
  * drawing names: "the read-only row facts the host authorized — owner level /
- * visibility, MIME, and updated time"
- * (design@fe2182547d4a specs/app-artifact-review.html §IV).
+ * visibility, MIME, and updated time".
  *
  * THE LINE IS THE DRAWING'S LINE (cinatra#3051, re-shoot grade). The drawing
  * draws "… · Team · Private · text/html · updated 8 min ago"
@@ -316,22 +317,28 @@ export function reviewPreviewFloorDiagnostic(
   return `${pkg}slot "${slot}" · reason "${reason}"`;
 }
 
-/**
- * The package the floor names for one target: the one whose renderer the host
- * resolved, or — when the host's own form rung drew it, so no package did — the
- * artifact TYPE's own defining package, read off the type id
- * (`@scope/pack:kind` → `@scope/pack`). `null` when neither is known, which
- * drops the `package` half of the line rather than inventing one.
+/*
+ * REMOVED (cinatra#3058, fix leg 8; the convergence round on the reconciled
+ * merge): `reviewTargetPackageName`, which read the `package` half of §V's floor
+ * line off a host-resolved renderer package or, failing that, off the artifact
+ * type id.
+ *
+ * Its one caller was the review card, and it had exactly one honest argument to
+ * pass it: the RESOLVED package the branch's own target rows carried on the
+ * wire. The card-owned header wire this reading now stands on carries no such
+ * field, and §V fixes where that name may come from — "The resolution is
+ * host-derived, never a claim the client or the model can forge" — so the card
+ * can no longer name a package at all, and its floor line drops that half (the
+ * slot and the reason stay: the floor is never a blank). Inferring the package
+ * from the type id instead would report a package that had no part in the
+ * failure, which is the invented value "never a raw error or manifest value"
+ * keeps off this line.
+ *
+ * The package-NAMED floor is still drawn where the host resolved a renderer and
+ * can say so — `reviewTargetFloorDiagnostic` on the artifact page's own mount —
+ * and a card-side package would return the day the header wire carries the
+ * host's resolution as a fact rather than as a guess.
  */
-export function reviewTargetPackageName(
-  resolvedPackageName: string | null,
-  objectType: string | null,
-): string | null {
-  if (resolvedPackageName) return resolvedPackageName;
-  if (!objectType) return null;
-  const base = objectType.split(":")[0] ?? "";
-  return base.length > 0 ? base : null;
-}
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
  * truncated for display, with the exact id preserved for the title attribute. */

@@ -190,6 +190,18 @@ export function ReviewGateLoading() {
  * indigo arc" means and what the sibling `LoadingSpinner` (arc over a
  * 25%-opacity track ring) is not.
  *
+ * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
+ * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
+ * so the arc is whatever colour this wrapper sets. It set `text-mustard-ink`,
+ * and no `--color-mustard-ink` is registered in the theme block — so the utility
+ * emitted no rule at all and the arc silently took the INHERITED foreground,
+ * measured as rgb(21,33,58) in light and rgb(248,250,252) in dark. `text-primary`
+ * is the registered indigo the drawing names, and it is the same token the
+ * chosen row's edge takes, so the arc and the edge can never drift apart. In the
+ * dark theme that token resolves to the application's near-white dark primary —
+ * the dark-token deviation this branch already records for the row and the
+ * floor, which now covers the arc with them rather than as a second item.
+ *
  * Conformance anchor: `review-gate-placeholder`.
  */
 const REVIEW_GATE_PLACEHOLDER_TITLE_ID = "review-gate-placeholder-title";
@@ -216,7 +228,7 @@ export function ReviewGatePlaceholder() {
       >
         Agentic Run Progress
       </p>
-      <div className="grid place-items-center pb-[22px] pt-[26px]">
+      <div className="grid w-full place-items-center pb-[22px] pt-[26px]">
         <SpinnerArc className="size-[22px] text-primary" />
       </div>
     </div>
