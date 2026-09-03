@@ -23,8 +23,9 @@
  *   "@cinatra-ai/email-artifacts:body · revision rev_4c21… · Team · Private ·
  *    text/markdown"
  *
- * and the size in the form the drawing draws it in (§V.2's download card:
- * "application/octet-stream · 2.4 MB"), never a raw byte count.
+ * FIX LEG 2 closed the line where the drawing closes it: the size cell and the
+ * header's own Download control are gone, because the sentence above names
+ * neither, and the revision is drawn in the drawing's own mono form.
  *
  * and the Breadcrumb section of the components drawing, which the artifact
  * page's title feeds through `PageHeaderTitleSync`:
@@ -44,7 +45,6 @@ import { describe, expect, it } from "vitest";
 import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
-  formatArtifactSize,
   artifactRevisionLabel,
 } from "../artifact-detail-header";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
@@ -84,42 +84,6 @@ function row(over: Partial<ArtifactSummary> = {}): ArtifactSummary {
   } as ArtifactSummary;
 }
 
-describe("the size is drawn, never counted out in bytes", () => {
-  it("draws the drawing's own reading for a megabyte-scale file", () => {
-    expect(formatArtifactSize(2_400_000)).toBe("2.4 MB");
-  });
-
-  it("never answers a raw byte count for anything a person reads", () => {
-    for (const bytes of [0, 1, 999, 1000, 2_400_000, 1_073_741_824]) {
-      expect(formatArtifactSize(bytes)).not.toMatch(/\bbytes\b/);
-    }
-  });
-
-  it("scales through the units rather than growing one number", () => {
-    expect(formatArtifactSize(999)).toBe("999 B");
-    expect(formatArtifactSize(412_000)).toBe("412 kB");
-    expect(formatArtifactSize(3_200_000_000)).toBe("3.2 GB");
-  });
-
-  it("answers a named absence rather than a number it does not have", () => {
-    expect(formatArtifactSize(Number.NaN)).toBe("unknown size");
-    expect(formatArtifactSize(-1)).toBe("unknown size");
-  });
-
-  // Convergence finding (codex, this leg): the unit has to be chosen from the
-  // number as DRAWN. Rounding after the unit was picked draws "1000 kB", a
-  // count of a unit no reader uses — the same defect as counting bytes, one
-  // unit up.
-  it("never draws a thousand of a unit — the next unit is what a person reads", () => {
-    expect(formatArtifactSize(999_999)).toBe("1 MB");
-    expect(formatArtifactSize(999_999_999)).toBe("1 GB");
-    expect(formatArtifactSize(1_000_000_000_000_000)).toBe("1 PB");
-    for (const bytes of [999_999, 999_949, 999_999_999, 1_000_000_000_000_000]) {
-      expect(formatArtifactSize(bytes)).not.toMatch(/^\d{4,}/);
-    }
-  });
-});
-
 // Convergence finding (codex, this leg): a stored title that is empty or is
 // nothing but whitespace is a name genuinely unavailable, and the Breadcrumb
 // rule leaves no room for the blank crumb it would otherwise draw.
@@ -140,7 +104,6 @@ describe("a name genuinely unavailable is an absent name, not an empty one", () 
       artifact: row({ title: "" }),
       mime: "image/png",
       revisionId: null,
-      sizeBytes: 10,
       now: NOW,
     });
     expect(model.title).toBe("9c0dfce6…");
@@ -149,7 +112,7 @@ describe("a name genuinely unavailable is an absent name, not an empty one", () 
 });
 
 describe("the revision is a mono revision id, shortened as the drawing shortens it", () => {
-  it("draws eight characters and an ellipsis behind the word revision", () => {
+  it("draws the drawing's own prefixed mono id behind the word revision", () => {
     expect(artifactRevisionLabel("rev_11b8c4d2-7a10-4d1f")).toBe(
       "revision rev_11b8…",
     );
@@ -161,12 +124,11 @@ describe("the revision is a mono revision id, shortened as the drawing shortens 
 });
 
 describe("the header model the artifact's own page draws", () => {
-  it("carries the type, the revision, owner level, visibility, the MIME, the drawn size and the updated time", () => {
+  it("carries the type, the revision, owner level, visibility, the MIME and the updated time", () => {
     const model = buildArtifactDetailHeader({
       artifact: row(),
       mime: "image/png",
       revisionId: "rev_11b8c4d2-7a10-4d1f",
-      sizeBytes: 2_400_000,
       now: NOW,
     });
 
@@ -176,7 +138,6 @@ describe("the header model the artifact's own page draws", () => {
       "Team",
       "Private",
       "image/png",
-      "2.4 MB",
       "updated 8 minutes ago",
     ]);
   });
@@ -186,10 +147,9 @@ describe("the header model the artifact's own page draws", () => {
       artifact: row(),
       mime: "image/png",
       revisionId: "rev_11b8c4d2",
-      sizeBytes: 10,
       now: NOW,
     });
-    expect(model.kindLabel).toBe("Image Artifact");
+    expect(model.kindLabel).toBe("Image");
   });
 
   it("names the floor rather than an extension where the row has no defining extension", () => {
@@ -199,7 +159,6 @@ describe("the header model the artifact's own page draws", () => {
       }),
       mime: "image/png",
       revisionId: "rev_11b8c4d2",
-      sizeBytes: 10,
       now: NOW,
     });
     expect(model.kindLabel).toBe("Default artifact");
@@ -210,7 +169,6 @@ describe("the header model the artifact's own page draws", () => {
       artifact: row(),
       mime: "image/png",
       revisionId: "rev_11b8c4d2",
-      sizeBytes: 10,
       now: NOW,
     });
     expect(model.metaCells).not.toContain("pinned");
@@ -221,7 +179,6 @@ describe("the header model the artifact's own page draws", () => {
       artifact: row(),
       mime: "image/png",
       revisionId: null,
-      sizeBytes: 10,
       now: NOW,
     });
     expect(model.title).toBe("quarterly-chart.png");
@@ -232,7 +189,6 @@ describe("the header model the artifact's own page draws", () => {
       artifact: row({ title: null }),
       mime: "image/png",
       revisionId: null,
-      sizeBytes: 10,
       now: NOW,
     });
     expect(model.title).toBe("9c0dfce6…");
@@ -244,7 +200,6 @@ describe("the header model the artifact's own page draws", () => {
       artifact: row(),
       mime: "",
       revisionId: null,
-      sizeBytes: 0,
       now: NOW,
     });
     expect(model.metaCells).toEqual([
@@ -252,7 +207,6 @@ describe("the header model the artifact's own page draws", () => {
       "Team",
       "Private",
       "unknown",
-      "0 B",
       "updated 8 minutes ago",
     ]);
   });

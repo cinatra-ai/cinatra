@@ -20,8 +20,6 @@
  * in `./renderer-dispatch.ts`; the resolution seam in `./renderer-resolution.ts`.
  *
  * `PageHeader.actions` carries the artifact-level actions:
- *   - Download — always (when a representation exists); hits the existing
- *     content endpoint (always `attachment` per `downloadDispositionFor`).
  *   - "Open in source application" — only when `artifact.sourceUrl` is
  *     non-null (connector-ref artifacts; the service validates the URL to
  *     http/https before it ever reaches this href).
@@ -30,7 +28,7 @@ import "server-only";
 import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { Download, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -114,7 +112,6 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
         <PageHeader
           title={artifactDisplayTitle(artifact)}
           description="A dashboard artifact — opens at its canonical surface."
-          divider={false}
         />
         <PageContent
           className="flex flex-col gap-6 pb-8"
@@ -194,7 +191,6 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     artifact,
     mime,
     revisionId,
-    sizeBytes: artifact.size,
   });
   // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
   // one place the Breadcrumb rule against a raw id in a name's place lands.
@@ -242,31 +238,25 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
           </span>
         }
         meta={header.metaCells.join(" · ")}
-        divider={false}
+        // THE HEADER CARRIES NO DOWNLOAD. The drawing closes this header at the
+        // mono meta line, and it gives the download to the KIND: the pdf's own
+        // download floor (§XI.2, §XI.4), the download card of a file nothing can
+        // read (§V.2). A control the header adds on top of that is a second
+        // download the drawing never draws — the fourth proof round measured it
+        // on all twenty-two artifact frames. "Open in source application" is not
+        // one: it is where a connector-referenced row came FROM, not its bytes.
         actions={
-          downloadHref || artifact.sourceUrl ? (
-            <>
-              {artifact.sourceUrl ? (
-                <Button asChild variant="outline">
-                  <Link
-                    href={artifact.sourceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <ExternalLink data-icon="inline-start" aria-hidden="true" />
-                    Open in source application
-                  </Link>
-                </Button>
-              ) : null}
-              {downloadHref ? (
-                <Button asChild variant="outline">
-                  <Link href={downloadHref} download>
-                    <Download data-icon="inline-start" aria-hidden="true" />
-                    Download
-                  </Link>
-                </Button>
-              ) : null}
-            </>
+          artifact.sourceUrl ? (
+            <Button asChild variant="outline">
+              <Link
+                href={artifact.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink data-icon="inline-start" aria-hidden="true" />
+                Open in source application
+              </Link>
+            </Button>
           ) : null
         }
       />

@@ -65,7 +65,8 @@ export type TypedPromotionRefusal =
   | "extension-owns-no-type"
   /** The row already carries the extension's own type — nothing to promote. */
   | "already-promoted"
-  /** No matcher assertion associates this row with the extension. */
+  /** Neither authority holds: no matcher assertion associates this row with the
+   *  extension, and the person asserted nothing of their own. */
   | "no-matcher-assertion"
   /** The matcher's confidence is below the extension's declared threshold. */
   | "below-threshold"
@@ -187,12 +188,25 @@ export type TypedPromotionPlan =
  *
  * ORDER IS LOAD-BEARING, because more than one refusal can be true and the first
  * is the honest one: a row that does not exist is not "unconfirmed", and a row
- * that already carries the target type is not "below threshold". The two
- * AUTHORITIES — the matcher's assertion and the person's confirmation — are
- * checked LAST and BOTH, because the plan requires both and neither substitutes
- * for the other: a high-confidence match without a confirmation retypes nothing,
- * and a confirmation on a row the matcher never associated retypes nothing
- * either.
+ * that already carries the target type is not "below threshold".
+ *
+ * TWO ROADS ONTO THE PROMOTION, AND THE DRAWING GIVES BOTH (artifact-review
+ * §XI.10): "Promotion happens only on the matcher's assertion at its threshold
+ * and with the person's confirmation, OR ON THE PERSON'S OWN ASSERTION, WHICH
+ * OUTRANKS THE MATCHER." This planner used to give one — it required a matcher
+ * association under every confirmation — so a person who asserted a meaning the
+ * matcher had never guessed at moved the row's label and nothing else: the type
+ * stayed put, the mono line kept naming the base, and the base display kept
+ * drawing. That is what the fourth proof round measured on the screenshot.
+ *
+ * The person's own assertion is therefore an AUTHORITY, not a confirmation of
+ * someone else's: where it holds, the matcher is not consulted at all, which is
+ * what "outranks" means. Where it does not, the matcher road is unchanged — a
+ * high-confidence match without a confirmation retypes nothing, and a
+ * confirmation on a row nothing associated retypes nothing either.
+ *
+ * NEITHER ROAD SKIPS THE FORM. The content is shared unchanged either way, so
+ * the type it lands under must still accept it.
  */
 export function planTypedPromotion(input: {
   row: PromotableRow | null;
@@ -200,6 +214,9 @@ export function planTypedPromotion(input: {
   matcher: MatcherAssociation | null;
   /** The person's confirmation, from the surface that already asks for one. */
   confirmed: boolean;
+  /** The person's OWN meaning assertion for this (row, extension) — the second
+   *  road §XI.10 gives, and the one that outranks the matcher. */
+  personAsserted: boolean;
 }): TypedPromotionPlan {
   const refuse = (reason: TypedPromotionRefusal): TypedPromotionPlan => ({ ok: false, reason });
 
@@ -208,9 +225,14 @@ export function planTypedPromotion(input: {
   if (input.row.objectType === input.ownType.typeId) return refuse("already-promoted");
   if (!input.row.latestRevision) return refuse("no-content");
 
-  if (!input.matcher) return refuse("no-matcher-assertion");
-  if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
-  if (!input.confirmed) return refuse("not-confirmed");
+  // THE PERSON'S OWN ASSERTION IS ITS OWN AUTHORITY. Where it holds the matcher
+  // road is not walked at all — an assertion that outranks the matcher cannot be
+  // held back by what the matcher did or did not guess.
+  if (!input.personAsserted) {
+    if (!input.matcher) return refuse("no-matcher-assertion");
+    if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
+    if (!input.confirmed) return refuse("not-confirmed");
+  }
 
   // RE-VALIDATED AGAINST THE TARGET TYPE, not against the base's. The content is
   // shared unchanged, so the type it lands under must actually accept it — the

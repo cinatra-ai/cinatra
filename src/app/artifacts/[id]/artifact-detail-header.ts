@@ -8,8 +8,12 @@
  * facts the host authorized — owner level / visibility, MIME, and updated
  * time." §XI draws the same line on the artifact's OWN page without the pinned
  * marker — nothing on this surface is pinned, the page reads what the artifact
- * has become — and puts the kind beside the title. §V.2 draws a size the way a
- * person reads one ("2.4 MB"), never a count of bytes.
+ * has become — and puts the kind beside the title.
+ *
+ * THE LINE CLOSES THERE. Type, revision, owner level, visibility, MIME, updated
+ * time: six facts, and the drawing names no seventh. A size is drawn where the
+ * drawing draws one — inside the kinds whose own display carries a file's form
+ * and size (§V.2's download card) — and never in this header.
  *
  * PURE AND TOTAL, and the clock is injected: the page draws exactly what this
  * returns, so the drawing is measured here rather than described in a comment
@@ -31,43 +35,28 @@ export type ArtifactDetailHeaderModel = {
 };
 
 /**
- * THE SIZE, DRAWN. A raw byte count is a number the reader has to convert; the
- * drawing draws "2.4 MB". Decimal units, because that is what the drawing's own
- * reading uses, and a named absence rather than a number this leaf does not
- * have.
+ * THE REVISION, IN THE DRAWN MONO FORM. Every reading in the ratified drawing
+ * writes it the same way — "revision rev_8f3a…", "revision rev_11b8…",
+ * "revision rev_9ac3…", "revision rev_c410…": the word, then a mono id that
+ * says what it is, then the ellipsis that says it was shortened. The fourth
+ * proof round measured "revision d2e62529…" on every frame — eight characters
+ * of raw hexadecimal, which is a shortened identifier and not the drawn form.
+ *
+ * The stored identifier's own prefix is honoured rather than doubled: a
+ * revision id that already names itself keeps its name.
  */
-export function formatArtifactSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "unknown size";
-  if (bytes < 1000) return `${Math.round(bytes)} B`;
-  const units = ["kB", "MB", "GB", "TB", "PB"] as const;
-  let value = bytes / 1000;
-  let unit = 0;
-  // THE UNIT IS DECIDED BY THE NUMBER AS DRAWN, not by the raw quotient: a
-  // quotient of 999.999 is drawn "1000 kB" if it is rounded after the unit is
-  // chosen, and "1000 kB" is the count of a unit nobody reads. Step the unit
-  // whenever the number this leaf would DRAW has reached the next one.
-  while (unit < units.length - 1) {
-    const drawnValue = value < 10 ? Number(value.toFixed(1)) : Math.round(value);
-    if (drawnValue < 1000) break;
-    value /= 1000;
-    unit += 1;
-  }
-  const drawn = value < 10 ? value.toFixed(1) : String(Math.round(value));
-  // 2.0 MB reads as a measurement nobody took; 2 MB is the same number drawn.
-  return `${drawn.endsWith(".0") ? drawn.slice(0, -2) : drawn} ${units[unit]}`;
-}
+const REVISION_PREFIX = "rev_";
 
-/**
- * THE REVISION, AS A MONO ID. The drawing shortens it — "rev_11b8…" — under the
- * same rule the trail places on an id it must show at all: eight characters and
- * an ellipsis, never the whole identifier and never a title-cased one.
- */
 export function artifactRevisionLabel(revisionId: string | null): string | null {
   if (revisionId === null) return null;
   const trimmed = revisionId.trim();
   if (trimmed === "") return null;
-  const short = trimmed.length > 8 ? `${trimmed.slice(0, 8)}…` : trimmed;
-  return `revision ${short}`;
+  // A stored id may carry a prefix of its own (`rep_…`, `rev_…`). The drawn id
+  // is the significant part behind it, under the drawing's own prefix.
+  const significant = trimmed.replace(/^(rev|rep)_/i, "");
+  if (significant === "") return null;
+  const short = significant.length > 4 ? `${significant.slice(0, 4)}…` : significant;
+  return `revision ${REVISION_PREFIX}${short.toLowerCase()}`;
 }
 
 /** Owner level and visibility are drawn capitalized, exactly as the library
@@ -111,10 +100,9 @@ export function buildArtifactDetailHeader(input: {
   readonly artifact: ArtifactSummary;
   readonly mime: string;
   readonly revisionId: string | null;
-  readonly sizeBytes: number;
   readonly now?: Date;
 }): ArtifactDetailHeaderModel {
-  const { artifact, mime, revisionId, sizeBytes } = input;
+  const { artifact, mime, revisionId } = input;
   const now = input.now ?? new Date();
 
   const revision = artifactRevisionLabel(revisionId);
@@ -136,7 +124,6 @@ export function buildArtifactDetailHeader(input: {
       capitalized(artifact.ownerLevel),
       capitalized(artifact.visibility),
       mime || "unknown",
-      formatArtifactSize(sizeBytes),
       updated,
     ],
   };

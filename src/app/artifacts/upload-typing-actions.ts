@@ -399,12 +399,16 @@ async function promoteOnConfirmedMeaning(input: {
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
     // the matcher itself resolved it from — never a default invented here. A
-    // package with no matcher declaration never matched this row, so the road
-    // refuses on the missing assertion rather than on a fabricated threshold.
+    // package with no matcher declaration has no matcher road at all, and says
+    // so with a null threshold rather than a fabricated one; the drawing's
+    // second road — the person's own assertion (§XI.10) — is still open to it,
+    // which is why a missing declaration no longer ends the call. Returning
+    // early here is what made a person's assertion on a matcher-less pack a
+    // silent no-op.
     const entry = matcherManifestRegistry
       .list()
       .find((e) => e.packageName === input.extension);
-    if (!entry) return null;
+    const threshold = entry ? entry.matcherConfidenceThreshold : null;
 
     // The org-write kernel authority the canonical objects writer requires,
     // minted HERE from the acting session — the store leaf never mints one.
@@ -418,7 +422,7 @@ async function promoteOnConfirmedMeaning(input: {
       artifactId: input.artifactId,
       extension: input.extension,
       ownType: { typeId: ownType.typeId, acceptsMimes },
-      threshold: entry.matcherConfidenceThreshold,
+      threshold,
       confirmed: true,
       createdBy: input.principalId,
       actor: { userId: input.userId, orgId: input.orgId },

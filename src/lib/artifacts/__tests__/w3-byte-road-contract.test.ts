@@ -93,4 +93,30 @@ describe("the byte road's own attribute (#3091)", () => {
       expect(source).toContain("data-props-api-version");
     },
   );
+
+  // WHERE THE COMMA-SEPARATED ROWS SIT IN THE PARTITION, said out loud (fix leg
+  // 2). A proof round photographs a csv page and finds no byte-road stamp on it,
+  // and the reading is only answerable if the partition says WHY: csv is not a
+  // kind of its own here. The text type accepts it, so a csv row is a text row,
+  // and the text display is one of the three this wave moved onto the content
+  // channel — an absent stamp on a csv page is the contract, not a gap.
+  it("puts the comma-separated rows on the content channel, because the text type is what accepts them", () => {
+    const pkgPath = resolve(REPO_ROOT, "extensions/cinatra-ai/text-artifact/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      cinatra: { artifact: { accepts: { file: { mimeTypes: string[] } } } };
+    };
+    expect(pkg.cinatra.artifact.accepts.file.mimeTypes).toContain("text/csv");
+    expect(CONTENT_CHANNEL_KINDS).toContain("text-artifact");
+  });
+
+  // THE MARKDOWN DISPLAY IS ON THE CONTENT CHANNEL TOO, and it is NOT this
+  // branch's to move: its own reading — the Code and Preview tabs and the saving
+  // indicator §V.1 gives it — is owned by an open sibling (cinatra#3026, pull
+  // request 3098), which is also where its props version advances. What is
+  // measurable here is the half that belongs to the partition: it reaches for no
+  // byte address, so it stamps no road, and a proof round that photographs one
+  // is reading the contract rather than finding a gap.
+  it("reaches for no byte address on the markdown display either", () => {
+    expect(detailRendererSource("markdown-artifact")).not.toMatch(STAMPED);
+  });
 });

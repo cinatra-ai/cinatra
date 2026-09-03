@@ -133,6 +133,38 @@ ORDER BY asserted_at DESC LIMIT 1`,
   };
 }
 
+/**
+ * THE PERSON'S OWN ASSERTION for one (row, extension), as the assertion store
+ * recorded it — the second road §XI.10 gives onto the promotion.
+ *
+ * ONLY a `user` assertion counts. An agent's and an authoring skill's are
+ * classic assertions too, but the drawing's sentence is about the PERSON: "or on
+ * the person's own assertion, which outranks the matcher". A `system` binding
+ * assertion is what every upload already carries for its base, so reading one
+ * here would promote every row the moment anybody confirmed anything.
+ */
+export function readPersonAssertion(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+}): boolean {
+  ensurePostgresSchema();
+  const s = schema();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT 1 FROM "${s}"."semantic_assertion"
+WHERE org_id = $1 AND artifact_id = $2 AND extension = $3
+  AND asserted_by = 'user' AND eligibility <> 'archived'
+LIMIT 1`,
+        values: [input.orgId, input.artifactId, input.extension],
+      },
+    ],
+  });
+  return (res?.rows?.length ?? 0) > 0;
+}
+
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -167,7 +199,10 @@ export async function promoteMatchedArtifactType(input: {
   artifactId: string;
   extension: string;
   ownType: ExtensionOwnType | null;
-  threshold: number;
+  /** The extension's own declared matcher threshold, or NULL where the pack
+   *  declares no matcher machinery at all — in which case the matcher road does
+   *  not exist for it and only the person's own assertion can promote. */
+  threshold: number | null;
   confirmed: boolean;
   createdBy?: string | null;
   /** The acting principal, for the history event the retype records. */
@@ -187,38 +222,48 @@ export async function promoteMatchedArtifactType(input: {
   retype?: TypedPromotionRetype;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
-  const matcher = readMatcherAssociation({
+  const matcher =
+    input.threshold === null
+      ? null
+      : readMatcherAssociation({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          threshold: input.threshold,
+        });
+  const personAsserted = readPersonAssertion({
     orgId: input.orgId,
     artifactId: input.artifactId,
     extension: input.extension,
-    threshold: input.threshold,
   });
   const plan = planTypedPromotion({
     row,
     ownType: input.ownType,
     matcher,
     confirmed: input.confirmed,
+    personAsserted,
   });
 
   if (!plan.ok) {
     // THE CONVERGING BRANCH. An `already-promoted` row may be one an earlier
     // call retyped and never got to append for. Everything else is a refusal.
     //
-    // IT CARRIES THE SAME TWO AUTHORITIES AS THE PROMOTION ITSELF, and the same
-    // form re-validation. A row that simply CARRIES the target type — written
-    // that way from the start, or promoted under some other road — was never
-    // this promotion, and appending a revision to it on a bare confirmation
-    // would be a write no matcher ever asserted for: the completion of an
-    // interrupted promotion is only a completion when the promotion's own
-    // conditions still hold.
+    // IT CARRIES THE SAME AUTHORITIES AS THE PROMOTION ITSELF, and the same form
+    // re-validation. A row that simply CARRIES the target type — written that way
+    // from the start, or promoted under some other road — was never this
+    // promotion, and appending a revision to it on a bare confirmation would be a
+    // write nobody asserted for: the completion of an interrupted promotion is
+    // only a completion when the promotion's own conditions still hold. Both
+    // roads count here for the same reason they count above — a promotion the
+    // person's own assertion authorized is exactly as interruptible as one the
+    // matcher's did.
     if (
       plan.reason === "already-promoted" &&
       row?.latestRevision &&
       input.ownType &&
       row.objectType === input.ownType.typeId &&
-      input.confirmed &&
-      matcher !== null &&
-      matcher.confidence >= matcher.threshold &&
+      (personAsserted ||
+        (input.confirmed && matcher !== null && matcher.confidence >= matcher.threshold)) &&
       mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
       const landed = appendPromotionRevision({
