@@ -22,7 +22,8 @@
  * `--dc-primary-rgb` is the one variable that cannot use `var(--…)` (DC
  * uses it inside `rgba(var(--dc-primary-rgb), <alpha>)`) so we hardcode
  * the RGB equivalents per theme. Light --accent #2d4a8a → 45, 74, 138.
- * Dark --accent oklch(0.929 0.013 255.508) ≈ #e2e8f0 → 226, 232, 240.
+ * Dark --accent #364E81 → 54, 78, 129 (cinatra#3192 fix leg 2: the dark ramp
+ * carries the one indigo rule 2 names, not the stock near-white slate).
  */
 
 :root,
@@ -125,7 +126,11 @@ html.dark {
      chain above is correct in dark mode. Only the literal RGB needs a
      dark override — drizzle-cube uses it inside rgba(var(--dc-primary-rgb),
      <alpha>) constructs which cannot accept a CSS color. */
-  --dc-primary-rgb: 226, 232, 240; /* dark --accent oklch(0.929 0.013 255.508) ≈ #e2e8f0 */
+  --dc-primary-rgb: 54, 78, 129; /* dark --accent #364E81 (cinatra#3192 leg 2) */
+  /* `--dc-filter-text` above reads raw `var(--accent)`, which is now the FILL
+     indigo — unreadable as a label on this palette. The filter pill takes the
+     ink end of the same hue, exactly as links and focus rings do. */
+  --dc-filter-text: var(--accent-ink);
 }
 
 /* Dashboard toolbar

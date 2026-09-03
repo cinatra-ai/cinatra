@@ -47,10 +47,21 @@ export function PrimitiveChromeFixtures() {
         </Select>
       </div>
 
+      {/*
+        All SEVEN variants the drawing names, each at the default size, so the
+        Button clauses are measured variant by variant rather than on the three
+        the first leg happened to mount. Every one is enabled at rest: the
+        aborted 2026-09-03 round could not read a primary at all because its
+        surface drew every primary disabled at opacity 0.5.
+      */}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary">Primary</Button>
         <Button variant="default">Default</Button>
+        <Button variant="outline">Outline</Button>
+        <Button variant="secondary">Secondary</Button>
         <Button variant="destructive">Decline</Button>
+        <Button variant="ghost">Ghost</Button>
+        <Button variant="link">Link</Button>
       </div>
 
       <div className="flex flex-wrap items-start gap-4">
