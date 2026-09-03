@@ -99,7 +99,10 @@ export function RecommendationRailStepRow({
     >
       <span
         data-conformance-id="recommendation-rail-indicator"
-        className={runSurfaceRailIndicatorClass(selected || settled)}
+        // The settled circle takes the drawing's muted ground, never the
+        // indigo fill (cinatra#3188 item 1) — the shared helper holds the rule
+        // so this row and the shared row cannot part company on it.
+        className={runSurfaceRailIndicatorClass(selected, settled)}
       >
         {/* A GLYPH ON EITHER READING, NEVER A NUMERAL (cinatra#3047, the
             re-shoot's third defect). The drawing gives this entry its own

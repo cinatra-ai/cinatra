@@ -36,6 +36,7 @@ import {
 import { buildRunInputSteps } from "../run-input-steps";
 import { buildRunInputRailSteps } from "../run-input-rail-steps";
 import { RunSurfaceRail, type RunSurfaceRailStep } from "../run-surface-rail";
+import { runSurfaceStepDrawsGlyph } from "../run-surface-rail-step";
 import { buildSetupRailSteps } from "../setup-run-surface-steps";
 
 const SCREEN_SRC = fs.readFileSync(
@@ -90,12 +91,23 @@ function runPageRail(params: {
     }),
     drawnKeys: railSteps.map((step) => step.key),
   });
-  railSteps.push(
-    ...buildSetupRailSteps(
-      upcoming.map((key) => ({ key, reached: false, settled: false, surface: null })),
-      railSteps.length,
-    ),
-  );
+  // THE GLYPH ROW GOES TO THE FRONT (cinatra#3047 fix leg 8), the same split
+  // the screen makes: an upcoming row is drawn where its step will stand, and
+  // the Skills step stands at the head of the rail.
+  const asStep = (key: (typeof upcoming)[number]) => ({
+    key,
+    reached: false,
+    settled: false,
+    surface: null,
+  });
+  const head = upcoming.filter((key) => runSurfaceStepDrawsGlyph(key));
+  const numbered = upcoming.filter((key) => !runSurfaceStepDrawsGlyph(key));
+  if (head.length > 0) {
+    railSteps.unshift(...buildSetupRailSteps(head.map(asStep), 0));
+  }
+  if (numbered.length > 0) {
+    railSteps.push(...buildSetupRailSteps(numbered.map(asStep), railSteps.length - head.length));
+  }
   return railSteps;
 }
 
@@ -118,18 +130,32 @@ describe("the rail is the run whole lifecycle once the first step is settled", (
       <RunSurfaceRail steps={railSteps} detail="the run detail" initialSelection="input:0" />,
     );
 
+    // TWO READINGS CORRECTED BY cinatra#3047 FIX LEG 8, neither of them this
+    // suite's own subject (four rows, in order, with the settled one selected).
+    // (a) The row reads "Setup", not "brief": the fixture's field declares its
+    //     own KEY in the display-title slot, which the compiler writes there
+    //     whenever an agent maps no human label, and a rail entry reads the
+    //     step's name rather than a machine field key.
+    // (b) The Skills row stands FIRST, where the drawing puts it — "the first
+    //     entry on the step rail ... ahead of the work steps it would
+    //     authorize" — including when it is drawn as a step the run has not
+    //     reached yet, because an upcoming row is drawn where its step will
+    //     stand.
     expect(railRowTitles(view.container)).toEqual([
-      "brief",
-      "Schedule",
       "Skills",
+      "Setup",
+      "Schedule",
       "Review",
     ]);
-    // Steps already passed sit above; steps still to come below.
+    // Steps already passed sit above; steps still to come below. The settled
+    // form is row 1 rather than row 0 now: the Skills row stands above it,
+    // drawn as a step the run has not reached (cinatra#3047 fix leg 8).
     const rows = view.container.querySelectorAll("[data-run-surface-rail-step]");
-    expect(rows[0].getAttribute("data-run-surface-rail-settled")).toBe("true");
-    expect(rows[0].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows[0].getAttribute("aria-current")).toBe("step");
-    for (const row of Array.from(rows).slice(1)) {
+    expect(rows[0].getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(rows[1].getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(rows[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
+    expect(rows[1].getAttribute("aria-current")).toBe("step");
+    for (const row of Array.from(rows).slice(2)) {
       expect(row.getAttribute("data-run-surface-rail-reached")).toBe("false");
     }
   });
@@ -145,10 +171,21 @@ describe("the rail is the run whole lifecycle once the first step is settled", (
       <RunSurfaceRail steps={railSteps} detail="the run detail" initialSelection="input:0" />,
     );
 
+    // TWO READINGS CORRECTED BY cinatra#3047 FIX LEG 8, neither of them this
+    // suite's own subject (four rows, in order, with the settled one selected).
+    // (a) The row reads "Setup", not "brief": the fixture's field declares its
+    //     own KEY in the display-title slot, which the compiler writes there
+    //     whenever an agent maps no human label, and a rail entry reads the
+    //     step's name rather than a machine field key.
+    // (b) The Skills row stands FIRST, where the drawing puts it — "the first
+    //     entry on the step rail ... ahead of the work steps it would
+    //     authorize" — including when it is drawn as a step the run has not
+    //     reached yet, because an upcoming row is drawn where its step will
+    //     stand.
     expect(railRowTitles(view.container)).toEqual([
-      "brief",
-      "Schedule",
       "Skills",
+      "Setup",
+      "Schedule",
       "Review",
     ]);
   });
