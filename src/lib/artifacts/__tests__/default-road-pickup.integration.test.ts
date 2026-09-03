@@ -667,8 +667,14 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     // writes its own artifact for one output. The sequential re-drive case below
     // cannot expose it: it only ever has one driver in flight.
     //
-    // Here the two drivers run CONCURRENTLY and the second one's ladder resolves
-    // a DIFFERENT extension, because the install state changes underneath it.
+    // THE RACE IS MADE DETERMINISTIC, not left to the scheduler. Both drivers
+    // are launched in one tick over bytes the structural probes leave ambiguous,
+    // so both reach the MODEL rung — and the model is injected, so this suite
+    // decides how long each driver spends inside its own detection. The slow
+    // driver is therefore GUARANTEED to still be typing while the fast one
+    // claims and writes, which is precisely the window the old preflight left
+    // open. Under the lock the window does not exist: the second driver waits at
+    // the door and, on entering, finds the settled row.
     objectTypeRegistry._clearForTests();
     REQUIRED.clear();
     registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
@@ -677,7 +683,15 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     await seedActiveClaim(BLOG_POST, BLOG_POST_EXT);
 
     const { templateId, runId } = await seedTemplateAndRun();
-    const drive = (producesRefs: Array<{ extension: string; objectTypeId?: string }>) =>
+    const AMBIGUOUS = "An ordinary paragraph of prose with nothing structural. ".repeat(40);
+    const answerAfter = (ms: number) => async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return { answer: "text/markdown", confidence: 0.99 };
+    };
+    const drive = (
+      producesRefs: Array<{ extension: string; objectTypeId?: string }>,
+      askDelayMs: number,
+    ) =>
       pickupMod.pickUpDefaultRoadItems(
         {
           runId,
@@ -686,27 +700,28 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
           packageVersion: "1.2.3",
           createdBy: null,
           templateName: "Blog draft writer",
-          items: [item("draft", MARKDOWN_DOC)],
+          items: [item("draft", AMBIGUOUS)],
           producesRefs,
         },
-        { ask: neverAsk, modelRungEnabled: false },
+        { ask: answerAfter(askDelayMs), modelRungEnabled: true },
       );
-    // Driver A resolves the FORM'S BASE; driver B, launched in the same tick,
-    // resolves the DECLARED KIND — a different extension for the same bytes of
-    // the same output of the same run.
-    const [a, b] = await Promise.all([
-      drive([]),
-      drive([{ extension: BLOG_POST_EXT, objectTypeId: BLOG_POST }]),
+    // The SLOW driver resolves the form's base; the FAST one, launched in the
+    // same tick, resolves the declared kind — a different extension for the same
+    // bytes of the same output of the same run.
+    const [slow, fast] = await Promise.all([
+      drive([], 400),
+      drive([{ extension: BLOG_POST_EXT, objectTypeId: BLOG_POST }], 0),
     ]);
     // ONE artifact. Both drivers report the SAME refs — the loser of the race
     // read the winner's settled row rather than writing a second artifact.
     const artifacts = new Set(
-      [...a, ...b].map((o) => o.artifactId).filter((v): v is string => typeof v === "string"),
+      [...slow, ...fast]
+        .map((o) => o.artifactId)
+        .filter((v): v is string => typeof v === "string"),
     );
     expect(artifacts.size).toBe(1);
     const rows = (await ledgerRows(runId)).filter((r) => r.artifact_id !== null);
-    const artifactIds = new Set(rows.map((r) => r.artifact_id));
-    expect(artifactIds.size).toBe(1);
+    expect(new Set(rows.map((r) => r.artifact_id)).size).toBe(1);
     // And exactly one of the two extensions won — never both.
     expect(new Set(rows.map((r) => r.extension)).size).toBe(1);
   });

@@ -451,22 +451,55 @@ export function outputConvergenceLockKey(
  * that also releases the connection, so neither a thrown write nor a crashed
  * process can leave an output fenced.
  */
+/**
+ * THE LOCK'S OWN POOL, and why it may not be the work's.
+ *
+ * A session lock is held by a CONNECTION, so the holder occupies one for the
+ * length of the critical section -- during which its callback goes on to query
+ * the store. Were that connection drawn from the SAME pool the callback draws
+ * from, a pool filled with lock holders would deadlock: every holder needs one
+ * more connection to finish, and none can be had until a holder finishes.
+ *
+ * A pool of its own breaks the cycle by construction: holding a connection HERE
+ * never requires a second connection HERE (the section is never nested), so a
+ * caller that cannot get one is merely waiting, holding nothing.
+ */
+function lockPool(): Pool {
+  return getPooledDb({
+    name: "artifact-materialization-convergence-lock",
+    connectionString: () => getPostgresConnectionString(),
+  });
+}
+
 export async function withOutputConvergenceLock<T>(
   input: { runId: string; outputId: string },
   fn: () => Promise<T>,
 ): Promise<T> {
   ensurePostgresSchema();
   const { hi, lo } = outputConvergenceLockKey(input.runId, input.outputId);
-  const client = await pool().connect();
+  const client = await lockPool().connect();
+  let held = false;
   try {
     await client.query("SELECT pg_advisory_lock($1, $2)", [hi, lo]);
-    try {
-      return await fn();
-    } finally {
-      await client.query("SELECT pg_advisory_unlock($1, $2)", [hi, lo]);
-    }
+    held = true;
+    return await fn();
   } finally {
-    client.release();
+    let unlocked = false;
+    if (held) {
+      try {
+        await client.query("SELECT pg_advisory_unlock($1, $2)", [hi, lo]);
+        unlocked = true;
+      } catch {
+        unlocked = false;
+      }
+    }
+    // A SESSION LOCK IS NOT RELEASED BY RETURNING THE CONNECTION. If the unlock
+    // itself failed, the session still holds the lock, and handing that session
+    // back to the pool would fence the output out of every later drive on this
+    // process. Releasing WITH an error destroys the connection instead, and the
+    // server drops the lock with the session -- the same recovery a crashed
+    // holder gets.
+    client.release(held && !unlocked ? new Error("advisory unlock failed") : undefined);
   }
 }
 

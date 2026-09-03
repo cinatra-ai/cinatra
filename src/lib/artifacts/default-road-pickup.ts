@@ -424,12 +424,13 @@ export async function pickUpDefaultRoadItems(
               },
             };
           }
-          writtenByHash.set(item.contentHash, {
-            artifactId: settled.artifactId,
-            representationRevisionId: settled.representationRevisionId,
-            extension: settled.extension,
-            form: settled.decidedVerdict?.form ?? "",
-          });
+          // NOT HYDRATED INTO `writtenByHash`. The settled row names the
+          // extension but not the object type the ladder chose, so it could
+          // never satisfy the strengthened reuse predicate below -- and a
+          // half-filled entry would be a claim this row cannot support. A later
+          // item carrying the same bytes takes the write path, whose OWN
+          // content-hash dedupe returns these very refs without a second
+          // artifact.
           return {
             outputId: item.outputId,
             outputName: item.outputName,
@@ -492,12 +493,48 @@ export async function pickUpDefaultRoadItems(
             decidedRung: verdict.rung,
             decidedVerdict: refusedVerdict,
           });
-          if (claim.kind === "claimed") {
-            await settleMaterializationWithoutArtifact({
+          if (claim.kind === "finalized") {
+            // A concurrent claimant reached an ARTIFACT under this key before
+            // this drive refused. That is a settled fact about the output and
+            // this drive's refusal is not: report the artifact, never a refusal
+            // this road did not record.
+            return {
+              outputId: item.outputId,
+              outputName: item.outputName,
+              status: "deduped",
+              verdict,
+              targetRung: target.rung,
+              artifactId: claim.artifactId,
+              representationRevisionId: claim.representationRevisionId,
+            };
+          }
+          const settledRefusal = await settleMaterializationWithoutArtifact({
+            orgId: input.orgId,
+            ledgerId: claim.ledgerId,
+            decidedVerdict: refusedVerdict,
+          });
+          if (!settledRefusal) {
+            // The row moved out of `claimed` underneath this drive, so THIS
+            // refusal is not what the ledger records. Read what does, and say
+            // that instead of asserting an outcome this drive did not write.
+            const now = await findSettledMaterializationForOutput({
               orgId: input.orgId,
-              ledgerId: claim.ledgerId,
-              decidedVerdict: refusedVerdict,
+              runId: input.runId,
+              outputId: item.outputId,
+              path: "default_road",
             });
+            if (now?.artifactId && now.representationRevisionId) {
+              return {
+                outputId: item.outputId,
+                outputName: item.outputName,
+                status: "deduped",
+                verdict,
+                targetRung: target.rung,
+                extension: now.extension,
+                artifactId: now.artifactId,
+                representationRevisionId: now.representationRevisionId,
+              };
+            }
           }
           return {
             outputId: item.outputId,
