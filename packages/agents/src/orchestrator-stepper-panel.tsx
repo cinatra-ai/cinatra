@@ -83,7 +83,10 @@ import {
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
-import { ReviewGatePlaceholder } from "./review-gate-states";
+// The gate-level BLOCKED state (cinatra#3219) and the review screen's
+// PLACEHOLDER — both are the review surface's own states, drawn from the one
+// shipped component so this panel restates neither markup nor copy.
+import { ReviewGateBlocked, ReviewGatePlaceholder } from "./review-gate-states";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
   ReviewGateCard,
@@ -144,36 +147,30 @@ const EMPTY_RAIL_EXTRAS: readonly RunStepRailEntry[] = [];
 // `./attachment-envelope-payload` so the precedence rules can be unit-tested
 // without dragging this panel's client-only imports.
 
-// Stale-gate CAS rejection (#811): approveReviewTaskInternal guards every
-// approval with a run.status === "pending_approval" compare-and-swap. A submit
-// that reaches the server AFTER the run already left pending_approval (e.g.
-// the setup loop re-queued the run while this panel's SSE status was still
-// catching up) is rejected with an internal invariant message — "Setup
-// approval rejected: run … is not pending_approval (current status: queued)".
-// That rejection is an expected UI race, not a user-facing error: detect it so
-// the submit paths below can translate it into a friendly processing state
-// instead of surfacing the raw message (SchemaFieldRenderer renders rethrown
-// errors verbatim via its submitError line). Same message-matching idiom as
-// the existing "already resolved" checks.
+// cinatra#3219 — THE STALE-GATE REFUSAL IS NO LONGER A MESSAGE TO MATCH.
 //
-// DELIBERATELY NARROW: only FORWARD-PROGRESS statuses (queued /
-// pending_input / running — a later frame is guaranteed to reconcile the
-// panel) count as stale; a rejection carrying a terminal status
-// (completed / failed / stopped) stays on the generic error path so the
-// spinner can never wait on a frame that will not come. Matches the setup-
-// ("current status: …") and wayflow- ("status: …") variants plus the
-// status-less concurrent-transition variant ("left pending_approval before
-// the approval committed"), which only fires when a write races the
-// millisecond CAS window.
-function isStaleGateRejection(message: string): boolean {
-  return /not pending_approval \((?:current )?status: (?:queued|pending_input|running)\)|left pending_approval/i.test(
-    message,
-  );
-}
-
-// Human-readable replacement for the raw CAS rejection (#811).
-const STALE_GATE_MESSAGE =
-  "This step was already submitted or has moved on — the run is still processing. The form will update automatically.";
+// This panel used to recognise "the gate you opened is gone" by running a
+// regular expression over the thrown error's message at each of its three
+// submit sites. In a production build that message is not there: Next.js masks
+// an ordinary Server Action error, so every match quietly fell through to a
+// generic toast — and on the setup-field path the masked framework string was
+// rendered verbatim under the field.
+//
+// `approveReviewTask` now returns a typed outcome instead, and a blocked one
+// renders the state the surface already draws for exactly this case:
+// `ReviewGateBlocked` with `reason="no-longer-pending"` — "This review is no
+// longer open / The gate was already decided or the run moved on.", with a
+// Refresh back to the live gate. The drawing fixes it: "A gate that cannot be
+// prepared or decided shows a single blocked state naming the reason from the
+// closed set: the gate is no longer pending (already decided, or the run moved
+// on) ... A blocked gate offers a refresh back to the live gate; it never lets
+// a stale decision through."
+//
+// The old translation kept an optimistic spinner and narrowed itself to
+// forward-progress statuses so the spinner could not wait on a frame that would
+// never come. The blocked panel has no such dependency — it is terminal for
+// this gate and carries its own Refresh — so every current status reads the
+// same, which is also what the closed set says.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -481,6 +478,12 @@ function HitlApprovalCard({
 }) {
   const [isApproving, setIsApproving] = useState(false);
 
+  // The drawn blocked state for this gate (cinatra#3219). Set from the typed
+  // outcome `approveReviewTask` returns; the reason comes from the review
+  // surface's closed blocked set, so the panel names a state rather than
+  // authoring a message.
+  const [gateBlocked, setGateBlocked] = useState<"no-longer-pending" | null>(null);
+
   // Pending paperclip attachments are captured at Suggest time, persisted
   // across Suggest invocations, and consumed at gate Continue time. The main
   // `approveReviewTask` site below wraps the legacy `userResponse` text with
@@ -534,6 +537,26 @@ function HitlApprovalCard({
   // poison the next real comparison.
   if (bufferKey !== null) {
     prevBufferKeyRef.current = bufferKey;
+  }
+
+  // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
+  // review-task id — and not on the buffer key above (cinatra#3219 convergence).
+  // The buffer key is `xRenderer::fieldName`, which a following gate can repeat
+  // exactly: a mid-run WayFlow gate carries no fieldName and often reuses its
+  // renderer, so a blocked panel keyed that way would cover a gate that is
+  // genuinely open, with no way back but a full reload.
+  const prevGateTaskIdRef = useRef<string | null>(null);
+  const gateTaskId = interruptContext != null ? interruptContext.reviewTaskId : null;
+  if (
+    gateTaskId !== null &&
+    prevGateTaskIdRef.current !== null &&
+    prevGateTaskIdRef.current !== gateTaskId &&
+    gateBlocked !== null
+  ) {
+    queueMicrotask(() => setGateBlocked(null));
+  }
+  if (gateTaskId !== null) {
+    prevGateTaskIdRef.current = gateTaskId;
   }
 
   // Gate-scoped attachment ref lifetime. Clear `pendingAttachmentsRef`
@@ -788,7 +811,22 @@ function HitlApprovalCard({
     }
     let didApprove = false;
     try {
-      await approveReviewTask(interruptContext.reviewTaskId, nextBuffered, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+      const outcome = await approveReviewTask(interruptContext.reviewTaskId, nextBuffered, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+      if (!outcome.ok) {
+        // The run moved on before the click landed. Draw the blocked state and
+        // stop: the submitted values were never recorded, so nothing is
+        // reported as approved.
+        //
+        // The rollback is NOT optional (cinatra#3219 convergence). This path
+        // already called `onApproved?.()` optimistically, and the parent
+        // answers it by setting `awaitingNextStep`, which is exactly the
+        // condition under which this card is NOT rendered. Without releasing
+        // it first, `setGateBlocked` would paint an unmounted card and the
+        // reader would sit on the spinner — the same dead end #3219 filed.
+        onApproveRejected?.();
+        setGateBlocked(outcome.blocked);
+        return;
+      }
       didApprove = true;
       // Clear on successful submit. Transition, already-resolved, and throw
       // paths clear via the gate-transition useEffect below.
@@ -799,15 +837,6 @@ function HitlApprovalCard({
       if (isAlreadyResolvedError(msg)) {
         didApprove = true;
         onApprovalSubmitted?.(nextBuffered, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
-      } else if (isStaleGateRejection(msg)) {
-        // Stale-gate race (#811): the run already left pending_approval
-        // (re-queued / moved on), so this submit could never apply. Keep the
-        // optimistic spinner from onApproved() — the run IS processing — and
-        // let the next SSE frame (INTERRUPT or status change) re-sync the
-        // panel instead of rolling the user back to a stale form. The
-        // submitted values are NOT recorded via onApprovalSubmitted because
-        // the server rejected the write.
-        toast.info(STALE_GATE_MESSAGE);
       } else {
         onApproveRejected?.();
         toast.error("Could not continue this run.");
@@ -918,20 +947,20 @@ function HitlApprovalCard({
                         // chat-prompt attachment could otherwise be dropped.
                         const wrappedApprovalPayload =
                           withAttachmentEnvelope(approvalPayload) as Record<string, unknown>;
-                        await approveReviewTask(interruptContext.reviewTaskId, wrappedApprovalPayload, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+                        const outcome = await approveReviewTask(interruptContext.reviewTaskId, wrappedApprovalPayload, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+                        if (!outcome.ok) {
+                          // Same rollback as handleContinue: this path called
+                          // `onApproved?.()` above, so the card is unmounted
+                          // behind the parent's spinner until it is released.
+                          onApproveRejected?.();
+                          setGateBlocked(outcome.blocked);
+                          return;
+                        }
                         pendingAttachmentsRef.current = [];
                         onApprovalSubmitted?.(wrappedApprovalPayload, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
                       } catch (err) {
                         const m = err instanceof Error ? err.message : "unknown";
                         if (isAlreadyResolvedError(m)) return;
-                        if (isStaleGateRejection(m)) {
-                          // Stale-gate race (#811): keep the optimistic
-                          // spinner from onApproved() and let the stream
-                          // re-sync the panel; rethrowing would surface the
-                          // raw CAS message via the renderer's submitError.
-                          toast.info(STALE_GATE_MESSAGE);
-                          return;
-                        }
                         onApproveRejected?.();
                         throw err;
                       }
@@ -968,12 +997,19 @@ function HitlApprovalCard({
                     // pending chat-prompt attachment.
                     const wrappedPayload = withAttachmentEnvelope(payload);
                     try {
-                      await approveReviewTask(
+                      const outcome = await approveReviewTask(
                         interruptContext.reviewTaskId,
                         wrappedPayload,
                         payloadFieldName,
                         interruptContext.schema as Record<string, unknown> | undefined,
                       );
+                      if (!outcome.ok) {
+                        // The setup loop had already moved past this field.
+                        // The blocked panel replaces the form — it never
+                        // reaches SchemaFieldRenderer's submitError line.
+                        setGateBlocked(outcome.blocked);
+                        return;
+                      }
                       pendingAttachmentsRef.current = [];
                       if (wrappedPayload && typeof wrappedPayload === "object" && !Array.isArray(wrappedPayload)) {
                         onApprovalSubmitted?.(wrappedPayload as Record<string, unknown>, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
@@ -981,22 +1017,6 @@ function HitlApprovalCard({
                     } catch (err) {
                       const m = err instanceof Error ? err.message : "unknown";
                       if (isAlreadyResolvedError(m)) return;
-                      if (isStaleGateRejection(m)) {
-                        // Stale-gate race (#811): the run re-queued before this
-                        // submit landed (the setup loop is processing the
-                        // previous field), so the CAS guard rejected it with
-                        // the raw "… is not pending_approval (current status:
-                        // queued)" message — which SchemaFieldRenderer would
-                        // otherwise render verbatim under the field. Flip the
-                        // panel to the processing spinner instead
-                        // (awaitingNextStep resets itself when the next
-                        // INTERRUPT or status change arrives) and show a
-                        // human-readable message. This path never called
-                        // onApproved() on submit, so it is invoked here.
-                        onApproved?.();
-                        toast.info(STALE_GATE_MESSAGE);
-                        return;
-                      }
                       throw err;
                     }
                   }
@@ -1023,6 +1043,18 @@ function HitlApprovalCard({
         )}
     </>
   );
+
+  // The gate is gone. Draw the state the surface already draws for it and
+  // nothing else: no form to submit into, no framework text, no bare toast.
+  if (gateBlocked) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <ReviewGateBlocked reason={gateBlocked} />
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>

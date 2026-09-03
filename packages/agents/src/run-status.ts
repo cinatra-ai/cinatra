@@ -208,6 +208,42 @@ export class RunTransitionError extends Error {
   }
 }
 
+/**
+ * The HITL gate is no longer pending (cinatra#3219).
+ *
+ * `approveReviewTaskInternal` refuses an approval whose run has already left
+ * `pending_approval` by the time the status is read. That refusal is an
+ * EXPECTED race — someone pressed Continue in the small window where the run
+ * had already moved on — and the run surface draws a ratified blocked state
+ * for it, so it has to reach the caller as something the caller can act on.
+ *
+ * The carrier is `code` (and the observed `currentStatus`), never the message:
+ * an ordinary error thrown by a Server Action crosses the App Router boundary
+ * in production as a generic masked error carrying an opaque digest, so the
+ * original text is not there to read. The boundary maps this class to a
+ * returned discriminated result BEFORE the mask is applied.
+ *
+ * `message` is preserved verbatim from the throw site for logs and for the
+ * non-Server-Action caller (the A2A resume route) that still reads it.
+ */
+export class GateNotPendingError extends Error {
+  readonly code = "gate_not_pending" as const;
+  readonly runId: string;
+  /** The status the run was actually in when the guard read it. */
+  readonly currentStatus: string;
+
+  constructor(args: {
+    runId: string;
+    currentStatus: string;
+    message: string;
+  }) {
+    super(args.message);
+    this.name = "GateNotPendingError";
+    this.runId = args.runId;
+    this.currentStatus = args.currentStatus;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Terminal-run OUTCOME resolution (folded in from run-terminal-outcome.ts,
 // cinatra#2482 — route-graph ratchet: the locked routes carry this graph, so
