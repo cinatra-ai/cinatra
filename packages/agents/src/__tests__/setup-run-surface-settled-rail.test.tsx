@@ -171,11 +171,13 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     // …and no status word is added beside the title, because the drawing shows
     // none.
     expect(row.textContent).toBe("Recommendation");
-    // The completed circle takes the rail's FILLED tokens, exactly as the run
-    // page's settled recommendation row does.
+    // The completed circle takes the ratified drawing's MUTED ground — the
+    // same ground the entry still ahead takes, because the drawing names the
+    // two in one rule (cinatra#3188 item 1). The check inside it, not a fill,
+    // is what records that the question was answered.
     const indicator = row.querySelector<HTMLElement>(INDICATOR_SEL)!;
-    expect(indicator.className).toContain("bg-primary");
-    expect(indicator.className).not.toContain("bg-muted-foreground/40");
+    expect(indicator.className).toContain("bg-muted-foreground/40");
+    expect(indicator.className).not.toContain("bg-primary");
     // THE TITLE IS UNHIGHLIGHTED: this row is history, not the step the surface
     // is on. The schedule step is the open one here.
     expect(row.querySelector("span:last-of-type")!.className).toContain("text-muted-foreground");
@@ -197,7 +199,7 @@ describe("a settled step is the rail's own resolved-gate history row", () => {
     expect(row.textContent).toBe("Review");
     expect(
       row.querySelector<HTMLElement>(INDICATOR_SEL)!.className,
-    ).toContain("bg-primary");
+    ).toContain("bg-muted-foreground/40");
   });
 
   it("leaves a LIVE row on its numeral — the step the run is paused on", () => {

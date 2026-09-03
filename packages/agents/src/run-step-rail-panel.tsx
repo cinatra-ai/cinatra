@@ -13,7 +13,12 @@ import {
 } from "@/components/reui/stepper";
 
 import type { RunStepRailEntry } from "./run-step-rail";
-import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import {
+  RailExtraEntry,
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "./run-step-rail-extra-entry";
 import { useRunStepSelection } from "./run-surface-rail";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -127,7 +132,7 @@ export function RunStepRailPanel({
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
                   />
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             }
@@ -139,7 +144,7 @@ export function RunStepRailPanel({
             );
 
             const indicatorNode = (
-              <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+              <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                 {displayStep}
               </StepperIndicator>
             );
@@ -163,7 +168,7 @@ export function RunStepRailPanel({
                   data-rail-status={entry.status}
                 >
                   <StepperTrigger
-                    className="gap-2 px-0 py-0.5"
+                    className={RUN_PAGE_RAIL_ROW_CLASS}
                     // EXPLICIT 0, for the reason the record's row states: a
                     // finished rail has no stepper-selected row, so `undefined`
                     // left every row at `-1` and a keyboard reader who landed on
@@ -187,7 +192,7 @@ export function RunStepRailPanel({
                     {titleNode}
                   </StepperTrigger>
                 </div>
-                {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
               </StepperItem>
             );
           })}
