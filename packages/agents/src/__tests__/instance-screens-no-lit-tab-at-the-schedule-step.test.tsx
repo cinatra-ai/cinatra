@@ -28,6 +28,7 @@ import { describe, expect, it } from "vitest";
 import { AgentInstanceNav } from "@/components/agent-instance-nav";
 
 import {
+  runPageActiveTab,
   runPageScheduleStepActiveTab,
   scheduleRouteActiveTab,
 } from "../instance-screens";
@@ -68,11 +69,38 @@ describe("the run page's own schedule step lights no tab", () => {
     );
   });
 
+  // ONE PROP, BOTH SPANS (the merge-forward with cinatra#3068). The run's own
+  // input step is drawn inside this same frame and lights no tab either, and the
+  // page draws ONE tab strip -- so the reading the layout is handed is
+  // `runPageActiveTab`, which owns that span and delegates THIS one here. The
+  // pin is therefore that the schedule span still reaches the strip unchanged,
+  // not the shape of the call that carries it.
   it("hands the layout that answer instead of the literal", () => {
     expect(SCREEN_SRC).toContain(
-      'activeTab={runPageScheduleStepActiveTab({ scheduleStepInFrame: runDetailPanel === "trigger" })}',
+      '          scheduleStepInFrame: runDetailPanel === "trigger",',
+    );
+    expect(SCREEN_SRC).toContain("activeTab={runPageActiveTab({");
+    expect(SCREEN_SRC).toContain(
+      "return runPageScheduleStepActiveTab({",
     );
     expect(SCREEN_SRC).not.toContain(`activeTab=${JSON.stringify("setup")}`);
+  });
+
+  it("answers 'none' through the reading the page actually asks", () => {
+    expect(
+      runPageActiveTab({
+        inputStepIsOpen: false,
+        inputStepsInRail: false,
+        scheduleStepInFrame: true,
+      }),
+    ).toBe("none");
+    expect(
+      runPageActiveTab({
+        inputStepIsOpen: false,
+        inputStepsInRail: false,
+        scheduleStepInFrame: false,
+      }),
+    ).toBe("setup");
   });
 });
 

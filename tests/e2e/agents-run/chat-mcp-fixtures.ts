@@ -119,9 +119,9 @@ export const CHAT_MCP_FIXTURES: ReadonlyArray<ChatMcpFixture> = [
     runTimeoutMs: 1_200_000,
   },
   {
-    packageName: "@cinatra-ai/blog-image-prompt-agent",
+    packageName: "@cinatra-ai/blog-image-generator-agent",
     prompt:
-      "Use the @cinatra-ai/blog-image-prompt-agent to generate an image prompt for a blog post about 'example domains'.",
+      "Use the @cinatra-ai/blog-image-generator-agent to make the featured image for a blog post about 'example domains'.",
     expectedTerminalStatus: "completed",
     runTimeoutMs: 1_200_000,
   },
