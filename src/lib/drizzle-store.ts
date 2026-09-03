@@ -2201,6 +2201,8 @@ $body$` },
     // persisted on clean RUN_FINISHED by external-sse-proxy. Nullable;
     // legacy rows + internal runs + incomplete externals remain NULL.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS streamed_text text` },
+    // produced_review_park: cinatra#3046 fix leg 12 — the withheld terminal write a produced-review park is holding, as the park's OWN column. It replaces a marker that lived inside the mutable step_results JSON, where any unrelated whole-column write erased it silently, so a parked run read back as not parked. Written and cleared in the same guarded transaction as the parked status and the terminal write. Additive and nullable (the streamed_text precedent on the line above; the schema-migration gate scopes a new nullable column additive, so no numbered migration). Its own NEW line — never appended to a line that already carries DDL and never folded into the CREATE, either of which rewrites deployed schema text.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS produced_review_park text` },
     // a2a_context_id: fasta2a conversation context ID for WayFlow resume.
     // Resume sends a new message into the same context so the flow continues from
     // the input-required checkpoint rather than starting a fresh conversation.

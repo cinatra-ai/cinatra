@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
-import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -196,13 +195,20 @@ export function ReviewGateLoading() {
  * motif keeps its own job — it is the GATE's loading state, drawn in the target
  * slots while the host prepares them — and that use is untouched.
  *
- * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
- * — the same component the orchestrator stepper's executing card spins — not a
- * second spinner drawn here.
+ * THE SPINNER IS THE DRAWING'S OWN NODE (cinatra#3046, fix leg 12). It was the
+ * shared `LoadingSpinner` inside a tinted tile. The drawing's placeholder example
+ * puts ONE node in this band — a 22px `viewBox 0 0 24 24` with a single stroked
+ * arc — and the two together drew a 30px `rounded-lg bg-mustard-ink/15` tile
+ * behind it plus, inside the shared component, a full `circle` at
+ * `stroke-opacity 0.25`: the grey track ring the arc runs on. The tenth graded
+ * reading measured both on the parked box, in both palettes, as chrome the
+ * drawing does not give. So this box draws the arc the drawing gives it. The
+ * shared component is untouched — every other surface in the system draws the
+ * tracked spinner, and the drawing does not govern them.
  *
  * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
- * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
- * so the arc is whatever colour this wrapper sets. It set `text-mustard-ink`,
+ * fixes this icon as "the indigo arc"; the arc paints with `currentColor`,
+ * so it is whatever colour this wrapper sets. It set `text-mustard-ink`,
  * and no `--color-mustard-ink` is registered in the theme block — so the utility
  * emitted no rule at all and the arc silently took the INHERITED foreground,
  * measured as rgb(21,33,58) in light and rgb(248,250,252) in dark. `text-primary`
@@ -280,8 +286,16 @@ export function ReviewGatePlaceholder({
       }
       className="flex w-full flex-col gap-3"
     >
-      {/* THE CARD'S OWN NAME, the heading the drawn placeholder puts at its
-          head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
+      {/* THE CARD'S OWN NAME, and it STAYS (re-read at design main for fix leg
+          12, against the reading that this title is off-contract). The drawing's
+          own placeholder example — the one carrying this box's conformance
+          anchor — opens the card with exactly this string before the band with
+          the arc in it, and §II's prose forbids a STATUS, a RESULT and anything
+          to press, none of which a fixed card name is. Removing it would put
+          this box out of conformance with the example it is anchored to. The
+          measured departures on this box were the tile and the track ring, and
+          those are what fix leg 12 removes. The heading the drawn placeholder
+          puts at its head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
           a status word and not a result — it is the fixed name §II uses for
           this card in its own prose ("the run progress card"), identical on
           every run. The drawing's `--ink` is #15213a, and the token registered
@@ -299,9 +313,27 @@ export function ReviewGatePlaceholder({
           fills, and the arc that claims something is still coming does not. */}
       <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
         {settled ? null : (
-          <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-primary">
-            <LoadingSpinner className="size-4" />
-          </span>
+          // THE ARC, AND ONLY THE ARC (cinatra#3046, fix leg 12). The drawn band
+          // holds one node: `viewBox 0 0 24 24`, `width:22px; height:22px`, a
+          // SINGLE stroked path in the indigo, spinning. What stood here drew two
+          // things the drawing does not: a 30px `rounded-lg bg-mustard-ink/15`
+          // tile behind the arc, and — inside the shared `LoadingSpinner` — a
+          // full `circle` at `stroke-opacity 0.25`, the grey track ring the arc
+          // runs on. The tenth graded reading measured both as undrawn chrome on
+          // the parked box in both palettes. The shared spinner is left alone
+          // (every other surface in the system draws the tracked one, and the
+          // drawing does not govern them); this box draws the node it is given.
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            className="size-[22px] animate-spin text-primary"
+            aria-hidden="true"
+          >
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
         )}
       </div>
     </div>

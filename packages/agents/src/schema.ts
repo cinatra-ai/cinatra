@@ -321,6 +321,19 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // reads this via initialStreamedText to hydrate after page refresh.
   // Migration: see src/lib/drizzle-store.ts streamed_text entry (ADD COLUMN IF NOT EXISTS).
   streamedText: text("streamed_text"),
+  // THE PARK ITSELF, AS A COLUMN (cinatra#3046, fix leg 12). The produced-review
+  // park used to live ONLY as an additive key inside this row's own MUTABLE
+  // `step_results` JSON, and every other writer of that column sets it WHOLE —
+  // so one unrelated write while a run sat parked erased the park with no error
+  // and no status change, and every surface then read "not parked" off a
+  // genuinely parked row. This column carries the withheld terminal write the
+  // park is holding, is written in the SAME guarded transaction as the parked
+  // status, and is cleared in the SAME transaction as the terminal write that
+  // ends it — so no concurrent `step_results` write can reach it. JSON-as-text,
+  // matching `step_results`' own storage. Additive and nullable (the
+  // streamed_text precedent); NULL means "not parked on a produced review".
+  // Migration: see src/lib/drizzle-store.ts produced_review_park entry.
+  producedReviewPark: text("produced_review_park"),
   // authPolicy: per-run override of the template's agentAuthPolicy (JSON-as-text).
   // Nullable; null = inherit from agent_templates.agentAuthPolicy (or DEFAULT_AGENT_AUTH_POLICY).
   authPolicy: text("auth_policy"),

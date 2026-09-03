@@ -1706,7 +1706,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // and the same pure resolver both surfaces already share decides when it may
   // overrule. Nothing else about this panel's reading of the stream changes.
   const streamedStatus = stream.status;
-  const { rowStatus, heardFromRun } = useRunRowWatch(runId, {
+  const { rowStatus, rowProducedReviewPark, heardFromRun } = useRunRowWatch(runId, {
     enabled: runStreamMayBeMute(streamEnabled, streamedStatus),
   });
   const status = resolveRunSurfaceStatus({
@@ -2064,8 +2064,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // draws nothing. The rail beside it says Step 1 and Review; the column says
   // nothing at all. Photographed on the fifth capture in both themes: "an empty
   // block with no card, no spinner, no identity, no text".
+  //
+  // AND THE ROW'S OWN WORD IS READ BESIDE THE SLOT'S (cinatra#3046, fix leg 12).
+  // This line took the SLOT's answer alone. The conversation's panel has always
+  // ORed the row's word with it, for the reason its own comment gives: a slot
+  // answer is a second read on its own schedule, and between the park landing
+  // and that reader's next look the slot says nothing. On this surface the gap
+  // is not a gap but the whole window — the tenth graded reading measured the
+  // conversation landing the card 4.3 s and 4.7 s after the gate row while this
+  // page drew no card across 567 one-second polls in either palette. The row
+  // watch above was already reading the route that serves the park and throwing
+  // the field away; it hands it on now, so this reading is the same two halves,
+  // in the same order, that the conversation's panel takes.
   const parkedOnProducedReview =
-    status === "pending_approval" && reviewSlot.producedReviewPark === true;
+    status === "pending_approval" &&
+    (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
 
   let stageCard: ReactNode = null;
 

@@ -72,6 +72,15 @@ export async function updateAgentRunStatus(
   if (patch?.stepResults !== undefined) {
     updates.stepResults = JSON.stringify(patch.stepResults);
   }
+  // THE PARK RIDES THE STATUS EDGE (cinatra#3046, fix leg 12). It is written and
+  // cleared HERE, inside transitionRunStatus's guarded transaction, so the park
+  // and the status it is a park in are ONE commit — a reader can never see a
+  // parked status with no park, or a terminal status still carrying one. The
+  // value is already JSON-as-text (the column's storage), so it is passed
+  // through, not re-serialised; `null` is the explicit clear the release writes.
+  if (patch?.producedReviewPark !== undefined) {
+    updates.producedReviewPark = patch.producedReviewPark;
+  }
   if (patch?.error !== undefined) {
     updates.error = patch.error;
   }
@@ -90,6 +99,74 @@ export async function updateAgentRunStatus(
   // back its minimal contract type; the runtime tx is the real drizzle tx).
   const dtx = tx as unknown as typeof db;
   await dtx.update(agentRuns).set(updates).where(eq(agentRuns.id, id));
+}
+
+/**
+ * THE PARK IS CLEARED ON EVERY EXIT FROM THE PARKED STATUS (cinatra#3046, fix
+ * leg 12, convergence round).
+ *
+ * The park is written with the `pending_approval` edge and cleared by
+ * `releaseHeldRun` with the terminal write it owes. But `pending_approval` has
+ * FIVE legal exits, and the release is only one of them: a parked run can be
+ * STOPPED (`agent_run_stop`), RESUMED (`->running`), FAILED, or terminalised by
+ * the resume path — and each of those left the park's column, and the legacy
+ * marker inside `step_results`, exactly where they were. A run stopped while
+ * parked and then re-driven would reach an ORDINARY approval carrying a stale
+ * park: the route would call that ordinary question a produced-review park, the
+ * sweep would select it, and the release could land the OLD attempt's withheld
+ * terminal write on the NEW one.
+ *
+ * So the exit clears it, at the SAME seam and inside the SAME guarded
+ * transaction as the status edge that leaves the park — both halves together, so
+ * the column-first reader and the legacy-marker fallback can never disagree
+ * about a run that is no longer parked. It is a no-op on the release (which has
+ * already written the cleared halves in this very transaction) and on every
+ * ordinary `pending_approval` exit that never carried a park.
+ */
+async function clearProducedReviewParkOnExit(
+  tx: GuardedRunTx,
+  runId: string,
+  orgId: string,
+): Promise<void> {
+  // Dynamic, and deliberately: run-produced-review-hold imports this module for
+  // `transitionRunStatus`, so a static edge back would close a module-init
+  // cycle. Same posture as the `./agent-run-serde` dispatch-guard import above.
+  const { readWithheldTerminal, stripWithheldTerminal } = await import(
+    "./run-produced-review-hold"
+  );
+  const dtx = tx as unknown as typeof db;
+  const [row] = await dtx
+    .select({ stepResults: agentRuns.stepResults, producedReviewPark: agentRuns.producedReviewPark })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)))
+    .limit(1);
+  if (!row) return;
+  const updates: Partial<typeof agentRuns.$inferInsert> = {};
+  if (row.producedReviewPark !== null && row.producedReviewPark !== undefined) {
+    updates.producedReviewPark = null;
+  }
+  // The column is TEXT: both readers below take the parsed array, and handing
+  // them the raw string answers "no marker" about a row that has one (and would
+  // strip a payload to nothing if it ever wrote). Parsed once, here.
+  const parsedSteps: unknown = typeof row.stepResults === "string"
+    ? (() => {
+        try {
+          return JSON.parse(row.stepResults as string);
+        } catch {
+          return null;
+        }
+      })()
+    : row.stepResults;
+  if (Array.isArray(parsedSteps) && readWithheldTerminal(parsedSteps) !== null) {
+    updates.stepResults = JSON.stringify(stripWithheldTerminal(parsedSteps));
+  }
+  // Nothing to clear is the common case — an ordinary approval that was never a
+  // park pays one read and no write.
+  if (Object.keys(updates).length === 0) return;
+  await dtx
+    .update(agentRuns)
+    .set(updates)
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)));
 }
 
 /**
@@ -229,6 +306,8 @@ export async function transitionRunStatus(
         startedAt?: Date;
         completedAt?: Date;
         stepResults?: unknown[];
+        /** cinatra#3046 fix leg 12: the produced-review park's own column, written or cleared ATOMICALLY with this status edge. JSON-as-text (the withheld terminal write), or `null` to clear. Absent for every transition that is not a park or its release. */
+        producedReviewPark?: string | null;
         /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
         humanWaitGate?: boolean;
         /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
@@ -285,6 +364,9 @@ export async function transitionRunStatus(
   }
   const orgId = authority.orgId;
   const isTerminal = TERMINAL_RUN_STATUSES.has(to);
+  // cinatra#3046 fix leg 12 (convergence): EVERY exit from the parked status
+  // clears the park, not only the release. See clearProducedReviewParkOnExit.
+  const leavingProducedReviewPark = from === "pending_approval" && to !== "pending_approval";
   // Per-transition capability (§3): terminal edges LAND a run's outputs
   // (`run.complete`); every other edge is a dispatch / lifecycle move
   // (`run.execute`). Combined with the seam's §1a run-binding, a run/OBO
@@ -311,6 +393,13 @@ export async function transitionRunStatus(
         // CAS + outbox INSERT + lease DELETE commit atomically.
         settleLeaseInTx,
       );
+      // cinatra#3046 fix leg 12 (convergence): the derivation-outbox delegate
+      // commits its OWN terminal UPDATE and never names the park's column, so a
+      // parked run released WITH a derivation capture used to land `completed`
+      // still carrying its park. The clear rides this transaction too.
+      if (leavingProducedReviewPark) {
+        await clearProducedReviewParkOnExit(guardedTx, runId, orgId);
+      }
     });
     // POST-COMMIT (codex #2/#13): the guarded tx committed ⇒ the transition
     // happened. Best-effort Redis TTL sweep on terminal. NO dispatchRunWaitTransition
@@ -337,9 +426,16 @@ export async function transitionRunStatus(
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||
       dbMeta.completedAt !== undefined ||
-      dbMeta.stepResults !== undefined;
+      dbMeta.stepResults !== undefined ||
+      dbMeta.producedReviewPark !== undefined;
     if (hasDelegatedMeta || isTerminal) {
       await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>, guardedTx);
+    }
+    // cinatra#3046 fix leg 12 (convergence): and the park never outlives the
+    // parked status. A no-op when the release has already cleared both halves
+    // in this same transaction.
+    if (leavingProducedReviewPark) {
+      await clearProducedReviewParkOnExit(guardedTx, runId, orgId);
     }
     // cinatra#1940 P1 fold (Decision 4): a terminal landing settles the run's
     // lease in the SAME guarded tx as the CAS + meta — status and lease

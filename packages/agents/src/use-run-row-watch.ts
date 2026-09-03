@@ -24,11 +24,22 @@
  * OWN seed route, same-origin and cookie-borne, which is the route this page is
  * already served from and the same one the shared reader asks.
  *
- * WHAT IT ANSWERS. The row's status, for the rule above; and a count of the
- * looks that actually answered, which is the liveness evidence the shared
- * reader's failure belt is a proxy for. Nothing is derived here: the row's own
- * words are handed on, and every decision about them is taken by the pure
+ * WHAT IT ANSWERS. The row's status, for the rule above; the row's own PARK; and
+ * a count of the looks that actually answered, which is the liveness evidence the
+ * shared reader's failure belt is a proxy for. Nothing is derived here: the row's
+ * own words are handed on, and every decision about them is taken by the pure
  * resolver and by the reader.
+ *
+ * WHY THE PARK IS CARRIED TOO (cinatra#3046, fix leg 12). This hook already reads
+ * the route that SERVES the park — `reviewGate.producedReviewPark`, minted off
+ * the run row the response is about — and threw the field away, keeping only the
+ * status. So the run page's only reading of the park was the shared slot
+ * reader's, a SECOND read on its own schedule; the conversation's panel has
+ * always taken the row's word beside the slot's and ORed the two. The tenth
+ * graded reading measured the difference exactly: the conversation landed the
+ * review card 4.3 s and 4.7 s after the gate row, and the run page drew no card
+ * at all across 567 one-second polls in either palette. Handing the field on
+ * costs no request — it is already in the response body being parsed.
  *
  * THE COST, STATED: a run page open on a working or parked run reads one small
  * same-origin route every five seconds. That is the cadence the conversation's
@@ -53,6 +64,14 @@ export const RUN_ROW_WATCH_DEADLINE_MS = 10000;
 export type RunRowWatch = {
   /** The run row's own status, or `null` until a look has answered. */
   rowStatus: string | null;
+  /** The run row's OWN word on the produced-review park, from the same answer the
+   *  status came from. `false` until a look has answered. A look that answers
+   *  WITHOUT the field says nothing about the park and leaves the last real
+   *  answer standing (convergence): a partial or older body is not evidence that
+   *  a park ended, and treating it as one is how this half's evidence used to
+   *  disappear under a surface that ORs the two halves. It is reset with the run
+   *  it belongs to, so no run inherits another's park. */
+  rowProducedReviewPark: boolean;
   /** How many looks have ANSWERED — the surface's evidence its transport works. */
   heardFromRun: number;
 };
@@ -62,7 +81,18 @@ export function useRunRowWatch(
   { enabled }: { enabled: boolean },
 ): RunRowWatch {
   const [rowStatus, setRowStatus] = useState<string | null>(null);
+  const [rowProducedReviewPark, setRowProducedReviewPark] = useState(false);
   const [heardFromRun, setHeardFromRun] = useState(0);
+
+  // THE ROW'S WORDS BELONG TO THE RUN THEY WERE READ FOR (convergence). This
+  // effect is declared FIRST and keyed on `runId` alone, so a host that swaps
+  // one run for another on the same mount starts with no status and no park
+  // rather than classifying the new run's first pending approval with the old
+  // run's answer.
+  useEffect(() => {
+    setRowStatus(null);
+    setRowProducedReviewPark(false);
+  }, [runId]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -91,12 +121,25 @@ export function useRunRowWatch(
           { cache: "no-store", signal: controller.signal },
         );
         if (response.ok) {
-          const data = (await response.json()) as { status?: unknown };
+          const data = (await response.json()) as {
+            status?: unknown;
+            reviewGate?: { producedReviewPark?: unknown };
+          };
           if (typeof data.status === "string" && runStatusIsTerminal(data.status)) {
             heardTerminal = true;
           }
           if (!stopped) {
             if (typeof data.status === "string") setRowStatus(data.status);
+            // The row's own word, taken WHOLE off the answer that carried the
+            // status — the same snapshot, so the two can never disagree about
+            // one run. An answer whose body has no gate object says `false`,
+            // which is what this surface read before the field was carried.
+            // ONLY a boolean is an answer (convergence). `undefined` is a body
+            // that did not carry the field — a legacy or partial answer — and
+            // the last real answer stands rather than being cleared by it.
+            if (typeof data.reviewGate?.producedReviewPark === "boolean") {
+              setRowProducedReviewPark(data.reviewGate.producedReviewPark);
+            }
             // Bumped on the ANSWER, never on the attempt: it is evidence that
             // this surface's transport works, and a look that failed is not.
             setHeardFromRun((n) => n + 1);
@@ -124,5 +167,5 @@ export function useRunRowWatch(
     };
   }, [runId, enabled]);
 
-  return { rowStatus, heardFromRun };
+  return { rowStatus, rowProducedReviewPark, heardFromRun };
 }

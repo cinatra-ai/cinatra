@@ -311,6 +311,11 @@ export type AgentRunRecord = {
   // external A2A peer text output persisted on clean RUN_FINISHED.
   // NULL for internal runs and for externals that timed out / errored.
   streamedText: string | null;
+  // THE PRODUCED-REVIEW PARK, as the row's own durable word (cinatra#3046, fix
+  // leg 12). JSON-as-text: the withheld terminal write this park is holding, or
+  // NULL when the run is not parked on a produced review. Read by
+  // isParkedOnProducedReview; written and cleared only by the park's own seam.
+  producedReviewPark: string | null;
   // per-run override of the template's agentAuthPolicy. null = inherit.
   // Persisted as JSON-as-text in agent_runs.auth_policy.
   authPolicy: AgentAuthPolicy | null;

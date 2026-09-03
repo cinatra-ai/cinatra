@@ -195,6 +195,63 @@ export function stripWithheldTerminal(stepResults: unknown): unknown[] {
 }
 
 /**
+ * THE PARK AS ITS OWN COLUMN (cinatra#3046, fix leg 12).
+ *
+ * WHAT WAS MEASURED. The park's only durable trace was `WITHHELD_TERMINAL_KEY`,
+ * an additive key inside the run row's own `step_results` JSON. That column is
+ * written WHOLE by every one of its writers — the generic meta patch, the
+ * orchestrator's ledger write, every terminal payload — and none of them knows
+ * the key exists. So ONE unrelated write while a run sat parked erased the park:
+ * no error, no status edge, `pending_approval` still on the row, and from that
+ * instant every surface asking "is this parked?" was told no about a run that
+ * was. The release lost its withheld terminal write in the same stroke and
+ * refused the run as "not-produced-review-park", so the run sat parked forever.
+ *
+ * SO THE PARK OWNS A COLUMN. `produced_review_park` carries the withheld
+ * terminal write, is written in the SAME guarded transaction as the parked
+ * status and cleared in the SAME transaction as the terminal write that ends it,
+ * and is named by no other writer in the system. A concurrent `step_results`
+ * write cannot reach it.
+ *
+ * THE MARKER STAYS, AND IS STILL READ. A run parked by the previous build
+ * carries a marker and no column, and it must still be readable and releasable
+ * across the deploy. So the park WRITES BOTH and every reader takes the column
+ * first and falls back to the marker — which is also what keeps
+ * `stripWithheldTerminal` meaningful on the terminal payload.
+ */
+export function encodeProducedReviewPark(withheld: WithheldTerminal): string {
+  return JSON.stringify(withheld);
+}
+
+/** The column's own reading. Total: a value this cannot parse into a withheld
+ *  terminal write is not one, and answers null rather than throwing on a row a
+ *  surface is only trying to draw. */
+export function decodeProducedReviewPark(column: unknown): WithheldTerminal | null {
+  if (typeof column !== "string" || column === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(column);
+  } catch {
+    return null;
+  }
+  // Reuse the marker's own validator, so the column and the marker can never
+  // disagree about what a withheld terminal write IS.
+  return readWithheldTerminal([{ [WITHHELD_TERMINAL_KEY]: parsed }]);
+}
+
+/** The park a run row is carrying, from whichever of the two the row has: the
+ *  column first, the legacy marker second. */
+export function readRunPark(run: {
+  producedReviewPark?: unknown;
+  stepResults: unknown;
+}): WithheldTerminal | null {
+  return (
+    decodeProducedReviewPark(run.producedReviewPark) ??
+    readWithheldTerminal(parseStepResults(run.stepResults))
+  );
+}
+
+/**
  * IS THIS RUN PARKED ON THE REVIEW OF WHAT IT PRODUCED? (cinatra#3046.)
  *
  * The park's own reading, for the surfaces that have to DRAW it. `pending_approval`
@@ -221,10 +278,15 @@ export function stripWithheldTerminal(stepResults: unknown): unknown[] {
  */
 export function isParkedOnProducedReview(run: {
   status: string | null | undefined;
+  /** The park's own column. Absent on a run row read before fix leg 12 added it,
+   *  and on a run parked by the previous build — both fall through to the marker. */
+  producedReviewPark?: unknown;
   stepResults: unknown;
 }): boolean {
   if (run.status !== PARKED_STATUS) return false;
-  return readWithheldTerminal(parseStepResults(run.stepResults)) !== null;
+  // THE COLUMN FIRST (fix leg 12). It is the half no other writer can reach; the
+  // marker is kept only so a run parked before this shipped still reads parked.
+  return readRunPark(run) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +790,11 @@ async function parkRun(
   const base =
     input.stepResults.length > 0 ? input.stepResults : await readStoredStepResults(runId, orgId);
   const parkedStepResults = attachWithheldTerminal(base, input.withheld);
+  // AND THE PARK'S OWN COLUMN, written with it (fix leg 12). Both are written
+  // because a run parked by this build must stay releasable by a node still
+  // running the previous one; the column is what the predicate and the release
+  // read first, and what no other writer of `step_results` can erase.
+  const parkColumn = encodeProducedReviewPark(input.withheld);
   try {
     // Already parked (a template-declared gate resumed into this production):
     // there is no status edge to take, only the withheld write to record. The
@@ -751,12 +818,20 @@ async function parkRun(
       const written = await withParkWriteRetry(runId, () =>
         db
           .update(agentRuns)
-          .set({ stepResults: JSON.stringify(parkedStepResults) })
+          .set({
+            stepResults: JSON.stringify(parkedStepResults),
+            producedReviewPark: parkColumn,
+          })
           .where(
             and(
               eq(agentRuns.id, runId),
               eq(agentRuns.orgId, orgId),
               eq(agentRuns.status, PARKED_STATUS),
+              // FIRST WRITER WINS, on EITHER half (fix leg 12). The guard has to
+              // name the column as well as the marker, or a second recovery chain
+              // would be refused by the marker on a legacy row and admitted on a
+              // row that only ever had the column — two answers to one question.
+              sql`${agentRuns.producedReviewPark} IS NULL`,
               sql`NOT (${agentRuns.stepResults} IS NOT NULL
                   AND jsonb_path_exists(${agentRuns.stepResults}::jsonb, ${WITHHELD_TERMINAL_JSONPATH}::jsonpath))`,
             ),
@@ -778,7 +853,9 @@ async function parkRun(
         runId,
         fromStatus,
         PARKED_STATUS,
-        { stepResults: parkedStepResults },
+        // ONE COMMIT (fix leg 12): the parked status and the park itself land in
+        // the same guarded transaction, so no reader can see one without the other.
+        { stepResults: parkedStepResults, producedReviewPark: parkColumn },
         authority,
       ),
     ).catch((err) => {
@@ -837,14 +914,20 @@ export async function releaseHeldRun(
   authority: OrgWriteAuthority,
 ): Promise<ReleaseOutcome> {
   const [run] = await db
-    .select({ status: agentRuns.status, stepResults: agentRuns.stepResults })
+    .select({
+      status: agentRuns.status,
+      stepResults: agentRuns.stepResults,
+      producedReviewPark: agentRuns.producedReviewPark,
+    })
     .from(agentRuns)
     .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, authority.orgId)))
     .limit(1);
   if (!run || run.status !== PARKED_STATUS) return { released: false, reason: "not-parked" };
 
   const parsed = parseStepResults(run.stepResults);
-  const withheld = readWithheldTerminal(parsed);
+  // THE COLUMN FIRST (fix leg 12), so a park whose `step_results` was overwritten
+  // by an unrelated writer is still released with the terminal write it owes.
+  const withheld = readRunPark(run);
   // A park with no withheld terminal write is NOT ours — a template-declared
   // gate's park is released by its own resume delivery, and touching it here
   // would be a second path to the same run's terminal status.
@@ -871,6 +954,11 @@ export async function releaseHeldRun(
       // instead of clearing it. What lands is exactly the payload the executor
       // would have written outright.
       stepResults: stripped,
+      // AND THE PARK IS CLEARED IN THE SAME COMMIT (fix leg 12). Explicitly
+      // `null`, never omitted: a terminal row still carrying a park would read
+      // back as parked to the sweep and to every surface, which is the same
+      // defect this column was added to end, only inverted.
+      producedReviewPark: null,
       ...(error !== undefined ? { error } : {}),
       ...(terminal === "completed" ? { completedAt: new Date() } : {}),
       // The derivation capture is legal on the terminal-SUCCESS edge only, and a
@@ -1069,8 +1157,13 @@ export async function listReleasableHeldRuns(
         // has to be in the SQL, before the LIMIT, and not left to
         // `releaseHeldRun`'s refusal — see the starvation note above. A
         // template-declared park carries no marker and is never selected.
-        sql`${agentRuns.stepResults} IS NOT NULL
-            AND jsonb_path_exists(${agentRuns.stepResults}::jsonb, ${WITHHELD_TERMINAL_JSONPATH}::jsonpath)`,
+        // EITHER HALF (fix leg 12): the park's own column, or — for a run parked
+        // by the previous build, or one whose column write predates it — the
+        // legacy marker. A template-declared park carries neither and is never
+        // selected, which is the property this clause exists for.
+        sql`(${agentRuns.producedReviewPark} IS NOT NULL
+             OR (${agentRuns.stepResults} IS NOT NULL
+                 AND jsonb_path_exists(${agentRuns.stepResults}::jsonb, ${WITHHELD_TERMINAL_JSONPATH}::jsonpath)))`,
         // ...nothing it produced is still awaiting orchestration...
         sql`NOT EXISTS (
           SELECT 1 FROM ${artifactProducedOutbox} o

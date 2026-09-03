@@ -149,6 +149,7 @@ function makeRun(
     traceId: null,
     timeoutSeconds: null,
     streamedText: null,
+    producedReviewPark: null,
     // Per-run AgentAuthPolicy override (null = inherit).
     authPolicy: null,
     // org id is required because the column is NOT NULL. Test fixtures use a

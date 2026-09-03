@@ -158,6 +158,7 @@ describe("AgentRunRecord type surface", () => {
       traceId: null,
       timeoutSeconds: null,
       streamedText: null,
+      producedReviewPark: null,
       authPolicy: VALID_POLICY,
       // agent_runs.org_id is required; keep the fixture populated so the suite stays compatible.
       orgId: TEST_ORG_ID,

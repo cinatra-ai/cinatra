@@ -127,6 +127,7 @@ describe("AgentRunRecord type surface", () => {
       traceId: null,
       timeoutSeconds: null,
       streamedText: null,
+      producedReviewPark: null,
       // Per-run AgentAuthPolicy override (null = inherit).
       authPolicy: null,
       // org id is required (non-null) on every new run.
