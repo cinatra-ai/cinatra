@@ -258,6 +258,28 @@ export type RunProducedOutput = {
  * captured at SSR — a run that completes while the user watches would otherwise
  * be judged on a snapshot taken while it was still `queued`.
  */
+/**
+ * DOES THIS RUN HAVE A TRANSCRIPT? (cinatra#3002)
+ *
+ * The one rule, in one place. A run page shows a transcript when the run
+ * accumulated streamed text (the external-peer proxy path writes
+ * `agent_runs.streamed_text`) or when `agent_run_messages` holds rows for it
+ * (every other path, including the receipt a completed runtime-executed run
+ * writes). `readRunOutputEvidence` reads the two facts from the database and
+ * asks this; `deriveRunOutcome` below turns the answer into the reading the
+ * completion card draws.
+ *
+ * It lives here, in the pure domain, because a test that proves the joined
+ * path — a completed run writes its row, the card then names a transcript —
+ * must apply the PRODUCT's rule rather than restate it (convergence finding).
+ */
+export function hasTranscriptEvidence(input: {
+  streamedText: string | null | undefined;
+  messageCount: number;
+}): boolean {
+  return (input.streamedText ?? "") !== "" || input.messageCount > 0;
+}
+
 export type RunOutputEvidence = {
   /** Provenance-linked output objects, newest first. */
   outputs: readonly RunProducedOutput[];

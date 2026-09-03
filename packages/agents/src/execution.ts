@@ -1264,31 +1264,49 @@ function lastAgentResponseText(
  *
  * This is that third source, and it is the run's OWN DECLARATION rather than a
  * heuristic: whatever the flow's EndNode declares as its output is what the run
- * says it produced. Only STRING-valued outputs are read. A declared output that
- * is an object or a list is structured data, not the run's words; rendering it
- * into the transcript would put a JSON blob where a reader expects an answer,
- * and such a run keeps the honest step-results reading instead — the same guard
+ * says it produced.
+ *
+ * IT READS AN UNAMBIGUOUS DECLARATION ONLY, and the narrowness is the point
+ * (convergence finding). A flow that declares SEVERAL things it produced has
+ * not produced one body of prose, and picking a string out of that set names
+ * the wrong thing as the run's answer. `@cinatra-ai/web-research-agent` is the
+ * standing counter-example: its EndNode declares `enrichedRows` (array),
+ * `failures` (array), `webChecks` (array) and `extractionNotes` (string). The
+ * rows are the run's work and the notes are a diagnostic aside — receipting the
+ * notes would put the aside in the transcript and then let the completion card
+ * say "its output is in the run transcript below" over it, which is a NEW false
+ * claim of exactly the class this issue exists to remove. Same for the media
+ * shape `{ transcript, kind }`: `kind` is a label, not the run's words.
+ *
+ * So the run's declaration speaks for the run only when, after dropping the
+ * outputs it left empty, exactly ONE declared output carries anything at all
+ * and that one is a string. Then it is the whole of what the run produced, and
+ * it becomes the transcript row. Every other declaration — several outputs
+ * carrying values, or a lone output that is structured data rather than words —
+ * writes no receipt and keeps the honest step-results reading, the same guard
  * fix leg 1 wrote, unweakened.
  *
- * More than one declared text output is named rather than glued together: two
- * answers run into one paragraph would read as a single one. One output — the
- * shape the graded run and every text-answering flow has — is its value
- * verbatim, with no label invented around it.
+ * The value is returned with surrounding whitespace trimmed and nothing else
+ * changed: no label is invented around it.
  */
+function isEmptyDeclaredValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
 export function declaredOutputsResponseText(
   endNodeOutputs: Record<string, unknown> | null,
 ): string {
   if (!endNodeOutputs) return "";
-  const named: Array<[string, string]> = [];
-  for (const [name, value] of Object.entries(endNodeOutputs)) {
-    if (typeof value !== "string") continue;
-    const text = value.trim();
-    if (text.length === 0) continue;
-    named.push([name, text]);
-  }
-  if (named.length === 0) return "";
-  if (named.length === 1) return named[0][1];
-  return named.map(([name, text]) => `${name}\n\n${text}`).join("\n\n");
+  const carried = Object.entries(endNodeOutputs).filter(
+    ([, value]) => !isEmptyDeclaredValue(value),
+  );
+  if (carried.length !== 1) return "";
+  const [, only] = carried[0];
+  return typeof only === "string" ? only.trim() : "";
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
@@ -2079,7 +2097,12 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // leg 2). The second proof round measured a completed, text-answering runtime
   // run with zero transcript rows: its answer travelled only as the EndNode
   // output the sentinel carries, so neither `finalText` nor the backward scan
-  // could see it. `declaredOutputsResponseText` reads that declaration.
+  // could see it. `declaredOutputsResponseText` reads that declaration, and
+  // reads it only when the declaration is UNAMBIGUOUS: exactly one declared
+  // output carries anything, and it is a string. A flow that declares several
+  // things it produced has not produced one body of prose, and lifting a string
+  // out of that set would name the wrong thing as the run's answer and then let
+  // the card claim the transcript holds it (convergence finding).
   //
   // ORDER, and why it is this one. `finalText` still wins: the run's last word
   // is what every other consumer on this path already means by the run's
@@ -2087,8 +2110,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // output comes next, ahead of the backward scan, because a declaration beats
   // a heuristic: when a flow states what it produced, that statement is the
   // run's answer, and the scan exists only to recover words from a run that
-  // declared nothing. A run with no words in any of the three still writes no
-  // receipt, exactly as before.
+  // declared nothing. A run with no words in any of the three — and a run whose
+  // declaration is ambiguous or structured — still writes no receipt, exactly as
+  // before, and keeps the honest step-results reading.
   const finalResponseText =
     finalText.length > 0
       ? finalText

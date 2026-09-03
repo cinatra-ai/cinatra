@@ -33,11 +33,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Fix leg 2 (the SECOND proof round's finding 2) adds the ones that decide what
 // happens when the answer never travelled as a message part at all:
 //
-//   8. a run whose answer is its EndNode's DECLARED OUTPUT — the shape the
-//      graded `Agent Code Reviewer` run completed in, and the shape that still
-//      left zero transcript rows at the previous head — leaves that declared
-//      output as the run's transcript row;
-//   9. a declared output that is not text is still no receipt;
+//   8. a run whose answer is its EndNode's SOLE DECLARED OUTPUT - the shape
+//      the graded `Agent Code Reviewer` run completed in, and the shape that
+//      still left zero transcript rows at the previous head - leaves that
+//      declared output as the run's transcript row;
+//   9. an AMBIGUOUS declaration writes nothing: several declared outputs
+//      carrying values (the media `{ transcript, kind }` shape, the research
+//      agent's rows-beside-notes shape) means the run did not produce one body
+//      of prose, and a lone non-string output is data rather than words;
 //  10. the declaration beats the backward scan, and the run's own last word
 //      beats the declaration.
 //
@@ -433,7 +436,56 @@ describe("cinatra#3002 — the runtime run's transcript receipt", () => {
     });
   });
 
-  it("names each declared text output when a run declares more than one", async () => {
+  it("writes NO receipt when a declared text output stands beside other produced values", async () => {
+    // THE CONVERGENCE FINDING. A flow that declares several things it produced
+    // has not produced one body of prose. `@cinatra-ai/media-transcript-agent`
+    // ends with `{ transcript, kind }` — `kind` is a label, not the run's
+    // words — and picking one string out of that set would name the wrong thing
+    // as the run's answer, then let the card say "its output is in the run
+    // transcript below" over it. An ambiguous declaration keeps the honest
+    // step-results reading.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Transcribe this." }] },
+        endNodeOutputsMessage({ transcript: "[Speaker 1]: Hello world.", kind: "audio" }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes NO receipt when a diagnostic note stands beside the run's structured work", async () => {
+    // `@cinatra-ai/web-research-agent`'s real EndNode: `enrichedRows` (array),
+    // `extractionNotes` (string), `failures` (array), `webChecks` (array). The
+    // rows are the run's work and the notes are an aside; receipting the aside
+    // would put the aside in the transcript under a card claiming it is the
+    // run's output — a new false claim of the very class #3002 removes.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Research these." }] },
+        endNodeOutputsMessage({
+          enrichedRows: [{ company: "Acme", site: "acme.test" }],
+          extractionNotes: "One row could not be enriched.",
+          failures: [],
+          webChecks: [],
+        }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reads the lone text output when its declared siblings came back empty", async () => {
+    // Outputs the run left empty carry nothing, so they make no ambiguity: the
+    // one output that carries anything IS the whole of what this run produced.
     await handleWayflowTaskState({
       authority: TEST_AUTHORITY,
       runId: "run-3002",
@@ -441,32 +493,14 @@ describe("cinatra#3002 — the runtime run's transcript receipt", () => {
       fromStatus: "running",
       task: completedTaskWithHistory([
         { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
-        endNodeOutputsMessage({ findings: REVIEW_FINDINGS, verdict: "Advisory only." }),
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS, failures: [], notes: "" }),
       ]),
     });
 
     expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
       runId: "run-3002",
-      text: `findings\n\n${REVIEW_FINDINGS}\n\nverdict\n\nAdvisory only.`,
+      text: REVIEW_FINDINGS,
     });
-  });
-
-  it("writes NO receipt when the run's declared outputs carry no text", async () => {
-    // Structured data is not the run's words. Rendering it would put a JSON blob
-    // where a reader expects an answer, so such a run keeps the honest
-    // step-results reading instead — fix leg 1's guard, unweakened.
-    await handleWayflowTaskState({
-      authority: TEST_AUTHORITY,
-      runId: "run-3002",
-      run: makeRun(),
-      fromStatus: "running",
-      task: completedTaskWithHistory([
-        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
-        endNodeOutputsMessage({ ideas: ["one", "two"], count: 2 }),
-      ]),
-    });
-
-    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
   });
 
   it("prefers the run's DECLARATION over the backward scan's best guess", async () => {

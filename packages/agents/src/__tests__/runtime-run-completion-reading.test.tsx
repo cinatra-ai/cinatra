@@ -13,8 +13,17 @@
  * drew the sentence the ratified drawing gives a finished run.
  *
  * This suite joins them on ONE run. It drives the real terminal handler over
- * the graded run's own shape into an in-memory `agent_run_messages`, then reads
- * the card the run page would draw from exactly the rows that write produced:
+ * the graded run's own shape into an in-memory stand-in for
+ * `agent_run_messages`, then asks the PRODUCT's own transcript rule
+ * (`hasTranscriptEvidence`, the rule `readRunOutputEvidence` applies to the
+ * rows it reads) what those rows mean, and draws the real card from that:
+ *
+ * WHAT IT DOES AND DOES NOT PROVE. The database round trip is NOT in this
+ * suite: the insert, its sequence numbering and its idempotency are proved by
+ * `run-final-response-receipt`'s own suite, and the row-shaped seam here stands
+ * in for it. What this suite alone proves is the JOIN the two halves left open
+ * — that the run's answer reaches the rows at all on this path, and that the
+ * product's reading of those rows draws the drawing's sentence:
  *
  *   1. the run's answer becomes its transcript row, and the card draws the
  *      drawing's sentence, quoted:
@@ -131,6 +140,7 @@ vi.mock("../run-actions", () => ({
 }));
 
 import { handleWayflowTaskState } from "../execution";
+import { hasTranscriptEvidence } from "../run-status";
 import type { AgentRunRecord } from "../store";
 
 const TEST_AUTHORITY = { orgId: "org-3002", can: () => true };
@@ -198,13 +208,18 @@ function gateFreeRuntimeRun(outputs: Record<string, unknown>) {
   };
 }
 
-/** The evidence the run page reads AFTER the run completed — the transcript
- *  half taken from the rows the completion actually wrote, the step-results
- *  half from the one `wayflow_response` entry every runtime run leaves. */
+/** The evidence the run page reads AFTER the run completed. The transcript
+ *  half is the PRODUCT's rule applied to the rows the completion actually
+ *  wrote — the same call `readRunOutputEvidence` makes over the rows it reads,
+ *  so this suite does not restate the rule it is checking. The step-results
+ *  half is the one `wayflow_response` entry every runtime run leaves. */
 function evidenceAfterCompletion() {
   return {
     outputs: [],
-    hasTranscript: transcriptRows.length > 0,
+    hasTranscript: hasTranscriptEvidence({
+      streamedText: null,
+      messageCount: transcriptRows.length,
+    }),
     hasStepResults: true,
   };
 }

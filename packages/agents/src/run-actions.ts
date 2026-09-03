@@ -27,6 +27,7 @@ import {
 } from "./store";
 import {
   deriveProducedOutputTitle,
+  hasTranscriptEvidence,
   type RunOutputEvidence,
   type RunProducedOutput,
 } from "./run-status";
@@ -734,7 +735,10 @@ export async function readRunOutputEvidence(args: {
   const hasStepResults = Array.isArray(run.stepResults) && run.stepResults.length > 0;
   const hasStreamedText = (run.streamedText ?? "") !== "";
   const messages = hasStreamedText ? [] : await readAgentRunMessages(run.id);
-  const hasTranscript = hasStreamedText || messages.length > 0;
+  const hasTranscript = hasTranscriptEvidence({
+    streamedText: run.streamedText,
+    messageCount: messages.length,
+  });
 
   // Provenance-linked outputs. Dynamic imports keep the host objects/artifact
   // module graphs off this module's synchronous load (same precedent as
