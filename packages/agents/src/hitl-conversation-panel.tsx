@@ -48,29 +48,31 @@ export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
  * WHERE THE WINDOW STANDS, per surface (design `458fb7ffce6c`,
  * `app-artifact-review.html` §VI and §IX).
  *
- * §VI, in its own words: "BENEATH THE DECISION BAR the run detail carries a
- * conversational prompt window" — the drawing shows the card with its decision
- * bar and the window as two separately stacked examples, one after the other.
- * A window that floats over the bar is therefore not a second reading of the
- * drawing; it is a different drawing. On the review page the window sits in the
- * document flow, after the card, and nothing overlaps.
+ * ONE READING ON ALL FIVE. §VI, in its own words: "BENEATH THE DECISION BAR the
+ * run detail carries a conversational prompt window", and §IX asks that "the
+ * decision bar and prompt window stay reachable at the foot of the run detail at
+ * every width" — the foot of the RUN DETAIL, which is the column the step's work
+ * is drawn in, never the foot of the page frame around it.
  *
- * The four windows that sit UNDER A FORM the person is filling keep the floating
- * reading they were drawn with: there the window follows the person down a long
- * form so the field they are typing into and the box they are typing in stay on
- * screen together (§IX, "the decision bar and prompt window stay reachable at
- * the foot of the run detail at every width"). The review page has no form to
- * follow — it has a decision bar the window may not cover.
+ * The floating reading four of these windows carried was a consequence of the
+ * old mount: three callers handed the shared panel the page's own frame element,
+ * so the only way to keep the window near the work was to dock it across the
+ * foot of the frame. cinatra#3188 item 3 fixed the mount itself — every window
+ * now stands inside the run detail column, under the work it belongs to — and
+ * with the mount fixed the dock is not a second reading of the drawing but a
+ * different drawing, on the review page and on the four form-following windows
+ * alike. So every surface stands in the flow.
  *
- * IT IS A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares WHICH
- * READING it is and never a placement of its own, so no window can drift from
- * the drawing on its own and a sixth surface cannot compile without a placement.
+ * IT IS STILL A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares
+ * WHICH READING it is and never a placement of its own, so no window can drift
+ * from the drawing on its own and a sixth surface cannot compile without a
+ * placement.
  */
 export const RUN_WINDOW_PLACEMENTS: Record<RunWindowSurface, "floating" | "in-flow"> = {
-  "run-page": "floating",
-  "step-by-step": "floating",
-  schedule: "floating",
-  "armed-trigger": "floating",
+  "run-page": "in-flow",
+  "step-by-step": "in-flow",
+  schedule: "in-flow",
+  "armed-trigger": "in-flow",
   /** §VI — beneath the decision bar, in the flow, never over it. */
   review: "in-flow",
 };
@@ -96,7 +98,13 @@ export type HitlConversationEntry = {
 };
 
 export type HitlConversationPanelProps = {
-  /** Stable element to portal into (parent computes via document.querySelector("main")). */
+  /**
+   * Stable element to portal into — the mount the HOST renders where the
+   * drawing puts the window, under the work it belongs to (cinatra#3188 item
+   * 3). A host that hands over the page frame instead puts the window at the
+   * END of the page rather than under anything in particular, which is the one
+   * thing this prop must not be used for.
+   */
   portalTarget: HTMLElement | null;
   /** Visibility gate set by the parent. */
   visible: boolean;
@@ -164,7 +172,6 @@ export function HitlConversationPanel({
   // §VI's own placement for this reading, resolved here rather than at any
   // mount, exactly as the sentence is.
   const placement = RUN_WINDOW_PLACEMENTS[surface];
-  const inFlow = placement === "in-flow";
   // The window's own sentence, as the send control's accessible name.
   const submitLabel = runWindowSendLabel(surface);
   const [convOpen, setConvOpen] = useState(false);
@@ -288,27 +295,23 @@ export function HitlConversationPanel({
 
   if (!visible || !portalTarget) return null;
 
+  // THE WINDOW STANDS UNDER THE WORK, IT DOES NOT DOCK (cinatra#3188 item 3).
+  // The ratified drawing puts it "below the scheduler, in the same column", and
+  // has the gate's "decision bar and the run's prompt window ... fill the run
+  // detail on the right" — a window fixed across the foot of the frame is
+  // neither. So the dock goes (`sticky bottom-0 z-30`), and with it the fade
+  // that existed only to soften the page passing UNDER a floating window;
+  // nothing passes under it now. The inset it keeps is the window's own
+  // breathing room inside the column it stands in.
   return createPortal(
     <div
       data-conv-open={convOpen}
       data-run-window-placement={placement}
       // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
-      // context. An element that is not taken out of flow and comes after the
-      // card in document order cannot draw over it at any width, which is the
-      // whole of §VI's "beneath the decision bar".
-      className={
-        inFlow ? "px-5 pb-4 pt-6" : "sticky bottom-0 z-30 px-5 pb-4 pt-6"
-      }
-      // The fade exists so a FLOATING window has content passing under it. A
-      // window standing in the flow has nothing behind it to fade.
-      style={
-        inFlow
-          ? undefined
-          : {
-              background:
-                "linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 85%, transparent) 30%, var(--background) 55%)",
-            }
-      }
+      // context, and no fade: an element that is not taken out of flow and
+      // comes after the work in document order cannot draw over it at any
+      // width, which is the whole of §VI's "beneath the decision bar".
+      className="px-5 pb-4 pt-6"
     >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (

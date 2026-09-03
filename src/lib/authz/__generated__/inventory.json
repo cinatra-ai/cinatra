@@ -253,6 +253,11 @@
       "line": 18
     },
     {
+      "primitiveName": "appointment_schedule_add",
+      "file": "src/lib/appointment-schedule-add-mcp.ts",
+      "line": 67
+    },
+    {
       "primitiveName": "appointment_schedule_list",
       "file": "extensions/cinatra-ai/google-appointment-schedules-connector/src/mcp/registry.ts",
       "line": 8

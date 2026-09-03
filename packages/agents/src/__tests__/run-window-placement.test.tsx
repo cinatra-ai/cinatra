@@ -111,7 +111,7 @@ function mount(surface: RunWindowSurface) {
   return { main, bar, panel };
 }
 
-describe("§VI — the review page's window stands beneath the decision bar", () => {
+describe("§VI — every run window stands beneath the work, never over it", () => {
   it("is IN FLOW: no sticky, no fixed, no absolute, no bottom, no stacking context", () => {
     const { panel } = mount("review");
     expect(panel).not.toBeNull();
@@ -132,21 +132,26 @@ describe("§VI — the review page's window stands beneath the decision bar", ()
     expect(rel & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeFalsy();
   });
 
-  it("the other four windows keep the floating reading they were drawn with", () => {
+  it("the other four windows stand in the flow too", () => {
+    // They floated only while three of them mounted the window on the page's
+    // own frame; cinatra#3188 item 3 moved every mount into the run detail
+    // column, and inside that column the drawing's foot-of-the-run-detail
+    // clause is met by a window that simply ends the column.
     for (const surface of SURFACES.filter((s) => s !== "review")) {
       const { panel } = mount(surface);
-      expect(panel!.className).toContain("sticky");
-      expect(panel!.className).toContain("bottom-0");
+      for (const token of ["sticky", "fixed", "absolute", "bottom-0", "z-30"]) {
+        expect(panel!.className).not.toContain(token);
+      }
+      expect(panel!.getAttribute("style") ?? "").toBe("");
       cleanup();
       document.body.innerHTML = "";
     }
   });
 
-  it("every surface has a placement, and only the review page's is in flow", () => {
+  it("every surface has a placement, and every one of them is in flow", () => {
     expect(Object.keys(RUN_WINDOW_PLACEMENTS).sort()).toEqual([...SURFACES].sort());
-    expect(RUN_WINDOW_PLACEMENTS.review).toBe("in-flow");
-    for (const surface of SURFACES.filter((s) => s !== "review")) {
-      expect(RUN_WINDOW_PLACEMENTS[surface]).toBe("floating");
+    for (const surface of SURFACES) {
+      expect(RUN_WINDOW_PLACEMENTS[surface]).toBe("in-flow");
     }
   });
 });

@@ -56,27 +56,30 @@ describe("connectorCanonicalCrumbHref", () => {
 });
 
 describe("buildBreadcrumbTrail — connector trail", () => {
+  // RE-PINNED for cinatra#3215. This block used to assert a four-crumb trail
+  // ending in "Setup", over a connector crumb reading "Some Connector" — the
+  // humanized slug. Both were the defect the issue names, not a floor: the
+  // trail is three crumbs now, the connector crumb is its leaf, and an
+  // unresolved slug reads verbatim. The #422 canonical link this block was
+  // written for is unchanged and still asserted.
   it("renders the connector [slug] crumb as a navigable canonical link", () => {
     const crumbs = buildBreadcrumbTrail("/connectors/acme/some-connector/setup");
-    expect(crumbs).toHaveLength(4);
+    expect(crumbs).toHaveLength(3);
 
     // Connectors root: a normal link.
     expect(crumbs[0]).toMatchObject({ label: "Connectors", href: "/connectors" });
     expect(crumbs[0].nonNavigable).toBeFalsy();
 
-    // Vendor level: stays a non-navigable label (no index page).
+    // Vendor level: stays a non-navigable label (no index page), and with no
+    // published display name it reads the slug verbatim (cinatra#3215).
+    expect(crumbs[1].label).toBe("acme");
     expect(crumbs[1].nonNavigable).toBe(true);
 
-    // Connector level: the #422 fix — a real link to the canonical subroute.
-    expect(crumbs[2].label).toBe("Some Connector");
+    // Connector level: the #422 fix — a real link to the canonical subroute —
+    // and now the trail's leaf, since the page's own tab is not a crumb.
+    expect(crumbs[2].label).toBe("some-connector");
     expect(crumbs[2].href).toBe("/connectors/acme/some-connector/setup");
     expect(crumbs[2].nonNavigable).toBeFalsy();
-
-    // Leaf (current page).
-    expect(crumbs[3]).toMatchObject({
-      label: "Setup",
-      href: "/connectors/acme/some-connector/setup",
-    });
   });
 
   it("keeps the connector crumb a label on an invalid (non-canonical) subroute", () => {
@@ -97,15 +100,28 @@ describe("buildBreadcrumbTrail — connector trail", () => {
 
 describe("breadcrumbCrumbKey — unique React keys (#499)", () => {
   it("gives distinct keys to two crumbs that legitimately share an href", () => {
-    // On a valid connector page the [slug] crumb canonical-links to its subroute
-    // (#422), which is the leaf page itself — so crumbs[2] and crumbs[3] share an
-    // href. Keying by href alone collided ("two children with the same key").
+    // RE-PINNED for cinatra#3215. The collision that first raised #499 was the
+    // connector setup page: the [slug] crumb canonical-links to its subroute
+    // (#422), which was the very page the "Setup" leaf stood for. That leaf is
+    // gone — the page's own tab is no longer a crumb — so the pair is built
+    // here instead. The claim under test is unchanged: keying by href alone
+    // collides ("two children with the same key"), and the positional key does
+    // not.
     const crumbs = buildBreadcrumbTrail(
       "/connectors/cinatra-ai/openai-connector/setup",
+      {
+        contributions: [
+          {
+            prefix: "/connectors/cinatra-ai",
+            label: "Cinatra AI",
+            href: "/connectors/cinatra-ai/openai-connector/setup",
+          },
+        ],
+      },
     );
-    expect(crumbs).toHaveLength(4);
-    // Confirm the collision the warning came from is real and intentional.
-    expect(crumbs[2].href).toBe(crumbs[3].href);
+    expect(crumbs).toHaveLength(3);
+    // Confirm the collision the warning came from is real.
+    expect(crumbs[1].href).toBe(crumbs[2].href);
 
     const keys = crumbs.map((c, i) => breadcrumbCrumbKey(c, i));
     expect(new Set(keys).size).toBe(keys.length);
@@ -506,6 +522,149 @@ describe("isIdLikeSegment / idSegmentPlaceholder (#1737)", () => {
     expect(idSegmentPlaceholder("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs")).toBe(
       "Ul5Hrhxi…",
     );
+  });
+});
+
+// cinatra#3215 — THE CONNECTOR ROUTE'S CRUMBS ARE NAMES, AND THE TAB IS NOT A
+// CRUMB. From the ratified components drawing, Breadcrumb section:
+//   "A breadcrumb always reflects the navigation hierarchy — the route the page
+//    sits on, not the thing the page happens to be about."
+//   "A crumb that stands for an entity id shows that entity's display name — at
+//    every position, not only the last."
+//   "…never a title-cased raw id."
+//   "Never combine with tabs."
+describe("buildBreadcrumbTrail — the connector trail names its levels (cinatra#3215)", () => {
+  const SETUP_PATH =
+    "/connectors/cinatra-ai/google-appointment-schedules-connector/setup";
+  const VENDOR_PREFIX = "/connectors/cinatra-ai";
+  const CONNECTOR_PREFIX =
+    "/connectors/cinatra-ai/google-appointment-schedules-connector";
+
+  // What the owning route publishes from its server render, after its access
+  // checks — the same two display names the page header and the connector card
+  // write.
+  const publishedNames = [
+    { prefix: VENDOR_PREFIX, label: "Cinatra AI" },
+    { prefix: CONNECTOR_PREFIX, label: "Google Appointment Schedules" },
+  ];
+
+  it("(1) shows the connector's display name — the string the page header writes — not the slug", () => {
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH, {
+      contributions: publishedNames,
+    });
+    expect(crumbs[2].label).toBe("Google Appointment Schedules");
+    // The humanized slug — the string this crumb used to read.
+    expect(crumbs[2].label).not.toBe("Google Appointment Schedules Connector");
+    // Still the #422 canonical link.
+    expect(crumbs[2].href).toBe(SETUP_PATH);
+  });
+
+  it("(2) shows the vendor's display name exactly as published — never re-humanized", () => {
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH, {
+      contributions: publishedNames,
+    });
+    expect(crumbs[1].label).toBe("Cinatra AI");
+    expect(crumbs[1].label).not.toBe("Cinatra Ai");
+  });
+
+  it("(2) THE DECLARED FALLBACK: with no display name resolvable the vendor crumb is the slug VERBATIM", () => {
+    // The drawing's eight-characters-plus-ellipsis fallback is written for an
+    // entity id; a vendor slug is not one. The fix renders the slug verbatim —
+    // not humanized, not truncated, not dropped.
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH);
+    expect(crumbs[1].label).toBe("cinatra-ai");
+  });
+
+  it("(2) the connector crumb takes the same verbatim fallback", () => {
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH);
+    expect(crumbs[2].label).toBe("google-appointment-schedules-connector");
+  });
+
+  it("(4) spends NO crumb on the page's own selected tab", () => {
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH, {
+      contributions: publishedNames,
+    });
+    expect(crumbs).toHaveLength(3);
+    expect(crumbs.map((c) => c.label)).toEqual([
+      "Connectors",
+      "Cinatra AI",
+      "Google Appointment Schedules",
+    ]);
+    expect(crumbs.some((c) => c.label === "Setup")).toBe(false);
+  });
+
+  it("(4) drops the tab crumb on the route SHAPE — not on whether the surface draws a tab strip", () => {
+    expect(buildBreadcrumbTrail(SETUP_PATH)).toHaveLength(3);
+    expect(
+      buildBreadcrumbTrail("/connectors/acme/some-connector/setup"),
+    ).toHaveLength(3);
+  });
+
+  it("(4) the connector crumb becomes the leaf and still points at the page it names", () => {
+    const crumbs = buildBreadcrumbTrail(SETUP_PATH, {
+      contributions: publishedNames,
+    });
+    expect(crumbs[crumbs.length - 1].href).toBe(SETUP_PATH);
+  });
+
+  it("(6) NO crumb on the dispatch route is a title-cased slug — at the COMPOSER, nothing published", () => {
+    // Each row pairs a path with the two title-cased strings the crumbs used to
+    // read at the vendor and connector positions.
+    const rows = [
+      [SETUP_PATH, "Cinatra Ai", "Google Appointment Schedules Connector"],
+      ["/connectors/acme/some-connector/setup", "Acme", "Some Connector"],
+      ["/connectors/acme/some-connector", "Acme", "Some Connector"],
+      ["/connectors/acme/some-connector/configure", "Acme", "Some Connector"],
+    ] as const;
+    for (const [pathname, titleCasedVendor, titleCasedConnector] of rows) {
+      const segments = pathname.split("/").filter(Boolean);
+      const crumbs = buildBreadcrumbTrail(pathname);
+      expect(crumbs[1].label).not.toBe(titleCasedVendor);
+      expect(crumbs[2].label).not.toBe(titleCasedConnector);
+      expect(crumbs[1].label).toBe(segments[1]);
+      expect(crumbs[2].label).toBe(segments[2]);
+    }
+  });
+
+  it("(state axis) a connector whose display name MATCHES its slug reads that name once", () => {
+    const crumbs = buildBreadcrumbTrail("/connectors/acme/mailer/setup", {
+      contributions: [{ prefix: "/connectors/acme/mailer", label: "mailer" }],
+    });
+    expect(crumbs).toHaveLength(3);
+    expect(crumbs[2].label).toBe("mailer");
+  });
+
+  it("(7) the #1737 id floor rule still wins over the verbatim fallback", () => {
+    const id = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+    const crumbs = buildBreadcrumbTrail(`/connectors/cinatra-ai/${id}/setup`);
+    expect(crumbs[2].label).toBe(idSegmentPlaceholder(id));
+  });
+
+  it("(8) the static connector pages keep the trail they draw today", () => {
+    // These paths carry no vendor/connector pair, so the connector-route
+    // fallback never reads them: the humanized label stands.
+    for (const [slug, label] of [
+      ["email", "Email"],
+      ["drupal", "Drupal"],
+      ["resend", "Resend"],
+      ["wordpress", "Wordpress"],
+    ] as const) {
+      const crumbs = buildBreadcrumbTrail(`/connectors/${slug}`);
+      expect(crumbs).toHaveLength(2);
+      expect(crumbs[1].label).toBe(label);
+    }
+  });
+
+  it("(8) a non-connector route of the same depth is untouched", () => {
+    const crumbs = buildBreadcrumbTrail(
+      "/configuration/network/proxy-settings/setup",
+    );
+    expect(crumbs.map((c) => c.label)).toEqual([
+      "Configuration",
+      "Network",
+      "Proxy Settings",
+      "Setup",
+    ]);
   });
 });
 

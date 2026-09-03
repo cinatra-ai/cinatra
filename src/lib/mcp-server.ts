@@ -35,6 +35,7 @@ import { createBoundScreenFillMcpModule } from "@/lib/lifecycle/bound-screen-fil
 import { createScheduleProposalMcpModule } from "@/lib/lifecycle/schedule-proposal-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createConnectorInventoryMcpModule } from "@/lib/connector-inventory-mcp";
+import { createAppointmentScheduleAddMcpModule } from "@/lib/appointment-schedule-add-mcp";
 import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
 import { createBlogContentModule } from "@/lib/blog/integration/module";
@@ -133,6 +134,18 @@ const preConnectorPlatformModules = [
   // would fail the registration pass loudly rather than shadow the host tool,
   // and the ownership test pins the single owner against the real tree.
   createConnectorInventoryMcpModule(),
+  // cinatra#2368 acceptance item 3 — `appointment_schedule_add`, the host's
+  // own extension-backed add bridge. It MUST be registered on this pass and
+  // not only in the deterministic passthrough registry: the delegated-chat
+  // catalog is derived from `plan.servable` (the set this pass registered),
+  // so a primitive absent here is never offered to the assistant however the
+  // host declares it in capability-plan.ts. PRE-connector, like the inventory
+  // module above: the add bridge is a HOST capability (it needs the
+  // invoking-user identity the host holds), so the host claims the name
+  // before the manifest-discovered connector modules register — the
+  // connector owns `appointment_schedule_list` and nothing in this family
+  // besides.
+  createAppointmentScheduleAddMcpModule(),
 ];
 
 const postConnectorPlatformModules = [
