@@ -169,13 +169,22 @@ export function probeFrontMatter(text: string): boolean {
  * two fields per line, and EVERY line carrying the same field count under the
  * same delimiter. A markdown table is excluded on purpose — its rows start and
  * end with a pipe and it carries a `---|---` separator row.
+ *
+ * EVERY LINE MEANS EVERY LINE (cinatra#3029, forward + fix leg 1). The probe
+ * used to read the first two hundred non-empty lines and then state a claim
+ * about the WHOLE document: a document whose two-hundred-and-first line broke
+ * the shape was typed `text/csv` anyway, and a reader opening it under a csv
+ * display found a file that is not one. A verdict names what was inspected, so
+ * either the probe reads the whole document or the verdict says "sampled".
+ * This reads the whole document, which is the answer that keeps the recorded
+ * reason -- "every line carries the same field count under one delimiter" --
+ * a true sentence about the bytes it was written over.
  */
 export function probeCsv(text: string): boolean {
   const lines = text
     .replace(/^﻿/, "")
     .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0)
-    .slice(0, 200);
+    .filter((l) => l.trim().length > 0);
   if (lines.length < 2) return false;
   // A markdown table is not a csv, however consistent its pipe count.
   if (lines.some((l) => /^\s*\|?\s*:?-{3,}\s*:?\s*(\|\s*:?-{3,}\s*:?\s*)+\|?\s*$/.test(l))) {
@@ -280,12 +289,50 @@ const NAME_HINT_FORMS: Readonly<Record<string, string>> = {
 
 /** The form a name's extension hints at, or null. Only within the text
  *  family; an `.png` name never reaches a form here — a signature does. */
-export function formFromNameHint(name: string | null | undefined): string | null {
+/**
+ * The forms a structural probe has ALREADY REFUSED for this text.
+ *
+ * Item 0.18 gives the name rung exactly one power: "the file's name and
+ * extension, a hint that may only choose within the text family the probes
+ * ALLOW, never over a signature." A probe that ran and said no has not left its
+ * form open -- it has closed it. `probeJson` and `probeCsv` are decisive in that
+ * direction: their subjects either parse or do not, so a `.json` name over bytes
+ * `probeJson` rejected cannot name `application/json`, and a `.csv` name over
+ * bytes `probeCsv` rejected cannot name `text/csv`.
+ *
+ * The rest of the hint family is NOT closed by a failed probe and must not be
+ * treated as though it were. Markdown's probe is a THRESHOLD over a feature
+ * count, not a refusal -- a plain prose file named `.md` is markdown by its
+ * author's own statement even though it carries no heading -- and there is no
+ * probe for `text/plain` at all.
+ */
+export function formsRefusedByProbes(text: string): ReadonlySet<string> {
+  const refused = new Set<string>();
+  if (!probeJson(text)) refused.add("application/json");
+  if (!probeCsv(text)) refused.add("text/csv");
+  return refused;
+}
+
+/**
+ * The form a name's extension hints at, or null.
+ *
+ * `refused` is the set the probes closed (`formsRefusedByProbes`). A hint that
+ * lands inside it is NOT a hint the ladder may take: it would send bytes that
+ * are demonstrably not JSON to a JSON artifact type on the strength of a
+ * filename alone. Called WITHOUT it the function is the bare name map, which is
+ * what the map's own unit rows read.
+ */
+export function formFromNameHint(
+  name: string | null | undefined,
+  refused?: ReadonlySet<string>,
+): string | null {
   if (!name) return null;
   const dot = name.lastIndexOf(".");
   if (dot < 0 || dot === name.length - 1) return null;
   const ext = name.slice(dot + 1).toLowerCase();
-  return NAME_HINT_FORMS[ext] ?? null;
+  const hinted = NAME_HINT_FORMS[ext] ?? null;
+  if (hinted === null) return null;
+  return refused?.has(hinted) ? null : hinted;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +408,11 @@ export async function detectOutputForm(
   }
 
   // ---- Rung 4: the name-and-extension hint --------------------------------
-  const hinted = formFromNameHint(input.name);
+  // WITHIN what the probes above LEFT OPEN. The structural rung has just run
+  // over this very text, so the forms it refused are known -- and a name may not
+  // reopen one of them (item 0.18: the hint "may only choose within the text
+  // family the probes allow").
+  const hinted = formFromNameHint(input.name, formsRefusedByProbes(text));
   if (hinted) {
     return {
       form: hinted,

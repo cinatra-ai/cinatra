@@ -143,3 +143,32 @@ export function selectEndNodeOutputPickupItems(input: {
   belowFloor.sort((a, b) => (a.outputName < b.outputName ? -1 : a.outputName > b.outputName ? 1 : 0));
   return { items, belowFloor };
 }
+
+// ---------------------------------------------------------------------------
+// THE FLOOR'S DECISION, AS THE RUN'S OWN RECORD CARRIES IT (cinatra#3029,
+// forward + fix leg 1).
+//
+// Item 0.17 calls the floor "a rule the pickup RECORDS, not a guess". The
+// selection above returned `belowFloor` and the terminal transition threw it
+// away: the decision existed for the length of one function call, so nothing a
+// person could read afterwards said WHY an output the run plainly produced is
+// absent from what the run made. This is the key the terminal `stepResults`
+// carries it under -- the run's own durable record, beside the outputs that DID
+// take a road.
+// ---------------------------------------------------------------------------
+
+/** The `stepResults` key the below-floor decision is recorded under. */
+export const BELOW_FLOOR_STEP_RESULT_KEY = "default_road_below_floor";
+
+/**
+ * The terminal record's below-floor fragment, ready to spread into the run's
+ * `wayflow_response` step result. EMPTY when the floor turned nothing away --
+ * an absent key reads as "the floor had no work to do", which is true, where a
+ * present empty array would be a record of a decision never taken.
+ */
+export function belowFloorTerminalRecord(
+  selection: EndNodeOutputSelection,
+): Record<string, BelowFloorOutput[]> {
+  if (selection.belowFloor.length === 0) return {};
+  return { [BELOW_FLOOR_STEP_RESULT_KEY]: selection.belowFloor };
+}

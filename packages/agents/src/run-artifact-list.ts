@@ -163,3 +163,51 @@ export function runArtifactListSummary(list: RunArtifactList): string {
         : `, and the ${list.used} artifacts it came from`;
   return `${wrote}${used}. Each opens on its own page; the run keeps the revision it filed or read.`;
 }
+
+// ---------------------------------------------------------------------------
+// WHETHER THE RECORD MAY SPEAK AT ALL (cinatra#3029, forward + fix leg 1).
+//
+// The ratified drawing's run-outputs-list declares three states beside its rows:
+// `data-state="empty loading error kind:artifact"`. Its own sentence for section
+// I.2 is why the third is not a decoration:
+//
+//   "Every row on this page stands for an artifact that exists, at the revision
+//    named beside it. That is what makes the page readable as proof: a reader who
+//    sees five rows can open five pages, and a reader who sees THE EMPTY READING
+//    KNOWS THE RUN KEPT NOTHING — NOT THAT THE PAGE FAILED TO LOAD IT."
+//
+// So the empty reading is a CLAIM, and a claim may only be made from an answer.
+// The screen used to turn any read failure into `[]` and draw the empty reading
+// over it, which states the one thing the drawing says it must not.
+//
+// `records === null` is "the read did not answer": neither the rows nor the
+// empty reading, and the step stands down rather than saying something false.
+// ---------------------------------------------------------------------------
+
+/** What the run's own record can say, given the read and the capture's state. */
+export type RunMadeReading = "rows" | "empty" | "unknown";
+
+/**
+ * PURE. `records` is `null` when the read FAILED — never `[]`, which is an
+ * answer. `captureSettled` is false while the post-terminal pickup may still be
+ * writing, so an empty list is not yet the run's answer either.
+ */
+export function runMadeReading(input: {
+  runIsTerminal: boolean;
+  /** `null` = the read failed and answered nothing. */
+  records: readonly RunArtifactRecord[] | null;
+  captureSettled: boolean;
+}): RunMadeReading {
+  if (!input.runIsTerminal) return "unknown";
+  // A FAILED READ IS NOT AN EMPTY LIST.
+  if (input.records === null) return "unknown";
+  if (input.records.length > 0) return "rows";
+  // No rows, and the capture may still be running: not yet an answer.
+  return input.captureSettled ? "empty" : "unknown";
+}
+
+/** Whether the record may be drawn at all — `rows` or the `empty` READING, both
+ *  of which are answers; `unknown` is not. */
+export function runMadeSaysSomething(reading: RunMadeReading): boolean {
+  return reading !== "unknown";
+}

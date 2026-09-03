@@ -6,6 +6,8 @@ import {
   defaultRoadLedgerOutputId,
   isDefaultRoadLedgerOutputId,
   selectEndNodeOutputPickupItems,
+  BELOW_FLOOR_STEP_RESULT_KEY,
+  belowFloorTerminalRecord,
 } from "../end-node-output-pickup";
 
 // ---------------------------------------------------------------------------
@@ -38,7 +40,7 @@ describe("the document floor", () => {
   });
 
   it("ACCEPTANCE 2 — a datum below the floor takes no road, and is RECORDED as such", () => {
-    const { items, belowFloor } = selectEndNodeOutputPickupItems({
+    const selection = selectEndNodeOutputPickupItems({
       endNodeOutputs: {
         publicationId: "wp_10231",
         approved: true,
@@ -46,6 +48,7 @@ describe("the document floor", () => {
         summary: "the draft was approved and published",
       },
     });
+    const { items, belowFloor } = selection;
     expect(items).toEqual([]);
     // "a rule the pickup records, not a guess" — every turned-away datum is
     // named with the length that was measured.
@@ -56,6 +59,24 @@ describe("the document floor", () => {
       "summary",
     ]);
     for (const b of belowFloor) expect(b.byteLength).toBeLessThan(DOCUMENT_FLOOR_BYTES);
+
+    // AND "RECORDED" MEANS PERSISTED (cinatra#3029, forward + fix leg 1). This
+    // case used to end at the line above — on the pure selector's RETURN value,
+    // which the terminal transition then discarded, so the title claimed a
+    // durability that production did not have. `belowFloorTerminalRecord` is the
+    // fragment `execution.ts` spreads into the run's own terminal step result,
+    // so this reads what a person reading the run afterwards actually gets.
+    const record = belowFloorTerminalRecord(selection);
+    expect(record).toHaveProperty(BELOW_FLOOR_STEP_RESULT_KEY);
+    expect(record[BELOW_FLOOR_STEP_RESULT_KEY]).toEqual(belowFloor);
+  });
+
+  it("the terminal record carries NO below-floor key when the floor turned nothing away", () => {
+    // An absent key reads as "the floor had no work to do", which is true. A
+    // present empty array would be a record of a decision never taken.
+    const selection = selectEndNodeOutputPickupItems({ endNodeOutputs: { draft: ABOVE } });
+    expect(selection.belowFloor).toEqual([]);
+    expect(belowFloorTerminalRecord(selection)).toEqual({});
   });
 
   it("ACCEPTANCE 3 — response text is not an output: a run whose outputs are absent yields nothing", () => {

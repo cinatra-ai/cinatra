@@ -67,8 +67,16 @@ const loadContext = async (input: { templateId: string; packageVersion: string |
 // domain of the form-base rung. Controlled so this suite's fixture bases are the
 // required set, exactly as `selectRequiredArtifactUploadCandidates` reads it.
 const REQUIRED = new Set<string>();
+// The host's required-extension LOCK, as manifest data: which packages are
+// required in prod, and AT WHICH PIN. The pin is what the produced event's
+// `producing_extension_version` is contractually the value of (plan section
+// 8.2), so this suite states one and asserts the road carries it — rather than
+// asserting NULL and calling the missing datum a contract.
+const REQUIRED_PIN = "^0.1.0";
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => REQUIRED.has(pkg),
+  findRequiredInProdEntry: (pkg: string) =>
+    REQUIRED.has(pkg) ? { packageName: pkg, versionRange: REQUIRED_PIN } : null,
 }));
 // The heavy app-boot registrar must not clobber the types this suite registers.
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () => {} }));
@@ -281,7 +289,8 @@ async function seedActiveClaim(typeId: string, extension: string) {
   await client.query(
     `INSERT INTO "${S()}"."artifact_type_claims"
        (id, scope, object_type_id, claim_kind, extension_package, extension_version, status, generation, dispositions)
-     VALUES ($1, $2, $3, 'dedicated', $4, '1.0.0', 'active', 1, $5::jsonb)`,
+     VALUES ($1, $2, $3, 'dedicated', $4, '1.0.0', 'active', 1, $5::jsonb)
+     ON CONFLICT DO NOTHING`,
     [
       `claim-${randomUUID()}`,
       `org:${ORG}`,
@@ -402,9 +411,10 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     for (const e of events) {
       expect([TEXT_BASE_EXT, JSON_BASE_EXT]).toContain(e.producing_extension);
       // The base the ladder chose is a different extension from the agent
-      // template, so its version is recorded as an honest NULL, never the
-      // template's pinned version.
-      expect(e.producing_extension_version).toBeNull();
+      // template, so the version recorded beside it is THE BASE'S OWN PIN from
+      // the host's required-extension lock — never the agent template's, and
+      // never (as it was) a NULL standing in for a value that exists.
+      expect(e.producing_extension_version).toBe(REQUIRED_PIN);
     }
     expect(neverAsk).not.toHaveBeenCalled();
   });
@@ -476,7 +486,20 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     expect(await objectTypeOf(rows[0].artifact_id!)).toBe(BINARY_BASE);
   });
 
-  it("ACCEPTANCE 4, the state of THIS branch — with no binary base installed the refusal is RECORDED, never guessed", async () => {
+  it("ACCEPTANCE 4 — where NO base can house the form, the ledger row STILL exists and SAYS SO", async () => {
+    // THE DEFECT THIS CLOSES (cinatra#3029, forward + fix leg 1). This case used
+    // to assert ZERO ledger rows and call that correct: the road wrote nothing,
+    // recorded nothing, and every later reader of the run saw an output that had
+    // simply never existed. Item 0.17 asks for "one ledger row per item"; not
+    // minting an artifact under a type nothing owns is the honest half, and this
+    // is the other half — the DECISION is written down.
+    //
+    // MEASURED, on main, TODAY: `@cinatra-ai/binary-artifact` IS in the host's
+    // required set (root package.json `cinatra.extensions`) and its type accepts
+    // `application/octet-stream`, so the binary rung resolves in production and
+    // the case above is the shipped behaviour. This case is the state that
+    // remains genuinely reachable — a form no INSTALLED base accepts — and it is
+    // constructed here by installing no base for it.
     objectTypeRegistry._clearForTests();
     REQUIRED.clear();
     registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
@@ -504,8 +527,244 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
       verdict: { rung: "binary_fallback", form: "application/octet-stream" },
       refusal: { reason: "no_base_installed" },
     });
-    expect(await ledgerRows(runId)).toHaveLength(0);
+    // AND THE ROW EXISTS. Finalized — the road is done with this output, so a
+    // re-drive must not re-run a ladder over it — with NULL artifact refs, which
+    // is what "there is no artifact" looks like on this table, and a verdict that
+    // states the form and why nothing could house it.
+    const rows = await ledgerRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].path).toBe("default_road");
+    expect(rows[0].phase).toBe("finalized");
+    expect(rows[0].artifact_id).toBeNull();
+    expect(rows[0].representation_revision_id).toBeNull();
+    expect(rows[0].decided_rung).toBe("binary_fallback");
+    expect(rows[0].decided_verdict).toMatchObject({
+      form: "application/octet-stream",
+      refusalReason: "no_base_installed",
+      refusalRung: "binary_base",
+    });
     expect(notificationCalls).toHaveLength(0);
+
+    // AND IT IS TERMINAL. A second drive reads the settled row and does not
+    // re-detect, so the recorded decision is the run's answer for good.
+    const again = await pickupMod.pickUpDefaultRoadItems(
+      {
+        runId,
+        orgId: ORG,
+        templateId,
+        packageVersion: "1.2.3",
+        createdBy: null,
+        templateName: "Blog draft writer",
+        items: [item("blob", UNNAMEABLE)],
+        producesRefs: [],
+      },
+      { ask: neverAsk, modelRungEnabled: false },
+    );
+    expect(again[0].status).toBe("no_target");
+    expect(await ledgerRows(runId)).toHaveLength(1);
+  });
+
+  it("EVERY DETECTED FORM finishes with an artifact AND a ledger row — binary and unknown included", async () => {
+    // The acceptance sentence of item 0.17 as ONE table: markdown (structural),
+    // json (structural), ambiguous prose the model rung is switched off over
+    // (plain), and undetectable bytes (the binary rung). With the bases the host
+    // ships today installed, EVERY one of the four reaches an artifact of the
+    // right base and carries a row — nothing is dropped, and no form is a
+    // special case (cinatra#3029, forward + fix leg 1).
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    registerArtifactType(JSON_BASE, JSON_BASE_EXT, ["application/json"]);
+    registerArtifactType(BINARY_BASE, BINARY_BASE_EXT, ["application/octet-stream"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+    REQUIRED.add(JSON_BASE_EXT);
+    REQUIRED.add(BINARY_BASE_EXT);
+    await seedActiveClaim(BINARY_BASE, BINARY_BASE_EXT);
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    const PROSE = "An ordinary paragraph of prose. ".repeat(60);
+    const outcomes = await pickupMod.pickUpDefaultRoadItems(
+      {
+        runId,
+        orgId: ORG,
+        templateId,
+        packageVersion: "1.2.3",
+        createdBy: null,
+        templateName: "Blog draft writer",
+        items: [
+          item("draft", MARKDOWN_DOC),
+          item("ideas", JSON_DOC, true),
+          item("notes", PROSE),
+          item("blob", UNNAMEABLE),
+        ],
+        producesRefs: [],
+      },
+      { ask: neverAsk, modelRungEnabled: false },
+    );
+    expect(outcomes).toHaveLength(4);
+    // NOT ONE of them is a drop.
+    expect(outcomes.map((o) => o.status)).not.toContain("no_target");
+    const rows = await ledgerRows(runId);
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.path).toBe("default_road");
+      expect(row.phase).toBe("finalized");
+      expect(row.artifact_id).not.toBeNull();
+      expect(row.representation_revision_id).not.toBeNull();
+      expect(row.decided_rung).not.toBeNull();
+    }
+    const byName = (n: string) => rows.find((r) => r.output_id.endsWith(n))!;
+    expect(await objectTypeOf(byName("draft").artifact_id!)).toBe(TEXT_BASE);
+    expect(await objectTypeOf(byName("ideas").artifact_id!)).toBe(JSON_BASE);
+    expect(await objectTypeOf(byName("notes").artifact_id!)).toBe(TEXT_BASE);
+    expect(await objectTypeOf(byName("blob").artifact_id!)).toBe(BINARY_BASE);
+    expect(byName("blob").decided_rung).toBe("binary_fallback");
+    // THE MODEL RUNG'S OWN VERDICT IS PERSISTED TOO — the switched-off answer is
+    // a recorded fact about how the form was decided, not an absence.
+    expect(byName("notes").decided_rung).toBe("model");
+    expect(byName("notes").decided_verdict).toMatchObject({
+      form: "text/plain",
+      modelSkipped: "switched_off",
+    });
+  });
+
+  it("the produced event carries the base's PINNED VERSION, not a null", async () => {
+    // Plan section 8.2: "the produced event [...] gains the producing extension
+    // AND ITS PINNED VERSION beside the run." The road wrote NULL there and
+    // called it an honest absence; the version is not absent — every base the
+    // ladder can choose is required-in-prod by construction, and the host's lock
+    // states the pin it is held at (cinatra#3029, forward + fix leg 1).
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    await pickupMod.pickUpDefaultRoadItems(
+      {
+        runId,
+        orgId: ORG,
+        templateId,
+        packageVersion: "1.2.3",
+        createdBy: null,
+        templateName: "Blog draft writer",
+        items: [item("draft", MARKDOWN_DOC)],
+        producesRefs: [],
+      },
+      { ask: neverAsk, modelRungEnabled: false },
+    );
+    const events = await producedEventsFor(runId);
+    expect(events).toHaveLength(1);
+    expect(events[0].producing_extension).toBe(TEXT_BASE_EXT);
+    expect(events[0].producing_extension_version).toBe(REQUIRED_PIN);
+  });
+
+  it("CONVERGENCE — two drivers racing on ONE output leave ONE artifact, whatever extension each resolves", async () => {
+    // THE DEFECT THIS CLOSES. The guard was a NON-LOCKING preflight read: both
+    // drivers read no finalized row, then typed, then claimed. The four-part
+    // unique key includes the EXTENSION, which on this road is DERIVED — so two
+    // drivers that resolve different extensions claim different keys and each
+    // writes its own artifact for one output. The sequential re-drive case below
+    // cannot expose it: it only ever has one driver in flight.
+    //
+    // Here the two drivers run CONCURRENTLY and the second one's ladder resolves
+    // a DIFFERENT extension, because the install state changes underneath it.
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    registerArtifactType(BLOG_POST, BLOG_POST_EXT, ["text/markdown"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+    await seedActiveClaim(BLOG_POST, BLOG_POST_EXT);
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    const drive = (producesRefs: Array<{ extension: string; objectTypeId?: string }>) =>
+      pickupMod.pickUpDefaultRoadItems(
+        {
+          runId,
+          orgId: ORG,
+          templateId,
+          packageVersion: "1.2.3",
+          createdBy: null,
+          templateName: "Blog draft writer",
+          items: [item("draft", MARKDOWN_DOC)],
+          producesRefs,
+        },
+        { ask: neverAsk, modelRungEnabled: false },
+      );
+    // Driver A resolves the FORM'S BASE; driver B, launched in the same tick,
+    // resolves the DECLARED KIND — a different extension for the same bytes of
+    // the same output of the same run.
+    const [a, b] = await Promise.all([
+      drive([]),
+      drive([{ extension: BLOG_POST_EXT, objectTypeId: BLOG_POST }]),
+    ]);
+    // ONE artifact. Both drivers report the SAME refs — the loser of the race
+    // read the winner's settled row rather than writing a second artifact.
+    const artifacts = new Set(
+      [...a, ...b].map((o) => o.artifactId).filter((v): v is string => typeof v === "string"),
+    );
+    expect(artifacts.size).toBe(1);
+    const rows = (await ledgerRows(runId)).filter((r) => r.artifact_id !== null);
+    const artifactIds = new Set(rows.map((r) => r.artifact_id));
+    expect(artifactIds.size).toBe(1);
+    // And exactly one of the two extensions won — never both.
+    expect(new Set(rows.map((r) => r.extension)).size).toBe(1);
+  });
+
+  it("CONVERGENCE — identical bytes under DIFFERENT names keep their own form on their own row", async () => {
+    // THE DEFECT THIS CLOSES. Same-byte reuse was keyed on the content hash and
+    // the target EXTENSION only — and one base extension can own several forms.
+    // Two items of identical ambiguous bytes named `draft.md` and `rows.csv`
+    // take different name-rung verdicts, resolve to the same multi-MIME base,
+    // and the second row then recorded "csv" while pointing at the first item's
+    // MARKDOWN representation: a verdict attached to an artifact of another form.
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    // Bytes the structural probes leave ambiguous, so the NAME rung decides —
+    // and the two names decide differently over the very same bytes.
+    const AMBIGUOUS = "An ordinary paragraph of prose with nothing structural. ".repeat(40);
+    const outcomes = await pickupMod.pickUpDefaultRoadItems(
+      {
+        runId,
+        orgId: ORG,
+        templateId,
+        packageVersion: "1.2.3",
+        createdBy: null,
+        templateName: "Blog draft writer",
+        items: [item("draft.md", AMBIGUOUS), item("rows.csv", AMBIGUOUS)],
+        producesRefs: [],
+      },
+      { ask: neverAsk, modelRungEnabled: false },
+    );
+    expect(outcomes).toHaveLength(2);
+    const md = outcomes.find((o) => o.outputName === "draft.md")!;
+    const csvItem = outcomes.find((o) => o.outputName === "rows.csv")!;
+    // ONE VERDICT over one set of bytes. Section 3 makes identical bytes ONE
+    // artifact, and one artifact has one representation and therefore one form —
+    // so the name rung may not give the second item a form the shared artifact
+    // does not have. Before this leg it did: `rows.csv` recorded a csv verdict
+    // over the markdown representation `draft.md` had already written.
+    expect(md.verdict.form).toBe(csvItem.verdict.form);
+    // TWO ledger rows, and each row's recorded form matches the artifact it
+    // points at — never one form's verdict over another form's representation.
+    const rows = await ledgerRows(runId);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.artifact_id).not.toBeNull();
+      const mime = await client.query(
+        `SELECT r.mime FROM "${S()}"."representation" rep
+           JOIN "${S()}"."resource" r ON r.id = rep.resource_id
+          WHERE rep.id = $1`,
+        [row.representation_revision_id],
+      );
+      expect(String(mime.rows[0]?.mime)).toBe(
+        String((row.decided_verdict as { form?: string } | null)?.form),
+      );
+    }
   });
 
   it("the declared-kind rung wins over the form's base, PER OUTPUT — and a partially bound agent keeps its unbound work", async () => {
@@ -704,6 +963,192 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     await lifecycle.transitionExtensionLifecycle(installId, "force_delete", {
       ...fixtureActor,
       reason: "cinatra#3029 fixture teardown",
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE RUN-MADE LIST'S OWN DATABASE READ (cinatra#3029, forward + fix leg 1).
+  //
+  // The rendered panel and the pure list model were both well covered; the READ
+  // behind them was barely exercised at all, and it carried a real defect --
+  // deduplication by artifact id alone, which silently deleted the "Used" fact
+  // whenever a run wrote a NEW REVISION of something it had also read.
+  //
+  // The ratified drawing, section I.2: "Every row carries the artifact's title,
+  // the type that owns it, THE REVISION THE RUN FILED OR READ, and the control
+  // that opens it on its own page ... a reader needs to see what the run started
+  // from as well as what it produced."
+  // -------------------------------------------------------------------------
+  describe("the run-made list's database read", () => {
+    let recordsMod: typeof import("../run-artifact-records");
+
+    /** A minimal artifact object + one representation revision of it. */
+    async function seedArtifact(input: {
+      artifactId: string;
+      revisionId: string;
+      typeId: string;
+      title: string;
+      mime: string;
+    }) {
+      await client.query(
+        `INSERT INTO "${S()}"."objects" (id, org_id, type, data)
+         VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (id) DO NOTHING`,
+        [input.artifactId, ORG, input.typeId, JSON.stringify({ title: input.title })],
+      );
+      await seedRevision(input.artifactId, input.revisionId, input.mime);
+    }
+
+    let nextRevision = 1;
+    /** One immutable representation revision of an artifact, and the resource
+     *  its bytes live in — the two rows the list's read joins through. */
+    async function seedRevision(artifactId: string, revisionId: string, mime: string) {
+      const resourceId = `res-${randomUUID()}`;
+      await client.query(
+        `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime)
+         VALUES ($1, $2, 'blob', $3, $4)`,
+        [resourceId, ORG, `sub-${resourceId}`, mime],
+      );
+      await client.query(
+        `INSERT INTO "${S()}"."representation"
+           (id, org_id, artifact_id, resource_id, revision, form)
+         VALUES ($1, $2, $3, $4, $5, 'file')`,
+        [revisionId, ORG, artifactId, resourceId, nextRevision++],
+      );
+    }
+
+    async function seedWrote(runId: string, artifactId: string, revisionId: string, ext: string) {
+      await client.query(
+        `INSERT INTO "${S()}"."artifact_materializations"
+           (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+            artifact_id, representation_revision_id, phase)
+         VALUES ($1, $2, $3, $4, NULL, 'default_road', $5, $6, $7, $8, 'finalized')`,
+        [
+          `mat-${randomUUID()}`,
+          ORG,
+          runId,
+          `cinatra:run-output:${randomUUID()}`,
+          ext,
+          sha(`${artifactId}${revisionId}`),
+          artifactId,
+          revisionId,
+        ],
+      );
+    }
+
+    async function seedUsed(runId: string, artifactId: string, revisionId: string) {
+      await client.query(
+        `INSERT INTO "${S()}"."run_context_selections"
+           (id, org_id, parent_run_id, parent_package_name, slot_id, artifact_id,
+            representation_revision_id, semantic_assertion_id, extension,
+            source_scope, selected_by, selection_mode)
+         VALUES ($1, $2, $3, '@test/pkg', 'slot', $4, $5, 'assert', '@test/ext',
+                 'organization', 'agent', 'interactive')`,
+        [`sel-${randomUUID()}`, ORG, runId, artifactId, revisionId],
+      );
+    }
+
+    beforeAll(async () => {
+      recordsMod = await import("../run-artifact-records");
+    });
+
+    it("an artifact the run READ and then WROTE A NEW REVISION OF keeps BOTH facts", async () => {
+      // THE DEFECT THIS CLOSES. The read suppressed every `used` row sharing an
+      // artifact id with a `wrote` row -- so a run that read revision A of an
+      // idea and filed revision B of it showed only B, and the reader was never
+      // told what the run started from.
+      const { runId } = await seedTemplateAndRun();
+      const artifactId = `obj-${randomUUID()}`;
+      const revA = `rev-${randomUUID()}`;
+      const revB = `rev-${randomUUID()}`;
+      await seedArtifact({
+        artifactId,
+        revisionId: revA,
+        typeId: "@cinatra-ai/blog:idea",
+        title: "The idea",
+        mime: "text/markdown",
+      });
+      // The SECOND revision of the SAME artifact — what the run filed.
+      await seedRevision(artifactId, revB, "text/markdown");
+      await seedUsed(runId, artifactId, revA);
+      await seedWrote(runId, artifactId, revB, TEXT_BASE_EXT);
+
+      const records = await recordsMod.readRunArtifactRecords({ orgId: ORG, runId });
+      expect(records).toHaveLength(2);
+      const wrote = records.find((r) => r.role === "wrote")!;
+      const used = records.find((r) => r.role === "used")!;
+      expect(wrote.representationRevisionId).toBe(revB);
+      expect(used.representationRevisionId).toBe(revA);
+      expect(used.annotation).toBe("read by this run");
+    });
+
+    it("the SAME revision read and written is ONE row, listed as written", async () => {
+      const { runId } = await seedTemplateAndRun();
+      const artifactId = `obj-${randomUUID()}`;
+      const rev = `rev-${randomUUID()}`;
+      await seedArtifact({
+        artifactId,
+        revisionId: rev,
+        typeId: "@cinatra-ai/blog:post",
+        title: "The post",
+        mime: "text/markdown",
+      });
+      await seedUsed(runId, artifactId, rev);
+      await seedWrote(runId, artifactId, rev, TEXT_BASE_EXT);
+
+      const records = await recordsMod.readRunArtifactRecords({ orgId: ORG, runId });
+      expect(records).toHaveLength(1);
+      expect(records[0].role).toBe("wrote");
+    });
+
+    it("lists everything the run wrote and everything it used, written first", async () => {
+      const { runId } = await seedTemplateAndRun();
+      const w1 = `obj-${randomUUID()}`;
+      const w2 = `obj-${randomUUID()}`;
+      const u1 = `obj-${randomUUID()}`;
+      const rw1 = `rev-${randomUUID()}`;
+      const rw2 = `rev-${randomUUID()}`;
+      const ru1 = `rev-${randomUUID()}`;
+      await seedArtifact({ artifactId: w1, revisionId: rw1, typeId: "@cinatra-ai/blog:post", title: "Post", mime: "text/markdown" });
+      await seedArtifact({ artifactId: w2, revisionId: rw2, typeId: "@cinatra-ai/blog:image", title: "Image", mime: "image/png" });
+      await seedArtifact({ artifactId: u1, revisionId: ru1, typeId: "@cinatra-ai/blog:idea", title: "Idea", mime: "text/markdown" });
+      await seedWrote(runId, w1, rw1, TEXT_BASE_EXT);
+      await seedWrote(runId, w2, rw2, TEXT_BASE_EXT);
+      await seedUsed(runId, u1, ru1);
+
+      const records = await recordsMod.readRunArtifactRecords({ orgId: ORG, runId });
+      expect(records).toHaveLength(3);
+      // The written rows lead, the used rows trail — the order the drawing puts
+      // them in ("one row per artifact the run wrote, and ... that artifact too,
+      // marked used").
+      expect(records.map((r) => r.role)).toEqual(["wrote", "wrote", "used"]);
+      expect(records.map((r) => r.title)).toContain("Idea");
+      expect(records.find((r) => r.artifactId === w2)!.mime).toBe("image/png");
+    });
+
+    it("a run that wrote nothing and used nothing reads as the EMPTY ANSWER, never a failure", async () => {
+      const { runId } = await seedTemplateAndRun();
+      const records = await recordsMod.readRunArtifactRecords({ orgId: ORG, runId });
+      expect(records).toEqual([]);
+    });
+
+    it("a READ FAILURE throws rather than answering the empty list", async () => {
+      // The screen turns a thrown read into the UNKNOWN reading (pinned in
+      // packages/agents/src/__tests__/run-artifact-list.test.ts). That is only
+      // sound because this read FAILS LOUDLY instead of swallowing the error and
+      // returning `[]` itself: an empty array from this function is an ANSWER
+      // about the run, and nothing else may produce one.
+      await client.query(`ALTER TABLE "${S()}"."objects" RENAME TO objects_hidden_3029`);
+      try {
+        await expect(
+          recordsMod.readRunArtifactRecords({ orgId: ORG, runId: "run-any" }),
+        ).rejects.toThrow();
+      } finally {
+        await client.query(`ALTER TABLE "${S()}"."objects_hidden_3029" RENAME TO objects`);
+      }
+      // And once the store is readable again the same call answers normally.
+      await expect(
+        recordsMod.readRunArtifactRecords({ orgId: ORG, runId: "run-any" }),
+      ).resolves.toEqual([]);
     });
   });
 

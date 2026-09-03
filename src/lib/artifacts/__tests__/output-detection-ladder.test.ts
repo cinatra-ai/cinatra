@@ -10,6 +10,7 @@ import {
   countMarkdownSignals,
   detectOutputForm,
   formFromNameHint,
+  formsRefusedByProbes,
   probeCsv,
   probeFrontMatter,
   probeJson,
@@ -333,6 +334,24 @@ describe("the structural probes", () => {
     expect(probeStructuralForm(AMBIGUOUS_PROSE)).toBeNull();
   });
 
+  it("csv is a claim about EVERY line, not about the first two hundred", () => {
+    // cinatra#3029, forward + fix leg 1. The probe used to slice the first two
+    // hundred non-empty lines and then state "every line carries the same field
+    // count under one delimiter" over the whole document. A file whose shape
+    // breaks AFTER that window was typed `text/csv` on the strength of a sample
+    // the verdict never admitted to taking, and a reader opening it under a csv
+    // display found a file that is not one.
+    const uniform = ["a,b,c", ...Array.from({ length: 400 }, (_, i) => `${i},x,y`)].join("\n");
+    expect(probeCsv(uniform)).toBe(true);
+    // The SAME document with one broken line at 250 — inside the document,
+    // outside the old window.
+    const broken = uniform.split("\n");
+    broken[250] = "this line has no delimiters at all";
+    expect(probeCsv(broken.join("\n"))).toBe(false);
+    // And the ladder follows the probe: no csv verdict over those bytes.
+    expect(probeStructuralForm(broken.join("\n"))?.form).not.toBe("text/csv");
+  });
+
   it("the name hint stays inside the text family", () => {
     expect(formFromNameHint("draft.md")).toBe("text/markdown");
     expect(formFromNameHint("rows.csv")).toBe("text/csv");
@@ -342,5 +361,59 @@ describe("the structural probes", () => {
     expect(formFromNameHint("archive.zip")).toBeNull();
     expect(formFromNameHint("no-extension")).toBeNull();
     expect(formFromNameHint(null)).toBeNull();
+  });
+
+  it("a hint may only choose WITHIN what the probes left open", () => {
+    // Item 0.18: the name is "a hint that may only choose within the text family
+    // the probes ALLOW". `probeJson` and `probeCsv` are decisive refusals, so a
+    // name may not reopen the form they closed (cinatra#3029, fix leg 1).
+    const notJson = formsRefusedByProbes("this is prose, not a JSON document");
+    expect(notJson.has("application/json")).toBe(true);
+    expect(formFromNameHint("notes.json", notJson)).toBeNull();
+    expect(formFromNameHint("rows.csv", notJson)).toBeNull();
+    // A form no probe refused is still the hint's to choose.
+    expect(formFromNameHint("draft.md", notJson)).toBe("text/markdown");
+    expect(formFromNameHint("notes.txt", notJson)).toBe("text/plain");
+    // And where the probe SUCCEEDS the form is not in the refused set at all —
+    // the structural rung has already answered above the name rung anyway.
+    const isJson = formsRefusedByProbes(JSON_DOC);
+    expect(isJson.has("application/json")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The name rung, as the LADDER runs it (cinatra#3029, forward + fix leg 1).
+// ---------------------------------------------------------------------------
+
+describe("the name rung inside the ladder", () => {
+  it("does NOT label invalid JSON as JSON because the file is called .json", async () => {
+    // THE DEFECT: `probeJson` had already REFUSED these bytes when the name rung
+    // ran, and the rung returned `application/json` anyway — so a file that is
+    // demonstrably not JSON was sent to a JSON artifact type on the strength of
+    // its filename, and every reader downstream was told it parses.
+    const notJson = "totally: not, json { at all";
+    expect(probeJson(notJson)).toBe(false);
+    const verdict = await detect(notJson, { name: "notes.json", modelRungEnabled: false });
+    expect(verdict.form).not.toBe("application/json");
+    // It falls THROUGH to the rung below, which is the model rung — switched off
+    // here, so plain text, exactly as an unnamed ambiguous text does.
+    expect(verdict.rung).toBe("model");
+    expect(verdict.form).toBe("text/plain");
+  });
+
+  it("does NOT label a non-csv file csv because the file is called .csv", async () => {
+    const notCsv = "a single sentence of prose with no delimiters";
+    expect(probeCsv(notCsv)).toBe(false);
+    const verdict = await detect(notCsv, { name: "rows.csv", modelRungEnabled: false });
+    expect(verdict.form).not.toBe("text/csv");
+  });
+
+  it("still takes the hints the probes left open", async () => {
+    // Markdown's probe is a THRESHOLD, not a refusal, so a `.md` name over prose
+    // that carries no markdown signal is still the author's own statement.
+    const prose = "A paragraph of ordinary prose with nothing structural in it.";
+    const verdict = await detect(prose, { name: "draft.md", ask: neverAsk });
+    expect(verdict.form).toBe("text/markdown");
+    expect(verdict.rung).toBe("name_extension");
   });
 });

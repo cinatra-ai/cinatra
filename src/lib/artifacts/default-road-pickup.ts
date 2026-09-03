@@ -1,7 +1,10 @@
 import "server-only";
 import type { Pool } from "pg";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { isPackageRequiredInProd } from "@cinatra-ai/extensions/required-in-prod";
+import {
+  findRequiredInProdEntry,
+  isPackageRequiredInProd,
+} from "@cinatra-ai/extensions/required-in-prod";
 import {
   producesObjectTypeIdForExtension,
   type SemanticArtifactProducesRef,
@@ -17,8 +20,10 @@ import { writeClaimedArtifact, resolveRunScopeOwnership } from "./run-artifact-m
 import type { ScopeDerivedOwnership } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   claimMaterialization,
-  findFinalizedMaterializationForOutput,
+  findSettledMaterializationForOutput,
   finalizeMaterializationAgainstExistingArtifact,
+  settleMaterializationWithoutArtifact,
+  withOutputConvergenceLock,
   type MaterializationDecidedVerdict,
 } from "./materialization-ledger";
 import {
@@ -88,6 +93,12 @@ export type DefaultRoadItem = {
 export type DefaultRoadItemOutcome = {
   outputId: string;
   outputName: string;
+  /**
+   * `no_target` is STILL a settled outcome, and it is now a settled outcome the
+   * LEDGER carries (cinatra#3029, forward + fix leg 1): every detected form
+   * finishes with a row, and where no installed base can take the form the row
+   * says exactly that instead of leaving an absence for a reader to interpret.
+   */
   status: "written" | "deduped" | "no_target";
   verdict: DetectionVerdict;
   targetRung: DefaultRoadTargetRung | null;
@@ -220,6 +231,25 @@ export function readDefaultRoadBaseCandidates(): DefaultRoadTargetCandidate[] {
   return out;
 }
 
+/**
+ * The PINNED VERSION of one base extension, from the host's required-extension
+ * lock (cinatra#3029, forward + fix leg 1).
+ *
+ * The produced event's contract is "the producing extension AND ITS PINNED
+ * VERSION beside the run" (plan section 8.2). The road used to write NULL there
+ * and call it an honest absence -- but the version is not absent: every base the
+ * ladder can choose is by construction a REQUIRED-in-prod package
+ * (`readDefaultRoadBaseCandidates` filters on exactly that), and the host's own
+ * `cinatra.extensions` lock states the pin each of them is held at. Reading it
+ * is reading the pin, not inventing one.
+ *
+ * NULL survives for the one case that is genuinely unknown: a package the lock
+ * does not name, which no base reaching this function can be.
+ */
+export function readDefaultRoadExtensionPin(extension: string): string | null {
+  return findRequiredInProdEntry(extension)?.versionRange ?? null;
+}
+
 /** The agent's declared `produces`, resolved to artifact-safe targets. */
 async function readDeclaredKindCandidates(
   orgId: string,
@@ -318,182 +348,315 @@ export async function pickUpDefaultRoadItems(
     deps?.modelRungEnabled ?? (await readModelRungEnabled(input.orgId));
   const ask = deps?.ask ?? defaultModelRungAsk;
   const cache = new Map<string, DetectionVerdict>();
+  // ONE SET OF BYTES, ONE VERDICT, FOR THE WHOLE RUN (cinatra#3029, forward +
+  // fix leg 1).
+  //
+  // Section 3: "Two outputs with the same bytes in one run are ONE ARTIFACT with
+  // two ledger rows." One artifact has ONE representation and therefore ONE
+  // form — so if the ladder is allowed to answer differently for the same bytes
+  // (which it is: the NAME rung reads the output's name, and two outputs of one
+  // run can carry the same bytes under different names) the second ledger row
+  // records a form the artifact it points at does not have. `draft.md` and
+  // `rows.csv` over identical ambiguous prose did exactly that.
+  //
+  // The bytes are what is typed, so the bytes are what the verdict is CACHED
+  // against. The first item to carry a hash decides the form of those bytes for
+  // this run, and every later item with the same hash inherits it — which is the
+  // same statement as "they are one artifact", said on the detection side.
+  const verdictByHash = new Map<string, DetectionVerdict>();
 
   // "Two outputs with the same bytes in one run are one artifact with two
   // ledger rows" (§3): the first item's refs, by content hash.
+  // The index carries the FORM and the OBJECT TYPE the ladder settled on, not
+  // only the extension: one extension can own several forms, so the extension
+  // alone is not enough to prove two items are the same artifact (fix leg 1).
   const writtenByHash = new Map<
     string,
-    { artifactId: string; representationRevisionId: string; extension: string }
+    {
+      artifactId: string;
+      representationRevisionId: string;
+      extension: string;
+      objectTypeId?: string;
+      form: string;
+    }
   >();
 
   const outcomes: DefaultRoadItemOutcome[] = [];
   for (const item of input.items) {
-    // ---- the per-output idempotence guard (convergence) ------------------
-    // The ledger's 4-part key includes the EXTENSION, which the ladder derives;
-    // a verdict can legitimately differ between drives (the model rung's switch
-    // turned off, a base installed or taken down, a runtime reconfigured), so a
-    // re-drive after a crashed settle could claim a DIFFERENT key and write a
-    // SECOND artifact for one output. One output of one run reaches at most one
-    // artifact on this road: if a finalized `default_road` row for this output
-    // already exists, the road is done with it — no detection, no model call,
-    // no write.
-    const settled = await findFinalizedMaterializationForOutput({
-      orgId: input.orgId,
-      runId: input.runId,
-      outputId: item.outputId,
-      path: "default_road",
-    });
-    if (settled) {
-      outcomes.push({
-        outputId: item.outputId,
-        outputName: item.outputName,
-        status: "deduped",
-        verdict: recordedVerdict(settled.decidedVerdict, settled.decidedRung),
-        targetRung: null,
-        extension: settled.extension,
-        artifactId: settled.artifactId,
-        representationRevisionId: settled.representationRevisionId,
-      });
-      writtenByHash.set(item.contentHash, {
-        artifactId: settled.artifactId,
-        representationRevisionId: settled.representationRevisionId,
-        extension: settled.extension,
-      });
-      continue;
-    }
-
-    const bytes = new TextEncoder().encode(item.content);
-    const verdict = await withActorContext(
-      buildDefaultRoadActorContext(input.orgId),
-      () =>
-        detectOutputForm(
-          { bytes, contentHash: item.contentHash, name: item.outputName },
-          { ask, modelRungEnabled, cache },
-        ),
-    );
-
-    const target = resolveDefaultRoadTarget({
-      form: verdict.form,
-      declaredKinds,
-      bases,
-    });
-    if (!target.ok) {
-      outcomes.push({
-        outputId: item.outputId,
-        outputName: item.outputName,
-        status: "no_target",
-        verdict,
-        targetRung: target.rung,
-        refusal: { reason: target.reason, detail: target.detail },
-      });
-      continue;
-    }
-
-    // ---- the same-bytes case: one artifact, a ledger row per item ---------
-    const already = writtenByHash.get(item.contentHash);
-    if (already && already.extension === target.extension) {
-      const claim = await claimMaterialization({
-        orgId: input.orgId,
-        runId: input.runId,
-        outputId: item.outputId,
-        nodeId: null,
-        path: "default_road",
-        extension: target.extension,
-        contentHash: item.contentHash,
-        decidedRung: verdict.rung,
-        decidedVerdict: verdict,
-      });
-      if (claim.kind === "claimed") {
-        await finalizeMaterializationAgainstExistingArtifact({
+    // ---- ONE OUTPUT IS ONE CRITICAL SECTION (convergence, fix leg 1) -------
+    // The finalized-row read, the detection, the target resolution, the claim
+    // and the write all run inside the per-output lock. The old shape read the
+    // ledger FIRST and typed afterwards, which is exactly-once only while the
+    // chosen extension is stable -- and on this road it is derived. Two drivers
+    // whose leases overlapped could both read no row, resolve DIFFERENT
+    // extensions, claim two different four-part keys and write two artifacts for
+    // one output. Inside the lock the second driver runs only after the first has
+    // settled, finds the settled row, and stops. See
+    // `withOutputConvergenceLock`.
+    const outcome = await withOutputConvergenceLock(
+      { runId: input.runId, outputId: item.outputId },
+      async (): Promise<DefaultRoadItemOutcome> => {
+        // ---- the per-output idempotence guard ----------------------------
+        // ARTIFACT OR NOT: a row the road settled without an artifact is just as
+        // final as one that reached an artifact, and re-detecting it would put a
+        // model call behind a decision that has already been made.
+        const settled = await findSettledMaterializationForOutput({
           orgId: input.orgId,
-          ledgerId: claim.ledgerId,
-          artifactId: already.artifactId,
-          representationRevisionId: already.representationRevisionId,
+          runId: input.runId,
+          outputId: item.outputId,
+          path: "default_road",
         });
-      }
-      outcomes.push({
-        outputId: item.outputId,
-        outputName: item.outputName,
-        status: "deduped",
-        verdict,
-        targetRung: target.rung,
-        extension: target.extension,
-        objectTypeId: target.objectTypeId,
-        artifactId: claim.kind === "finalized" ? claim.artifactId : already.artifactId,
-        representationRevisionId:
-          claim.kind === "finalized"
-            ? claim.representationRevisionId
-            : already.representationRevisionId,
-      });
-      continue;
-    }
+        if (settled) {
+          if (settled.artifactId === null || settled.representationRevisionId === null) {
+            return {
+              outputId: item.outputId,
+              outputName: item.outputName,
+              status: "no_target",
+              verdict: recordedVerdict(settled.decidedVerdict, settled.decidedRung),
+              targetRung: null,
+              extension: settled.extension,
+              refusal: {
+                reason: String(
+                  (settled.decidedVerdict as { refusalReason?: unknown } | null)
+                    ?.refusalReason ?? "no_base_installed",
+                ),
+                detail: "the earlier drive already settled this output without an artifact",
+              },
+            };
+          }
+          writtenByHash.set(item.contentHash, {
+            artifactId: settled.artifactId,
+            representationRevisionId: settled.representationRevisionId,
+            extension: settled.extension,
+            form: settled.decidedVerdict?.form ?? "",
+          });
+          return {
+            outputId: item.outputId,
+            outputName: item.outputName,
+            status: "deduped",
+            verdict: recordedVerdict(settled.decidedVerdict, settled.decidedRung),
+            targetRung: null,
+            extension: settled.extension,
+            artifactId: settled.artifactId,
+            representationRevisionId: settled.representationRevisionId,
+          };
+        }
 
-    const write = await writeClaimedArtifact({
-      runId: input.runId,
-      orgId: input.orgId,
-      createdBy: input.createdBy,
-      outputId: item.outputId,
-      nodeId: null,
-      path: "default_road",
-      extension: target.extension,
-      // The producing extension here is the BASE the ladder chose, not the
-      // agent package, so the agent template's pinned version is not this
-      // extension's version. The column is nullable and NULL reads as "the
-      // emitter did not record one" — an honest absence, never a wrong value.
-      extensionVersion: null,
-      title: `${input.templateName ?? "Agent"} — ${item.outputName}`,
-      mime: verdict.form,
-      content: item.content,
-      ownership,
-      resolvedTarget: {
-        objectTypeId: target.objectTypeId,
-        acceptedFileMimeTypes: target.acceptedFileMimeTypes,
+        const bytes = new TextEncoder().encode(item.content);
+        const verdict =
+          verdictByHash.get(item.contentHash) ??
+          (await withActorContext(
+            buildDefaultRoadActorContext(input.orgId),
+            () =>
+              detectOutputForm(
+                { bytes, contentHash: item.contentHash, name: item.outputName },
+                { ask, modelRungEnabled, cache },
+              ),
+          ));
+        verdictByHash.set(item.contentHash, verdict);
+
+        const target = resolveDefaultRoadTarget({
+          form: verdict.form,
+          declaredKinds,
+          bases,
+        });
+        if (!target.ok) {
+          // EVERY DETECTED FORM FINISHES WITH A LEDGER ROW (item 0.17, fix leg
+          // 1). No installed base can take this form -- so no artifact is minted
+          // under a type nothing owns, which is the honest half the road already
+          // had. The other half is this: the DECISION is written down. The row is
+          // claimed under the road's own reserved output id, keyed by the form
+          // the ladder settled on rather than by an extension there is none of,
+          // and settled `finalized` with NULL artifact refs carrying the verdict
+          // AND the refusal. A reader of the ledger can now tell "this run made
+          // nothing" from "this output could not be housed, and here is why".
+          const refusedVerdict: MaterializationDecidedVerdict = {
+            ...verdict,
+            refusalReason: target.reason,
+            refusalDetail: target.detail,
+            refusalRung: target.rung,
+          } as MaterializationDecidedVerdict;
+          const claim = await claimMaterialization({
+            orgId: input.orgId,
+            runId: input.runId,
+            outputId: item.outputId,
+            nodeId: null,
+            path: "default_road",
+            // THE FORM STANDS IN FOR THE EXTENSION. The column is NOT NULL and
+            // there is no extension to name -- no installed base claimed the
+            // form -- so the row carries the form the ladder decided on, which
+            // is the fact the row exists to record. It is prefixed so it can
+            // never be read as a package name.
+            extension: `form:${verdict.form}`,
+            contentHash: item.contentHash,
+            decidedRung: verdict.rung,
+            decidedVerdict: refusedVerdict,
+          });
+          if (claim.kind === "claimed") {
+            await settleMaterializationWithoutArtifact({
+              orgId: input.orgId,
+              ledgerId: claim.ledgerId,
+              decidedVerdict: refusedVerdict,
+            });
+          }
+          return {
+            outputId: item.outputId,
+            outputName: item.outputName,
+            status: "no_target",
+            verdict,
+            targetRung: target.rung,
+            refusal: { reason: target.reason, detail: target.detail },
+          };
+        }
+
+        // ---- the same-bytes case: one artifact, a ledger row per item -------
+        // THE FORM AND THE OBJECT TYPE ARE PART OF THE REUSE CONDITION (fix leg
+        // 1). Reuse used to be keyed on the content hash and the target
+        // EXTENSION alone -- and one extension can own several forms. Identical
+        // ambiguous bytes named `draft.md` and `rows.csv` take different name-rung
+        // verdicts, resolve to the same multi-MIME base, and the second row then
+        // said "csv" while pointing at the first item's markdown representation:
+        // a verdict attached to an artifact of another form. Bytes are only ONE
+        // artifact when the ladder decided the SAME thing about them.
+        const already = writtenByHash.get(item.contentHash);
+        if (
+          already &&
+          already.extension === target.extension &&
+          already.objectTypeId === target.objectTypeId &&
+          already.form === verdict.form
+        ) {
+          const claim = await claimMaterialization({
+            orgId: input.orgId,
+            runId: input.runId,
+            outputId: item.outputId,
+            nodeId: null,
+            path: "default_road",
+            extension: target.extension,
+            contentHash: item.contentHash,
+            decidedRung: verdict.rung,
+            decidedVerdict: verdict,
+          });
+          if (claim.kind === "claimed") {
+            await finalizeMaterializationAgainstExistingArtifact({
+              orgId: input.orgId,
+              ledgerId: claim.ledgerId,
+              artifactId: already.artifactId,
+              representationRevisionId: already.representationRevisionId,
+            });
+          }
+          return {
+            outputId: item.outputId,
+            outputName: item.outputName,
+            status: "deduped",
+            verdict,
+            targetRung: target.rung,
+            extension: target.extension,
+            objectTypeId: target.objectTypeId,
+            artifactId: claim.kind === "finalized" ? claim.artifactId : already.artifactId,
+            representationRevisionId:
+              claim.kind === "finalized"
+                ? claim.representationRevisionId
+                : already.representationRevisionId,
+          };
+        }
+
+        const write = await writeClaimedArtifact({
+          runId: input.runId,
+          orgId: input.orgId,
+          createdBy: input.createdBy,
+          outputId: item.outputId,
+          nodeId: null,
+          path: "default_road",
+          extension: target.extension,
+          // THE PRODUCING EXTENSION'S PINNED VERSION (fix leg 1). The producing
+          // extension here is the BASE the ladder chose, not the agent package,
+          // so the agent template's version was never the right value -- but NULL
+          // was not either. The base is required-in-prod by construction, and the
+          // host's own lock states the pin it is held at; that pin is what the
+          // contract asks for ("the producing extension and its pinned version").
+          extensionVersion: readDefaultRoadExtensionPin(target.extension),
+          title: `${input.templateName ?? "Agent"} — ${item.outputName}`,
+          mime: verdict.form,
+          content: item.content,
+          ownership,
+          resolvedTarget: {
+            objectTypeId: target.objectTypeId,
+            acceptedFileMimeTypes: target.acceptedFileMimeTypes,
+          },
+          mimeDescription: "the detected output form",
+          decidedRung: verdict.rung,
+          decidedVerdict: verdict,
+        });
+        if (!write.ok) {
+          // A refusal is only a RECORDED VERDICT when it is a fact about the work.
+          // `not_write_allowed` is fail-closed on a canonical-store read error and
+          // `path_collision` is a ledger race, so both can be facts about the
+          // MOMENT. Settling on them would drop an agent's output for good — the
+          // one thing item 0.17 exists to stop. THROW instead: the caller's lease
+          // is released and the sweep re-drives to the attempts cap.
+          if (write.reason !== "accepts_mismatch") {
+            throw new Error(
+              `[default-road] write refused for run ${input.runId} output "${item.outputName}" ` +
+                `(${write.reason}) — retryable: ${write.error}`,
+            );
+          }
+          // An `accepts_mismatch` IS a fact about the work, so it settles — and
+          // it settles WITH A ROW, for the same reason the no-base refusal does.
+          const refusedVerdict: MaterializationDecidedVerdict = {
+            ...verdict,
+            refusalReason: "write_refused",
+            refusalDetail: write.error,
+          } as MaterializationDecidedVerdict;
+          const claim = await claimMaterialization({
+            orgId: input.orgId,
+            runId: input.runId,
+            outputId: item.outputId,
+            nodeId: null,
+            path: "default_road",
+            extension: target.extension,
+            contentHash: item.contentHash,
+            decidedRung: verdict.rung,
+            decidedVerdict: refusedVerdict,
+          });
+          if (claim.kind === "claimed") {
+            await settleMaterializationWithoutArtifact({
+              orgId: input.orgId,
+              ledgerId: claim.ledgerId,
+              decidedVerdict: refusedVerdict,
+            });
+          }
+          return {
+            outputId: item.outputId,
+            outputName: item.outputName,
+            status: "no_target",
+            verdict,
+            targetRung: target.rung,
+            extension: target.extension,
+            objectTypeId: target.objectTypeId,
+            refusal: { reason: "write_refused", detail: write.error },
+          };
+        }
+        writtenByHash.set(item.contentHash, {
+          artifactId: write.artifactId,
+          representationRevisionId: write.representationRevisionId,
+          extension: target.extension,
+          objectTypeId: target.objectTypeId,
+          form: verdict.form,
+        });
+        return {
+          outputId: item.outputId,
+          outputName: item.outputName,
+          status: write.deduped ? "deduped" : "written",
+          verdict,
+          targetRung: target.rung,
+          extension: target.extension,
+          objectTypeId: target.objectTypeId,
+          artifactId: write.artifactId,
+          representationRevisionId: write.representationRevisionId,
+        };
       },
-      mimeDescription: "the detected output form",
-      decidedRung: verdict.rung,
-      decidedVerdict: verdict,
-    });
-    if (!write.ok) {
-      // A refusal is only a RECORDED VERDICT when it is a fact about the work.
-      // `not_write_allowed` is fail-closed on a canonical-store read error and
-      // `path_collision` is a ledger race, so both can be facts about the
-      // MOMENT. Settling on them would drop an agent's output for good — the
-      // one thing item 0.17 exists to stop. THROW instead: the caller's lease
-      // is released and the sweep re-drives to the attempts cap.
-      if (write.reason !== "accepts_mismatch") {
-        throw new Error(
-          `[default-road] write refused for run ${input.runId} output "${item.outputName}" ` +
-            `(${write.reason}) — retryable: ${write.error}`,
-        );
-      }
-      outcomes.push({
-        outputId: item.outputId,
-        outputName: item.outputName,
-        status: "no_target",
-        verdict,
-        targetRung: target.rung,
-        extension: target.extension,
-        objectTypeId: target.objectTypeId,
-        refusal: { reason: "write_refused", detail: write.error },
-      });
-      continue;
-    }
-    writtenByHash.set(item.contentHash, {
-      artifactId: write.artifactId,
-      representationRevisionId: write.representationRevisionId,
-      extension: target.extension,
-    });
-    outcomes.push({
-      outputId: item.outputId,
-      outputName: item.outputName,
-      status: write.deduped ? "deduped" : "written",
-      verdict,
-      targetRung: target.rung,
-      extension: target.extension,
-      objectTypeId: target.objectTypeId,
-      artifactId: write.artifactId,
-      representationRevisionId: write.representationRevisionId,
-    });
+    );
+    outcomes.push(outcome);
   }
   return outcomes;
 }

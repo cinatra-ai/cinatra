@@ -29,6 +29,10 @@ import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { RunMadePanel } from "./run-made-panel";
 import {
+  runMadeReading,
+  runMadeSaysSomething as runMadeReadingSaysSomething,
+} from "./run-artifact-list";
+import {
   isRunOutputCaptureSettled,
   readRunArtifactRecords,
 } from "@/lib/artifacts/run-artifact-records";
@@ -1131,18 +1135,42 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // The read is the materialization ledger's finalized rows plus the run's
   // context selections, so a row appears because the work REACHED AN ARTIFACT —
   // on any road, not only the default one.
-      ? await readRunArtifactRecords({ orgId: run.orgId, runId: run.id }).catch(() => [])
+  //
+  // A FAILED READ IS NOT AN EMPTY LIST (cinatra#3029, forward + fix leg 1). The
+  // ratified drawing, section I.2: "a reader who sees the empty reading knows
+  // the run kept nothing — NOT THAT THE PAGE FAILED TO LOAD IT." The read used
+  // to be `.catch(() => [])`, which turns any failure — a pool exhaustion, a
+  // schema still initialising, a transient network fault — into the definitive
+  // reading that the run made nothing. `null` is the third answer the conformance
+  // id already declares (`data-state="empty loading error kind:artifact"`): the
+  // read did not answer, so the step and its panel stand down and the page says
+  // nothing about what the run made, rather than saying something false.
+  const runMadeRecords =
+    run && isTerminalRunStatus(run.status)
+      ? await readRunArtifactRecords({ orgId: run.orgId, runId: run.id }).catch(() => null)
       : [];
   // The terminal transition commits BEFORE the pickup has typed and written, so
   // a page served inside that window would read the empty list as the definitive
   // "this run made nothing" (cinatra#3029, convergence). The entry and its panel
   // therefore wait for the capture to settle — unless the run already has rows,
   // which answer the question by themselves.
+  // The reading is decided by the PURE seam in `./run-artifact-list`
+  // (`runMadeReading`), pinned in `__tests__/run-artifact-list.test.ts`, so the
+  // rule this screen obeys is the rule the suite reads — not a second copy of it.
+  const runMadeCaptureSettled =
+    run != null && isTerminalRunStatus(run.status) && runMadeRecords !== null
+      ? runMadeRecords.length > 0 ||
+        (await isRunOutputCaptureSettled({ orgId: run.orgId, runId: run.id }))
+      : false;
   const runMadeSaysSomething =
     run != null &&
-    isTerminalRunStatus(run.status) &&
-    (runMadeRecords.length > 0 ||
-      (await isRunOutputCaptureSettled({ orgId: run.orgId, runId: run.id })));
+    runMadeReadingSaysSomething(
+      runMadeReading({
+        runIsTerminal: isTerminalRunStatus(run.status),
+        records: runMadeRecords,
+        captureSettled: runMadeCaptureSettled,
+      }),
+    );
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -1201,7 +1229,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             outcome: v.outcome,
           })),
         runMade:
-          run && runMadeSaysSomething
+          run && runMadeSaysSomething && runMadeRecords !== null
             ? { runId: run.id, artifactCount: runMadeRecords.length }
             : null,
         lifecycleDecisions: railLifecycleDecisions.map((d) => ({
@@ -1524,7 +1552,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   detail (`runMadeIsAStep`), and where opening a page of its own
                   would leave the reader with no rail at all. */}
               {runMadeSaysSomething && !runMadeIsAStep ? (
-                <RunMadePanel records={runMadeRecords} runStatus={run.status} />
+                <RunMadePanel records={runMadeRecords ?? []} runStatus={run.status} />
               ) : null}
               {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
@@ -1828,7 +1856,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                       // resolved gate's entry is.
                       settled: true,
                       surface: (
-                        <RunMadePanel records={runMadeRecords} runStatus={run.status} />
+                        <RunMadePanel records={runMadeRecords ?? []} runStatus={run.status} />
                       ),
                     }
                   : null;

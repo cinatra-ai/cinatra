@@ -332,6 +332,14 @@ async function driveClaimedRow(
   // "no_match" now means EXACTLY: every item was typed, and no rung of the
   // per-output ladder could claim any of them. It is a recorded verdict, not a
   // dropped output — the reason is on the row, per item.
+  //
+  // AND IT IS A VERDICT THE LEDGER CARRIES (cinatra#3029, forward + fix leg 1).
+  // This outbox detail used to be the ONLY place a `no_target` family survived:
+  // the ledger held nothing, so the artifact-side reading of the run could not
+  // tell an output nothing could house from an output that never existed. The
+  // pickup now settles every such item with its own ledger row, so this row and
+  // the ledger say the same thing about the same run, and neither is the only
+  // witness.
   return { status: written.length > 0 ? "done" : "no_match", detail };
 }
 

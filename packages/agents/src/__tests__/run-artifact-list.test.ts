@@ -7,6 +7,8 @@ import {
   shortRevision,
   typeBadgeFor,
   type RunArtifactRecord,
+  runMadeReading,
+  runMadeSaysSomething,
 } from "../run-artifact-list";
 
 // ---------------------------------------------------------------------------
@@ -170,5 +172,69 @@ describe("the row's small renderings", () => {
     expect(typeBadgeFor("@cinatra-ai/binary:file")).toBe("File");
     expect(typeBadgeFor("@cinatra-ai/blog:post", "Blog post")).toBe("Blog post");
     expect(typeBadgeFor("@cinatra-ai/blog:post", "   ")).toBe("Post");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// WHETHER THE RECORD MAY SPEAK AT ALL (cinatra#3029, forward + fix leg 1).
+//
+// The ratified drawing, section I.2, in its own words: "a reader who sees the
+// empty reading knows the run kept nothing — NOT THAT THE PAGE FAILED TO LOAD
+// IT." The screen converted every read failure to `[]` and drew the empty
+// reading over it, which asserts exactly the sentence the drawing forbids.
+// ---------------------------------------------------------------------------
+
+describe("the run-made reading", () => {
+  const row: RunArtifactRecord = {
+    artifactId: "a1",
+    representationRevisionId: "rev-1",
+    role: "wrote",
+    title: "The post",
+    objectTypeId: "@cinatra-ai/blog:post",
+    mime: "text/markdown",
+    annotation: null,
+  };
+
+  it("A FAILED READ IS UNKNOWN, never the empty reading", () => {
+    expect(
+      runMadeReading({ runIsTerminal: true, records: null, captureSettled: true }),
+    ).toBe("unknown");
+    // And the step therefore stands down entirely: the page says nothing about
+    // what the run made rather than saying, falsely, that it made nothing.
+    expect(
+      runMadeSaysSomething(
+        runMadeReading({ runIsTerminal: true, records: null, captureSettled: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("an ANSWERED empty read IS the empty reading, once the capture has settled", () => {
+    expect(
+      runMadeReading({ runIsTerminal: true, records: [], captureSettled: true }),
+    ).toBe("empty");
+    expect(
+      runMadeSaysSomething(
+        runMadeReading({ runIsTerminal: true, records: [], captureSettled: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("an empty read while the capture is still running is UNKNOWN", () => {
+    expect(
+      runMadeReading({ runIsTerminal: true, records: [], captureSettled: false }),
+    ).toBe("unknown");
+  });
+
+  it("rows are rows, settled or not", () => {
+    expect(
+      runMadeReading({ runIsTerminal: true, records: [row], captureSettled: false }),
+    ).toBe("rows");
+  });
+
+  it("a run that has not ended says nothing at all", () => {
+    expect(
+      runMadeReading({ runIsTerminal: false, records: [row], captureSettled: true }),
+    ).toBe("unknown");
   });
 });

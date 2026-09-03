@@ -25,7 +25,10 @@ import {
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 // The default road's document floor and item family (cinatra#3029, item 0.17).
-import { selectEndNodeOutputPickupItems } from "./end-node-output-pickup";
+import {
+  belowFloorTerminalRecord,
+  selectEndNodeOutputPickupItems,
+} from "./end-node-output-pickup";
 import { isTriggerReleased } from "./trigger-gate";
 // cinatra#2523: the setup-success hand-off asks whether the user has already
 // answered "When should this run?". trigger-store is already in this module's
@@ -1896,6 +1899,17 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ...(artifactMaterializations.length > 0
         ? { artifact_materializations: artifactMaterializations }
         : {}),
+      // THE FLOOR IS A RULE THE PICKUP **RECORDS** (cinatra#3029, item 0.17;
+      // forward + fix leg 1). "Below the floor an end-node value is a control
+      // datum ... and takes no road unless a binding names it — the document
+      // floor, a rule the pickup RECORDS, not a guess." The selection returned
+      // its below-floor list and the caller threw it away: the decision was only
+      // ever observable inside the pure selector, so nothing a person could read
+      // afterwards said WHY an output the run plainly produced is absent from
+      // what the run made. It is written here, into the run's own terminal
+      // record, beside the outputs that did take a road — each name with the
+      // serialised byte length that was measured against the floor.
+      ...belowFloorTerminalRecord(defaultRoadSelection),
       history: scrubbedHistory,
     },
   ];

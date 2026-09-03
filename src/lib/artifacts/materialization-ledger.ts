@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { getPooledDb } from "@/lib/db/pooled";
 import {
@@ -64,6 +64,16 @@ export type MaterializationDecidedVerdict = {
   modelAnswer?: string;
   confidence?: number;
   modelSkipped?: string;
+  /**
+   * WHY NO ARTIFACT (cinatra#3029, forward + fix leg 1). Present only on a row
+   * the road settled WITHOUT one: the ladder named a form, and no installed base
+   * could house it (`no_base_installed`), or two claimed it (`ambiguous`), or
+   * the write itself refused the bytes (`write_refused`). The row exists so the
+   * decision is readable; these three fields are what it says.
+   */
+  refusalReason?: string;
+  refusalDetail?: string;
+  refusalRung?: string;
 };
 
 export type MaterializationClaim =
@@ -390,6 +400,163 @@ export async function finalizeMaterializationAgainstExistingArtifact(input: {
     [input.ledgerId, input.orgId, input.artifactId, input.representationRevisionId],
   );
   return res.rows.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// THE PER-OUTPUT CONVERGENCE LOCK (cinatra#3029, forward + fix leg 1).
+//
+// The row's unique key is FOUR parts (run, output_id, extension, content_hash),
+// and on the default road the EXTENSION is not an input -- it is derived, by a
+// detection ladder whose answer may legitimately move between drives (the model
+// rung's per-organisation switch flips, a base is installed or taken down, a
+// runtime is reconfigured). So "read the finalized row, then type, then claim"
+// is not exactly-once: two drivers whose leases overlap both read no finalized
+// row, then resolve DIFFERENT extensions, then claim two different keys, and one
+// output of one run reaches two artifacts.
+//
+// A read cannot close that window, because the window is between the read and
+// the claim. A LOCK can: one output of one run is one critical section, taken
+// BEFORE anything is typed and held until the write has settled, so whatever the
+// ladder says the second time, the second driver enters only after the first has
+// finalized -- and then finds the finalized row and stops.
+//
+// A SESSION-scoped Postgres advisory lock is what that is: it is held by a
+// connection rather than by a transaction (the write inside spans several of its
+// own transactions), it is released when the connection is returned, and it is
+// released BY THE SERVER if the holder dies, which is exactly the crash
+// behaviour the road already relies on -- a dead driver must not fence the
+// output out of every later re-drive.
+// ---------------------------------------------------------------------------
+
+/** The advisory-lock key of one (run, output) pair, as a signed 64-bit pair.
+ *  Derived from a digest so the two halves are stable across processes. */
+export function outputConvergenceLockKey(
+  runId: string,
+  outputId: string,
+): { hi: number; lo: number } {
+  const digest = createHash("sha256")
+    .update(`default-road-convergence\u0000${runId}\u0000${outputId}`, "utf8")
+    .digest();
+  // Two signed 32-bit halves: `pg_advisory_lock(int, int)`.
+  return { hi: digest.readInt32BE(0), lo: digest.readInt32BE(4) };
+}
+
+/**
+ * Run `fn` while holding the per-output convergence lock.
+ *
+ * The whole per-output window -- the finalized-row read, the detection, the
+ * target resolution, the claim and the write -- runs inside it, so per-output
+ * exactly-once no longer depends on the extension the ladder happens to pick.
+ * The lock is taken on a DEDICATED pooled connection and released in a `finally`
+ * that also releases the connection, so neither a thrown write nor a crashed
+ * process can leave an output fenced.
+ */
+export async function withOutputConvergenceLock<T>(
+  input: { runId: string; outputId: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  ensurePostgresSchema();
+  const { hi, lo } = outputConvergenceLockKey(input.runId, input.outputId);
+  const client = await pool().connect();
+  try {
+    await client.query("SELECT pg_advisory_lock($1, $2)", [hi, lo]);
+    try {
+      return await fn();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1, $2)", [hi, lo]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SETTLED WITHOUT AN ARTIFACT (cinatra#3029, forward + fix leg 1).
+//
+// Item 0.17 asks for "one ledger row per item". The road used to write NO row at
+// all when no installed base could take the detected form: the outcome existed
+// only in the drive's return value, and a family of such items settled as
+// `no_match` with an empty ledger -- indistinguishable, to every later reader,
+// from a run that produced nothing. A decision that was made is a fact, and a
+// fact the ledger does not carry is a fact nobody can read.
+//
+// The row is `finalized` with NULL artifact refs: the road is DONE with that
+// output (a re-drive must not re-run a model over it) and there is no artifact,
+// which is precisely what the two NULLs say. `decided_verdict` carries the
+// ladder's verdict and the refusal beside it, so the row states WHY.
+// ---------------------------------------------------------------------------
+
+/**
+ * Settle a claimed row as finished WITHOUT an artifact, carrying the refusal.
+ * Phase-guarded like every other finalize, so a concurrent driver that settled
+ * first simply wins and this returns false.
+ */
+export async function settleMaterializationWithoutArtifact(input: {
+  orgId: string;
+  ledgerId: string;
+  decidedVerdict: MaterializationDecidedVerdict;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `UPDATE "${s}"."artifact_materializations"
+        SET phase = 'finalized', decided_verdict = $3
+      WHERE id = $1 AND org_id = $2 AND phase = 'claimed'
+      RETURNING id`,
+    [input.ledgerId, input.orgId, JSON.stringify(input.decidedVerdict)],
+  );
+  return res.rows.length === 1;
+}
+
+/**
+ * The road's own row for ONE output, ARTIFACT OR NOT -- the read that makes the
+ * per-output guard total.
+ *
+ * `findFinalizedMaterializationForOutput` answers only for a row that reached an
+ * artifact, so an output the road settled WITHOUT one would be re-detected,
+ * re-asked of the model and re-settled on every later drive. This read sees both
+ * kinds: `artifactId === null` is the settled-without-artifact row.
+ */
+export async function findSettledMaterializationForOutput(input: {
+  orgId: string;
+  runId: string;
+  outputId: string;
+  path: MaterializationPath;
+}): Promise<{
+  artifactId: string | null;
+  representationRevisionId: string | null;
+  extension: string;
+  decidedRung: string | null;
+  decidedVerdict: MaterializationDecidedVerdict | null;
+} | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT artifact_id, representation_revision_id, extension, decided_rung, decided_verdict
+       FROM "${s}"."artifact_materializations"
+      WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+        AND phase = 'finalized'
+      ORDER BY (artifact_id IS NULL), created_at ASC
+      LIMIT 1`,
+    [input.orgId, input.runId, input.outputId, input.path],
+  );
+  const row = res.rows[0] as
+    | {
+        artifact_id: string | null;
+        representation_revision_id: string | null;
+        extension: string;
+        decided_rung: string | null;
+        decided_verdict: MaterializationDecidedVerdict | null;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    artifactId: row.artifact_id ?? null,
+    representationRevisionId: row.representation_revision_id ?? null,
+    extension: row.extension,
+    decidedRung: row.decided_rung ?? null,
+    decidedVerdict: row.decided_verdict ?? null,
+  };
 }
 
 /**

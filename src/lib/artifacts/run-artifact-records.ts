@@ -139,10 +139,18 @@ export async function readRunArtifactRecords(input: {
     [input.runId, input.orgId],
   );
 
-  const writtenIds = new Set<string>();
+  // KEYED BY ARTIFACT **AND** REVISION (cinatra#3029, forward + fix leg 1).
+  // The suppression below used to key on the artifact id alone, so a run that
+  // READ revision A of an artifact and then WROTE revision B of it lost the read
+  // entirely: the drawing's "the revision the run filed or read" became one
+  // revision, and the reader was never told the run started from the other. Two
+  // rows are the same fact only when they name the same revision.
+  const writtenRevisions = new Set<string>();
   const records: RunArtifactRecord[] = [];
   for (const row of wrote.rows as Array<Record<string, unknown>>) {
-    writtenIds.add(String(row.artifact_id));
+    writtenRevisions.add(
+      `${String(row.artifact_id)}\u0000${String(row.representation_revision_id)}`,
+    );
     records.push({
       artifactId: String(row.artifact_id),
       representationRevisionId: String(row.representation_revision_id),
@@ -155,12 +163,16 @@ export async function readRunArtifactRecords(input: {
   }
   for (const row of used.rows as Array<Record<string, unknown>>) {
     const id = String(row.artifact_id);
-    // An artifact the run both READ and WROTE is one row, listed as written —
-    // the stronger fact about the run, and a reader never sees it twice.
-    if (writtenIds.has(id)) continue;
+    const revision = String(row.representation_revision_id);
+    // THE SAME REVISION read and written is ONE row, listed as written — the
+    // stronger fact about the run, and a reader never sees the same revision
+    // twice. A DIFFERENT revision is a different fact and keeps its own row:
+    // the run read what came before and filed what came after, and the page is
+    // where a reader sees both.
+    if (writtenRevisions.has(`${id}\u0000${revision}`)) continue;
     records.push({
       artifactId: id,
-      representationRevisionId: String(row.representation_revision_id),
+      representationRevisionId: revision,
       role: "used",
       title: titleFromObjectData(row.object_data),
       objectTypeId: String(row.object_type_id),
