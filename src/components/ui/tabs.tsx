@@ -74,13 +74,19 @@ function TabsContent({
 // stretches to the page edge. Use TabsListRow in place of TabsList for
 // that row; pair with `<PageHeader divider={false}>` so the rule does
 // not stack with the header rule above (spec §Dividers).
+//
+// cinatra#3216 — "IMMEDIATELY to the right of the last tab" (spec
+// §Dividers), so the grid carries NO column gap. It used to carry
+// `gap-7` (28px), which punched a visible hole between the last tab and
+// the start of the rule, so the row read as two separate marks instead
+// of one continuous line. Neither §Dividers nor §Tabs allows a gap.
 function TabsListRow({
   className,
   children,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.List>) {
   return (
-    <div className='grid grid-cols-[auto_1fr] items-end gap-7'>
+    <div className='grid grid-cols-[auto_1fr] items-end'>
       <TabsList className={cn('border-b-0', className)} {...props}>
         {children}
       </TabsList>
