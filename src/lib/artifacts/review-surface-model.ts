@@ -204,7 +204,14 @@ export function reviewSettledCopy(outcome: ReviewSettledOutcome): {
       // decided after it are the same row and read the same way.
       return {
         title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
-        body: "The gate is resolved and the run has been released to continue.",
+        // THE DRAWN SENTENCE, VERBATIM (fix leg 7). The eighth proof round
+        // measured this line as "The gate is resolved and the run has been
+        // released to continue." — a sentence about the RUN. The drawing's
+        // settled marker outside a conversation reads about the WORK:
+        // "Decided on the revision above. These are the words that will be
+        // sent." The comment above this function already quoted it; the copy
+        // had not caught up.
+        body: "Decided on the revision above. These are the words that will be sent.",
       };
     case "rejected":
       // LEGACY ONLY (cinatra#3080). No new decision can produce a reject — the
@@ -325,10 +332,20 @@ export function reviewTypeLabel(objectType: string): string {
     ? objectType.slice(objectType.indexOf("/") + 1)
     : objectType;
   const base = (afterScope.split(":")[0] ?? afterScope).trim();
-  const pretty = base
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  const words = base.split("-").filter(Boolean);
+  // THE PILL READS THE KIND ALONE (cinatra#3080, fix leg 7). Two things made it
+  // read the type id back instead. The packaging noun — a type packaged as
+  // `blog-post-artifact` is still a blog post, and the drawing's pills say so:
+  // `@cinatra-ai/screenshot-artifact` draws "Screenshot",
+  // `@cinatra-ai/slide-deck-artifact` draws "Slide deck",
+  // `@cinatra-ai/brand-voice-artifact` draws "Brand voice". And the CASE: every
+  // pill the drawing draws is SENTENCE case — "Blog post", "Blog image", "Email
+  // body", "Slide deck" — never the Title Case the eighth proof round measured
+  // ("Blog Post Artifact").
+  const kind = words.filter((w) => w !== "artifact" && w !== "artifacts");
+  const spoken = kind.length > 0 ? kind : words;
+  const pretty = spoken
+    .map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(" ");
   return pretty || objectType;
 }
@@ -361,8 +378,8 @@ export function reviewTargetRowFacts(
   now: Date = new Date(),
 ): string[] {
   return [
-    artifact.ownerLevel,
-    artifact.visibility,
+    spokenFact(artifact.ownerLevel),
+    spokenFact(artifact.visibility),
     artifact.mime,
     `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
   ];
@@ -390,7 +407,20 @@ export function reviewTargetRowFacts(
 function relativeUpdatedTime(updatedAt: string, now: Date): string {
   const at = new Date(updatedAt);
   if (Number.isNaN(at.getTime())) return updatedAt;
-  return formatDistance(at, now, { addSuffix: true });
+  // THE DRAWN ABBREVIATION (cinatra#3080, fix leg 7). §IV of the ratified review
+  // drawing prints the identity line's last segment as "updated 8 min ago", not
+  // "8 minutes ago": the line is mono, ten pixels and already carrying five
+  // segments, and the drawing spends its width on the facts rather than on the
+  // unit. Only the unit is abbreviated; every other magnitude keeps the shared
+  // formatter's own words.
+  return formatDistance(at, now, { addSuffix: true }).replace(/\bminutes?\b/, "min");
+}
+
+/** A row fact as the drawing prints it: the substrate's own word, capitalized
+ *  for a reading ("Team", "Private"), never a labelled prefix and never a raw
+ *  lower-case column value dropped onto a person's line. */
+function spokenFact(value: string): string {
+  return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,

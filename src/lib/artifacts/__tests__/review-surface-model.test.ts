@@ -108,7 +108,8 @@ describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
 describe("§II — the immutable header projections", () => {
   it("prettifies an object-type id into a short type label", () => {
     expect(reviewTypeLabel("@cinatra-ai/email:draft")).toBe("Email");
-    expect(reviewTypeLabel("@acme/support-desk:case")).toBe("Support Desk");
+    // SENTENCE case, as every pill the drawing draws is written (fix leg 7).
+    expect(reviewTypeLabel("@acme/support-desk:case")).toBe("Support desk");
     expect(reviewTypeLabel("plain")).toBe("Plain");
   });
 
@@ -377,7 +378,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // cannot re-introduce one by passing it.
     expect(reviewSettledCopy("approved")).toEqual({
       title: "Continued",
-      body: "The gate is resolved and the run has been released to continue.",
+      body: "Decided on the revision above. These are the words that will be sent.",
     });
     // A LEGACY reject row stays readable — it simply can no longer be produced.
     expect(reviewSettledCopy("rejected").title).toBe("Rejected");
@@ -442,7 +443,9 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    // The drawn reading (fix leg 7): the values spoken, and the unit abbreviated
+    // as §IV prints it — "Team · Private · text/html · updated 8 min ago".
+    expect(line).toBe("Organization · Organization · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -457,7 +460,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -474,7 +477,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts[3]).toBe("updated 8 min ago");
     expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
   });
 
@@ -489,7 +492,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 min ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {

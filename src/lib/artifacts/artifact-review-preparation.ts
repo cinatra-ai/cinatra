@@ -276,7 +276,7 @@ export interface PrepareReviewPorts {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
-  }): ArtifactRendererProps;
+  }): Promise<ArtifactRendererProps> | ArtifactRendererProps;
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +451,12 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  const props = ports.buildProps({
+  // AWAITED, like `resolveMount` above (cinatra#3080, fix leg 7). The content
+  // channel reads the pinned revision on the SERVER — "the text arm streams
+  // bytes off the blob store, and the plan asks for an asynchronous builder
+  // precisely so no display is ever tempted to fetch them itself" — so the props
+  // a review target is built with cannot be assembled synchronously any more.
+  const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,
     mime,

@@ -1700,8 +1700,10 @@ describe("a settled card that knows its outcome", () => {
     const container = await settledWith("approved", "Dana Okonkwo");
     expect(container.textContent).toContain("Continued");
     expect(container.textContent).not.toContain("Dana Okonkwo");
+    // THE DRAWN SENTENCE (fix leg 7). The marker used to say what happened to
+    // the RUN; the drawing's settled marker says what happened to the WORK.
     expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
+      "Decided on the revision above. These are the words that will be sent.",
     );
     expect(
       container

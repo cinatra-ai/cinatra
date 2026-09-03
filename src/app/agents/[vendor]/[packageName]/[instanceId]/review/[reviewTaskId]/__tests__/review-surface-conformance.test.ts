@@ -331,7 +331,11 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
   });
 
   it("the form rung renders NO provenance region", () => {
-    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+    // It shares the one arm the other two rendered rungs take: the drawing lets
+    // none of the three name what drew the work.
+    expect(MODEL).toMatch(
+      /case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/,
+    );
   });
 
   // cinatra#3080 — THE ROW THE NEWER DRAWING FORBIDS. This suite's closed set
@@ -596,7 +600,9 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     // the affordance that decides nothing was the strongest act on the surface.
     // Asking for another go is Regenerate's, on the floor; what is typed here is
     // a note, and the window says so.
-    expect(REVIEW_PROMPT_WINDOW).toMatch(/data-action="comment-review -> annotated"/);
+    // On its OWN marker, not a `data-action`: the window is the conversational
+    // reading of Comment, and the card emits no floor action anchor at all.
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/data-review-prompt-road="comment-review -> annotated"/);
     expect(stripComments(REVIEW_PROMPT_WINDOW)).not.toMatch(/data-action="request-changes/);
     // And it adds NO fourth decision affordance — the request rides the Comment path.
     expect(stripComments(REVIEW_PROMPT_WINDOW)).not.toMatch(/request changes<|>Request changes/i);

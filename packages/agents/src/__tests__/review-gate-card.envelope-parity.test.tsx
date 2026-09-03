@@ -53,6 +53,20 @@
 // byte for byte — which is what keeps this guard honest here too: the floor had
 // to move exactly the states that draw a decision and no others.
 
+//
+// THIRTY-TWO ENTRIES CARRY THE REDRAWN HEADER STRIP AND SETTLED MARKER
+// (cinatra#3080, PR #3100, fix leg 7). The eighth proof round graded the gate
+// against the ratified drawing and charged the header strip with three things —
+// a clipboard glyph the drawing draws nowhere, no bottom rule, and no
+// target-naming line beside the word — and the settled marker with being a
+// centred icon stack over the wrong sentence. Both are redrawn to the drawing,
+// so every capture that draws a header or a settled marker legitimately moved:
+// the twelve that did NOT move are the four `absent` captures (no DOM at all),
+// the four `advisory` ones (§VII owns them and the card draws nothing) and the
+// four `settled` ones with no recorded outcome, which draw `ReviewGateBlocked`
+// and no header. That is what keeps this guard honest here too: the redraw had
+// to move exactly the states that draw a header and no others.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 

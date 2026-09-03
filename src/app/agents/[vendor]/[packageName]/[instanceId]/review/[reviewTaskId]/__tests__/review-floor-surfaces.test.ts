@@ -97,7 +97,12 @@ describe("the floor's own words, everywhere a review is read (cinatra#3080)", ()
     // The DRAWN review shell renders no header block.
     const shell = code.slice(code.indexOf("function ReviewShell"));
     const shellBody = shell.slice(0, shell.indexOf("\nfunction "));
-    expect(shellBody).not.toMatch(/PageHeader/);
+    // The DRAWN block is what the drawing forbids. `PageHeaderTitleSync` draws
+    // no pixels at all — it is the crumb-title broadcast the removed header used
+    // to carry, kept so the breadcrumb stops humanising a raw review-task id —
+    // so the assertion is on the header COMPONENT, not on the word.
+    expect(shellBody).not.toMatch(/<PageHeader[\s/>]/);
+    expect(shellBody).not.toMatch(/PageHeaderDescription|PageHeaderHeading|PageHeaderEyebrow/);
     // What page headers remain belong to the REFUSAL readings — a viewer who may
     // not see the run is owed a page that names itself, and no gate is drawn
     // there to do it — and none of them carries a retired word.

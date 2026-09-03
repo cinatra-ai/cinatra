@@ -99,12 +99,14 @@ describe("§V — a resolved renderer says nothing about itself on the target", 
     expect(html).not.toMatch(/data-conformance-id="review-provenance-marketplace"/);
   });
 
-  it("names the type ONCE — in the header, never again beneath it", () => {
-    // The header's own type tag is §IV's and stays; the forbidden row drew the
-    // same words a second time, immediately under it. One occurrence is the
-    // header's; two was the defect.
+  it("names the type NOWHERE — the ONE header that names it is the card's", () => {
+    // The forbidden row drew the type a second time, immediately under the
+    // header. Both are gone from this panel now: §IV's header moved out of the
+    // island and onto the card (cinatra#3141 item 7), so the panel names the
+    // type zero times and the card names it once — which is what "exactly one
+    // header per pinned target" means.
     const html = render(BUILD_MAP);
-    expect(html.split("Blog Post Artifact").length - 1).toBe(1);
+    expect(html.split("Blog post").length - 1).toBe(0);
   });
 
   it("draws nothing above the work for the host's own text rendering", () => {

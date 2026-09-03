@@ -140,7 +140,6 @@ import {
   ArrowRight,
   Check,
   CircleX,
-  ClipboardCheck,
   MessageSquare,
   RotateCcw,
 } from "lucide-react";
@@ -479,8 +478,21 @@ export function ReviewGateCard({
   submitAction,
   picturePrompt,
   runId,
+  agentLabel,
+  step,
 }: {
   view: ReviewGateCardView;
+  /**
+   * WHAT THE HEADER NAMES (cinatra#3080, fix leg 7). The drawing's header strip
+   * carries a mono line beside the word — "Outreach agent · run rn_8f31… · step
+   * 4 of 6" — and every fact in it is one the HOST already holds at render time:
+   * the run surface that mounts this gate drew the agent's name and the step
+   * ladder before the card ever resolved. Both are optional and both degrade:
+   * the line prints the segments it was given and nothing else.
+   */
+  agentLabel?: string | null;
+  /** Where the gated step sits in the run, when the host knows the ladder. */
+  step?: { index: number; total: number } | null;
   /**
    * The RUN this gate belongs to (cinatra#3141 item 1). The gate's conversational
    * prompt window — the drawing's one channel for requesting changes — keeps its
@@ -812,6 +824,11 @@ export function ReviewGateCard({
   const body = renderState({
     state,
     targetHeaders,
+    naming: {
+      agentLabel: agentLabel ?? null,
+      runId: runId ?? null,
+      step: step ?? null,
+    },
     promptWindow:
       runId != null && runId !== ""
         ? (canComment: boolean) => (
@@ -874,6 +891,8 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  /** What the header strip's mono line names — the host's own facts. */
+  naming: ReviewGateNaming;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
@@ -894,6 +913,7 @@ function renderState(args: {
 }): ReactElement | null {
   const {
     state,
+    naming,
     targetHeaders,
     promptWindow,
     islandSrc,
@@ -912,7 +932,7 @@ function renderState(args: {
     case "loading":
       return (
         <>
-          <ReviewGateHeader pending />
+          <ReviewGateHeader pending naming={naming} />
           <ReviewGateLoading />
         </>
       );
@@ -962,7 +982,7 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} />
+          <ReviewGateHeader pending={false} naming={naming} />
           {/* §IV — the header the decision was taken on, kept over the reviewed
               work: a settled gate names what was reviewed whether or not its
               read-only preview has painted. */}
@@ -1006,7 +1026,7 @@ function renderState(args: {
       const suggestions = state.suggestions ?? [];
       return (
         <>
-          <ReviewGateHeader pending />
+          <ReviewGateHeader pending naming={naming} />
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
@@ -1511,16 +1531,78 @@ export function SuggestionChips({
  * the awaiting-your-decision pill. Those go; the heading stays and says what the
  * region is. (§XIII was written after this branch's pin was taken, which is why
  * fix leg 5 could not read it.)
+ *
+ * THE STRIP, AS DRAWN (fix leg 7). The eighth proof round charged three
+ * things against it. NO GLYPH: the drawing's header strip is the word and
+ * the naming line and nothing else, and the clipboard tile drawn before the
+ * word appears in no frame of it. A BOTTOM RULE: the strip carries
+ * `border-bottom:1px solid var(--line)`, which is what separates the header
+ * from the body beneath it. AND THE TARGET-NAMING LINE: beside the word, on
+ * the same baseline, a mono ten-pixel muted line naming what is under
+ * review — "Outreach agent \u00b7 run rn_8f31\u2026 \u00b7 step 4 of 6".
+ *
+ * The naming is the HOST's to supply, not the wire's: the run surface that
+ * draws this gate already knows the agent, the run and the step, and a field
+ * added to the resolve answer would be a second, later-arriving source for
+ * facts the host holds at render time. A host that holds none passes none,
+ * and the line is not drawn at all.
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
+export type ReviewGateNaming = {
+  /** The agent whose run raised the gate, as a person would name it. */
+  agentLabel: string | null;
+  /** The run the gate is a step of. */
+  runId: string | null;
+  /** Where in the run the gated step sits. */
+  step: { index: number; total: number } | null;
+};
+
+/** The run id, truncated to the length the drawing prints it at ("rn_8f31…"). */
+function shortRunId(runId: string): string {
+  return runId.length > 8 ? `${runId.slice(0, 7)}…` : runId;
+}
+
+/**
+ * The mono line the drawing draws BESIDE the word — "Outreach agent · run
+ * rn_8f31… · step 4 of 6". It says only what the host could source: a segment
+ * the card cannot name truthfully is left out rather than invented, because a
+ * gate that names the wrong run is worse than a gate that names none.
+ */
+export function reviewGateNamingLine(naming: ReviewGateNaming | null): string | null {
+  if (!naming) return null;
+  const segments: string[] = [];
+  if (naming.agentLabel) segments.push(naming.agentLabel);
+  if (naming.runId) segments.push(`run ${shortRunId(naming.runId)}`);
+  if (naming.step) segments.push(`step ${naming.step.index} of ${naming.step.total}`);
+  return segments.length > 0 ? segments.join(" · ") : null;
+}
+
+export function ReviewGateHeader({
+  pending,
+  naming,
+}: {
+  pending: boolean;
+  naming: ReviewGateNaming | null;
+}): ReactElement {
+  const namingLine = reviewGateNamingLine(naming);
   return (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
-        <ClipboardCheck aria-hidden="true" className="size-4" />
-      </span>
+    <div className="flex flex-wrap items-baseline gap-2 border-b border-line pb-2.5">
       <span className="font-sans text-sm font-bold text-foreground">
         {pending ? "Review requested" : "Review"}
       </span>
+      {namingLine ? (
+        <span
+          data-review-gate-naming=""
+          // The SAME mono treatment the target header's identity line already
+          // carries a few lines below — `font-mono text-badge-2xs tracking-tight
+          // text-muted-foreground`. The drawing letter-spaces both at 0.04em; the
+          // shipped tracking scale has no token at that value and arbitrary
+          // tracking is refused (cinatra#886), so the two mono lines stay
+          // identical to each other rather than one of them drifting.
+          className="font-mono text-badge-2xs tracking-tight text-muted-foreground"
+        >
+          {namingLine}
+        </span>
+      ) : null}
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-brand-mustard" aria-hidden="true" />
@@ -2048,15 +2130,30 @@ export function ReviewGatePromptWindow({
   };
 
   return (
-    // The conversational prompt window (cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    // The conversational prompt window (cinatra#2063). The anchor marks this
+    // mount for the run-embedded conformance closed set.
+    //
+    // WHAT IS TYPED HERE IS A NOTE, AND ONLY A NOTE (cinatra#3080). Until this
+    // branch a non-empty sentence on a single-target lifecycle gate resolved as
+    // `changes_requested` — the gate closed and a repair opened, from a window
+    // whose whole promise is that it decides nothing. Asking for another go is
+    // REGENERATE's, on the floor above, where it carries the right a terminal
+    // decision needs. So `handleSubmit` files what is typed through the Comment
+    // path and the gate stays pending: the outcome the card reads back is
+    // `annotated`, and its own message is "Comment added to the review. It is
+    // still open." The marker below says which road this is; it moved with the
+    // window when the card took the mount over from the review route, and it
+    // travelled as the older wording by accident.
+    //
+    // AND IT IS NOT A `data-action` (fix leg 7). The window is the
+    // CONVERSATIONAL reading of Comment, not a fourth decision affordance, and
+    // the card composes the floor rather than drawing one: not a single
+    // review-action anchor may be emitted by this file, which is what makes "one
+    // renderer, every host" true rather than asserted. The road is named on a
+    // marker of the window's own.
     <div
       data-conformance-id="review-prompt-window"
-      data-action="request-changes -> changes-requested"
+      data-review-prompt-road="comment-review -> annotated"
       ref={setPortalTarget}
     >
       <HitlConversationPanel

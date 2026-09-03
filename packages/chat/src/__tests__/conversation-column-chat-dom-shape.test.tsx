@@ -79,7 +79,10 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
 
 import { mountSurface } from "./conversation-column-harness";
-import { COMPOSER_RESERVED_SPACE_FLOOR_PX } from "../composer-reserved-space";
+import {
+  COMPOSER_RESERVED_SPACE_FLOOR_PX,
+  composerReservedSpacePx,
+} from "../composer-reserved-space";
 
 afterEach(cleanup);
 
@@ -308,27 +311,30 @@ describe("§I — the chat box is the one primary input, on every host (#2865)",
   // still the pre-measurement paint); what must be true is that the list's real
   // padding comes from the composer's own height.
   it("clears the docked composer by MEASURING it, never by the fixed guess", async () => {
+    // THE ONE MEASUREMENT (fix leg 7). This branch measured the composer with
+    // its own observer; main landed the same measurement for cinatra#3044 with a
+    // shared floor helper, and the two are now one: the stream reserves
+    // `composerReservedSpacePx(composer.offsetHeight)`, with the old `pb-24`
+    // constant kept only as the floor a zero measurement answers. The invariant
+    // this test exists for is unchanged — 96px of guess leaves a review card's
+    // decision floor under the composer, and the measurement is what puts it
+    // above.
     const measured = 180;
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      height: measured,
-      width: 0,
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: measured,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    const offsetHeight = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(measured);
     try {
       const { container } = await mountSurface("chat");
       const column = container.querySelector<HTMLElement>("[data-parity-surface='chat'] > div");
       const list = column!.children[0] as HTMLElement;
-      // 96px of guess would leave the floor under the composer; the measurement
-      // plus the gap is what puts it above.
-      await waitFor(() => expect(list.style.paddingBottom).toBe(`${measured + 16}px`));
+      await waitFor(() =>
+        expect(list.style.paddingBottom).toBe(`${composerReservedSpacePx(measured)}px`),
+      );
+      expect(composerReservedSpacePx(measured)).toBeGreaterThan(
+        COMPOSER_RESERVED_SPACE_FLOOR_PX,
+      );
     } finally {
-      rect.mockRestore();
+      offsetHeight.mockRestore();
     }
   });
 });

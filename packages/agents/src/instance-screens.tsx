@@ -1742,10 +1742,22 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // The SAME column the frame draws (cinatra#3080, fix leg 6):
                     // a rail that stays in view on the branch with gate steps and
                     // scrolls away on the branch without them would be two rails.
-                    // The holder carries no anchor of its own — this file's
-                    // run-embedded anchor set is closed by the ratified spec, and
-                    // the rail inside it already carries its own.
-                    <div className={RUN_SURFACE_RAIL_COLUMN_CLASS}>{railNode}</div>
+                    // The holder carries no CONFORMANCE ID of its own — this
+                    // file's run-embedded anchor set is closed by the ratified
+                    // spec, and the rail inside it already carries its own.
+                    //
+                    // IT IS STILL MEASURABLE (fix leg 7). The eighth proof round
+                    // read this branch and reported that the sticky column "never
+                    // rendered" on a one-step run, because the only thing it
+                    // could name was the rail PANEL inside it. The column did
+                    // render; it was anonymous. The marker below is the same
+                    // attribute the two-column frame's own rail column carries,
+                    // so a graded frame can measure the sticky column on either
+                    // branch — and it is an attribute, not a conformance id, so
+                    // the closed anchor set is untouched.
+                    <div data-run-step-rail-column="" className={RUN_SURFACE_RAIL_COLUMN_CLASS}>
+                      {railNode}
+                    </div>
                   ) : null}
                   <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
                 </>

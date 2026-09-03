@@ -74,11 +74,20 @@ export function RailExtraEntry({
         // entry (`run-step-rail.ts`); this component never sees the raw
         // disposition, so it cannot name it a second way. An act this build
         // cannot read says "Settled" — true, and never a raw column.
+        // ONE LABEL, MIDDOT-JOINED, AND THE WORD LOWERCASE (fix leg 7). The
+        // eighth proof round measured this row as two un-joined spans —
+        // "Review" then a title-case "Continued" — against the rail the drawing
+        // draws, whose settled rows read "Review · the post · continued" and
+        // "Review · featured image · continued": one sentence a person reads, in
+        // which the settled word is a word and not a badge. The TARGET segment
+        // between them is not drawn here: this rail entry carries no target
+        // name, and naming the wrong artifact in a run's history is worse than
+        // naming none.
         <span
-          className="ms-1.5 text-badge-2xs tracking-wide text-muted-foreground"
+          className="text-muted-foreground"
           data-rail-gate-settled={settledWord}
         >
-          {settledWord}
+          {` · ${settledWord.toLowerCase()}`}
         </span>
       ) : null}
       {isVerification ? (
