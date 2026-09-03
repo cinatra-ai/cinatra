@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ARTIFACT_EDIT_CHANNEL_VERSION,
   ARTIFACT_EDIT_IDLE_PAUSE_MS,
+  ARTIFACT_EDIT_KEEPALIVE_CAP_BYTES,
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
   artifactEditByteLength,
   artifactEditMessage,
@@ -195,6 +196,178 @@ describe("the one road a display has to the host", () => {
       outcome: "failed",
       reason: "malformed-answer",
     });
+  });
+
+  // A STATUS THIS CHANNEL DID NOT EXPECT IS NOT A SUCCESS, whatever the body
+  // says. An edge that answers 500, a session that has lapsed and answers 401,
+  // a proxy that answers 502 with a cached page — each can carry a readable
+  // JSON body, and one of them carrying the word "saved" must never draw the
+  // check. The drawing: the indicator "never reads as stored before it is".
+  it("never reads a NON-OK answer as stored, whatever its body claims", async () => {
+    const answered = async (status: number, body: unknown) =>
+      saveArtifactEdit(EDITABLE, "# Two\n", {
+        fetch: (async () =>
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          })) as unknown as typeof fetch,
+      });
+
+    // The one that matters: a failure carrying a success body.
+    expect(await answered(500, { outcome: "saved", revisionId: "rev-2", revision: 2 })).toEqual({
+      outcome: "failed",
+      reason: "server",
+    });
+    expect(await answered(502, { outcome: "unchanged", revisionId: "rev-1" })).toEqual({
+      outcome: "failed",
+      reason: "server",
+    });
+    // A lapsed session is a REFUSAL a reader can act on, not a server fault.
+    expect(await answered(401, { outcome: "saved", revisionId: "rev-2", revision: 2 })).toEqual({
+      outcome: "refused",
+      reason: "no-write-rights",
+    });
+    expect(await answered(403, { outcome: "saved", revisionId: "rev-2", revision: 2 })).toEqual({
+      outcome: "refused",
+      reason: "no-write-rights",
+    });
+    // A DECISION UNDER A FAILING STATUS IS NOT THIS CHANNEL'S PROTOCOL. The save
+    // route answers EVERY outcome it has — saved, unchanged, stale, refused —
+    // on 200, and reserves its failing statuses for the cases that carry no
+    // outcome at all. So a stale-looking body under a 500 is a proxy or an edge
+    // inventing one, and honouring it would be worse than ignoring it: the
+    // display DROPS the change set waiting behind a stale refusal and replaces
+    // the words on screen, so a fabricated stale answer would destroy the
+    // reader's work on a server fault.
+    expect(
+      await answered(500, {
+        outcome: "stale",
+        latestRevisionId: "rev-9",
+        latestRevision: 9,
+        text: "# Nine\n",
+      }),
+    ).toEqual({ outcome: "failed", reason: "server" });
+    expect(await answered(500, { outcome: "refused", reason: "unknown-base" })).toEqual({
+      outcome: "failed",
+      reason: "server",
+    });
+    // The one status that says something a reader can act on still does.
+    expect(
+      await answered(401, {
+        outcome: "stale",
+        latestRevisionId: "rev-9",
+        latestRevision: 9,
+        text: "# Nine\n",
+      }),
+    ).toEqual({ outcome: "refused", reason: "no-write-rights" });
+  });
+
+  // THE CHANNEL PARSES EVERY OUTCOME IT DECLARES. "failed" is one of the five
+  // in the union, so a host that answers with it must be read as that failure
+  // and explained with its own sentence — not misread as an answer that could
+  // not be parsed, which tells the reader the wrong thing about what went wrong.
+  it("reads back the FAILED outcome it declares, with its own reason", () => {
+    expect(readArtifactEditOutcome({ outcome: "failed", reason: "server" })).toEqual({
+      outcome: "failed",
+      reason: "server",
+    });
+    expect(readArtifactEditOutcome({ outcome: "failed", reason: "transport" })).toEqual({
+      outcome: "failed",
+      reason: "transport",
+    });
+    expect(readArtifactEditOutcome({ outcome: "failed", reason: "malformed-answer" })).toEqual({
+      outcome: "failed",
+      reason: "malformed-answer",
+    });
+    // A reason outside the closed set is still not readable — INCLUDING the
+    // names every object inherits. A membership test that walks the prototype
+    // chain reads "toString" as a reason this channel has a sentence for, and
+    // then hands back a union member that is not one of the three.
+    for (const reason of ["whatever", "toString", "constructor", "hasOwnProperty"]) {
+      expect(readArtifactEditOutcome({ outcome: "failed", reason })).toEqual({
+        outcome: "failed",
+        reason: "malformed-answer",
+      });
+      expect(readArtifactEditOutcome({ outcome: "refused", reason })).toEqual({
+        outcome: "failed",
+        reason: "malformed-answer",
+      });
+    }
+  });
+
+  // LEAVING THE VIEW IS ONE OF THE TWO THINGS THAT BOUNDS A CHANGE SET, and the
+  // page is often gone the instant after. An ordinary request is cancelled with
+  // the document that started it, so the last change set of a session — the one
+  // a person typed and then navigated away from — is exactly the one most
+  // likely to be lost. The request is marked to outlive its document when the
+  // caller says it is a leaving save and the change set is small enough for the
+  // browsers own keepalive budget.
+  it("marks a LEAVING save to outlive the document that started it", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ outcome: "saved", revisionId: "rev-2", revision: 2 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await saveArtifactEdit(EDITABLE, "# Two\n", {
+      fetch: fetchImpl as unknown as typeof fetch,
+      leaving: true,
+    });
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive).toBe(true);
+
+    // An ordinary save is NOT keepalive: the budget is small and shared, and an
+    // ordinary save has a live document to complete in.
+    fetchImpl.mockClear();
+    await saveArtifactEdit(EDITABLE, "# Two\n", {
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive).toBeUndefined();
+
+    // AND THE BUDGET IS RESPECTED. A change set past the browsers keepalive
+    // limit is sent as an ordinary request rather than one the browser would
+    // refuse outright — a save that might complete beats one that cannot start.
+    fetchImpl.mockClear();
+    await saveArtifactEdit(EDITABLE, "x".repeat(ARTIFACT_EDIT_KEEPALIVE_CAP_BYTES + 1), {
+      fetch: fetchImpl as unknown as typeof fetch,
+      leaving: true,
+    });
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive).toBeUndefined();
+
+    // AND THE BUDGET IS THE REQUEST'S, NOT THE TEXT'S. The browser weighs what
+    // it is asked to carry, envelope and all — so a change set whose TEXT sits
+    // under the budget can still make a request that does not, and a channel
+    // that weighed only the text would mark that request and have the browser
+    // refuse it outright. Measure the envelope this channel actually sends,
+    // then sit one byte either side of the boundary.
+    fetchImpl.mockClear();
+    await saveArtifactEdit(EDITABLE, "", {
+      fetch: fetchImpl as unknown as typeof fetch,
+      leaving: true,
+    });
+    const envelopeBytes = new TextEncoder().encode(
+      String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body),
+    ).length;
+    expect(envelopeBytes).toBeGreaterThan(0);
+
+    // Exactly at the budget: still carried past the document.
+    fetchImpl.mockClear();
+    await saveArtifactEdit(
+      EDITABLE,
+      "x".repeat(ARTIFACT_EDIT_KEEPALIVE_CAP_BYTES - envelopeBytes),
+      { fetch: fetchImpl as unknown as typeof fetch, leaving: true },
+    );
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive).toBe(true);
+
+    // One byte past it, with the TEXT still well under the budget.
+    fetchImpl.mockClear();
+    await saveArtifactEdit(
+      EDITABLE,
+      "x".repeat(ARTIFACT_EDIT_KEEPALIVE_CAP_BYTES - envelopeBytes + 1),
+      { fetch: fetchImpl as unknown as typeof fetch, leaving: true },
+    );
+    expect(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive,
+    ).toBeUndefined();
   });
 
   it("refuses a change set over the cap before it reaches the host at all", async () => {

@@ -255,8 +255,27 @@ describe("§I–VI — render→spec: the route invents no anchor outside the cl
 describe("§I — one type-agnostic surface (G1-clean: no concrete type / renderer id)", () => {
   it("the model + panel key on the OPAQUE mount kind, never a concrete type/binding/renderer id", () => {
     // The floor anchor is derived from the mount kind union only — the model
-    // reads `mount.kind`, and nothing narrower.
-    expect(MODEL).toMatch(/mount\.kind === "floor"/);
+    // switches on the mount KIND, and on nothing narrower. (The default branch
+    // spells that switch exhaustively, so a new mount kind is a type error
+    // rather than a silent `null`; this arm reads that form.)
+    expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+    const model = stripComments(MODEL);
+    // The equality form is only the CHEAPEST way to spell the thing the rule
+    // forbids. A switch, a guard or any other comparison on a concrete field
+    // narrows the surface just as surely, so none of those is allowed either.
+    // Reading such a field is not narrowing on it — the floor descriptor still
+    // carries `mount.packageName` through — so this bans the branch, not the read.
+    expect(model).not.toMatch(/mount\.(objectType|renderer|packageName)\s*(===|!==|==|!=)/);
+    expect(model).not.toMatch(/switch\s*\(\s*mount\.(objectType|renderer|packageName)/);
+    expect(model).not.toMatch(/(if|while)\s*\(\s*!?mount\.(objectType|renderer|packageName)\s*[)&|]/);
+    // And every switch the model makes ON THE MOUNT discriminates on its KIND.
+    // (The file holds other switches — over refusal reasons, over outcomes —
+    // that have nothing to do with the mount; this reads the mount's own.)
+    const mountSwitches = [...model.matchAll(/switch\s*\(\s*(mount[^)]*)\)/g)].map((m) =>
+      m[1].trim(),
+    );
+    expect(mountSwitches.length).toBeGreaterThan(0);
+    expect(mountSwitches.every((d) => d === "mount.kind")).toBe(true);
     // The region resolution reads the mount kind and nothing about the artifact.
     expect(MODEL).toMatch(/mount: ReviewTargetMount,?\s*\n?\s*\): ReviewProvenanceConformanceId \| null/);
     // No renderer-id / concrete-type prop is threaded through the surface.
