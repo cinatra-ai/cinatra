@@ -246,8 +246,55 @@ export function readDefaultRoadBaseCandidates(): DefaultRoadTargetCandidate[] {
  * NULL survives for the one case that is genuinely unknown: a package the lock
  * does not name, which no base reaching this function can be.
  */
-export function readDefaultRoadExtensionPin(extension: string): string | null {
-  return findRequiredInProdEntry(extension)?.versionRange ?? null;
+export type DefaultRoadProducingVersion = {
+  /**
+   * A CONCRETE version, or null -- NEVER a range. `producing_extension_version`
+   * is written by one other producer (`extension-artifact-reads`) and it puts a
+   * concrete `packageVersion` there, so a caret range in the same column would
+   * read as a version that was never installed. The lock names a concrete
+   * version only when it pins one exactly; otherwise this stays null and the
+   * range is recorded where a range belongs.
+   */
+  version: string | null;
+  /** The host's pin for the base, VERBATIM (`^0.1.0`, `0.1.7`, ...). */
+  pin: string | null;
+};
+
+const EXACT_PINNED_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
+export function readDefaultRoadExtensionPin(extension: string): DefaultRoadProducingVersion {
+  const pin = findRequiredInProdEntry(extension)?.versionRange?.trim() ?? null;
+  return {
+    pin,
+    version: pin != null && EXACT_PINNED_VERSION_RE.test(pin) ? pin : null,
+  };
+}
+
+/**
+ * THE LEDGER IDENTITY EXCLUDES THE PATH (cinatra#1893 Q3, convergence over
+ * forward + fix leg 1). `claimMaterialization` keys on
+ * (run, output, extension, content hash), so a row this road gets back can
+ * belong to ANOTHER materialization path. The shared write core refuses that
+ * case (`path_collision`); the default road's three DIRECT claims -- the
+ * no-base refusal, the same-bytes reuse and the write refusal -- have to refuse
+ * it too, or they finalize / settle a foreign road's journal row.
+ *
+ * A collision is a fact about the MOMENT, never about the work, so it THROWS:
+ * the lease is released and the sweep re-drives, exactly as the write path's
+ * own `path_collision` handling does.
+ */
+function assertOwnDefaultRoadClaim(
+  claim: { path?: string },
+  runId: string,
+  outputName: string,
+): void {
+  if (claim.path != null && claim.path !== "default_road") {
+    throw new Error(
+      `[default-road] the ledger row for run ${runId} output "${outputName}" is held by ` +
+        `materialization path "${claim.path}" — retryable: the ledger's 4-part key excludes the ` +
+        `path, so this row belongs to another road and must never be finalized or settled here.`,
+    );
+  }
 }
 
 /** The agent's declared `produces`, resolved to artifact-safe targets. */
@@ -493,6 +540,7 @@ export async function pickUpDefaultRoadItems(
             decidedRung: verdict.rung,
             decidedVerdict: refusedVerdict,
           });
+          assertOwnDefaultRoadClaim(claim, input.runId, item.outputName);
           if (claim.kind === "finalized") {
             // A concurrent claimant reached an ARTIFACT under this key before
             // this drive refused. That is a settled fact about the output and
@@ -535,6 +583,18 @@ export async function pickUpDefaultRoadItems(
                 representationRevisionId: now.representationRevisionId,
               };
             }
+            if (!now) {
+              // NOTHING IS SETTLED (convergence over leg 1). The claim moved out
+              // from under this drive and the ledger now records no decision at
+              // all about this output. Returning a terminal refusal here would
+              // be the very drop item 0.17 exists to stop -- an outcome nobody
+              // wrote down. That is a fact about the MOMENT: throw, release the
+              // lease, let the sweep re-drive.
+              throw new Error(
+                `[default-road] the refusal for run ${input.runId} output "${item.outputName}" ` +
+                  `could not be settled and the ledger holds no decision for it — retryable.`,
+              );
+            }
           }
           return {
             outputId: item.outputId,
@@ -573,6 +633,7 @@ export async function pickUpDefaultRoadItems(
             decidedRung: verdict.rung,
             decidedVerdict: verdict,
           });
+          assertOwnDefaultRoadClaim(claim, input.runId, item.outputName);
           if (claim.kind === "claimed") {
             await finalizeMaterializationAgainstExistingArtifact({
               orgId: input.orgId,
@@ -597,6 +658,12 @@ export async function pickUpDefaultRoadItems(
           };
         }
 
+        // THE PRODUCING VERSION AND THE PIN ARE TWO DIFFERENT FACTS
+        // (convergence over leg 1). The column takes the concrete version; the
+        // host's range is recorded on the ledger's own verdict instead.
+        const producing = readDefaultRoadExtensionPin(target.extension);
+        const producedVerdict: MaterializationDecidedVerdict =
+          producing.pin == null ? verdict : { ...verdict, producingExtensionPin: producing.pin };
         const write = await writeClaimedArtifact({
           runId: input.runId,
           orgId: input.orgId,
@@ -611,7 +678,7 @@ export async function pickUpDefaultRoadItems(
           // was not either. The base is required-in-prod by construction, and the
           // host's own lock states the pin it is held at; that pin is what the
           // contract asks for ("the producing extension and its pinned version").
-          extensionVersion: readDefaultRoadExtensionPin(target.extension),
+          extensionVersion: producing.version,
           title: `${input.templateName ?? "Agent"} — ${item.outputName}`,
           mime: verdict.form,
           content: item.content,
@@ -622,7 +689,7 @@ export async function pickUpDefaultRoadItems(
           },
           mimeDescription: "the detected output form",
           decidedRung: verdict.rung,
-          decidedVerdict: verdict,
+          decidedVerdict: producedVerdict,
         });
         if (!write.ok) {
           // A refusal is only a RECORDED VERDICT when it is a fact about the work.
@@ -655,12 +722,57 @@ export async function pickUpDefaultRoadItems(
             decidedRung: verdict.rung,
             decidedVerdict: refusedVerdict,
           });
-          if (claim.kind === "claimed") {
-            await settleMaterializationWithoutArtifact({
+          assertOwnDefaultRoadClaim(claim, input.runId, item.outputName);
+          if (claim.kind === "finalized") {
+            // Somebody reached an ARTIFACT under this key while this drive was
+            // being refused. The artifact is the settled fact; this refusal is
+            // not (the same rule the no-base branch runs under).
+            return {
+              outputId: item.outputId,
+              outputName: item.outputName,
+              status: "deduped",
+              verdict,
+              targetRung: target.rung,
+              extension: target.extension,
+              objectTypeId: target.objectTypeId,
+              artifactId: claim.artifactId,
+              representationRevisionId: claim.representationRevisionId,
+            };
+          }
+          const settledMismatch = await settleMaterializationWithoutArtifact({
+            orgId: input.orgId,
+            ledgerId: claim.ledgerId,
+            decidedVerdict: refusedVerdict,
+          });
+          if (!settledMismatch) {
+            // THE SETTLE IS CHECKED (convergence over leg 1). It used to be
+            // fired and forgotten, so a phase guard that matched nothing left
+            // the caller holding a terminal refusal the ledger never recorded.
+            const now = await findSettledMaterializationForOutput({
               orgId: input.orgId,
-              ledgerId: claim.ledgerId,
-              decidedVerdict: refusedVerdict,
+              runId: input.runId,
+              outputId: item.outputId,
+              path: "default_road",
             });
+            if (now?.artifactId && now.representationRevisionId) {
+              return {
+                outputId: item.outputId,
+                outputName: item.outputName,
+                status: "deduped",
+                verdict,
+                targetRung: target.rung,
+                extension: now.extension,
+                artifactId: now.artifactId,
+                representationRevisionId: now.representationRevisionId,
+              };
+            }
+            if (!now) {
+              throw new Error(
+                `[default-road] the write refusal for run ${input.runId} output ` +
+                  `"${item.outputName}" could not be settled and the ledger holds no decision ` +
+                  `for it — retryable.`,
+              );
+            }
           }
           return {
             outputId: item.outputId,

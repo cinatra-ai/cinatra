@@ -74,6 +74,15 @@ export type MaterializationDecidedVerdict = {
   refusalReason?: string;
   refusalDetail?: string;
   refusalRung?: string;
+  /**
+   * THE HOST'S PIN for the producing base, verbatim (convergence over forward +
+   * fix leg 1). A pin is a RANGE ("^0.1.0") as often as it is a version, and
+   * `producing_extension_version` is a CONCRETE-version column -- its other
+   * writer puts an installed `packageVersion` there. So the range is recorded
+   * HERE, where a range is what the field means, and the version column stays
+   * null unless the lock pins one exactly.
+   */
+  producingExtensionPin?: string;
 };
 
 export type MaterializationClaim =

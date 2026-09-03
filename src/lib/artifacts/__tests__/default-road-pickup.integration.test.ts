@@ -72,7 +72,7 @@ const REQUIRED = new Set<string>();
 // `producing_extension_version` is contractually the value of (plan section
 // 8.2), so this suite states one and asserts the road carries it — rather than
 // asserting NULL and calling the missing datum a contract.
-const REQUIRED_PIN = "^0.1.0";
+let REQUIRED_PIN = "^0.1.0";
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => REQUIRED.has(pkg),
   findRequiredInProdEntry: (pkg: string) =>
@@ -404,17 +404,21 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     expect(ideas.extension).toBe(JSON_BASE_EXT);
     expect((ideas.decided_verdict as { form: string }).form).toBe("application/json");
     expect(await objectTypeOf(ideas.artifact_id!)).toBe(JSON_BASE);
+    // ...and the host's pin for the base IS recorded, on the ledger's own
+    // verdict, where "^0.1.0" is a truthful value.
+    expect(draft.decided_verdict).toMatchObject({ producingExtensionPin: REQUIRED_PIN });
+    expect(ideas.decided_verdict).toMatchObject({ producingExtensionPin: REQUIRED_PIN });
 
     // The produced event carries the producing extension — the base the ladder chose.
     const events = await producedEventsFor(runId);
     expect(events).toHaveLength(2);
     for (const e of events) {
       expect([TEXT_BASE_EXT, JSON_BASE_EXT]).toContain(e.producing_extension);
-      // The base the ladder chose is a different extension from the agent
-      // template, so the version recorded beside it is THE BASE'S OWN PIN from
-      // the host's required-extension lock — never the agent template's, and
-      // never (as it was) a NULL standing in for a value that exists.
-      expect(e.producing_extension_version).toBe(REQUIRED_PIN);
+      // THE VERSION COLUMN TAKES A VERSION (convergence over leg 1). The lock
+      // here pins a RANGE, and a range is not a version anybody installed —
+      // the column's other writer puts a concrete `packageVersion` in it — so
+      // the road leaves it null and records the range where a range belongs.
+      expect(e.producing_extension_version).toBeNull();
     }
     expect(neverAsk).not.toHaveBeenCalled();
   });
@@ -484,6 +488,66 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     expect(rows[0].decided_rung).toBe("binary_fallback");
     expect(rows[0].decided_verdict).toMatchObject({ form: "application/octet-stream" });
     expect(await objectTypeOf(rows[0].artifact_id!)).toBe(BINARY_BASE);
+  });
+
+  it("CONVERGENCE — a ledger row held by ANOTHER road is never settled by this one", async () => {
+    // THE DEFECT THIS CLOSES (convergence over forward + fix leg 1). The ledger
+    // identity is (run, output, extension, content hash) — it EXCLUDES the path
+    // (cinatra#1893 Q3) — so a claim this road gets back can be an unfinalized
+    // row belonging to a DIFFERENT materialization path. The shared write core
+    // refuses that case; the default road's three DIRECT claims did not, so a
+    // refusal here would have settled another road's journal row with null refs
+    // and a verdict that road never decided.
+    //
+    // A collision is a fact about the MOMENT, so the road throws: the lease is
+    // released and the sweep re-drives — the same handling the write path gives
+    // its own `path_collision`.
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+
+    const { templateId, runId } = await seedTemplateAndRun();
+    const blob = item("blob", UNNAMEABLE);
+    const foreignId = `mat-${randomUUID()}`;
+    await client.query(
+      `INSERT INTO "${S()}"."artifact_materializations"
+         (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase)
+       VALUES ($1, $2, $3, $4, NULL, 'end_node_binding', $5, $6, 'claimed')`,
+      [
+        foreignId,
+        ORG,
+        runId,
+        blob.outputId,
+        "form:application/octet-stream",
+        blob.contentHash,
+      ],
+    );
+
+    await expect(
+      pickupMod.pickUpDefaultRoadItems(
+        {
+          runId,
+          orgId: ORG,
+          templateId,
+          packageVersion: "1.2.3",
+          createdBy: null,
+          templateName: "Blog draft writer",
+          items: [blob],
+          producesRefs: [],
+        },
+        { ask: neverAsk, modelRungEnabled: false },
+      ),
+    ).rejects.toThrow(/end_node_binding/);
+
+    // The foreign row is EXACTLY as it was: still claimed, still empty, still
+    // carrying no decision this road made.
+    const after = await ledgerRows(runId);
+    expect(after).toHaveLength(1);
+    expect(after[0].path).toBe("end_node_binding");
+    expect(after[0].phase).toBe("claimed");
+    expect(after[0].artifact_id).toBeNull();
+    expect(after[0].decided_verdict).toBeNull();
   });
 
   it("ACCEPTANCE 4 — where NO base can house the form, the ledger row STILL exists and SAYS SO", async () => {
@@ -656,7 +720,48 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     const events = await producedEventsFor(runId);
     expect(events).toHaveLength(1);
     expect(events[0].producing_extension).toBe(TEXT_BASE_EXT);
-    expect(events[0].producing_extension_version).toBe(REQUIRED_PIN);
+    // A RANGE never enters the version column; the range is on the row.
+    expect(events[0].producing_extension_version).toBeNull();
+    const pinnedRows = await ledgerRows(runId);
+    expect(pinnedRows[0].decided_verdict).toMatchObject({
+      producingExtensionPin: REQUIRED_PIN,
+    });
+  });
+
+  it("the produced event carries the base's version when the lock PINS ONE EXACTLY", async () => {
+    // THE OTHER HALF of the same contract (convergence over leg 1). Where the
+    // host's lock names a concrete version, that version IS the producing
+    // version and it belongs in the column — the same value shape the column's
+    // other writer (`extension-artifact-reads`) puts there.
+    objectTypeRegistry._clearForTests();
+    REQUIRED.clear();
+    registerArtifactType(TEXT_BASE, TEXT_BASE_EXT, ["text/plain", "text/markdown", "text/csv"]);
+    REQUIRED.add(TEXT_BASE_EXT);
+    const previousPin = REQUIRED_PIN;
+    REQUIRED_PIN = "0.1.7";
+    try {
+      const { templateId, runId } = await seedTemplateAndRun();
+      await pickupMod.pickUpDefaultRoadItems(
+        {
+          runId,
+          orgId: ORG,
+          templateId,
+          packageVersion: "1.2.3",
+          createdBy: null,
+          templateName: "Blog draft writer",
+          items: [item("draft", MARKDOWN_DOC)],
+          producesRefs: [],
+        },
+        { ask: neverAsk, modelRungEnabled: false },
+      );
+      const events = await producedEventsFor(runId);
+      expect(events).toHaveLength(1);
+      expect(events[0].producing_extension_version).toBe("0.1.7");
+      const rows = await ledgerRows(runId);
+      expect(rows[0].decided_verdict).toMatchObject({ producingExtensionPin: "0.1.7" });
+    } finally {
+      REQUIRED_PIN = previousPin;
+    }
   });
 
   it("CONVERGENCE — two drivers racing on ONE output leave ONE artifact, whatever extension each resolves", async () => {
@@ -768,6 +873,10 @@ describe.skipIf(!HAS_DB)("cinatra#3029 — the default road (real store)", () =>
     // points at — never one form's verdict over another form's representation.
     const rows = await ledgerRows(runId);
     expect(rows).toHaveLength(2);
+    // ONE artifact, asserted rather than implied (convergence over leg 1): the
+    // comment above says "one artifact" and now the rows say it too.
+    expect(new Set(rows.map((r) => r.artifact_id)).size).toBe(1);
+    expect(md.artifactId).toBe(csvItem.artifactId);
     for (const row of rows) {
       expect(row.artifact_id).not.toBeNull();
       const mime = await client.query(
