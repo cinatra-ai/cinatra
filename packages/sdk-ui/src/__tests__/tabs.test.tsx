@@ -152,3 +152,29 @@ describe("sdk-ui Tabs primitive — consumer export wiring", () => {
     expect(notVendored).not.toMatch(/`Tabs`/);
   });
 });
+
+describe("sdk-ui Tabs primitive — the rule starts immediately right of the last tab (cinatra#3216)", () => {
+  // Ratified drawing, Dividers: "If a tablist is present in the same row, the
+  // rule starts immediately to the right of the last tab and runs to the page
+  // edge". The mirror carried `gap-7` (28 CSS px) on the row grid, the whole of
+  // the hole between the last tab and the start of the rule.
+  const rowClassName = (() => {
+    const match = tabsSrc.match(/<div className="(grid grid-cols-\[auto_1fr\][^"]*)">/);
+    if (!match) throw new Error("no TabsListRow grid wrapper found in the SDK mirror");
+    return match[1];
+  })();
+
+  it("declares no horizontal gap between the tablist column and the rule column", () => {
+    const gaps = rowClassName
+      .split(/\s+/)
+      .filter((c) => /^(gap|gap-x|column-gap|space-x)-/.test(c));
+    expect(
+      gaps,
+      `the row grid carries ${gaps.join(" ")}, which pushes the rule that far right of the last tab`,
+    ).toEqual([]);
+  });
+
+  it("keeps the row end-aligned so the rule still closes the row on its baseline", () => {
+    expect(rowClassName).toContain("items-end");
+  });
+});

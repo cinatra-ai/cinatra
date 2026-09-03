@@ -390,8 +390,14 @@ describe("the setup run page draws the two-column run surface", () => {
       expect(row.querySelector("[data-lifecycle-card]")).toBeNull();
       expect(row.querySelector("[data-run-review-slot]")).toBeNull();
     }
-    // The rail column carries rows and nothing else.
-    expect(railColumn(container)[0].children.length).toBe(3);
+    // The rail column carries the rows and the marks between them, and nothing
+    // else: three entries, and one separator standing between each adjacent
+    // pair (cinatra#3188 item 2).
+    const railChildren = Array.from(railColumn(container)[0].children);
+    expect(railChildren.length).toBe(5);
+    expect(
+      railChildren.filter((child) => child.matches("[data-run-surface-rail-separator]")).length,
+    ).toBe(2);
   });
 
   it("draws NO agentic run progress card beside the selected step", async () => {
