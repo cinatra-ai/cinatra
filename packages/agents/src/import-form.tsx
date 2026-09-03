@@ -48,11 +48,22 @@ import { toast } from "@/lib/cinatra-toast";
 // repacks the resolved files into the flat stored-method ZIP the server
 // importer consumes.
 import {
-  readZipEntries,
+  readZipArchive,
   resolveAgentArchive,
+  resolveUploadedExtensionArchive,
   buildCanonicalAgentZip,
+  computeCanonicalAgentZipDigest,
   bytesToBase64,
+  type UploadableExtensionKind,
 } from "./upload-archive";
+// cinatra#3204 (criterion 11): the store's OWN install-scope picker, mounted
+// here rather than re-implemented. The Upload screen resolves the same
+// server-computed rows the marketplace grid resolves and hands them down.
+import {
+  InstallScopePickerBody,
+  resolveInstallScopeSelection,
+  type InstallScopeFieldContext,
+} from "@cinatra-ai/extensions/screens/install-scope-field";
 
 type AgentPreview = {
   name: string;
@@ -60,11 +71,49 @@ type AgentPreview = {
   sourceNl: string;
   zipBase64: string;
   fileName: string;
+  /** The kind READ from the package (cinatra#3204), never assumed. */
+  kind: UploadableExtensionKind;
+  packageName: string | null;
+  packageVersion: string | null;
+  /** The D2 digest over the DELIVERED tree — what the operator handed over. */
+  contentDigest: string;
+  /**
+   * The D2 digest over the tree the request actually CARRIES (the canonical
+   * repack). It is a different file set from the delivered tree, so it is a
+   * different digest, and it is this one the server can recompute from the
+   * bytes it received. Null for a kind this screen cannot submit yet.
+   */
+  sentTreeDigest: string | null;
 };
 
 async function parseZipFile(file: File): Promise<AgentPreview> {
   const buf = await file.arrayBuffer();
-  const entries = await readZipEntries(buf);
+  // cinatra#3204 (criteria 1-5): hardened, KIND-AWARE intake. The archive is
+  // read under path/symlink/entry-count/size refusals, its declared kind is
+  // resolved and checked against the payload that backs it, and the delivered
+  // tree is digested — all before anything is shown, and without executing a
+  // single byte of the package.
+  const entries = await readZipArchive(buf);
+  const pkg = await resolveUploadedExtensionArchive(entries);
+
+  // Only an AGENT package continues into the agent import path below. The other
+  // three kinds are READ and previewed here (their kind, name and version are
+  // known and shown), and the submit states plainly that this screen cannot
+  // finish their install yet — see the disabled-submit copy in the form.
+  if (pkg.kind !== "agent") {
+    return {
+      name: pkg.packageName ?? file.name,
+      description: null,
+      sourceNl: "",
+      zipBase64: "",
+      fileName: file.name,
+      kind: pkg.kind,
+      packageName: pkg.packageName,
+      packageVersion: pkg.packageVersion,
+      contentDigest: pkg.contentDigest,
+      sentTreeDigest: null,
+    };
+  }
   const resolved = resolveAgentArchive(entries);
 
   if (resolved.manifestJson) {
@@ -100,6 +149,7 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
   // consumes (root agent.json + manifest/package/license sidecars) — the
   // server contract is unchanged; the acceptance widening is client-side.
   const canonical = buildCanonicalAgentZip(resolved);
+  const sentTreeDigest = await computeCanonicalAgentZipDigest(resolved);
 
   return {
     name: agent.name ?? "Unnamed Agent",
@@ -107,6 +157,11 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
     sourceNl: agent.sourceNl ?? "",
     zipBase64: bytesToBase64(canonical),
     fileName: file.name,
+    kind: pkg.kind,
+    packageName: pkg.packageName,
+    packageVersion: pkg.packageVersion,
+    contentDigest: pkg.contentDigest,
+    sentTreeDigest,
   };
 }
 
@@ -117,10 +172,23 @@ type ImportAgentFormProps = {
 
 export function ImportAgentForm({
   availableScopes,
-}: ImportAgentFormProps) {
+  installScopeContext,
+}: ImportAgentFormProps & { installScopeContext?: InstallScopeFieldContext }) {
   const router = useRouter();
   const [nameOverride, setNameOverride] = useState("");
   const [isPending, startTransition] = useTransition();
+
+  // cinatra#3204 (criterion 11) — THE INSTALL SCOPE: who this extension is
+  // installed FOR. Preselected to the server's own default, which is
+  // `Workspace: All` wherever the server offered that row enabled.
+  const [installScopeValue, setInstallScopeValue] = useState<string>(
+    installScopeContext?.availability.state === "ready"
+      ? installScopeContext.availability.defaultValue
+      : "",
+  );
+  const installScopeSelection = installScopeContext
+    ? resolveInstallScopeSelection(installScopeContext, installScopeValue)
+    : null;
 
   // Upload-time permissions state: the ACCESS half only (the checkbox
   // multi-select scope picker). The advanced OWNERSHIP panel was removed
@@ -206,6 +274,19 @@ export function ImportAgentForm({
         coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
       };
       const result = await importAgentTemplate(zipBase64, nameOverride.trim() || undefined, {
+        // cinatra#3204 (criteria 13-15): the chosen scope travels with the
+        // submit. The SERVER re-resolves it, asserts the actor's authority at
+        // that target, anchors the canonical row there and persists the
+        // audience FAIL-CLOSED. Omitted when the screen offered no picker (no
+        // active organization / no installable scope), which keeps the previous
+        // behaviour for exactly the sessions that had no scope to choose.
+        ...(installScopeContext && installScopeSelection?.committable
+          ? { installScope: { pickerValue: installScopeValue } }
+          : {}),
+        // The digest of the bytes THIS REQUEST CARRIES. The server recomputes
+        // it over the archive it received and refuses a mismatch, so what is
+        // recorded on the canonical row describes what was actually installed.
+        ...(preview?.sentTreeDigest ? { packageContentDigest: preview.sentTreeDigest } : {}),
         // The publish destination is not user-facing: an uploaded extension
         // always lands in the local registry by default (owner ruling on
         // cinatra#2644). "private" routes through resolvePublishDestination,
@@ -348,13 +429,39 @@ export function ImportAgentForm({
         </div>
       )}
 
-      {/* Access scope picker, last step before submit: the checkbox
-          multi-select mode of the unified access picker. Configures which
-          scopes can access the uploaded extension. */}
+      {/* cinatra#3204 (criterion 17) — TWO QUESTIONS, SEPARATELY LABELLED.
+          The screen used to ask only the second one, under the heading
+          "Access", which read as the first. They are different questions with
+          different consequences, so each now says which one it is and neither
+          borrows the other's wording. The decision recorded for #3204 is to
+          keep both rather than fold one into the other: an install scope that
+          silently set run visibility (or the reverse) would answer a question
+          the operator was never asked. */}
       <Separator className="my-1" />
+      {installScopeContext && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="upload-install-scope" className="text-sm font-semibold text-foreground">
+            Install for
+          </Label>
+          <InstallScopePickerBody
+            context={installScopeContext}
+            value={installScopeValue}
+            onValueChange={setInstallScopeValue}
+            pickerId="upload-install-scope"
+            subjectName={preview?.name ?? "this extension"}
+            testId="upload-install-scope-picker"
+            disabled={isPending}
+          />
+          <p className="text-xs text-muted-foreground">
+            Who this extension is installed for. This is the same choice a marketplace install
+            offers, and it decides where the install is recorded and who can use it.
+          </p>
+        </div>
+      )}
+
       {availableScopes && (
         <div className="flex flex-col gap-2">
-          <Label className="text-sm font-semibold text-foreground">Access</Label>
+          <Label className="text-sm font-semibold text-foreground">Run visibility</Label>
           <AccessCombobox
             selectionMode="multiple"
             value={permissionsDraft.policy.runListVisibility}
@@ -363,7 +470,8 @@ export function ImportAgentForm({
             disabled={isPending}
           />
           <p className="text-xs text-muted-foreground">
-            Choose which scopes can access the uploaded extension.
+            Who can list, read and execute this agent&apos;s runs once it is installed. Editable
+            afterwards on the agent&apos;s own permissions page.
           </p>
         </div>
       )}
@@ -376,8 +484,32 @@ export function ImportAgentForm({
         </Alert>
       )}
 
+      {/* cinatra#3204 — READ, then say what is possible. The three non-agent
+          kinds are now READ by this screen (their kind, name and version are
+          resolved, their payload checked and their tree digested), but the
+          install road that finishes the job for them is not wired to this
+          screen yet. Saying so plainly beats the previous behaviour, which
+          refused the FILE by name and left the button dead with no explanation
+          of what the file actually was. */}
+      {preview && preview.kind !== "agent" && (
+        <Alert variant="info">
+          <AlertTitle>
+            {preview.packageName ?? preview.fileName} is a {preview.kind} package
+          </AlertTitle>
+          <AlertDescription>
+            This screen reads and checks {preview.kind} packages, but it cannot finish installing
+            one yet — that road is being wired next. Install it from the marketplace in the
+            meantime.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="flex items-center gap-2">
-        <Button type="submit" className="flex-1" disabled={!preview || isPending}>
+        <Button
+          type="submit"
+          className="flex-1"
+          disabled={!preview || preview.kind !== "agent" || isPending}
+        >
           {isPending ? "Uploading..." : "Upload (.zip)"}
         </Button>
         {hasFile && (

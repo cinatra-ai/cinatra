@@ -82,18 +82,48 @@ export type ExtensionSourceVerdaccio = {
   activeDigest?: string;
 };
 
+/**
+ * The CONTENT DIGEST a non-registry source records over the tree it actually
+ * delivered (cinatra#3204 D2) — "sha256-" plus 64 lowercase hex, computed by
+ * `computeExtensionTreeDigest` over the canonical tree encoding defined in
+ * ./extension-package-digest.ts.
+ *
+ * DISTINCT FROM A REVISION IDENTIFIER, deliberately. `resolvedSha` and
+ * `resolvedCommitOrTreeHash` name a point in a history; they say nothing about
+ * the bytes that arrived, and a repository can serve a tree no commit of its
+ * history contains. This field is the statement about those bytes, and it is
+ * what lets a SUPPLIED package be driven through the same install pipeline a
+ * registry install uses (which verifies delivered bytes against a digest the
+ * caller states in advance).
+ *
+ * OPTIONAL: rows written before #3204 carry none, and an absent digest keeps
+ * its established meaning — no content attestation, so no supplied-source
+ * install can be driven from that row. Additive JSONB field, no SQL migration.
+ * Never a substitute for the sha512 SRI on a verdaccio source, and never
+ * presented as registry attestation (see `describeSourceProvenance`).
+ */
+/**
+ * The grammar every recorded `contentDigest` must satisfy — the canonical
+ * extension TREE digest of ./extension-package-digest.ts. Declared here (not
+ * imported) so canonical-types stays free of value imports; the digest module
+ * re-exports this constant, so there is exactly one regular expression.
+ */
+export const EXTENSION_CONTENT_DIGEST_RE = /^sha256-[0-9a-f]{64}$/;
+
 export type ExtensionSourceGithub = {
   type: "github";
   repo: string;
   ref: string;
   resolvedSha: string;
   path?: string;
+  contentDigest?: string;
 };
 
 export type ExtensionSourceLocal = {
   type: "local";
   path: string;
   resolvedCommitOrTreeHash: string;
+  contentDigest?: string;
 };
 
 /**
@@ -390,9 +420,17 @@ export function isExtensionSource(value: unknown): value is ExtensionSource {
         (v.activeDigest === undefined || str(v.activeDigest))
       );
     case "github":
-      return str(v.repo) && str(v.ref) && str(v.resolvedSha);
+      // `contentDigest` is OPTIONAL (pre-#3204 rows carry none) — but when
+      // present it must satisfy the D2 grammar. A malformed digest is worse
+      // than an absent one: it would be read as an attestation of bytes it
+      // does not describe.
+      return str(v.repo) && str(v.ref) && str(v.resolvedSha) && contentDigestOk(v.contentDigest);
     case "local":
-      return str(v.path) && str(v.resolvedCommitOrTreeHash);
+      return (
+        str(v.path) &&
+        str(v.resolvedCommitOrTreeHash) &&
+        contentDigestOk(v.contentDigest)
+      );
     case "bundled":
       // `digest` is OPTIONAL (dev boots and pre-#795 rows carry none) — but
       // when present it must satisfy the store digest-segment grammar: #795
@@ -418,6 +456,17 @@ export function isExtensionSource(value: unknown): value is ExtensionSource {
 // the install path resolves them first.
 const PROVENANCE_PLACEHOLDERS = new Set(["pending-resolution", "latest", "HEAD"]);
 
+/**
+ * A non-registry source's OPTIONAL `contentDigest` (cinatra#3204 D2): absent is
+ * fine (every row written before #3204), present-and-malformed is not.
+ */
+function contentDigestOk(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && EXTENSION_CONTENT_DIGEST_RE.test(value))
+  );
+}
+
 export function validateExtensionSource(value: unknown): string[] {
   if (!value || typeof value !== "object") return ["source is not an object"];
   const v = value as Record<string, unknown>;
@@ -440,10 +489,13 @@ export function validateExtensionSource(value: unknown): string[] {
       if (!str(v.repo)) errors.push("github.repo");
       if (!str(v.ref)) errors.push("github.ref");
       if (!str(v.resolvedSha)) errors.push("github.resolvedSha");
+      // OPTIONAL, but well-formed when present (cinatra#3204 D2).
+      if (!contentDigestOk(v.contentDigest)) errors.push("github.contentDigest");
       break;
     case "local":
       if (!str(v.path)) errors.push("local.path");
       if (!str(v.resolvedCommitOrTreeHash)) errors.push("local.resolvedCommitOrTreeHash");
+      if (!contentDigestOk(v.contentDigest)) errors.push("local.contentDigest");
       break;
     case "bundled":
       if (!str(v.packageName)) errors.push("bundled.packageName");

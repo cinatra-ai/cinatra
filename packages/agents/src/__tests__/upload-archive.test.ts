@@ -26,6 +26,7 @@ import { createZipBuffer, readZipFiles } from "../zip-helpers";
 import {
   readZipEntries,
   resolveAgentArchive,
+  resolveUploadedExtensionArchive,
   buildCanonicalAgentZip,
   buildStoredZip,
   bytesToBase64,
@@ -292,7 +293,30 @@ describe("malformed archives", () => {
     ).rejects.toThrow(/entrypoint "cinatra\/oas\.json" \(from package\.json\) not found/);
   });
 
-  it("rejects a non-agent extension package by kind", async () => {
+  // REPLACED (cinatra#3204, acceptance criterion 2). This assertion used to
+  // pin the File road's connector REFUSAL. The road now accepts every live
+  // installable kind, so the refusal is gone and what is pinned instead is the
+  // new division of labour: `resolveUploadedExtensionArchive` is the road's
+  // entry and resolves a connector package, while `resolveAgentArchive` stays
+  // the AGENT-PAYLOAD extractor the canonical repack feeds and is therefore
+  // still agent-only. The full replacement refusal set lives in
+  // ./upload-archive-kinds.test.ts.
+  it("accepts a connector package on the File road — the kind refusal is replaced", async () => {
+    const pkg = JSON.stringify({
+      name: "@cinatra-ai/some-connector",
+      version: "1.0.0",
+      cinatra: { kind: "connector" },
+    });
+    const archive = storedZip([
+      { name: "package.json", content: pkg },
+      { name: "cinatra/config.json", content: JSON.stringify({ scope: "workspace" }) },
+    ]);
+    const resolved = await resolveUploadedExtensionArchive(await readZipEntries(archive));
+    expect(resolved.kind).toBe("connector");
+    expect(resolved.packageName).toBe("@cinatra-ai/some-connector");
+  });
+
+  it("keeps resolveAgentArchive agent-only — it extracts the agent payload, it is not the road", async () => {
     const pkg = JSON.stringify({
       name: "@cinatra-ai/some-connector",
       cinatra: { kind: "connector", entrypoint: "cinatra/oas.json" },

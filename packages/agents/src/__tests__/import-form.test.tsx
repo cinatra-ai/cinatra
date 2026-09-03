@@ -155,12 +155,18 @@ describe("ImportAgentForm — picker / preview / cancel state machine", () => {
   });
 
   it("surfaces a parse error for an invalid archive and keeps Upload disabled", async () => {
+    // cinatra#3204: the refusal WORDING changed with the kind-aware intake. The
+    // form no longer asks "is this an agent?" first — it asks what the package
+    // IS — so an archive carrying neither a package.json nor a legacy root
+    // agent.json is refused for having nothing that says what it is, rather
+    // than for not being an agent. The behaviour this test pins (a real reason
+    // on screen, Upload still disabled) is unchanged.
     render(<ImportAgentForm />);
     fireEvent.change(fileInput(), {
       target: { files: [zipFile([{ name: "README.md", content: "hi" }], "not-an-agent.zip")] },
     });
     await waitFor(() => {
-      expect(screen.getByText(/no agent definition found/)).toBeTruthy();
+      expect(screen.getByText(/no package\.json at the package root/)).toBeTruthy();
     });
     expect(
       (screen.getByRole("button", { name: "Upload (.zip)" }) as HTMLButtonElement).disabled,
