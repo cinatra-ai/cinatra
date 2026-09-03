@@ -30,6 +30,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //      DataParts — still leaves its answer as the run's transcript row;
 //   7. a run with no text anywhere in its history still writes nothing.
 //
+// Fix leg 2 (the SECOND proof round's finding 2) adds the ones that decide what
+// happens when the answer never travelled as a message part at all:
+//
+//   8. a run whose answer is its EndNode's DECLARED OUTPUT — the shape the
+//      graded `Agent Code Reviewer` run completed in, and the shape that still
+//      left zero transcript rows at the previous head — leaves that declared
+//      output as the run's transcript row;
+//   9. a declared output that is not text is still no receipt;
+//  10. the declaration beats the backward scan, and the run's own last word
+//      beats the declaration.
+//
 // Harness mirrors wayflow-materialization-outcome-honesty.test.ts.
 //
 // Run:
@@ -371,6 +382,129 @@ describe("cinatra#3002 — the runtime run's transcript receipt", () => {
         // Malformed, and NOT last: only the backward scan reaches it.
         { role: "agent", parts: {} as unknown as Array<Record<string, unknown>> },
         { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  // ── fix leg 2: the answer that never travelled as a message part ────────
+
+  /** The `Agent Code Reviewer` flow declares exactly one output, `findings`. */
+  const REVIEW_FINDINGS =
+    "Three findings: the package slug does not match packageName, the component " +
+    "ids are not stable kebab-case, and the version was not bumped on republish.";
+
+  /** The synthetic DataPart WayFlow appends when a flow reaches FinishedStatus,
+   *  carrying the EndNode's declared output values. Stripped from the persisted
+   *  history before any text extraction reads it — which is exactly why nothing
+   *  on this path could see the run's answer before this leg. */
+  function endNodeOutputsMessage(outputs: Record<string, unknown>) {
+    return {
+      role: "agent",
+      parts: [{ kind: "data", data: { __cinatra_endnode_outputs__: outputs } }],
+    };
+  }
+
+  it("persists a run's DECLARED output as its transcript row when the answer never travelled as text (fix leg 2)", async () => {
+    // THE SHAPE THE SECOND PROOF ROUND MEASURED. A gate-free, text-answering run
+    // executed on the agent runtime, completed — and `agent_run_messages` held
+    // zero rows for it, lane-wide. Its answer is the flow's declared EndNode
+    // output, so `finalText` is empty and the bounded backward scan finds no
+    // text-carrying message either: both of fix leg 1's sources are blind here.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: REVIEW_FINDINGS,
+    });
+  });
+
+  it("names each declared text output when a run declares more than one", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS, verdict: "Advisory only." }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: `findings\n\n${REVIEW_FINDINGS}\n\nverdict\n\nAdvisory only.`,
+    });
+  });
+
+  it("writes NO receipt when the run's declared outputs carry no text", async () => {
+    // Structured data is not the run's words. Rendering it would put a JSON blob
+    // where a reader expects an answer, so such a run keeps the honest
+    // step-results reading instead — fix leg 1's guard, unweakened.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ ideas: ["one", "two"], count: 2 }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers the run's DECLARATION over the backward scan's best guess", async () => {
+    // "Working on it." is a real text-carrying agent message in the run's final
+    // turn, so the leg-1 scan would write it as the run's answer. The flow's own
+    // declared output says what the run produced; a declaration beats a
+    // heuristic.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Working on it." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+        { role: "agent", parts: [{ kind: "data", data: { done: true } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: REVIEW_FINDINGS,
+    });
+  });
+
+  it("still lets the run's own LAST WORD win over its declaration", async () => {
+    // A run that ends by speaking has said its answer, and every other consumer
+    // on this path already means that by the run's output.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
       ]),
     });
 

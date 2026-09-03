@@ -1247,6 +1247,50 @@ function lastAgentResponseText(
   return "";
 }
 
+/**
+ * THE RUN'S OWN DECLARED OUTPUT, AS TEXT (cinatra#3002, fix leg 2).
+ *
+ * The second proof round measured a run that neither of the two sources above
+ * can read. `Agent Code Reviewer` executed on the agent runtime, completed, and
+ * answered in words — and it finished with ZERO rows in `agent_run_messages`,
+ * because its answer never travelled as a TextPart at all. It is a compiled
+ * flow whose EndNode declares one output, `findings`, and the runtime hands
+ * that value over as the sentinel DataPart this module already extracts into
+ * `endNodeOutputs` (and persists as the step result's `output_data`). So
+ * `finalText` was empty, the bounded backward scan of the final turn found no
+ * text-carrying message either, and the receipt correctly — by its own two
+ * rules — wrote nothing. The blank page under the completion card survived on
+ * exactly the path the graded run took, one channel further out.
+ *
+ * This is that third source, and it is the run's OWN DECLARATION rather than a
+ * heuristic: whatever the flow's EndNode declares as its output is what the run
+ * says it produced. Only STRING-valued outputs are read. A declared output that
+ * is an object or a list is structured data, not the run's words; rendering it
+ * into the transcript would put a JSON blob where a reader expects an answer,
+ * and such a run keeps the honest step-results reading instead — the same guard
+ * fix leg 1 wrote, unweakened.
+ *
+ * More than one declared text output is named rather than glued together: two
+ * answers run into one paragraph would read as a single one. One output — the
+ * shape the graded run and every text-answering flow has — is its value
+ * verbatim, with no label invented around it.
+ */
+export function declaredOutputsResponseText(
+  endNodeOutputs: Record<string, unknown> | null,
+): string {
+  if (!endNodeOutputs) return "";
+  const named: Array<[string, string]> = [];
+  for (const [name, value] of Object.entries(endNodeOutputs)) {
+    if (typeof value !== "string") continue;
+    const text = value.trim();
+    if (text.length === 0) continue;
+    named.push([name, text]);
+  }
+  if (named.length === 0) return "";
+  if (named.length === 1) return named[0][1];
+  return named.map(([name, text]) => `${name}\n\n${text}`).join("\n\n");
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
@@ -2030,8 +2074,25 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // DataParts ends on a message with no text, and reading only that message
   // left the very run the first proof round graded with zero transcript rows —
   // the defect above, alive on the path that run took.
+  //
+  // AND THE RUN'S DECLARED OUTPUT IS READ WHEN THERE ARE NO WORDS AT ALL (fix
+  // leg 2). The second proof round measured a completed, text-answering runtime
+  // run with zero transcript rows: its answer travelled only as the EndNode
+  // output the sentinel carries, so neither `finalText` nor the backward scan
+  // could see it. `declaredOutputsResponseText` reads that declaration.
+  //
+  // ORDER, and why it is this one. `finalText` still wins: the run's last word
+  // is what every other consumer on this path already means by the run's
+  // output, and a run that ends by speaking has said its answer. The DECLARED
+  // output comes next, ahead of the backward scan, because a declaration beats
+  // a heuristic: when a flow states what it produced, that statement is the
+  // run's answer, and the scan exists only to recover words from a run that
+  // declared nothing. A run with no words in any of the three still writes no
+  // receipt, exactly as before.
   const finalResponseText =
-    finalText.length > 0 ? finalText : lastAgentResponseText(history);
+    finalText.length > 0
+      ? finalText
+      : declaredOutputsResponseText(endNodeOutputs) || lastAgentResponseText(history);
   if (finalResponseText.length > 0) {
     try {
       await recordRunFinalResponseMessage({ runId, text: finalResponseText });

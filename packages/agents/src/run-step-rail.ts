@@ -332,6 +332,20 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
     }
   });
 
+  // THE READINGS THIS RAIL DOES NOT DRAW, AND WHO OWNS THEM (cinatra#3002 fix
+  // leg 2, named so the next reader does not re-derive them here):
+  //   * the run's own DONE record — the ratified drawing's "a finished run says
+  //     what it made", whose last rail entry opens a page listing one row per
+  //     artifact the run wrote or used. It is a whole page and a whole entry
+  //     kind, not a label change, and it is NOT this issue's item: #3002 is the
+  //     completed run's produced TEXT reaching the run page.
+  //   * the current-position marker on the rail — cinatra#3149.
+  //   * the settled SCHEDULE entry standing first — cinatra#3174 / cinatra#3193.
+  //   * a step drawn with a raw declared field name where a readable step name
+  //     belongs: that label comes from the run's INPUT-step projection
+  //     (`run-input-steps.ts`, cinatra#3068), which renders the agent's own
+  //     declared input title verbatim. The surplus step-result entry below is
+  //     labelled `Step N` and never carries a declared key.
   // (2) TRANSCRIPT — only forms the spine when NO template steps AND no
   //     stepResults exist (a single-agent / leaf transcript run). Otherwise the
   //     transcript is the right-pane detail, not the rail.
