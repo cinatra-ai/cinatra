@@ -3,7 +3,7 @@
  * THE SETTLED READING, AS DRAWN (cinatra#3080, PR #3100, fix leg 7).
  *
  * The eighth proof round graded the settled gate 11 of 24 against the ratified
- * drawing at the design repository's default branch. Five of the thirteen
+ * ratified drawing at its default branch. Five of the thirteen
  * failures are this file's subject, and each test below quotes the sentence it
  * pins.
  *

@@ -62,7 +62,6 @@ import {
   type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
-import { objectProjectionDigest } from "@/lib/artifacts/object-backed-contract";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 
@@ -145,11 +144,16 @@ export function reviewTargetSubstancePorts(
     async readPinnedSubstance(input) {
       if (input.contentClass === "configuration") {
         const configuration = member.configuration;
+        // A configuration with no recorded digest is not a configuration this
+        // channel can project: the digest is what a data capability is sealed
+        // to, and minting one here would seal it to a value the gate never
+        // recorded. It answers an absence, which the display floors on.
         if (configuration === undefined || configuration === null) return null;
+        if (!member.configurationDigest) return null;
         return {
           class: "configuration",
           configuration,
-          digest: member.configurationDigest ?? objectProjectionDigest(configuration),
+          digest: member.configurationDigest,
         };
       }
       if (input.contentClass === "text") {
