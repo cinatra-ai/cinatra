@@ -4,175 +4,109 @@
 // Functional-acceptance harness for the RECOMMENDATION ROW of the
 // in-conversation lifecycle cards (cinatra#3160, epic #3155 W4).
 //
-// Renders the REAL `RunRecommendationChipRow` — the one shipped renderer of
-// `recommendation_hold`, the same component the run panel, the chat transcript
-// and the widget each mount — inside the REAL chat-thread host declaration, so
-// the assertions in tests/e2e/design/conformance/contract.ts run against the
-// shipped row, the shipped pill, the shipped read-only reading and the shipped
-// restricted reading rather than against a stand-in.
+// THE MOUNT IS `RecommendationHoldCard`, THE ONE COMPOSER OF THE SHIPPED ROW.
 //
-// NOTHING IS INTERCEPTED. There is no transport substitution of any kind here:
-// no fetch wrapper, no route stub, no seeded server answer, and no `submit`
-// prop. Every reading below is reached by handing the row the props its shipped
-// hosts hand it — the candidates the run offers, the run's settled answer, and
-// whether THIS reader may shape the run — which is why no driver in this family
-// presses a decision control: the row's decision controls submit to the real
-// server actions, and a harness that answered them for the product would be
-// asserting the harness.
+// The first cut of this harness mounted `RunRecommendationChipRow` directly and
+// handed it a reading per mount — the candidates, the settled answer and the
+// reader's rights — because the card takes none of those as props. That is a
+// SECOND RENDERER of `recommendation_hold`, which is exactly the class
+// scripts/audit/chat-hitl-one-card-gate.mjs rule R2 forbids and exactly the
+// defect (D-1) its own history records: a host that draws the interaction itself
+// instead of mounting the card is a second place where "confirmed" can come to
+// mean something different, however faithful it looks on the day it lands. The
+// gate caught it, and the gate was right. Every mount below is the card.
 //
-// THE READINGS, AND WHERE EACH ONE COMES FROM in the drawing's §V:
+// WHAT THE CARD DOES INSTEAD, AND WHAT THAT COSTS THIS HARNESS. The card owns
+// WHETHER the row appears, WHICH state it is in and WHEN it re-reads: it
+// resolves the run's authoritative hold state itself — the cookie-bound server
+// action on a cookie host, the broker read on a credential-declaring one — and
+// derives the offer, the settled answer and `canDecide` from that answer alone.
+// So a mount does not hand it a reading; it hands it a RUN, and the reading is
+// whatever that run resolves to for THIS reader.
 //
-//   PAUSED / BEFORE START — "the row is drawn in the assistant's turn, after
-//     the assistant has started the run ... the run is dispatched and held at
-//     that gate"; and "for as long as the run has not started, a reader who
-//     comes back to the Skills step is shown the same pills". Those are ONE
-//     product reading — a live parked hold — and the drawing draws it twice, so
-//     the harness mounts it twice: once as the turn, once inside the
-//     three-readings example.
-//   RUNNING — "once the run is running, the selection is fixed and the row is
-//     read-only: each pill states in its own box whether that skill was applied
-//     to the run. No Continue is left beneath it, and nothing is left to press."
-//     That is the shipped SETTLED row, built from the run's durable evidence.
-//   RESTRICTED — "shaping this run needs run access on it. Every box, and the
-//     Continue beneath them, stays on screen disabled." That is the shipped
-//     `canDecide={false}` reading.
+// The conformance harness route is a dev-only PUBLIC path (see
+// src/lib/auth-route-guard.ts) and the design suite drives it with no session,
+// so on THIS page the cookie-bound resolve answers "no row for this reader" and
+// the card draws nothing. That is the shipped card's own fail-closed reading,
+// not a gap in the harness — and it is the same constraint the W0 harness
+// already recorded for the review card ("the card as a whole draws no DOM before
+// an authorised server resolve", lifecycle-card-fixtures.tsx). It is why the
+// thirteen recommendation surfaces are NOT driven in
+// tests/e2e/design/conformance/functional-acceptance.spec.ts and are named on
+// this wave's readiness list instead: their manifest stays unpinned, no
+// allowlist entry was added, and no driver claims coverage this harness cannot
+// honestly reach. The readings themselves are proven where a real reader and a
+// real held run exist — tests/e2e/chat-hitl-held-turn/held-turn.spec.ts — and,
+// through the shipped card and the shipped row, in
+// __tests__/lifecycle-recommendation-fixture.test.tsx, which answers the card's
+// OWN resolve with the authoritative state each run stands for and asserts
+// nothing about how that reading is drawn.
 //
-// WHAT THE HARNESS DOES NOT DO. It names no drawn state. The chip a started run
-// draws for a skill with no decision row is drawn `skipped` because the shipped
-// `settledChipsForRow` derives it; the loading line and the no-candidates line
-// are the component's own; whether a control is disabled is the component's own.
-// The harness hands inputs and nothing else — pinned by
-// __tests__/lifecycle-recommendation-fixture.test.tsx.
+// NOTHING IS INTERCEPTED HERE. There is no transport substitution of any kind on
+// this page: no fetch wrapper, no route stub, no seeded server answer and no
+// `submit` prop. The card resolves through its real transport and draws whatever
+// that answers.
 //
 // Kept OFF the pixel-diffed /design-fixtures index page (same convention as the
-// other conformance fixtures): coverage here is assertion-based —
-// tests/e2e/design/conformance/functional-acceptance.spec.ts.
+// other conformance fixtures).
 // ---------------------------------------------------------------------------
 
 import type { ReactElement } from "react";
 
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
-import { RunRecommendationChipRow } from "@cinatra-ai/agents/run-recommendation-chip-row";
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
 
 import {
   LIFECYCLE_RECOMMENDATION_AGENT,
-  LIFECYCLE_RECOMMENDATION_APPLIED_KINDS,
-  LIFECYCLE_RECOMMENDATION_CANDIDATES,
-  LIFECYCLE_RECOMMENDATION_RUN_ID,
-  LIFECYCLE_RECOMMENDATION_SKILL_ID,
-  LIFECYCLE_RECOMMENDATION_SKILL_NAME,
-  type LifecycleRecommendationDecision,
+  LIFECYCLE_RECOMMENDATION_READINGS,
+  LIFECYCLE_RECOMMENDATION_READING_RUN,
+  LIFECYCLE_RECOMMENDATION_RUN,
 } from "./lifecycle-recommendation-fixture-data";
 
 /**
- * The run's settled answer for the reading where the run has already started.
- *
- * `decided` is the run's DURABLE EVIDENCE — one entry per skill that ended with
- * a selection row, carrying the mark that row RECORDED — and `candidates` is the
- * offer the hold asked about. The recorded mark is an input the resolver reads,
- * not a reading this file draws: what the row DRAWS from it (the box treatment,
- * the outcome line) is the shipped component's. The third skill is in the offer
- * and in no decision row, and the shipped `settledChipsForRow` is what turns
- * that into the chip the drawing draws with its box clear — nothing here says
- * "skipped", and the harness unit test asserts that over THIS object.
- *
- * Exported so that test can read the real object rather than a restatement of it.
+ * One mount: the shipped card, under the CHAT-THREAD host declaration, for one
+ * run. The declaration is what makes this the in-conversation reading rather
+ * than the run panel's — and `chat_thread` is a cookie host, so it declares no
+ * credential (the runtime's closed list refuses the mismatch either way).
  */
-export const STARTED_RUN_DECISION: LifecycleRecommendationDecision = {
-  kind: "confirmed",
-  skillNames: [],
-  decided: LIFECYCLE_RECOMMENDATION_APPLIED_KINDS.map((kind) => ({
-    skillId: LIFECYCLE_RECOMMENDATION_SKILL_ID[kind],
-    name: LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind],
-    mark: "confirmed" as const,
-  })),
-  candidates: LIFECYCLE_RECOMMENDATION_CANDIDATES.map((candidate) => ({
-    skillId: candidate.skillId,
-    name: candidate.name,
-  })),
-};
-
-/** A LIVE parked hold — the reading the drawing draws in the assistant's turn. */
-function HeldRow({ canDecide }: { canDecide: boolean }): ReactElement {
+function RecommendationCardInThread({ runId }: { runId: string }): ReactElement {
   return (
-    <RunRecommendationChipRow
-      runId={LIFECYCLE_RECOMMENDATION_RUN_ID}
-      agentPackageName={LIFECYCLE_RECOMMENDATION_AGENT}
-      initialRecommendations={[...LIFECYCLE_RECOMMENDATION_CANDIDATES]}
-      decision={{ kind: "pending" }}
-      canDecide={canDecide}
-      variant="inline"
-    />
+    <LifecycleCardSurfaceProvider host="chat_thread">
+      <RecommendationHoldCard runId={runId} agentPackageName={LIFECYCLE_RECOMMENDATION_AGENT} />
+    </LifecycleCardSurfaceProvider>
   );
 }
 
 /**
- * The in-conversation recommendation row, one mount per reading the drawing
- * draws. Every mount declares the CHAT-THREAD host, which is what makes these
- * the in-conversation readings rather than the run panel's.
+ * The in-conversation recommendation card, one mount per reading the drawing
+ * draws. A reading is selected by the RUN the card is handed, never by a prop:
+ * the card resolves what that run is, and the row draws what the card resolved.
  */
 export function LifecycleRecommendationFixtures(): ReactElement {
   return (
     <div className="flex flex-col gap-10">
-      {/* The row in the assistant's turn, on a run held at the gate. */}
+      {/* The card in the assistant's turn, on a run held at the gate. */}
       <div data-surface-id="recommendation-paused">
-        <LifecycleCardSurfaceProvider host="chat_thread">
-          <HeldRow canDecide />
-        </LifecycleCardSurfaceProvider>
+        <RecommendationCardInThread runId={LIFECYCLE_RECOMMENDATION_RUN.held} />
       </div>
 
-      {/* The same live row, offered NO candidate. "A row with every box clear is
+      {/* A held run that was offered NO candidate. "A row with every box clear is
           still the whole card" — the row keeps its place and states its own
           emptiness; nothing stands in for it. */}
       <div data-surface-id="recommendation-empty">
-        <LifecycleCardSurfaceProvider host="chat_thread">
-          <RunRecommendationChipRow
-            runId={LIFECYCLE_RECOMMENDATION_RUN_ID}
-            agentPackageName={LIFECYCLE_RECOMMENDATION_AGENT}
-            initialRecommendations={[]}
-            decision={{ kind: "pending" }}
-            variant="inline"
-          />
-        </LifecycleCardSurfaceProvider>
+        <RecommendationCardInThread runId={LIFECYCLE_RECOMMENDATION_RUN.empty} />
       </div>
 
-      {/* The same live row BEFORE its candidates have been read. The row is given
-          no prefetched offer, which is exactly what the chat mount does, and the
-          reading it draws until the read answers is the component's own. */}
-      <div data-surface-id="recommendation-loading">
-        <LifecycleCardSurfaceProvider host="chat_thread">
-          <RunRecommendationChipRow
-            runId={LIFECYCLE_RECOMMENDATION_RUN_ID}
-            agentPackageName={LIFECYCLE_RECOMMENDATION_AGENT}
-            decision={{ kind: "pending" }}
-            variant="inline"
-          />
-        </LifecycleCardSurfaceProvider>
-      </div>
-
-      {/* The drawing's side-by-side example: one row, three readings. */}
+      {/* The drawing's side-by-side example: one row, three readings — each one a
+          run whose resolved state IS that reading. `before-start` is the SAME
+          held run as the turn above, because the drawing draws one live parked
+          hold twice rather than two product states. */}
       <div data-surface-id="recommendation-readings" className="flex flex-col gap-6">
-        <div data-reading="before-start">
-          <LifecycleCardSurfaceProvider host="chat_thread">
-            <HeldRow canDecide />
-          </LifecycleCardSurfaceProvider>
-        </div>
-        <div data-reading="running">
-          <LifecycleCardSurfaceProvider host="chat_thread">
-            <RunRecommendationChipRow
-              runId={LIFECYCLE_RECOMMENDATION_RUN_ID}
-              agentPackageName={LIFECYCLE_RECOMMENDATION_AGENT}
-              initialRecommendations={[...LIFECYCLE_RECOMMENDATION_CANDIDATES]}
-              decision={STARTED_RUN_DECISION}
-              variant="inline"
-            />
-          </LifecycleCardSurfaceProvider>
-        </div>
-        <div data-reading="restricted">
-          <LifecycleCardSurfaceProvider host="chat_thread">
-            <HeldRow canDecide={false} />
-          </LifecycleCardSurfaceProvider>
-        </div>
+        {LIFECYCLE_RECOMMENDATION_READINGS.map((reading) => (
+          <div key={reading} data-reading={reading}>
+            <RecommendationCardInThread runId={LIFECYCLE_RECOMMENDATION_READING_RUN[reading]} />
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -5,36 +5,41 @@
 // it THREE READINGS — the row while the question is open (the assistant's turn,
 // and the reader who comes back to it before the run starts), the same row once
 // the run has started, and the reader who may see the proposal but may not shape
-// it. Thirteen manifest surfaces stand on those three readings: the row itself
-// three times over, one chip per proposed skill in each reading, and the
-// side-by-side example that draws all three at once. That is why the family is
-// driven by ONE factory parameterised by READING and CHIP KIND
-// (`recommendationChipDriver` / `recommendationRowDriver`,
-// tests/e2e/design/conformance/contract.ts) over this data, exactly as the six
-// extension listing cards are driven by `cardDriver` over
-// CONFORMANCE_CARD_FIXTURES and the suggestion chips by `suggestionChipDriver`.
+// it.
+//
+// WHAT THIS FILE NAMES, AFTER THE ONE-CARD CORRECTION (see the harness module's
+// header). It no longer names PROPS for the row: the row has exactly one
+// composer in the product, `RecommendationHoldCard`, and that card takes no
+// state from its host — it RESOLVES the run's authoritative hold state itself
+// and derives every prop the row is given from that answer. So what a reading
+// needs is a RUN whose resolved state is that reading, and this file names the
+// run identities plus, for the harness unit tier, the authoritative answer each
+// one stands for — in the shipped `RunRecommendationHoldState` type, so a change
+// to what the resolver returns is a typecheck failure here rather than a fixture
+// that quietly stops resembling what the product is handed.
 //
 // WHY MOUNTS AND NOT MANIFEST SURFACE IDS. Same reason as the suggestion chips
 // (see lifecycle-card-fixture-data.ts): the shipped row carries ONE conformance
 // id for the row and identifies a chip by its SKILL ID, because one component
 // serves every host that draws `recommendation_hold` and a per-surface anchor
-// would have to be invented for the harness. A mount is therefore named here and
-// the binding from mount+kind to manifest surface lives on the test side, in the
-// driver map.
+// would have to be invented for the harness.
 //
 // THIS FILE CARRIES NO DRAWN STATE. It names the run, the reader's rights, the
 // proposed skills in the protocol's own shape, and — for the reading where the
 // run has already started — the run's DURABLE EVIDENCE (which skills ended up
 // with a selection row). Which mark each chip then draws, whether a chip is
-// pressable, what the row says while its candidates load and what it says with
-// none at all are all computed by the shipped component: the third chip of the
-// started reading is drawn `skipped` because the shipped `settledChipsForRow`
-// derives it from an offer with no decision row, never because this file says so.
+// pressable and what the row says with no candidate at all are all computed by
+// the shipped card and the shipped row: the third chip of the started reading is
+// drawn `skipped` because the shipped `settledChipsForRow` derives it from an
+// offer with no decision row, never because this file says so.
 // ---------------------------------------------------------------------------
 
 import type { ComponentProps } from "react";
 
-import type { RunRecommendationChipRow } from "@cinatra-ai/agents/run-recommendation-chip-row";
+import type {
+  RunRecommendationChipRow,
+  RunRecommendationHoldState,
+} from "@cinatra-ai/agents/run-recommendation-chip-row";
 
 type RunRecommendationChipRowProps = ComponentProps<typeof RunRecommendationChipRow>;
 
@@ -46,9 +51,6 @@ type RunRecommendationChipRowProps = ComponentProps<typeof RunRecommendationChip
 export type LifecycleRecommendationCandidate = NonNullable<
   RunRecommendationChipRowProps["initialRecommendations"]
 >[number];
-
-/** The run's settled answer, again in the shipped row's own prop type. */
-export type LifecycleRecommendationDecision = RunRecommendationChipRowProps["decision"];
 
 /**
  * The three proposed skills the drawing names, in its own order.
@@ -88,8 +90,7 @@ export const LIFECYCLE_RECOMMENDATION_SKILL_NAME: Readonly<
   schedule: "Schedule send",
 };
 
-/** The run the harness rows are drawn for, and the agent that was dispatched. */
-export const LIFECYCLE_RECOMMENDATION_RUN_ID = "run-conformance-3160";
+/** The agent that was dispatched for every run below. */
 export const LIFECYCLE_RECOMMENDATION_AGENT = "@cinatra-test/outreach-fixture-agent";
 
 export const LIFECYCLE_RECOMMENDATION_CANDIDATES: readonly LifecycleRecommendationCandidate[] =
@@ -114,14 +115,89 @@ export const LIFECYCLE_RECOMMENDATION_APPLIED_KINDS: readonly LifecycleRecommend
   "draft",
 ];
 
+/**
+ * THE RUNS THE HARNESS MOUNTS A CARD FOR, one per reading the drawing draws.
+ *
+ * Distinct identities on purpose: the card files its resolved answer under the
+ * run id it asked about, so two readings on one page must be two runs or the
+ * second would read back the first one's answer.
+ *
+ * `before-start` deliberately REUSES the held run: the drawing draws that
+ * reading twice (once as the assistant's turn, once inside the three-readings
+ * example) and it is ONE product reading — a live parked hold — so inventing a
+ * second run for it would be inventing a second product state.
+ */
+export const LIFECYCLE_RECOMMENDATION_RUN = {
+  held: "run-conformance-3160-held",
+  empty: "run-conformance-3160-empty",
+  decided: "run-conformance-3160-decided",
+  restricted: "run-conformance-3160-restricted",
+} as const;
+
+export type LifecycleRecommendationRunKey = keyof typeof LIFECYCLE_RECOMMENDATION_RUN;
+
+/**
+ * THE AUTHORITATIVE ANSWER each run stands for, in the resolver's own shipped
+ * type. This is what `getRunRecommendationHoldStateAction` returns for a reader
+ * who may see that run — it is NOT a drawn reading and NOT a prop: the card
+ * derives every prop the row receives from it, and the row derives every mark,
+ * line and affordance from those.
+ *
+ * The harness unit tier answers the card's own resolve from this map, which is
+ * the one tier that can: the conformance harness route is a dev-only PUBLIC path
+ * with no session, so the card's cookie-bound resolve there answers "no row for
+ * this reader" and the card draws nothing. See the harness module's header.
+ */
+export const LIFECYCLE_RECOMMENDATION_HOLD_STATE: Readonly<
+  Record<string, RunRecommendationHoldState>
+> = {
+  [LIFECYCLE_RECOMMENDATION_RUN.held]: {
+    state: "held",
+    agentPackageName: LIFECYCLE_RECOMMENDATION_AGENT,
+    promptText: "Draft the outreach follow-ups for this week.",
+    recommendations: [...LIFECYCLE_RECOMMENDATION_CANDIDATES],
+    holdRef: "",
+    canDecide: true,
+  },
+  [LIFECYCLE_RECOMMENDATION_RUN.empty]: {
+    state: "held",
+    agentPackageName: LIFECYCLE_RECOMMENDATION_AGENT,
+    promptText: "Draft the outreach follow-ups for this week.",
+    recommendations: [],
+    holdRef: "",
+    canDecide: true,
+  },
+  [LIFECYCLE_RECOMMENDATION_RUN.decided]: {
+    state: "confirmed",
+    skillNames: LIFECYCLE_RECOMMENDATION_APPLIED_KINDS.map(
+      (kind) => LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind],
+    ),
+    decided: LIFECYCLE_RECOMMENDATION_APPLIED_KINDS.map((kind) => ({
+      skillId: LIFECYCLE_RECOMMENDATION_SKILL_ID[kind],
+      name: LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind],
+      mark: "confirmed" as const,
+    })),
+    candidates: LIFECYCLE_RECOMMENDATION_CANDIDATES.map((candidate) => ({
+      skillId: candidate.skillId,
+      name: candidate.name,
+    })),
+  },
+  [LIFECYCLE_RECOMMENDATION_RUN.restricted]: {
+    state: "held",
+    agentPackageName: LIFECYCLE_RECOMMENDATION_AGENT,
+    promptText: "Draft the outreach follow-ups for this week.",
+    recommendations: [...LIFECYCLE_RECOMMENDATION_CANDIDATES],
+    holdRef: "",
+    canDecide: false,
+  },
+};
+
 /** The harness mounts this family draws. */
 export const LIFECYCLE_RECOMMENDATION_MOUNTS = [
-  /** The row in the assistant's turn, on a run held at the recommendation gate. */
+  /** The card in the assistant's turn, on a run held at the recommendation gate. */
   "recommendation-paused",
-  /** The same live row with no candidate at all. */
+  /** The same card on a held run that was offered no candidate at all. */
   "recommendation-empty",
-  /** The same live row before its candidates have been read. */
-  "recommendation-loading",
   /** The drawing's side-by-side example: three readings of one row. */
   "recommendation-readings",
 ] as const;
@@ -139,3 +215,12 @@ export const LIFECYCLE_RECOMMENDATION_READINGS = [
 ] as const;
 
 export type LifecycleRecommendationReading = (typeof LIFECYCLE_RECOMMENDATION_READINGS)[number];
+
+/** The run whose resolved state IS each of the side-by-side readings. */
+export const LIFECYCLE_RECOMMENDATION_READING_RUN: Readonly<
+  Record<LifecycleRecommendationReading, string>
+> = {
+  "before-start": LIFECYCLE_RECOMMENDATION_RUN.held,
+  running: LIFECYCLE_RECOMMENDATION_RUN.decided,
+  restricted: LIFECYCLE_RECOMMENDATION_RUN.restricted,
+};

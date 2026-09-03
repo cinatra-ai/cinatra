@@ -237,15 +237,18 @@ export default function ConformanceHarnessPage() {
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
-              In-conversation recommendation row (mounts: recommendation-paused,
-              recommendation-empty, recommendation-loading, recommendation-readings)
+              In-conversation recommendation card (mounts: recommendation-paused,
+              recommendation-empty, recommendation-readings)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {/* cinatra#3160, epic #3155 W4: the REAL RunRecommendationChipRow under
-                the REAL chat-thread host declaration, in each of the three readings
-                the drawing gives it. The harness hands inputs; the shipped component
-                draws every reading. */}
+            {/* cinatra#3160, epic #3155 W4: the REAL RecommendationHoldCard — the
+                ONE composer of the shipped row — under the REAL chat-thread host
+                declaration, one mount per run. The card resolves the run's
+                authoritative hold state itself, so this route hands it a run and
+                nothing else; on this sessionless dev-only route that resolve
+                answers "no row for this reader" and the card draws nothing, which
+                is its own fail-closed reading. See the module header. */}
             <LifecycleRecommendationFixtures />
           </CardContent>
         </Card>

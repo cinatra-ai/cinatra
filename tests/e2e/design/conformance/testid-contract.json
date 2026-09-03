@@ -28,19 +28,6 @@
     "extension-listing-card-installing": { "$ref": "extension-listing-card" },
     "extension-listing-card-incompatible": { "$ref": "extension-listing-card" },
     "suggestion-accepted": { "$ref": "suggestion-chip" },
-    "recommendation-row-paused": { "$ref": "recommendation-row" },
-    "recommendation-in-thread": { "$ref": "recommendation-row" },
-    "recommendation-row-readings": { "$ref": "recommendation-row" },
-    "recommendation-chip-enrich": { "$ref": "recommendation-chip" },
-    "recommendation-chip-draft": { "$ref": "recommendation-chip" },
-    "recommendation-chip-schedule": { "$ref": "recommendation-chip" },
-    "recommendation-chip-before-start-enrich": { "$ref": "recommendation-chip" },
-    "recommendation-chip-before-start-draft": { "$ref": "recommendation-chip" },
-    "recommendation-chip-before-start-schedule": { "$ref": "recommendation-chip" },
-    "recommendation-chip-running-enrich": { "$ref": "recommendation-chip" },
-    "recommendation-chip-running-draft": { "$ref": "recommendation-chip" },
-    "recommendation-chip-running-schedule": { "$ref": "recommendation-chip" },
-    "recommendation-chip-restricted": { "$ref": "recommendation-chip" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -541,44 +528,6 @@
     }
   },
   "shared": {
-    "recommendation-row": {
-      "manifest": "app-lifecycle-cards",
-      "selector": "[data-surface-id={mount}] [data-run-recommendation-chip-row] — the REAL RunRecommendationChipRow, the ONE shipped renderer of `recommendation_hold`, mounted on the conformance harness route inside a chat-thread host declaration (src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx). Under §V the ROW IS THE CARD, so the row's own outermost element carries the card-root declaration: data-lifecycle-card=\"recommendation_hold\", data-lifecycle-card-state (`held` while the question is open, `decided` once the run has started), data-lifecycle-card-host and the transcript's own hold marker. data-can-decide states whether THIS reader may shape the run. The harness hands the row its inputs only — the offer, the run's durable evidence and the reader's rights — and every reading (the loading line, the no-candidate line, each chip's mark, the disabled restricted reading) is computed by the shipped component.",
-      "requires": [
-        {
-          "file": "packages/agents/src/run-recommendation-chip-row.tsx",
-          "literals": [
-            "data-run-recommendation-chip-row=\"\"",
-            "data-conformance-id=\"run-chip-row\"",
-            "data-lifecycle-card=\"recommendation_hold\"",
-            "data-lifecycle-card-state=\"held\"",
-            "data-lifecycle-card-state=\"decided\"",
-            "data-run-recommendation-settled=\"true\"",
-            "data-can-decide={canDecide ? \"true\" : \"false\"}",
-            "data-run-recommendation-restricted=\"\"",
-            "Loading recommendations…",
-            "No candidate skills."
-          ]
-        }
-      ]
-    },
-    "recommendation-chip": {
-      "manifest": "app-lifecycle-cards",
-      "selector": "[data-surface-id={mount}] [data-run-recommendation-chip-row] [data-recommendation-chip][data-skill-id={skillId}] — one pill of the REAL row, addressed by the SKILL it stands for, because the shipped row identifies a chip by its package-qualified skill id and one component serves every host that draws this card. data-chip-mark is the box's own reading (`undecided` while the question is open; `confirmed` / `adjusted` / `skipped` once the run has started, derived by the shipped settledChipsForRow from the run's durable evidence), and aria-disabled is the restricted reading. The pill prints the RESOLVED display label the run handed the row, never the id.",
-      "requires": [
-        {
-          "file": "packages/agents/src/run-recommendation-chip-row.tsx",
-          "literals": [
-            "data-recommendation-chip=\"\"",
-            "data-skill-id={skill.skillId}",
-            "data-skill-id={skillId}",
-            "data-chip-mark={chip ? chip.mark : \"undecided\"}",
-            "data-chip-mark={mark}",
-            "aria-disabled={canDecide ? undefined : \"true\"}"
-          ]
-        }
-      ]
-    },
     "suggestion-chip": {
       "manifest": "app-lifecycle-cards",
       "selector": "[data-surface-id={surface}] [data-conformance-id=\"suggestion-chips\"][data-suggestion-chips-mode=\"live\"] — the REAL SuggestionChips row, the shipped chip row of the one review renderer, mounted on the conformance harness route inside a chat-thread host declaration. ONE chip per suggestion, addressed by the state it is drawn in: [data-conformance-id=\"suggestion-accepted\"] / \"suggestion-dismissed\", each carrying data-suggestion-state and, on that same row element, the MANIFEST'S OWN action name as data-action (\"dismiss-suggestion -> dismissed\" on an accepted chip, \"accept-suggestion -> accepted\" on a dismissed one); the press target is the button inside the row. The harness holds only the reader's LOCAL dismissal set, which is where a mark lives on a pending gate (§VIII gives the chips no submit of their own); the drawn state, the offered control and its name are computed by the shipped component, so nothing the driver asserts is named by the harness.",

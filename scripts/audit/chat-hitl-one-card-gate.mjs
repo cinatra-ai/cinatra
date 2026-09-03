@@ -475,6 +475,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the assistant dispatch turn: the card mounts on the run identity read off the tool result, as a SIBLING of the inline run card, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part (cinatra#2794, S9b)",
         },
+        {
+          module: "src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx",
+          adapter: "mount",
+          region: "transcript",
+          surface: "dev_preview",
+          why: "the design-conformance harness mount (cinatra#3160, epic #3155 W4): the fixtures route draws the SAME card under the same chat_thread declaration, one mount per run, so the harness exercises the shipped composer instead of the row. Enumerated because it is a real callsite, and marked dev_preview because the route is dev-only and sessionless — the card's own cookie-bound resolve answers no row for its reader there, so it claims no host mount anybody ships. Its first cut mounted RunRecommendationChipRow directly and was the retired parallel renderer R2 forbids",
+        },
       ],
       site_widget: [
         {
