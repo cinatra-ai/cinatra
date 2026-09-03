@@ -39,8 +39,11 @@
 // real held run exist — tests/e2e/chat-hitl-held-turn/held-turn.spec.ts — and,
 // through the shipped card and the shipped row, in
 // __tests__/lifecycle-recommendation-fixture.test.tsx, which answers the card's
-// OWN resolve with the authoritative state each run stands for and asserts
-// nothing about how that reading is drawn.
+// OWN resolve with the authoritative state each run stands for. That tier DOES
+// assert the drawn reading — the marks, the counts, the labels, the empty line,
+// the restricted affordances — and the point is that it can: every value it
+// reads was DERIVED by the card and the row from the resolved state, and none of
+// them is named anywhere in what the resolve answered.
 //
 // NOTHING IS INTERCEPTED HERE. There is no transport substitution of any kind on
 // this page: no fetch wrapper, no route stub, no seeded server answer and no
