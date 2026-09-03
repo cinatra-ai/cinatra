@@ -211,3 +211,53 @@ export function runMadeReading(input: {
 export function runMadeSaysSomething(reading: RunMadeReading): boolean {
   return reading !== "unknown";
 }
+
+/**
+ * WHERE the run's own record is drawn — one value, decided once
+ * (cinatra#3149 item 2).
+ *
+ * THE DRAWING: "Selecting a step opens THAT STEP'S PAGE in the run detail, and
+ * the page carries the ONE CARD of the step it belongs to ... two cards are
+ * never stacked in one detail" (§I of the ratified review drawing), and the
+ * record is a page: "The rail's LAST ENTRY is the run's own record, and ITS
+ * PAGE lists the run's work" (§I.2).
+ *
+ * WHY IT IS A SEAM. The screen asked this twice — once to mount the panel
+ * inside the run detail, and once to make the record a step — out of two
+ * separately-written expressions. Two expressions can drift into both being
+ * true, and a reader then gets the record stacked on the gate's card, which is
+ * exactly what the fourth graded reading measured. One question, one answer:
+ * "stacked" is not a value this function can return.
+ *
+ * `railAvailable` is the screen's own `screenDrawsPageRail` reading. Where the
+ * page cannot stand a rail beside the detail — the flow branch, whose rail
+ * lives INSIDE the detail — a page of its own would leave the reader with no
+ * rail, no history and no way back, so the record stays in the detail.
+ *
+ * AND ON THAT BRANCH IT STILL YIELDS TO AN OPEN GATE (adopted at convergence).
+ * "The record stays in the detail" is only the drawing's reading while the
+ * detail has no other card to stack it on. The branch with no step pages draws
+ * the gate's own review card into that same detail, so a run whose output has
+ * an UNDECIDED gate would show the record and the gate's card together — which
+ * is the exact instant issue #3149 measured ("both panels visible together in
+ * the same instant the gate was still pending"). While the gate is undecided
+ * the gate's card owns the detail and the record is not drawn; the moment the
+ * gate is decided the record draws there as before, so nothing is lost, only
+ * ordered.
+ */
+export type RunMadePlacement = "step-page" | "in-run-detail" | "not-drawn";
+
+export function runMadePlacement(input: {
+  /** `runMadeSaysSomething(runMadeReading(...))` — the record has an answer. */
+  saysSomething: boolean;
+  /** Can a rail stand BESIDE the run detail on this page? */
+  railAvailable: boolean;
+  /** Does the run detail ITSELF already hold an undecided review gate's card?
+   *  Only ever true on the branch that has no step pages — where the record
+   *  would otherwise be stacked on that card. */
+  detailHoldsPendingGateCard?: boolean;
+}): RunMadePlacement {
+  if (!input.saysSomething) return "not-drawn";
+  if (input.railAvailable) return "step-page";
+  return input.detailHoldsPendingGateCard === true ? "not-drawn" : "in-run-detail";
+}

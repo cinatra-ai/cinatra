@@ -30,6 +30,7 @@ import { RunStepRailPanel } from "./run-step-rail-panel";
 import { RunMadePanel } from "./run-made-panel";
 import {
   runMadeReading,
+  runMadePlacement,
   runMadeSaysSomething as runMadeReadingSaysSomething,
 } from "./run-artifact-list";
 import {
@@ -1405,7 +1406,22 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     panel: runDetailPanel,
     stepperStepCount: stepperSteps.length,
   });
-  const runMadeIsAStep = run != null && runMadeSaysSomething && runMadeRailAvailable;
+  // ONE ANSWER, READ TWICE (cinatra#3149 item 2). The record's place is decided
+  // by the pure seam `runMadePlacement` and read below both where the record
+  // becomes a step and where it survives inside the run detail — so the two
+  // mounts cannot both fire and stack the record on the gate's own card, which
+  // "two cards are never stacked in one detail" rules out.
+  const runMadeWhere = runMadePlacement({
+    saysSomething: run != null && runMadeSaysSomething,
+    railAvailable: runMadeRailAvailable,
+    // The branch with no step pages draws the gate's own review card into THIS
+    // detail, so while that gate is undecided the record would be stacked on it
+    // — the instant cinatra#3149 item 2 measured. The screen already knows the
+    // answer server-side (`initialReviewGate.awaiting`, read once above), so it
+    // hands it to the seam rather than letting the detail find out by drawing.
+    detailHoldsPendingGateCard: Boolean(initialReviewGate?.awaiting),
+  });
+  const runMadeIsAStep = runMadeWhere === "step-page";
 
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
@@ -1551,7 +1567,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   step — the flow branch, whose rail lives inside this very
                   detail (`runMadeIsAStep`), and where opening a page of its own
                   would leave the reader with no rail at all. */}
-              {runMadeSaysSomething && !runMadeIsAStep ? (
+              {runMadeWhere === "in-run-detail" ? (
                 <RunMadePanel records={runMadeRecords ?? []} runStatus={run.status} />
               ) : null}
               {recommendationCardNode}

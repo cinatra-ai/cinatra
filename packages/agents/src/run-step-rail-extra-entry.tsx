@@ -120,6 +120,7 @@ export function RailExtraEntry({
   entry,
   reviewHrefBase,
   displayStep,
+  current = false,
 }: {
   entry: RunStepRailEntry;
   reviewHrefBase: string;
@@ -127,6 +128,13 @@ export function RailExtraEntry({
    *  the only `kind: "step"` entry that ever reaches this component). Gates,
    *  verifications and lifecycle decisions draw an icon instead. */
   displayStep?: number;
+  /** Is this the rail's CURRENT entry — the one the reader is standing on
+   *  (cinatra#3149 item 3)? Answered by the rail that draws the row, because
+   *  only the rail holds the anchor: "one entry is highlighted at a time"
+   *  (the ratified drawing, §I.3). A row that opens the record's own page
+   *  answers it for itself below and is never handed `true` at the same time —
+   *  the rail scopes this to the detail being what is open. */
+  current?: boolean;
 }) {
   const isGate = entry.kind === "gate";
   const isVerification = entry.kind === "verification";
@@ -228,6 +236,10 @@ export function RailExtraEntry({
           href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
           className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-rail-gate-link={entry.gate.reviewTaskId}
+          // The current-position marker sits on the ROW, whatever element the
+          // row is (cinatra#3149 item 3) — a pending review is as often the
+          // entry the reader is standing on as a work step is.
+          aria-current={current ? "step" : undefined}
         >
           {indicatorNode}
           {titleNode}
@@ -239,6 +251,7 @@ export function RailExtraEntry({
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-rail-verification-link={entry.verification.reviewTaskId}
+          aria-current={current ? "step" : undefined}
         >
           {indicatorNode}
           {titleNode}
@@ -271,7 +284,7 @@ export function RailExtraEntry({
           // selected row at all, so `undefined` took every row out of the tab
           // order and no keyboard could reach this one (the convergence leg).
           tabIndex={runMadeOpens ? 0 : -1}
-          aria-current={runMadeSelected ? "step" : undefined}
+          aria-current={runMadeSelected || current ? "step" : undefined}
           // `StepperTrigger` renders `role="tab"` and would otherwise announce
           // `aria-selected="false"` on the very row `aria-current` calls open.
           aria-selected={runMadeOpens ? runMadeSelected : undefined}

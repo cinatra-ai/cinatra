@@ -184,9 +184,15 @@ describe("the screen composes the record as a STEP, not into the stacked detail"
     expect(end).toBeGreaterThan(start);
     const detail = SCREEN_SRC.slice(start, end);
     expect(detail).toContain("<RunMadePanel");
-    expect(detail).toMatch(/runMadeSaysSomething && !runMadeIsAStep \? \(/);
-    // and the step is built from the SAME predicate, so the two can never both
-    // draw the panel in one render.
+    // ONE SEAM ANSWERS IT (cinatra#3149 item 2). The two mounts used to read two
+    // separately-written expressions — `runMadeSaysSomething && !runMadeIsAStep`
+    // here and `runMadeIsAStep` at the step — and two expressions can drift into
+    // both being true, which is the stacking the fourth graded reading measured.
+    // They now read ONE placement value, and "stacked" is not a value it can
+    // hold (`runMadePlacement`, pinned in `run-made-one-card-per-detail.test.tsx`).
+    expect(detail).toMatch(/runMadeWhere === "in-run-detail" \? \(/);
+    expect(SCREEN_SRC).toMatch(/const runMadeWhere = runMadePlacement\(/);
+    expect(SCREEN_SRC).toMatch(/const runMadeIsAStep = runMadeWhere === "step-page";/);
     expect(SCREEN_SRC).toMatch(/run && runMadeIsAStep/);
     expect(SCREEN_SRC).toMatch(/const runMadeRailAvailable = screenDrawsPageRail\(/);
   });

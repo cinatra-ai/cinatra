@@ -112,6 +112,21 @@ export function RunStepRailPanel({
             const isCompleted = entry.status === "completed" || isResolved;
             const isActive = displayStep === activeIndex || (isPending && entry.kind !== "lifecycleDecision");
             const isLast = i === entries.length - 1;
+            // THE CURRENT-POSITION MARKER (cinatra#3149 item 3). The ratified
+            // drawing on the review step: "The run waits at each — ONE ENTRY IS
+            // HIGHLIGHTED AT A TIME". So the marker is written from the rail's
+            // OWN anchor, `activeIndex` — the single index the stepper is on —
+            // and never from `isActive`, which is deliberately looser (it also
+            // opens every pending row) and would mark several rows at once.
+            //
+            // SCOPED TO THE DETAIL. Every row this panel draws opens the run
+            // DETAIL. When the reader has opened another page of the frame —
+            // the run's own record, a step of its own — that page's row is the
+            // current one and carries the marker itself
+            // (`run-step-rail-extra-entry.tsx`), so this panel stands down and
+            // the rail never carries two markers. Outside the frame there is no
+            // open page at all, and nothing is marked.
+            const isCurrent = selection?.selected === "detail" && displayStep === activeIndex;
 
             // Gates / verifications / lifecycle decisions render through the
             // SHARED row (cinatra#2739) — the same rows the live rail inside
@@ -131,6 +146,7 @@ export function RunStepRailPanel({
                     entry={entry}
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
+                    current={isCurrent}
                   />
                   {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
@@ -169,6 +185,9 @@ export function RunStepRailPanel({
                 >
                   <StepperTrigger
                     className={RUN_PAGE_RAIL_ROW_CLASS}
+                    // The marker sits on the ROW, the same place the three
+                    // sibling rails on this surface put theirs.
+                    aria-current={isCurrent ? "step" : undefined}
                     // EXPLICIT 0, for the reason the record's row states: a
                     // finished rail has no stepper-selected row, so `undefined`
                     // left every row at `-1` and a keyboard reader who landed on
