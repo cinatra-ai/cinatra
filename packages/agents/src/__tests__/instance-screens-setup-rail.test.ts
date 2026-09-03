@@ -188,6 +188,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
       "properties={properties}",
       "setupComplete={setupComplete}",
       "durationEstimate={durationEstimate}",
+      // cinatra#3224: the Estimated run duration line is always drawn — where
+      // the estimator has no reading, over the agent's declared step count. The
+      // prop is the schedule step's, listed with the rest.
+      "declaredStepCount={template.approvalPolicy?.steps?.length ?? 0}",
       // cinatra#2980: a run whose one-off schedule has already fired keeps the
       // form as a READING. The prop is the schedule step's, so it is listed with
       // the rest rather than smuggled in beside them.

@@ -897,7 +897,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const policySteps = template.approvalPolicy?.steps ?? [];
   // Shared with the agent-run review surface via buildRunStepperSteps (cinatra#2063)
   // so both surfaces render the identical step list in lockstep.
-  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>);
+  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>, {
+    // The run's own record of each step, for a declaration that names nothing
+    // (cinatra#3226): a work step is named by its work, never by an ordinal.
+    stepResults: (run?.stepResults ?? null) as readonly unknown[] | null,
+  });
 
   // Batch-fetch sub-agent descriptions for tooltip content.
   const childPackages = Array.from(new Set(
@@ -1083,7 +1087,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // panels are told the SECOND one: the step-less heading and the run-progress
   // reading retire only while the form is the step being drawn, so a run that
   // has moved on keeps the progress panel -- and its status badge -- it had.
-  const openInputStep = runInputSteps.find((step) => step.open) ?? null;
   const inputStepIsOpen = openInputStepKey !== null;
 
   // Pre-generate a unique run name so the title shows immediately on load.
@@ -1360,13 +1363,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           inputStepsInRail,
           scheduleStepInFrame: runDetailPanel === "trigger",
         })}
-        // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
-        // schedule step is named in the page header because it answers at its
-        // own sub-route; the run's first step answers on the run's own path, so
-        // the trail stopped at the run's name and told the reader the run but
-        // never the step. The step's own declared title travels through the ONE
-        // crumb channel instead, and only while the run is standing at it.
-        stepCrumbLabel={openInputStep?.label ?? null}
         templateName={template.name}
         initialRunName={runName}
         runId={run?.id ?? null}
@@ -1499,6 +1495,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     properties={properties}
                     setupComplete={setupComplete}
                     durationEstimate={triggerStepDurationEstimate}
+                    // The declared step count, for the Estimated run duration
+                    // line of a run with no history (cinatra#3224).
+                    declaredStepCount={policySteps.length}
                     // WHAT THE ROW STATES, FOR THE RUNNER'S SCHEDULE DEFAULT
                     // (cinatra#2936). The step opens on the row that decision
                     // names, and presence is one of its two inputs. The reading
@@ -2368,6 +2367,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         properties={properties}
         setupComplete={setupComplete}
         durationEstimate={durationEstimate}
+        declaredStepCount={template.approvalPolicy?.steps?.length ?? 0}
         readOnly={scheduleFrozen || scheduleTabSurface}
       />
     </AgentPanelBody>

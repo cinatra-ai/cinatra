@@ -268,7 +268,7 @@ describe("the run page's own rail carries the drawing's rhythm too (item 2, conv
       // rail overrode only the height and the ink.
       expect(mark.className).toContain("my-1");
       // 11px in from the column edge, which is where the drawing puts it.
-      expect(mark.className).toContain("ms-[11px]");
+      expect(mark.className).toContain("ml-[11px]");
       expect(mark.className).not.toMatch(/(?:^|\s)ms-3(?:\s|$)/);
       // The 8px height the drawing states.
       expect(mark.className).toContain("!h-2");
@@ -282,7 +282,7 @@ describe("the run page's own rail carries the drawing's rhythm too (item 2, conv
     expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("border-0");
     expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("py-0.5");
     expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("my-1");
-    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("ms-[11px]");
+    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("ml-[11px]");
 
     for (const module of [
       "run-step-rail-panel.tsx",

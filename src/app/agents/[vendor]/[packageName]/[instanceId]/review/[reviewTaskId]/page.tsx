@@ -105,7 +105,13 @@ async function loadRunStepsContext(
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
-      runSteps = buildRunStepperSteps(policySteps).map((s) => ({ index: s.index, label: s.label }));
+      // The run's own record of each step, as the run page hands it over
+      // (cinatra#3226): the two surfaces project ONE list, so a step the run
+      // page names by its work is named the same here.
+      runSteps = buildRunStepperSteps(policySteps, { stepResults: run.stepResults ?? null }).map((s) => ({
+        index: s.index,
+        label: s.label,
+      }));
     }
   } catch {
     runSteps = [];

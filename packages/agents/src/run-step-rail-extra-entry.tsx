@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
+import { RUN_RAIL_MARK_CLASS } from "./run-rail-mark";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 
@@ -69,7 +70,7 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * keeps its focus indicator: the base's `focus-visible:ring-3` ring is what
  * draws focus here, and a border transparent at rest never drew it.
  */
-export const RUN_PAGE_RAIL_ROW_CLASS = "gap-2 border-0 px-0 py-0.5";
+export const RUN_PAGE_RAIL_ROW_CLASS = "h-auto gap-2 border-0 px-0 py-0.5";
 
 /**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
@@ -77,14 +78,20 @@ export const RUN_PAGE_RAIL_ROW_CLASS = "gap-2 border-0 px-0 py-0.5";
  *   ".rail .sep { width: 2px; height: 8px; margin: 4px 0 4px 11px;
  *      border-radius: 1px; background: var(--line); }"
  *
- * The vendored `StepperSeparator` carries `m-0.5` -- 2px on every side -- and
- * the rail used to override only the height and the ink, so the run page's mark
- * stood at 2px above and below (against the drawing's 4px) and 12px in from the
- * column edge (against 11px, `ms-3` rounding the drawing's number). `my-1` and
- * `ms-[11px]` are the drawing's own two numbers; the 2px width and the 8px
- * height are the primitive's and the rail's `!h-2`.
+ * ONE DEFINITION FOR BOTH RAILS (cinatra#3225). This class used to set the
+ * indent, the margins and the height, and neither the mark's width nor its
+ * radius, so both fell to the vendored primitive's defaults — while the
+ * run-surface rail drew its mark at the drawing's measurements. Measured on a
+ * real completed run, the run page's own panel rail composed a 50.0px and then
+ * a 45.5px pitch between adjacent circle centres where the run-surface rail
+ * composed the drawing's 44.0px. Two compositions of one rail are two rhythms;
+ * the mark is declared once, in `run-rail-mark.ts`, and read here.
+ *
+ * THE ROW IS CONTENT-SIZED for the same reason (`h-auto` above): the shared
+ * Button pins a fixed `h-8`, a 32px box around a 24px circle, where the
+ * drawing's `.rail .step { padding: 2px 0 }` over the circle is 28px.
  */
-export const RUN_PAGE_RAIL_SEP_CLASS = "ms-[11px] my-1 !h-2 bg-border";
+export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
 
 
 // ---------------------------------------------------------------------------
@@ -236,7 +243,9 @@ export function RailExtraEntry({
         // `min-h-8` keeps every single-line row at exactly the height it had.
         <StepperTrigger
           className={cn(
-            "h-auto min-h-8",
+            // The row's own box is the shared row class's (`h-auto`, content
+            // sized, cinatra#3225) — no `min-h-8` floor, which held this row at
+            // the 32px the drawing does not draw.
             RUN_PAGE_RAIL_ROW_CLASS,
             // Once the row is allowed to grow, the Button's own `items-center`
             // would centre the indicator against the whole wrapped block. A
