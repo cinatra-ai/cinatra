@@ -55,6 +55,15 @@ const BYTE_ROAD_KINDS = [
 /** The three the wave moved onto the content channel. */
 const CONTENT_CHANNEL_KINDS = ["json-artifact", "cms-snapshot-artifact", "text-artifact"] as const;
 
+/** The file MIMEs a pack's own manifest accepts. */
+function acceptedMimes(slug: string): string[] {
+  const pkgPath = resolve(REPO_ROOT, "extensions/cinatra-ai", slug, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+    cinatra?: { artifact?: { accepts?: { file?: { mimeTypes?: string[] } } } };
+  };
+  return pkg.cinatra?.artifact?.accepts?.file?.mimeTypes ?? [];
+}
+
 /** The detail renderer source each pack itself names in its manifest — never a
  *  path guessed from the slug, so a pack that renames its entry is followed. */
 function detailRendererSource(slug: string): string {
@@ -107,6 +116,14 @@ describe("the byte road's own attribute (#3091)", () => {
     };
     expect(pkg.cinatra.artifact.accepts.file.mimeTypes).toContain("text/csv");
     expect(CONTENT_CHANNEL_KINDS).toContain("text-artifact");
+    // AND NO BYTE-ROAD KIND ACCEPTS IT, which is the half that makes the reading
+    // a contract rather than a coincidence: if csv dispatch ever moved back onto
+    // a kind that draws from the byte capability, this is where it shows.
+    for (const slug of BYTE_ROAD_KINDS) {
+      expect(acceptedMimes(slug), slug).not.toContain("text/csv");
+    }
+    // The display csv actually lands on reaches for no byte address at all.
+    expect(detailRendererSource("text-artifact")).not.toMatch(STAMPED);
   });
 
   // THE MARKDOWN DISPLAY IS ON THE CONTENT CHANNEL TOO, and it is NOT this

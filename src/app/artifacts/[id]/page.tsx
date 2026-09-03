@@ -220,7 +220,9 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.
-  const genericFloor = <FallbackHandler artifact={artifact} mime={mime} />;
+  const genericFloor = (
+    <FallbackHandler artifact={artifact} mime={mime} downloadHref={downloadHref} />
+  );
 
   return (
     <Main className="min-h-screen">

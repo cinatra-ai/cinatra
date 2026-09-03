@@ -55,8 +55,14 @@ export function artifactRevisionLabel(revisionId: string | null): string | null 
   // is the significant part behind it, under the drawing's own prefix.
   const significant = trimmed.replace(/^(rev|rep)_/i, "");
   if (significant === "") return null;
-  const short = significant.length > 4 ? `${significant.slice(0, 4)}…` : significant;
-  return `revision ${REVISION_PREFIX}${short.toLowerCase()}`;
+  // BY CHARACTER, NOT BY CODE UNIT. `slice` cuts a surrogate pair in half and
+  // paints a replacement character; `Array.from` walks code points, so an id
+  // carrying an astral character is shortened and never mangled.
+  const short = Array.from(significant).slice(0, 4).join("");
+  // THE ELLIPSIS IS PART OF THE DRAWN FORM, not a flag for "something was cut":
+  // every reading in the drawing writes `rev_8f3a…`, and a cell that drops it on
+  // a short id draws a form the drawing never draws.
+  return `revision ${REVISION_PREFIX}${short.toLowerCase()}…`;
 }
 
 /** Owner level and visibility are drawn capitalized, exactly as the library

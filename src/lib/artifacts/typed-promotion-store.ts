@@ -11,7 +11,7 @@ import "server-only";
 // nothing else.
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
-import { listActiveAssertions } from "./semantic-assertion-store";
+import { listActiveAssertions, type AssertionRecord } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
@@ -149,17 +149,39 @@ ORDER BY asserted_at DESC LIMIT 1`,
  * person's own assertion, which outranks the matcher". A `binding` row is what
  * every upload already carries for its base, so counting one here would promote
  * every row the moment anybody confirmed anything.
+ *
+ * AND IT IS THE ACTING PERSON'S OWN. The drawing's word is "own", and the road
+ * reaches the promotion through a branch that runs BESIDE the per-actor
+ * extension-access gate rather than behind it: a reading that accepted any
+ * person's assertion would let a second person, who cannot address that
+ * extension at all, spend somebody else's assertion as their authority. The
+ * assertion store records who asserted, so the comparison is available and the
+ * road takes it.
  */
+export function isPersonsOwnAssertion(
+  assertion: Pick<
+    AssertionRecord,
+    "extension" | "assertedBy" | "assertionBasis" | "assertedByPrincipal"
+  >,
+  who: { extension: string; principal: string | null },
+): boolean {
+  return (
+    assertion.extension === who.extension &&
+    assertion.assertedBy === "user" &&
+    assertion.assertionBasis === "classic" &&
+    assertion.assertedByPrincipal === who.principal
+  );
+}
+
 export function readPersonAssertion(input: {
   orgId: string;
   artifactId: string;
   extension: string;
+  /** The acting principal, as the surface derived it. */
+  principal: string | null;
 }): boolean {
-  return listActiveAssertions(input.orgId, input.artifactId).some(
-    (a) =>
-      a.extension === input.extension &&
-      a.assertedBy === "user" &&
-      a.assertionBasis === "classic",
+  return listActiveAssertions(input.orgId, input.artifactId).some((a) =>
+    isPersonsOwnAssertion(a, { extension: input.extension, principal: input.principal }),
   );
 }
 
@@ -203,6 +225,11 @@ export async function promoteMatchedArtifactType(input: {
   threshold: number | null;
   confirmed: boolean;
   createdBy?: string | null;
+  /** WHO IS ACTING. The person's own road (§XI.10) is the ACTING person's own,
+   *  so the road needs the acting principal and not merely the row's author.
+   *  Defaults to `createdBy`, which every production surface passes the same
+   *  principal into. */
+  principal?: string | null;
   /** The acting principal, for the history event the retype records. */
   actor: { userId: string; orgId: string };
   /** The org-write kernel authority, minted host-side by the calling surface —
@@ -233,6 +260,7 @@ export async function promoteMatchedArtifactType(input: {
     orgId: input.orgId,
     artifactId: input.artifactId,
     extension: input.extension,
+    principal: input.principal !== undefined ? input.principal : (input.createdBy ?? null),
   });
   const plan = planTypedPromotion({
     row,

@@ -25,6 +25,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { isPersonsOwnAssertion } from "@/lib/artifacts/typed-promotion-store";
+
 import { planTypedPromotion, type PromotableRow } from "../typed-promotion";
 
 const OWN_TYPE = {
@@ -151,5 +153,68 @@ describe("the matcher road is unchanged where the person asserted nothing", () =
         personAsserted: true,
       }),
     ).toEqual({ ok: false, reason: "already-promoted" });
+  });
+});
+
+// WHOSE ASSERTION IT IS (fix leg 2, convergence round). The road onto the
+// promotion runs BESIDE the per-actor extension-access gate — the converging
+// branch reaches it with an extension the gate dropped — so "the person's own
+// assertion" has to mean the ACTING person's. Reading any person's assertion
+// would let a second person, who cannot address that extension at all, spend
+// somebody else's assertion as their authority and append the revision.
+describe("the person's own assertion is the ACTING person's (#3091 fix leg 2)", () => {
+  const alice = {
+    extension: "@cinatra-ai/screenshot-artifact",
+    assertedBy: "user" as const,
+    assertionBasis: "classic" as const,
+    assertedByPrincipal: "principal_alice",
+  };
+
+  it("counts the acting person's own classic assertion", () => {
+    expect(
+      isPersonsOwnAssertion(alice, {
+        extension: "@cinatra-ai/screenshot-artifact",
+        principal: "principal_alice",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let a second person spend the first person's assertion", () => {
+    expect(
+      isPersonsOwnAssertion(alice, {
+        extension: "@cinatra-ai/screenshot-artifact",
+        principal: "principal_bob",
+      }),
+    ).toBe(false);
+  });
+
+  it("is not satisfied by an assertion on another extension", () => {
+    expect(
+      isPersonsOwnAssertion(alice, {
+        extension: "@cinatra-ai/pdf-artifact",
+        principal: "principal_alice",
+      }),
+    ).toBe(false);
+  });
+
+  it("counts neither an agent's, an authoring skill's, nor a binding row", () => {
+    expect(
+      isPersonsOwnAssertion(
+        { ...alice, assertedBy: "agent" },
+        { extension: alice.extension, principal: "principal_alice" },
+      ),
+    ).toBe(false);
+    expect(
+      isPersonsOwnAssertion(
+        { ...alice, assertedBy: "authoring_skill" },
+        { extension: alice.extension, principal: "principal_alice" },
+      ),
+    ).toBe(false);
+    expect(
+      isPersonsOwnAssertion(
+        { ...alice, assertionBasis: "binding" },
+        { extension: alice.extension, principal: "principal_alice" },
+      ),
+    ).toBe(false);
   });
 });

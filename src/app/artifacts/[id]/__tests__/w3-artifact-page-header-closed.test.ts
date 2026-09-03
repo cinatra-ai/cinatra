@@ -104,6 +104,21 @@ describe("the revision reads in the drawn mono form", () => {
     expect(artifactRevisionLabel("rep_8f3a99c1d2")).toBe("revision rev_8f3a…");
   });
 
+  // THE CONVERGENCE ROUND'S EDGES (fix leg 2). The drawn form is the same form
+  // for every id the store can hold: the ellipsis is part of it, and the cut is
+  // by character.
+  it("draws the ellipsis even where the stored id is shorter than the cut", () => {
+    expect(artifactRevisionLabel("abc")).toBe("revision rev_abc…");
+    expect(artifactRevisionLabel("rev_7")).toBe("revision rev_7…");
+  });
+
+  it("cuts by character, so an astral character is never split in half", () => {
+    const label = artifactRevisionLabel("ab\u{1F600}cdef")!;
+    expect(label).toBe("revision rev_ab\u{1F600}c…");
+    expect(label).not.toContain("\uFFFD");
+    expect(label.includes("\uD83D") && !label.includes("\u{1F600}")).toBe(false);
+  });
+
   it("draws no revision cell where the row has no representation", () => {
     expect(artifactRevisionLabel(null)).toBeNull();
     expect(artifactRevisionLabel("   ")).toBeNull();

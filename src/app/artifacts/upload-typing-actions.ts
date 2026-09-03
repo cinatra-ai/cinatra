@@ -425,6 +425,10 @@ async function promoteOnConfirmedMeaning(input: {
       threshold,
       confirmed: true,
       createdBy: input.principalId,
+      // THE ACTING PRINCIPAL, named for the person's own road: the converging
+      // branch runs beside the per-actor extension-access gate, so the road must
+      // read THIS person's assertion and never another's.
+      principal: input.principalId,
       actor: { userId: input.userId, orgId: input.orgId },
       authority,
     });
